@@ -85,7 +85,7 @@ async def check_missed_trades_alert(client: TossApiClient, is_kr_market: bool):
     missed = [f"• {sym}: {fail_reasons.get(sym, '잔고/거래시간 확인 필요')}" for sym, s in cfg.get("stocks", {}).items() if s.get("enabled", True) and ((s.get("currency") == "KRW") == is_kr_market) and s.get("s_mode") not in ["decision", "pause"] and s.get("last_exec_date") != today_str]
     if missed:
         cfg[alert_key] = today_str; await DcaConfigManager.save(cfg)
-        send_panel(f"🚨 [매매 미진행/실패 알람 - {'🇰🇷 한국장' if is_kr_market else '🇺🇸 미국장'}]\n\n" + "\n".join(missed), [[{"text": "💱 필요환전 확인", "callback_data": "fx"}, {"text": "🎛 관제탑", "callback_data": "panel"}]])
+        send_panel(f"🚨 [매매 미진행/실패 알람 - {'🇰🇷 한국장' if is_kr_market else '🇺🇸 미국장'}]\n\n" + "\n".join(missed), [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
 
 async def handle_callback(cb: dict, client: TossApiClient):
     if str(cb.get("message", {}).get("chat", {}).get("id", "")) != str(CHAT_ID): return
@@ -112,10 +112,6 @@ async def handle_callback(cb: dict, client: TossApiClient):
     elif data.startswith("next_buy2_"):
         sym = data.split("_", 2)[-1]; wait_state["mode"], wait_state["sym"] = "next_buy2", sym
         send_panel(f"🛒 [{sym}] 몇 일 동안 2차 매수할지 숫자를 입력하세요. (예: 100)", [[{"text": "🔙 취소", "callback_data": f"detail_{sym}"}]], msg_id)
-    elif data == "fx":
-        try: send_panel(*(await build_fx_view(client)), msg_id)
-        except Exception as e: send_panel(f"⚠️ [환전 계산 오류] {e}", [[{"text": "🔙 관제탑", "callback_data": "panel"}]], msg_id)
-    elif data == "ver_history": send_panel(*(build_ver_history_view()), msg_id)
     elif data == "toggle_master": cfg["is_master_active"] = not cfg.get("is_master_active", True); await DcaConfigManager.save(cfg); send_panel(*(await build_panel_view(client)), msg_id)
     elif data == "ask_tp": wait_state["mode"] = "tp"; send_panel("🎯 [1차익절% 매도비율%] 입력 (예: 10 20)", [[{"text": "🔙 취소", "callback_data": "panel"}]], msg_id)
 
@@ -123,15 +119,14 @@ async def handle_message(msg: dict, client: TossApiClient):
     if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
     text = msg.get("text", "").strip()
     if not text: return
-    if text.startswith("/") or text in ["메뉴", "관제탑", "환전", "취소", "히스토리", "history", "종목"]:
+    cfg = await ensure_cycle_fields()   # 아래 종목 이름 확인에서 쓰므로 먼저 불러옴 (/start 무응답 오류 수정)
+    if text.startswith("/") or text in ["메뉴", "관제탑", "취소", "종목"]:
         wait_state["mode"] = None
-        if text in ["/fx", "환전"]: send_panel(*(await build_fx_view(client)))
-        elif text in ["/history", "히스토리", "history"]: send_panel(*(build_ver_history_view()))
-        elif text in ["종목"]: send_panel(*(await build_stock_list_view(client, 0)))
+        if text in ["종목"]: send_panel(*(await build_stock_list_view(client, 0)))
         elif text.upper() in cfg.get("stocks", {}): send_panel(*(await build_stock_detail_view(client, text.upper())))
         else: send_panel(*(await build_panel_view(client)))
         return
-    cfg = await ensure_cycle_fields(); stocks = cfg.get("stocks", {}); m, sym = wait_state.get("mode"), wait_state.get("sym")
+    stocks = cfg.get("stocks", {}); m, sym = wait_state.get("mode"), wait_state.get("sym")
     if m == "day_sym" and sym in stocks:
         try:
             d = max(0, min(100, int("".join(ch for ch in text if ch.isdigit()))))
@@ -187,7 +182,6 @@ async def scheduler_loop(client: TossApiClient):
             if runtime_info.get("date") != now_kst.strftime("%Y-%m-%d"):
                 runtime_info["date"] = now_kst.strftime("%Y-%m-%d"); runtime_info["count"] = 0
             t_kst, hm_kst, hm_est = now_kst.strftime("%Y-%m-%d"), now_kst.strftime("%H:%M"), now_est.strftime("%H:%M")
-            if now_kst.weekday() < 5 and hm_kst == "09:00" and last_fx != t_kst: last_fx = t_kst; send_panel(*(await build_fx_view(client)))
             is_hol, reason = check_holiday()
             if is_hol and hm_kst == "09:00" and last_hol != t_kst: last_hol = t_kst; send_panel(f"🛑 [시스템 대기] {reason}", [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
             if now_kst.weekday() < 5 and "11:00" <= hm_kst <= "15:00":
@@ -200,7 +194,6 @@ async def scheduler_loop(client: TossApiClient):
         await asyncio.sleep(50)
 
 async def main():
-    load_ver_history()
     client = TossApiClient(client_id=TOSS_ID, client_secret=TOSS_SECRET)
     t, kb = await build_panel_view(client)
     send_panel(f"✨ [토스 적립봇 {BOT_VERSION} 종목별 리스트 및 상세 제어판 적용 완료!]\n\n" + t, kb)

@@ -1,22 +1,7 @@
 from t_core import *
 
-DEFAULT_VER_HISTORY = [
-    {"ver": "v1.0~v2.3", "date": "2026-10-19", "desc": "토스 적립봇 구축, +1%↑ 1/2배 매수, 10·20·30% 구간별 매도 표시"},
-    {"ver": "v3.0~v3.6", "date": "2026-10-20", "desc": "모듈형 분리(t_core/t_ui/main), 미체결 알람, 토스앱 보유종목 자동연동"},
-    {"ver": "v3.8~v4.0", "date": "2026-10-20", "desc": "종목별 개별 설정, 5종목 페이지네이션 및 진행일수 자동 역산"},
-    {"ver": "v4.2", "date": "2026-10-21", "desc": "전수 시뮬레이션 1단계: 50초 실시간 체크 카운터 동기화 및 장중 환전 시 자동 재매수 보완"}
-]
-
-def load_ver_history():
-    try:
-        with open(VER_HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(DEFAULT_VER_HISTORY, f, ensure_ascii=False, indent=2)
-    except: pass
-    return DEFAULT_VER_HISTORY
-
-def build_ver_history_view():
-    lines = [f"📜 [토스 적립봇 업데이트 History ({BOT_VERSION})]", "─────────────────"]
-    for item in load_ver_history(): lines.append(f"🔹 {item['ver']} ({item['date']})\n  └ {item['desc']}")
-    return "\n".join(lines), [[{"text": "🔙 관제탑으로", "callback_data": "panel"}]]
+# 버전 기록은 봇 폴더의 CHANGELOG.md 로 통합 (사무실 업데이트 때 자동으로 쌓임)
+# 환전 필요액 계산은 사무실 비서 브리핑(07:00 · 19:00 KST)이 대신함
 
 def ensure_stock_cycle(s: dict, is_kr: bool):
     if "s_mode" not in s: s["s_mode"] = "buy_1"
@@ -124,7 +109,6 @@ async def build_panel_view(client: TossApiClient):
     kb = [
         [{"text": "📋 보유종목 리스트 & 개별 금액/상태 설정", "callback_data": "stock_list"}],
         [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}, {"text": "🎯 익절/매도비율 변경", "callback_data": "ask_tp"}],
-        [{"text": "💱 오늘 필요환전 계산", "callback_data": "fx"}, {"text": "📜 History (업데이트 내역)", "callback_data": "ver_history"}],
         [{"text": "🔄 새로고침", "callback_data": "panel"}]
     ]
     return "\n".join(lines), kb
