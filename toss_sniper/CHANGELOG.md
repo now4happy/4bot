@@ -1,5 +1,11 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.2 · 2026-10-21 21:07 (KST)
+- 파일: main.py, sniper_plugin.py, tg_router.py, tg_ui_plugin.py
+- 내용: 09:30 이후에도 손절 작동
+- 요약: 손절 라인이 최대 차수까지 샀을 때뿐 아니라 09:30 매수 마감 뒤(더 살 수 없을 때)에도 작동합니다. 익절 목표는 원래대로(+0.64% 또는 +1.00%) 유지합니다.
+- 결재 번호: 2182eb46
+
 ## v1.0.1 · 2026-10-21 20:53 (KST)
 - 파일: main.py, quant_engine.py, sniper_plugin.py, tg_router.py, tg_ui_plugin.py
 - 내용: 최대 차수 매수 후 손절 라인

@@ -281,7 +281,7 @@ async def process_set_stop_loss(callback_query: types.CallbackQuery, state: FSMC
     _, max_buys = await AssassinLedger.get_buy_plan("SOXS")
     text = (
         "⌨️ <b>SOXS 최대 차수 매수 후 손절 라인 설정</b>\n\n"
-        f"▫️ 최대 {max_buys}회까지 모두 산 뒤, 현재가가 <b>전체 평단가 대비 몇 % 아래</b>로 떨어지면 전량 매도할지 숫자로 보내 주세요.\n"
+        f"▫️ 추가 매수가 끝난 뒤(최대 {max_buys}회 도달 또는 09:30 매수 마감), 현재가가 <b>전체 평단가 대비 몇 % 아래</b>로 떨어지면 전량 매도할지 숫자로 보내 주세요.\n"
         "▫️ <b>1.0 ~ 5.0</b> 사이, 소수점 첫째 자리까지 (예: <code>2.5</code>) · <code>0</code> = 손절 끄기\n"
         f"▫️ 현재 설정: <code>{'-' + format(cur, '.1f') + '%' if cur > 0 else '꺼짐'}</code>"
     )
@@ -313,7 +313,7 @@ async def process_stop_loss_input(message: types.Message, state: FSMContext):
         inline_keyboard=[[InlineKeyboardButton(text="🔙 제어반으로", callback_data="open_settlement")]]
     )
     await message.answer(
-        (f"✅ <b>손절 라인 -{val:.1f}% 설정 완료.</b>\n▫️ 최대 차수까지 산 뒤 평단 대비 -{val:.1f}% 아래로 떨어지면 전량 매도합니다."
+        (f"✅ <b>손절 라인 -{val:.1f}% 설정 완료.</b>\n▫️ 추가 매수가 끝난 뒤(최대 차수 또는 09:30 마감) 평단 대비 -{val:.1f}% 아래로 떨어지면 전량 매도합니다."
          if val > 0 else "✅ <b>손절 라인을 껐습니다.</b>"),
         reply_markup=keyboard, parse_mode="HTML",
     )

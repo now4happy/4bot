@@ -33,6 +33,11 @@ DAY_RSI_REARM_THRESHOLD = 35.0
 DAY_RSI_ALERT_COOLDOWN_SEC = 180.0
 # NEW: 프리장 보유 중 추가 매수 재장전 기준 — 직전 매수 뒤 RSI가 35 이상으로 회복했다가 다시 30 이하로 떨어져야 1회 추가 매수
 PRE_ADD_REARM_THRESHOLD = 35.0
+async def get_buy_end_state(symbol: str, now_est: datetime) -> tuple[bool, int, int]:
+    """(추가 매수 종료 여부, 산 횟수, 최대 횟수) — 최대 차수까지 샀거나 09:30~16:00 EST(신규 매수 마감)면 종료"""
+    cnt, max_buys = await AssassinLedger.get_buy_plan(symbol)
+    hm = now_est.hour * 100 + now_est.minute
+    return (cnt >= max_buys or 930 <= hm < 1600), cnt, max_buys
 
 # 무음 불발(Silent Drop) 방어 및 데이장 히스테리시스 스팸 억제용 인메모리 경보 캐시 (Case 18)
 _STRIKE_ALERT_CACHE = {
@@ -1002,7 +1007,7 @@ async def execute_premarket_rsi_add_buy_plugin(
             ctx.in_memory_ordering_lock[symbol] = False
 
 
-# NEW: 최대 차수까지 매수한 뒤 현재가가 평단가 대비 손절 라인(-1.0~-5.0%) 이하로 떨어지면 전량 매도
+# NEW: 추가 매수가 끝난 뒤(최대 차수 도달 또는 09:30 EST 매수 마감) 현재가가 평단가 대비 손절 라인(-1.0~-5.0%) 이하로 떨어지면 전량 매도
 # - 제어반에서 0(끄기) 또는 1.0~5.0% 설정 · 발동 후에는 체결될 때까지 매수 1호가로 계속 정정 매도
 # - 손절 뒤에는 당일 신규 진입을 멈춤 (17:00 EST 정리 후 다음 날 재가동)
 async def execute_max_buy_stop_loss_plugin(
@@ -1016,8 +1021,8 @@ async def execute_max_buy_stop_loss_plugin(
     if not triggered:
         if sl_pct <= 0.0 or entry_session != "PRE_SNIPER" or avg_price <= 0.0 or current_price <= 0.0:
             return False
-        buy_count, max_buys = await AssassinLedger.get_buy_plan(symbol)
-        if buy_count < max_buys:
+        finished, buy_count, max_buys = await get_buy_end_state(symbol, now_est)
+        if not finished or buy_count <= 0:
             return False
         sl_line = avg_price * (1.0 - sl_pct / 100.0)
         if current_price > sl_line:
@@ -1058,9 +1063,10 @@ async def execute_max_buy_stop_loss_plugin(
                                         order_type="LIMIT", market_country="US"), timeout=4.0,
             )
         if not triggered:
-            buy_count, max_buys = await AssassinLedger.get_buy_plan(symbol)
+            _, buy_count, max_buys = await get_buy_end_state(symbol, now_est)
+            why = f"최대 {max_buys}회 매수 완료" if buy_count >= max_buys else f"09:30 매수 마감 ({buy_count}/{max_buys}회)"
             await ctx.notify_tg(
-                f"🛑 <b>[스나이퍼 {symbol}] 최대 {max_buys}회 매수 후 손절 라인 -{sl_pct:.1f}% 도달 ➡️ 전량 매도</b>\n"
+                f"🛑 <b>[스나이퍼 {symbol}] {why} 후 손절 라인 -{sl_pct:.1f}% 도달 ➡️ 전량 매도</b>\n"
                 f"▫️ 평단가: <code>${avg_price:.2f}</code> | 현재가: <code>${current_price:.2f}</code> "
                 f"(손절 라인 <code>${avg_price * (1.0 - sl_pct / 100.0):.2f}</code>)\n"
                 f"▫️ 조치: 익절 덫 취소 후 <code>{dump_qty}주</code> 매수 1호가(<code>${bid_1:.2f}</code>) 지정가 매도 · 체결될 때까지 정정\n"

@@ -14,7 +14,7 @@
 # NEW: 시스템 기동 시 장부 내 선택된 목표 익절률(+0.64% vs +1.00%) 및 복리/단리 시드 모드를 동적으로 읽어 부팅 타전에 반영
 # NEW: 데이장(19:00~03:59 EST) SOXS 15초 캔들 스캔 가속 및 1.5초 실시간 틱 RSI<=30.0 관측 알림 플러그인(execute_daymarket_rsi_alert_plugin) 메인 루프 결속 (Case 53)
 # NEW: 프리장 보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 추가 매수(execute_premarket_rsi_add_buy_plugin, 최대 N회) 및 전체 평단 기준 익절 덫 재장전
-# NEW: 최대 차수 매수 후 손절 라인(execute_max_buy_stop_loss_plugin, 평단 대비 -1.0~-5.0%) 도달 시 전량 매도 및 당일 진입 중지
+# NEW: 추가 매수 종료(최대 차수 또는 09:30 마감) 후 손절 라인(execute_max_buy_stop_loss_plugin, 평단 대비 -1.0~-5.0%) 전량 매도 및 당일 진입 중지
 
 import sys
 import os
@@ -439,7 +439,7 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
             if macro_dumped:
                 continue
 
-            # NEW: 최대 차수 매수 후 평단 대비 손절 라인(-1.0~-5.0%) 도달 시 전량 매도 (제어반 설정, 0 = 끄기)
+            # NEW: 추가 매수 종료(최대 차수 또는 09:30 마감) 후 평단 대비 손절 라인(-1.0~-5.0%) 도달 시 전량 매도 (0 = 끄기)
             sl_fired = await execute_max_buy_stop_loss_plugin(
                 ctx=ctx,
                 symbol=symbol,

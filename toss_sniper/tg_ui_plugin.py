@@ -567,7 +567,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"▫️ 현재 출동시드: <code>${budget_s:,.2f}</code> | 목표 익절: <code>+{rate_s:.2f}% (순수익 +{net_rate_s:.2f}%)</code>\n"
         f"▫️ 추가 매수: <code>최대 {max_buys_s}회 (1회당 시드 ${budget_s:,.2f} · 최대 ${budget_s * max_buys_s:,.2f})</code>\n"
         "▫️ 추가 규칙: <code>보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 1회 추가 · 매도는 전체 평단 기준</code>\n"
-        f"▫️ 손절 라인: <code>{('최대 ' + str(max_buys_s) + '회 매수 후 평단 대비 -' + format(sl_s, '.1f') + '% 도달 시 전량 매도') if sl_s > 0 else '꺼짐'}</code>"
+        f"▫️ 손절 라인: <code>{('추가 매수 종료(최대 ' + str(max_buys_s) + '회 또는 09:30 마감) 후 평단 대비 -' + format(sl_s, '.1f') + '% 도달 시 전량 매도') if sl_s > 0 else '꺼짐'}</code>"
     )
     max_btns = [
         InlineKeyboardButton(
