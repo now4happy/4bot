@@ -1,3 +1,4 @@
+# 사무실 결재 테스트용 주석
 import time, threading
 from b_core import *
 from b_ui import *
