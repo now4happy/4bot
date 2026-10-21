@@ -33,6 +33,24 @@ DAY_RSI_REARM_THRESHOLD = 35.0
 DAY_RSI_ALERT_COOLDOWN_SEC = 180.0
 # NEW: 프리장 보유 중 추가 매수 재장전 기준 — 직전 매수 뒤 RSI가 35 이상으로 회복했다가 다시 30 이하로 떨어져야 1회 추가 매수
 PRE_ADD_REARM_THRESHOLD = 35.0
+# NEW(혼합형 간격): RSI 재장전 + 직전 매수가보다 0.7% 이상 싸야 추가 매수 (같은 가격·더 비싼 가격 물타기 방지)
+PRE_ADD_MIN_GAP_PCT = 0.7
+# NEW(손절 슬리피지): 호가 간격이 0.5% 넘게 벌어지면 처음 15초는 중간 가격에 걸고, 그 뒤 1호가로 내려 팔기
+SL_WIDE_SPREAD_PCT = 0.5
+SL_MID_WAIT_SEC = 15.0
+# NEW(데이장 매매): 데이장(19:00~03:59 EST)도 프리장과 같은 규칙으로 실매수 · 한 사이클(데이장→프리장)로 이어서 최대 N회
+DAYMARKET_TRADING = True
+# NEW(강제 청산): 정규장 마감 10분 전(15:50 EST)부터 전량 청산 시작 → 마감 전에 다 팔릴 시간 확보 (기존 15:59)
+MOC_START_MINUTE = 50
+
+
+def is_buy_window(est_hm: int) -> bool:
+    """신규·추가 매수 가능 시간: 프리장 04:00~09:29 + (켜져 있으면) 데이장 19:00~03:59 EST"""
+    if 400 <= est_hm <= 929:
+        return True
+    return DAYMARKET_TRADING and (est_hm >= 1900 or est_hm <= 359)
+
+
 async def get_buy_end_state(symbol: str, now_est: datetime) -> tuple[bool, int, int]:
     """(추가 매수 종료 여부, 산 횟수, 최대 횟수) — 최대 차수까지 샀거나 09:30~16:00 EST(신규 매수 마감)면 종료"""
     cnt, max_buys = await AssassinLedger.get_buy_plan(symbol)
@@ -246,7 +264,7 @@ async def execute_rsi_monitoring_plugin(
     est_hm = now_est.hour * 100 + now_est.minute
 
     # Case 25 & Case 59: 프리장(04:00~09:29 EST) 내 SOXS RSI <= 30.0 포착 즉시 메인 루프 기상 트리거 격발
-    if symbol == "SOXS" and (400 <= est_hm <= 929) and (0.0 < rsi_val <= PRE_SNIPER_RSI_THRESHOLD):
+    if symbol == "SOXS" and is_buy_window(est_hm) and (0.0 < rsi_val <= PRE_SNIPER_RSI_THRESHOLD):
         ctx.wakeup_event.set()
     # NEW: 데이장(19:00~03:59 EST) 내 SOXS RSI <= 30.0 포착 시 관측 전용 텔레그램 알림 플러그인 실행
     elif symbol == "SOXS" and (est_hm >= 1900 or est_hm <= 359):
@@ -264,7 +282,7 @@ async def execute_moc_zero_overnight_plugin(
     ctx: SniperPluginContext, symbol: str, now_est: datetime, is_active: bool,
     sell_order_id: str, runtime_state: dict,
 ) -> bool:
-    is_reg_moc = (now_est.hour == 15 and now_est.minute == 59) or (
+    is_reg_moc = (now_est.hour == 15 and now_est.minute >= MOC_START_MINUTE) or (
         now_est.hour == 16 and 0 <= now_est.minute <= 1
     )
     if not (is_reg_moc and is_active):
@@ -593,8 +611,8 @@ async def reconcile_zero_holdings_exit_plugin(
 
         now_est_check = datetime.now(EST_TZ)
         est_hm_now = now_est_check.hour * 100 + now_est_check.minute
-        is_premarket_now = (400 <= est_hm_now <= 929)
-        is_moc_time = (now_est_check.hour == 15 and now_est_check.minute >= 59) or (
+        is_premarket_now = is_buy_window(est_hm_now)   # 프리장 + 데이장: 익절 뒤 다시 출동
+        is_moc_time = (now_est_check.hour == 15 and now_est_check.minute >= MOC_START_MINUTE) or (
             now_est_check.hour == 16 and 0 <= now_est_check.minute <= 5
         )
         is_take_profit_exit, is_trap_survived = False, False
@@ -761,7 +779,7 @@ async def execute_premarket_rsi_sniper_strike_plugin(
         return
 
     est_hm = now_est.hour * 100 + now_est.minute
-    if not (400 <= est_hm <= 929):
+    if not is_buy_window(est_hm):
         return
 
     if not (0.0 < rsi_val <= PRE_SNIPER_RSI_THRESHOLD):
@@ -868,6 +886,7 @@ async def execute_premarket_rsi_sniper_strike_plugin(
                     entry_time=time.time(), nq_entry_price=nq_c_global, nq_entry_amp=nq_amp_global,
                     is_session_done=True, last_session_id=current_session_id, buy_count=1,
                 )
+                _STRIKE_ALERT_CACHE["last_add_price"] = target_price   # 추가 매수 간격 기준
                 _STRIKE_ALERT_CACHE["add_armed"] = False
                 _STRIKE_ALERT_CACHE["last_err_msg"] = ""
                 ctx.wakeup_event.set()
@@ -912,7 +931,7 @@ async def execute_premarket_rsi_add_buy_plugin(
         return
 
     est_hm = now_est.hour * 100 + now_est.minute
-    if not (400 <= est_hm <= 929):
+    if not is_buy_window(est_hm):
         return
     if not (0.0 < rsi_val <= PRE_SNIPER_RSI_THRESHOLD) or not _STRIKE_ALERT_CACHE.get("add_armed"):
         return
@@ -929,6 +948,23 @@ async def execute_premarket_rsi_add_buy_plugin(
                 f"⏸️ <b>[프리장 스나이퍼 {symbol}] 최대 매수 {max_buys}회 도달</b>\n"
                 f"▫️ RSI <code>{rsi_val:.1f}</code> 재포착했지만 추가 매수 없이 평단 기준 익절만 대기합니다."
             )
+        return
+
+    # 혼합형 간격: RSI 조건에 더해 직전 매수가보다 0.7% 이상 싸야 추가 매수 (아니면 재장전 유지한 채 대기)
+    ref_price = float(_STRIKE_ALERT_CACHE.get("last_add_price") or 0.0)
+    if ref_price <= 0.0:   # 재시작 등으로 직전 매수가를 모르면 평단가를 기준으로 (한 번만 조회)
+        try:
+            ref_price = float((await ctx.client.get_symbol_holdings_detail(symbol)).get("avg_price") or 0.0)
+        except Exception:
+            ref_price = 0.0
+        if ref_price > 0.0:
+            _STRIKE_ALERT_CACHE["last_add_price"] = ref_price
+    gap_line = ref_price * (1.0 - PRE_ADD_MIN_GAP_PCT / 100.0)
+    if ref_price > 0.0 and current_price > gap_line:
+        gap_key = f"{current_session_id}_{buy_count}_{ref_price:.2f}"
+        if _STRIKE_ALERT_CACHE.get("last_gap_note") != gap_key:
+            _STRIKE_ALERT_CACHE["last_gap_note"] = gap_key
+            print(f"⏳ [추가 매수 대기 {symbol}] RSI {rsi_val:.1f} 포착 · 현재가 ${current_price:.2f} > 기준 ${gap_line:.2f} (직전 ${ref_price:.2f} -{PRE_ADD_MIN_GAP_PCT}%)", flush=True)
         return
 
     async with ctx.dual_strike_mutex:
@@ -968,6 +1004,9 @@ async def execute_premarket_rsi_add_buy_plugin(
                 actual_budget = budget
 
             target_price = math.floor(latest_price * 100.0) / 100.0
+            if ref_price > 0.0 and target_price > gap_line:
+                _STRIKE_ALERT_CACHE["add_armed"] = True   # 주문 직전 가격이 다시 올랐으면 이번엔 쉬고 다음 기회 대기
+                return
             target_qty = int(math.floor(actual_budget / target_price)) if target_price > 0.0 else 0
             if target_qty <= 0:
                 bp_str = f"${current_bp:,.2f}" if current_bp >= 0.0 else "조회실패"
@@ -986,11 +1025,12 @@ async def execute_premarket_rsi_add_buy_plugin(
             if res and isinstance(res, dict) and res.get("result", {}).get("orderId"):
                 new_buy_id = str(res["result"]["orderId"])
                 await AssassinLedger.save_state(symbol, buy_order_id=new_buy_id, buy_count=buy_count + 1)
+                _STRIKE_ALERT_CACHE["last_add_price"] = target_price
                 ctx.wakeup_event.set()
                 active_rate = AssassinLedger.normalize_target_rate(target_profit_rate)
                 await ctx.notify_tg(
                     f"➕ <b>[프리장 스나이퍼] {symbol} RSI≤30 재포착 ➡️ 추가 매수 ({buy_count + 1}/{max_buys}회)</b>\n"
-                    f"▫️ 실시간 1분봉 RSI: <code>{rsi_val:.1f}</code> (RSI 35 회복 뒤 재하락)\n"
+                    f"▫️ 실시간 1분봉 RSI: <code>{rsi_val:.1f}</code> (RSI 35 회복 뒤 재하락) · 직전 매수가 <code>${ref_price:.2f}</code>보다 <code>{(target_price / ref_price - 1) * 100:+.2f}%</code>\n"
                     f"▫️ 추가 지정가(LIMIT): <code>${target_price:.2f}</code> × <code>{target_qty}주</code>\n"
                     f"▫️ 기존 보유: <code>{holdings_qty}주</code> ➡️ 체결 후 <b>전체 평단가 기준 +{active_rate:.2f}%</b>로 매도 덫 재장전"
                 )
@@ -1010,10 +1050,43 @@ async def execute_premarket_rsi_add_buy_plugin(
 # NEW: 추가 매수가 끝난 뒤(최대 차수 도달 또는 09:30 EST 매수 마감) 현재가가 평단가 대비 손절 라인(-1.0~-5.0%) 이하로 떨어지면 전량 매도
 # - 제어반에서 0(끄기) 또는 1.0~5.0% 설정 · 발동 후에는 체결될 때까지 매수 1호가로 계속 정정 매도
 # - 손절 뒤에는 당일 신규 진입을 멈춤 (17:00 EST 정리 후 다음 날 재가동)
+async def _report_stop_loss_fill(ctx: SniperPluginContext, symbol: str):
+    """손절 매도가 다 끝나면 '손절선 가격 vs 실제 체결가'를 알려 줌 (슬리피지 확인용)"""
+    info = _STRIKE_ALERT_CACHE.pop("sl_info", None)
+    if not isinstance(info, dict):
+        return
+    tot_q = tot_v = 0.0
+    for oid in info.get("ids", []):
+        try:
+            ex = (await ctx.client.get_order_detail(oid)).get("execution") or {}
+            q, p = float(ex.get("filledQuantity") or 0.0), float(ex.get("averageFilledPrice") or 0.0)
+            if q > 0.0 and p > 0.0:
+                tot_q += q; tot_v += q * p
+        except Exception:
+            pass
+    if tot_q <= 0.0:
+        await ctx.notify_tg(f"ℹ️ <b>[스나이퍼 {symbol}] 손절 매도 완료</b>\n▫️ 체결 가격은 토스 앱 거래내역에서 확인해 주세요. (조회 실패)")
+        return
+    fill = tot_v / tot_q
+    line, avg = float(info.get("line") or 0.0), float(info.get("avg") or 0.0)
+    slip = ((fill / line - 1.0) * 100.0) if line > 0.0 else 0.0
+    pnl = ((fill / avg - 1.0) * 100.0) if avg > 0.0 else 0.0
+    await ctx.notify_tg(
+        f"🧾 <b>[스나이퍼 {symbol}] 손절 체결 결과</b>\n"
+        + (f"▫️ 손절선: <code>${line:.2f}</code> (평단 <code>${avg:.2f}</code>의 -{float(info.get('pct') or 0):.1f}%)\n" if line > 0.0 else "")
+        + f"▫️ 실제 체결: <code>${fill:.2f}</code> × <code>{tot_q:g}주</code> (약 <code>${tot_v:,.2f}</code>)\n"
+        + (f"▫️ 슬리피지: 손절선보다 <code>{slip:+.2f}%</code>\n" if line > 0.0 else "")
+        + (f"▫️ 평단 대비 최종 손익: <code>{pnl:+.2f}%</code> (약 <code>{'-' if fill < avg else '+'}${abs(tot_q * (fill - avg)):,.2f}</code>)" if avg > 0.0 else "")
+    )
+
+
 async def execute_max_buy_stop_loss_plugin(
     ctx: SniperPluginContext, symbol: str, now_est: datetime, is_active: bool, holdings_qty: int,
     current_price: float, avg_price: float, sell_order_id: str, entry_session: str,
 ) -> bool:
+    if symbol == "SOXS" and holdings_qty <= 0 and _STRIKE_ALERT_CACHE.get("sl_info"):
+        await _report_stop_loss_fill(ctx, symbol)
+        return False
     if symbol != "SOXS" or not is_active or holdings_qty <= 0 or ctx.in_memory_ordering_lock[symbol]:
         return False
     triggered = (entry_session == "STOP_LOSS")
@@ -1041,6 +1114,12 @@ async def execute_max_buy_stop_loss_plugin(
             return False
         if not triggered:
             await AssassinLedger.save_state(symbol, entry_session="STOP_LOSS", is_session_done=True)
+            _STRIKE_ALERT_CACHE["sl_info"] = {"line": avg_price * (1.0 - sl_pct / 100.0), "avg": avg_price, "pct": sl_pct,
+                                              "qty": dump_qty, "ids": [], "since": time.time()}
+        sl_info = _STRIKE_ALERT_CACHE.get("sl_info")
+        if not isinstance(sl_info, dict):   # 재시작 뒤 이어서 손절 중이면 기록만 새로 시작
+            sl_info = {"line": 0.0, "avg": avg_price, "pct": sl_pct, "qty": dump_qty, "ids": [], "since": time.time()}
+            _STRIKE_ALERT_CACHE["sl_info"] = sl_info
         sellable_q_int, surviving_sell_ids = await _cancel_open_orders_and_wait_sellable(
             ctx=ctx, symbol=symbol, sell_order_id=sell_order_id, cancel_all_sides=False
         )
@@ -1049,19 +1128,32 @@ async def execute_max_buy_stop_loss_plugin(
         bid_1 = float(bids[0]["price"]) if bids and float(bids[0]["price"]) > 0.0 else current_price
         if bid_1 <= 0.0:
             return True
+        # 호가 간격 확인: 0.5% 넘게 벌어져 있으면 처음 15초는 중간 가격, 그 뒤엔 기존처럼 1호가로 (체결될 때까지 정정)
+        asks = orderbook.get("asks", [])
+        ask_1 = float(asks[0]["price"]) if asks and float(asks[0]["price"]) > 0.0 else 0.0
+        sell_px, wide = bid_1, False
+        if ask_1 > bid_1 > 0.0 and (ask_1 - bid_1) / ask_1 * 100.0 > SL_WIDE_SPREAD_PCT:
+            wide = True
+            if time.time() - float(sl_info.get("since", 0.0)) < SL_MID_WAIT_SEC:
+                sell_px = max(bid_1, math.floor((bid_1 + ask_1) / 2.0 * 100.0) / 100.0)
         if sellable_q_int > 0:
-            await asyncio.wait_for(
+            res = await asyncio.wait_for(
                 ctx.client.create_order(
                     symbol=symbol, side="SELL", order_type="LIMIT",
-                    quantity=min(dump_qty, sellable_q_int), price=f"{bid_1:.2f}",
+                    quantity=min(dump_qty, sellable_q_int), price=f"{sell_px:.2f}",
                     client_order_id=f"SLOSS_{symbol}_{now_est.strftime('%H%M%S')}_{int(time.time() * 10) % 100}"[:36],
                 ), timeout=4.0,
             )
+            oid = str(((res or {}).get("result") or {}).get("orderId") or "") if isinstance(res, dict) else ""
+            if oid and oid not in sl_info["ids"]:
+                sl_info["ids"].append(oid)
         elif surviving_sell_ids:
             await asyncio.wait_for(
-                ctx.client.modify_order(order_id=surviving_sell_ids[0], price=f"{bid_1:.2f}",
+                ctx.client.modify_order(order_id=surviving_sell_ids[0], price=f"{sell_px:.2f}",
                                         order_type="LIMIT", market_country="US"), timeout=4.0,
             )
+            if surviving_sell_ids[0] not in sl_info["ids"]:
+                sl_info["ids"].append(surviving_sell_ids[0])
         if not triggered:
             _, buy_count, max_buys = await get_buy_end_state(symbol, now_est)
             why = f"최대 {max_buys}회 매수 완료" if buy_count >= max_buys else f"09:30 매수 마감 ({buy_count}/{max_buys}회)"
@@ -1069,7 +1161,8 @@ async def execute_max_buy_stop_loss_plugin(
                 f"🛑 <b>[스나이퍼 {symbol}] {why} 후 손절 라인 -{sl_pct:.1f}% 도달 ➡️ 전량 매도</b>\n"
                 f"▫️ 평단가: <code>${avg_price:.2f}</code> | 현재가: <code>${current_price:.2f}</code> "
                 f"(손절 라인 <code>${avg_price * (1.0 - sl_pct / 100.0):.2f}</code>)\n"
-                f"▫️ 조치: 익절 덫 취소 후 <code>{dump_qty}주</code> 매수 1호가(<code>${bid_1:.2f}</code>) 지정가 매도 · 체결될 때까지 정정\n"
+                + (f"▫️ 호가 간격 넓음(매수 <code>${bid_1:.2f}</code> / 매도 <code>${ask_1:.2f}</code>) → 15초간 중간 가격 <code>${sell_px:.2f}</code>에 먼저 매도 시도\n" if wide and sell_px > bid_1 else "")
+                + f"▫️ 조치: 익절 덫 취소 후 <code>{dump_qty}주</code> 지정가(<code>${sell_px:.2f}</code>) 매도 · 체결될 때까지 정정\n"
                 "▫️ 오늘 신규 진입은 멈춥니다 (내일 프리장부터 다시 감시)"
             )
     except Exception as e:

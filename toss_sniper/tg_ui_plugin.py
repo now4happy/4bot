@@ -39,10 +39,9 @@ async def get_main_menu_text() -> str:
         f"🕒 <b>[ 프리장 SOXS 단방향 RSI≤30 스나이퍼 스케줄 ({dst_status_text}) ]</b>\n"
         f"▫️ 현재 설정: <b>목표 익절 +{active_rate:.2f}% (순수익 +{net_rate:.2f}%) · {comp_mode_str}</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "🔹 19:00~03:59: 🌙 <b>0세션 데이마켓 (관측 알림 전용 · 매수차단)</b>\n"
-        "      (실거래 매수 100% 차단 · 1분봉 캔들 수집 및 듀얼 RSI 관제)\n"
-        "      (🔔 SOXS 1분봉 RSI ≤ 30.0 도달 시 관측용 텔레그램 알림 발송)\n"
-        "      (히스테리시스 적용: RSI ≥ 35.0 회복 시 차기 알림 자동 재장전)\n"
+        "🔹 19:00~03:59: 🌙 <b>0세션 데이마켓 (실거래 · 프리장과 같은 규칙)</b>\n"
+        "      (SOXS 1분봉 RSI ≤ 30.0 매수 · 추가 매수는 RSI 35 회복 + 직전 매수가 -0.7%)\n"
+        "      (데이장 보유분은 프리장으로 이어서 같은 사이클 · 최대 매수 횟수 공유)\n"
         "🔹 04:00~09:29: 🔫 <b>프리장 스나이퍼 골든타임 (실거래 무한 출동)</b>\n"
         "      (NQ=F 당일 진폭 2.0% 미만 & SOXS 1분봉 RSI ≤ 30.0 감시)\n"
         "      (포착 즉시 실시간 현재가 기준 LIMIT 지정가 매수 발사)\n"
@@ -52,7 +51,7 @@ async def get_main_menu_text() -> str:
         "🔹 09:30~15:58: 🔥 <b>정규장 본장 (09:30 신규 매수 마감)</b>\n"
         "      (09:30 정각 프리장 미체결 매수 주문 즉각 선취소)\n"
         f"      (보유 물량 +{active_rate:.2f}% 익절 홀딩 & NQ=F 2·3차 매크로 손절 감시)\n"
-        "🔹 15:59~16:01: 🛑 제로-오버나이트 MOC 매수 1호가 스윕 강제 청산\n"
+        "🔹 15:50~16:01: 🛑 제로-오버나이트 매수 1호가 스윕 강제 청산 (마감 10분 전 시작)\n"
         "🔹 17:00: 🧹 정산 스캔 및 가비지 컬렉션(GC)\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
         "▶️ /avwap : 🔫 프리장 스나이퍼 레이더 관제탑\n"
@@ -216,7 +215,7 @@ def build_compact_status(
     elif entry_session == "CANCELED_MACRO":
         state_text = "🛑 매크로방어 발동(금일 마감)"
     elif current_session == "dayMarket":
-        state_text = f"🔔 데이장 RSI≤30 알림감시(매수차단·목표+{active_rate:.2f}%)"
+        state_text = f"🌙 데이장 RSI≤30 실거래 감시(목표+{active_rate:.2f}%)"
     elif 400 <= est_time_int <= 929:
         if not is_done:
             state_text = f"🔫 프리장 RSI≤30 감시중(목표+{active_rate:.2f}%)"
@@ -250,7 +249,7 @@ async def build_avwap_radar(api_client, shared_rsi_state=None) -> tuple[str, Inl
         pre_window_label = "(04:00~09:29 · 출동 마감)"
     else:
         session_name_ui = "dayMarket"
-        market_header = "( <b>🌙 데이마켓 · 🔔SOXS RSI≤30 알림전용</b> )"
+        market_header = "( <b>🌙 데이마켓 · SOXS RSI≤30 실거래</b> )"
         pre_window_label = "(04:00~09:29 · 개장 대기)"
 
     try:
@@ -319,7 +318,7 @@ async def build_avwap_radar(api_client, shared_rsi_state=None) -> tuple[str, Inl
                         if is_pre_time:
                             warn_str = "🔫 스나이퍼 타격권(≤30)"
                         elif is_day_time:
-                            warn_str = "🔔 데이장 알림권(≤30 · 매수차단)"
+                            warn_str = "🌙 데이장 매수권(≤30)"
                         else:
                             warn_str = "📉 과매도(≤30 · 진입마감)"
                     else:
@@ -543,10 +542,10 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
                 strike_status_str = f"🔒 09:30 신규진입 마감 (보유분 +{rate_s:.2f}% 감시)"
         else:
             strike_status_str = "🔒 09:30 정규장 신규진입 봉쇄 (관망 · 매수불가)"
-    elif 1559 <= t <= 1601:
-        strike_status_str = "🛑 15:59~16:01 제로-오버나이트 MOC 강제 청산 윈도우"
+    elif 1550 <= t <= 1601:
+        strike_status_str = "🛑 15:50~16:01 제로-오버나이트 강제 청산 윈도우"
     elif t >= 1900 or t < 400:
-        strike_status_str = "🌙 데이마켓 대기 (매수차단 · 🔔 SOXS RSI≤30 관측알림 가동)"
+        strike_status_str = "🌙 데이마켓 실거래 감시 (RSI≤30 매수 · 프리장까지 한 사이클)"
     else:
         strike_status_str = "⛔ 장외/애프터장 대기 (신규진입 차단)"
 
@@ -556,8 +555,8 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     text = (
         "⚙️ <b>[단방향 전술 코어 제어반 (프리장 SOXS 스나이퍼)]</b>\n"
         f"▫️ <b>전술 모드:</b> <code>🔫 프리장(04:00~09:29 EST) RSI≤30 요격 & +{rate_s:.2f}% 익절</code>\n"
-        "▫️ <b>데이장 모드:</b> <code>🔔 데이장(19:00~03:59 EST) SOXS RSI≤30 관측 알림 전용 (매수차단)</code>\n"
-        "▫️ <b>방어 체계:</b> <code>NQ=F 3단 매크로 손절 덤핑 & 15:59 제로-오버나이트 MOC</code>\n"
+        "▫️ <b>데이장 모드:</b> <code>🌙 데이장(19:00~03:59 EST) 실거래 · 프리장과 같은 규칙</code>\n"
+        "▫️ <b>방어 체계:</b> <code>NQ=F 3단 매크로 손절 덤핑 & 15:50 제로-오버나이트 강제 청산</code>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🐻 <b>SOXS (SHORT · 단방향 스나이퍼)</b>\n"
         f"▫️ 마스터 전원: <code>{act_s_str}</code>\n"

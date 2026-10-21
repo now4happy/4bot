@@ -41,6 +41,8 @@ from candle_recorder import record_candles_loop
 from sniper_plugin import (
     SniperPluginContext,
     PRE_SNIPER_RSI_THRESHOLD,
+    DAYMARKET_TRADING,
+    is_buy_window,
     execute_daymarket_rsi_alert_plugin,
     execute_moc_zero_overnight_plugin,
     execute_macro_defense_plugin,
@@ -237,7 +239,7 @@ async def rsi_radar_loop(ctx: SniperPluginContext, symbol: str):
         # MODIFIED: 프리장(04:00~09:29 EST) 중 SOXS 5초 스캔, 데이장(19:00~03:59 EST) 중 SOXS 15초 스캔으로 EWM 기저 상태 동기화
         now_est_chk = datetime.now(EST_TZ)
         est_hm_chk = now_est_chk.hour * 100 + now_est_chk.minute
-        if symbol == "SOXS" and (400 <= est_hm_chk <= 929):
+        if symbol == "SOXS" and is_buy_window(est_hm_chk):
             sleep_sec = 5.0
         elif symbol == "SOXS" and (est_hm_chk >= 1900 or est_hm_chk <= 359):
             sleep_sec = 15.0
@@ -463,7 +465,7 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
                     and len(last_session_id) >= 8
                     and last_session_id[:8] == current_session_id[:8]
                     and (
-                        entry_session == "CANCELED_MACRO"
+                        entry_session in ("CANCELED_MACRO", "STOP_LOSS")   # 데이장 손절 뒤 같은 사이클 프리장 재진입 방지
                         or bool(buy_order_id)
                         or bool(sell_order_id)
                         or target_sell_price > 0.0
@@ -506,7 +508,7 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
 
             # 초과 Case 52 — 프리장(04:00~09:29 EST) 무한 출동 자가 치유(Self-Healing) 가드
             if (
-                400 <= est_time_int <= 929
+                is_buy_window(est_time_int)
                 and is_session_done
                 and holdings_qty == 0
                 and not buy_order_id
@@ -546,7 +548,7 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
                 continue
 
             # 1.5초 메인 루프 실시간 틱 RSI(compute_realtime_tick_rsi) 즉시 합성
-            is_premarket_window = (400 <= est_time_int <= 929)
+            is_premarket_window = is_buy_window(est_time_int)   # 프리장 + 데이장(켜져 있을 때) 매수 시간
             is_daymarket_window = (est_time_int >= 1900 or est_time_int <= 359)
             sym_rsi_dict = ctx.shared_rsi_state.setdefault(
                 symbol, {"value": 0.0, "vwap": 0.0, "ewm_state": {}}
@@ -564,7 +566,7 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
                 live_rsi_val = fallback_rsi
 
             # NEW: 데이장(19:00~03:59 EST) 중 SOXS RSI <= 30.0 포착 시 실거래 매수 없이 관측용 텔레그램 알림만 타전 (Case 53)
-            if is_active and is_daymarket_window and live_rsi_val > 0.0:
+            if is_active and is_daymarket_window and not DAYMARKET_TRADING and live_rsi_val > 0.0:
                 await execute_daymarket_rsi_alert_plugin(
                     ctx=ctx,
                     symbol=symbol,
@@ -695,12 +697,12 @@ async def main():
             text=(
                 "✅ <b>[시스템 기동 완료 — 프리장 SOXS 단방향 RSI≤30 실거래 스나이퍼]</b>\n"
                 "▫️ 타겟: <b>SOXS(숏)</b> 배타적 실물 자산 투입 (SOXL 매매 영구 차단)\n"
-                "▫️ 데이장: <b>19:00~03:59 EST</b> 신규 매수 차단 · <b>SOXS RSI≤30.0 관측 알림 전용 가동</b>\n"
+                "▫️ 데이장: <b>19:00~03:59 EST</b> 실거래 매수 (프리장과 같은 규칙 · 프리장까지 한 사이클)\n"
                 "▫️ 타격: <b>프리장(04:00~09:29 EST)</b> NQ=F 진폭 2.0% 미만 & <b>SOXS 실시간 RSI≤30.0</b> 포착 시 현재가 지정가(LIMIT) 즉시 매수\n"
                 f"▫️ 익절: 현재 설정 <b>+{boot_rate:.2f}% (순수익 +{boot_net_rate:.2f}%)</b> · 제어반(/settlement)에서 <b>+0.64% / +1.00%</b> 즉시 전환 가능\n"
                 f"▫️ 시드: <b>${boot_budget:,.2f}</b> · {comp_desc}\n"
                 "▫️ 마감: <b>09:30 EST</b> 정규장 개장 정각 신규 매수 마감 및 미체결 매수 주문 즉각 파기\n"
-                "▫️ 방어: <b>NQ=F 3단 매크로 손절 덤핑</b> & <b>15:59 EST 제로-오버나이트 MOC(선취소+정정 스윕)</b> 상시 가동"
+                "▫️ 방어: <b>NQ=F 3단 매크로 손절 덤핑</b> & <b>15:50 EST 제로-오버나이트 강제 청산(선취소+정정 스윕)</b> 상시 가동"
             ),
             parse_mode="HTML",
         )
