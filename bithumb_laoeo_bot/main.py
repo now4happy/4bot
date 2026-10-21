@@ -66,6 +66,7 @@ def telegram_polling_loop():
                     offset = upd["update_id"] + 1
                     if "callback_query" in upd: handle_callback(upd["callback_query"])
                     elif "message" in upd: handle_message(upd["message"])
+            else: time.sleep(5)   # 토큰 충돌(409)·인증 오류 시 초당 수천 번 재접속 방지
         except: time.sleep(3)
 
 def trading_monitor_loop():
@@ -75,6 +76,9 @@ def trading_monitor_loop():
                 now = datetime.now(KST); today_str = now.strftime("%Y-%m-%d")
                 if runtime_info.get("date") != today_str: runtime_info["date"] = today_str; runtime_info["count"] = 0
                 accs = {a["currency"]: a for a in get_accounts() if isinstance(a, dict) and "currency" in a}
+                if "KRW" not in accs:
+                    # 잔고 조회 실패 시 이번 회차는 매수·매도·익절단계 초기화를 모두 건너뜀 (가짜 잔액부족 알림·중복 익절 방지)
+                    raise RuntimeError("빗썸 잔고 조회 실패 · 이번 회차 건너뜀")
                 krw_bal = float(accs.get("KRW", {}).get("balance", 0))
                 req_krw, _ = calc_today_required_krw(accs)
                 if req_krw > 0 and krw_bal < req_krw and (time.time() - float(state.get("last_low_bal_ts", 0)) >= 1800):
@@ -94,7 +98,12 @@ def trading_monitor_loop():
                     if bal > 0 and avg_p > 0 and target_stg > 0:
                         sell_vol = round(bal * (sr / 100.0), 8)
                         if sell_vol * cur_p >= 5000:
-                            ok, _ = place_order(coin, "ask", sell_vol, "market")
+                            ok, sell_res = place_order(coin, "ask", sell_vol, "market")
+                            if not ok and isinstance(sell_res, str):
+                                # 통신 오류(응답 없음)는 체결됐을 수 있으므로 같은 단계를 다시 매도하지 않음
+                                state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = "확인필요"
+                                save_json(STATE_FILE, state); add_history(coin, f"⚠️{target_stg}차익절 응답없음", sell_res[:60])
+                                send_panel(f"⚠️ [{coin} {target_stg}차 익절 주문 응답 없음]\n• 체결됐을 수 있어 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요.\n• 사유: {sell_res[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); continue
                             if ok:
                                 state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = f"{target_stg}차익절"
                                 save_json(STATE_FILE, state); add_history(coin, f"🎯{target_stg}차익절", f"{prof_pct:+.2f}% ({sr:.0f}% 매도)")
@@ -116,6 +125,11 @@ def trading_monitor_loop():
                                 state["cycle_days"] = s_days
                                 save_json(STATE_FILE, state); add_history(coin, "🛒정기매수", f"{buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
                                 send_panel(f"✅ [{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                            elif isinstance(res_json, str):
+                                # 통신 오류(응답 없음)는 체결됐을 수 있으므로 오늘은 다시 매수하지 않음 (중복 매수 방지)
+                                state["last_action_date"][coin], state["last_action_type"][coin] = today_str, "확인필요"
+                                save_json(STATE_FILE, state); add_history(coin, "⚠️정기매수 응답없음", f"{buy_amt:,.0f}원 · {res_json[:60]}")
+                                send_panel(f"⚠️ [{coin} 정기매수 주문 응답 없음] {buy_amt:,.0f}원\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요. (체결 안 됐으면 내일 정상 매수)\n• 사유: {res_json[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]])
                             else:
                                 fk = f"fail_{today_str}_{coin}"
                                 if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 실패] {res_json}", [[{"text": "💰 상황판", "callback_data": "balance"}]])

@@ -1,4 +1,4 @@
-import os, time, json, uuid, hashlib, jwt, requests
+import os, time, json, uuid, hashlib, jwt, requests, threading
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 
@@ -20,10 +20,19 @@ def load_json(path, default):
     except: pass
     return default
 
+_SAVE_LOCK = threading.Lock()
+
 def save_json(path, data):
-    try:
-        with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
-    except: pass
+    # 임시 파일에 다 쓴 뒤 한 번에 교체 → 저장 중 재시작·두 스레드 동시 저장으로 파일이 깨져 오늘 매수 기록이 사라지는 문제 방지
+    tmp = path + ".tmp"
+    with _SAVE_LOCK:
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2); f.flush(); os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except:
+            try: os.remove(tmp)
+            except: pass
 
 config = load_json(CONFIG_FILE, {"power": True, "coins": {"BTC": 10000, "ETH": 10000}, "target_profit_pct": 10.0, "sell_ratio_pct": 20.0, "buy_hour": 19})
 state = load_json(STATE_FILE, {"last_action_date": {}, "last_action_type": {}, "last_low_bal_ts": 0, "sold_stage": {}})
