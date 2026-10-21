@@ -1,14 +1,7 @@
 from datetime import datetime
 from b_core import *
 
-BITHUMB_VER_HISTORY = [
-    {"ver": "v3.9", "date": "2026-10-21", "desc": "전수 시뮬레이션 1단계: 60초 주기 실시간 체크 카운터 동기화 및 일수 표시 안정화"},
-    {"ver": "v1.0~v2.3", "date": "2026-10-19", "desc": "스마트 적립 구축, +1%↑ 1/2배 매수, 10·20·30% 구간별 매도 도입"},
-    {"ver": "v3.0~v3.4", "date": "2026-10-20", "desc": "급락감시 제거 초경량화, 19:00 미체결 실패알람, History 및 보안 잠금"},
-    {"ver": "v3.6", "date": "2026-10-20", "desc": "모듈형 아키텍처 분리 및 자동 백업·복구 구축"},
-    {"ver": "v3.7", "date": "2026-10-20", "desc": "종목별 매수 진행일수(N일차) 자동 역산·카운팅 표시 및 일수 보정 기능 추가"}
-]
-save_json(VER_HISTORY_FILE, BITHUMB_VER_HISTORY)
+# 버전 기록은 봇 폴더의 CHANGELOG.md 로 통합 (사무실 업데이트 때 자동으로 쌓임)
 
 def calc_today_required_krw(accs):
     today_str = datetime.now(KST).strftime("%Y-%m-%d")
@@ -82,12 +75,7 @@ def build_control_view():
     ]
     return text, kb
 
-def build_ver_history_view():
-    lines = [f"📜 [빗썸 봇 업데이트 History ({BOT_VERSION})]", "─────────────────"]
-    for item in load_json(VER_HISTORY_FILE, BITHUMB_VER_HISTORY): lines.append(f"🔹 {item['ver']} ({item['date']})\n  └ {item['desc']}")
-    return "\n".join(lines), [[{"text": "🔙 메인 메뉴", "callback_data": "main"}]]
-
 def build_main_view():
     text = f"🤖 [빗썸 스마트 적립 모듈형 관제탑 ({BOT_VERSION})]\n\n• 매일 19:00 정기 매수 (+1.0%↑ 시 1/2배, 그 외 1배)\n• 10% / 20% 도달 시 잔고의 20% 분할매도 (30%↑ 미정)\n• ⚡ 스케줄 상태: {get_bithumb_schedule_status()}"
-    kb = [[{"text": "💰 내 자산 상황판", "callback_data": "balance"}], [{"text": "⚙️ 전술 제어반", "callback_data": "control"}], [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "📜 History(버전내역)", "callback_data": "ver_history"}]]
+    kb = [[{"text": "💰 내 자산 상황판", "callback_data": "balance"}], [{"text": "⚙️ 전술 제어반", "callback_data": "control"}], [{"text": "📝 거래내역", "callback_data": "history"}]]
     return text, kb

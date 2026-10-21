@@ -1,4 +1,3 @@
-# 사무실 결재 테스트용 주석
 import time, threading
 from b_core import *
 from b_ui import *
@@ -12,7 +11,6 @@ def handle_callback(cb):
     if data == "balance": send_panel(*(build_balance_board()), msg_id)
     elif data == "control": send_panel(*(build_control_view()), msg_id)
     elif data == "main": send_panel(*(build_main_view()), msg_id)
-    elif data == "ver_history": send_panel(*(build_ver_history_view()), msg_id)
     elif data == "history": send_panel(f"📝 [최근 거래내역 ({BOT_VERSION})]\n\n" + ("\n".join(history[-15:]) if history else "내역 없음"), [[{"text": "💰 상황판", "callback_data": "balance"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]], msg_id)
     elif data == "toggle_power": config["power"] = not config.get("power", True); save_json(CONFIG_FILE, config); send_panel(*(build_control_view()), msg_id)
     elif data.startswith("prof_"): _, tp, sr = data.split("_"); config["target_profit_pct"], config["sell_ratio_pct"] = float(tp), float(sr); save_json(CONFIG_FILE, config); send_panel(*(build_control_view()), msg_id)
@@ -24,11 +22,10 @@ def handle_message(msg):
     if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
     text = msg.get("text", "").strip()
     if not text: return
-    if text.startswith("/") or text in ["메뉴", "상황판", "잔고", "제어반", "취소", "히스토리", "history"]:
+    if text.startswith("/") or text in ["메뉴", "상황판", "잔고", "제어반", "취소"]:
         wait_state["mode"] = None
         if text in ["/balance", "상황판", "잔고"]: send_panel(*(build_balance_board()))
         elif text in ["/control", "제어반"]: send_panel(*(build_control_view()))
-        elif text in ["/history", "히스토리", "history"]: send_panel(*(build_ver_history_view()))
         else: send_panel(*(build_main_view()))
         return
     if wait_state["mode"] == "setday":
