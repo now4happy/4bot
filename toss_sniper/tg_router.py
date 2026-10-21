@@ -50,6 +50,11 @@ class StopLossState(StatesGroup):
     waiting_for_stop_loss = State()
 
 
+# NEW: 추가 매수 가격 간격(0.3~1.0%) 입력 상태
+class AddGapState(StatesGroup):
+    waiting_for_gap = State()
+
+
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user = getattr(message, "from_user", None)
@@ -244,6 +249,76 @@ async def process_toggle_compound(callback_query: types.CallbackQuery, state: FS
             )
             await callback_query.answer(mode_label)
         except Exception as e:
+            pass
+
+
+# NEW: 전술 제어반 추가 매수 간격(직전 매수가보다 몇 % 더 싸야 추가 매수) 입력 · 0.3~1.0%
+@router.callback_query(F.data == "set_gap_SOXS")
+async def process_set_add_gap(callback_query: types.CallbackQuery, state: FSMContext):
+    user = getattr(callback_query, "from_user", None)
+    if not user or getattr(user, "id", None) != ADMIN_CHAT_ID:
+        return
+    await state.set_state(AddGapState.waiting_for_gap)
+    cur = await AssassinLedger.get_add_gap_pct("SOXS")
+    text = (
+        "⌨️ <b>SOXS 추가 매수 간격 설정</b>\n\n"
+        "▫️ RSI 35 회복 뒤 다시 RSI≤30이 되었을 때, 현재가가 <b>직전 매수가보다 몇 % 이상 싸야</b> 추가 매수할지 숫자로 보내 주세요.\n"
+        "▫️ <b>0.3 ~ 1.0</b> 사이, 소수점 첫째 자리까지 (예: <code>0.7</code>)\n"
+        "▫️ 작게 할수록 자주 사고(평단이 덜 내려감), 크게 할수록 드물게 더 싸게 삽니다.\n"
+        f"▫️ 현재 설정: <code>-{cur:.1f}%</code>"
+    )
+    try:
+        await callback_query.message.edit_text(text, parse_mode="HTML")
+    except Exception:
+        pass
+
+
+@router.message(AddGapState.waiting_for_gap)
+async def process_add_gap_input(message: types.Message, state: FSMContext):
+    user = getattr(message, "from_user", None)
+    if not user or getattr(user, "id", None) != ADMIN_CHAT_ID:
+        return
+    raw = (message.text or "").strip().replace("%", "").replace("-", "")
+    try:
+        val = float(raw)
+        if round(val, 1) != val:
+            raise ValueError()
+        val = AssassinLedger.normalize_add_gap(val)
+    except Exception:
+        await message.answer("🚨 <b>0.3 ~ 1.0</b> 사이 숫자(소수점 첫째 자리까지)를 보내 주세요. 예: <code>0.7</code>", parse_mode="HTML")
+        return
+    await AssassinLedger.save_state("SOXS", add_gap_pct=val)
+    if wakeup_event:
+        wakeup_event.set()
+    await state.clear()
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 제어반으로", callback_data="open_settlement")]]
+    )
+    await message.answer(
+        f"✅ <b>추가 매수 간격 -{val:.1f}% 설정 완료.</b>\n▫️ RSI 조건에 더해 직전 매수가보다 {val:.1f}% 이상 싸야 추가 매수합니다.",
+        reply_markup=keyboard, parse_mode="HTML",
+    )
+
+
+# NEW: 전술 제어반 데이장 자동매매 켜기/끄기 (보유 중에 꺼도 데이장 보유분은 03:30 EST 강제 청산은 그대로 진행)
+@router.callback_query(F.data == "toggle_day_SOXS")
+async def process_toggle_day_trading(callback_query: types.CallbackQuery, state: FSMContext):
+    user = getattr(callback_query, "from_user", None)
+    if not user or getattr(user, "id", None) != ADMIN_CHAT_ID:
+        return
+    new_on = not await AssassinLedger.get_day_trading("SOXS")
+    await AssassinLedger.save_state("SOXS", day_trading=new_on)
+    if wakeup_event:
+        wakeup_event.set()
+    text, keyboard = await build_settlement_board()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+    finally:
+        try:
+            await callback_query.answer("🌙 데이장 매매 켜짐 (19:00~03:29 EST 매수 · 03:30 강제 청산)" if new_on else "⏸ 데이장 매매 꺼짐 (프리장만 매매)")
+        except Exception:
             pass
 
 

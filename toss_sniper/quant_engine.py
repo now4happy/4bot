@@ -279,6 +279,43 @@ class AssassinLedger:
                     return 0.0
             return await asyncio.to_thread(_read)
 
+    # NEW: 추가 매수 가격 간격(직전 매수가보다 몇 % 더 싸야 추가 매수) · 0.3~1.0 (소수점 첫째 자리) · 기본 0.7
+    DEFAULT_ADD_GAP_PCT = 0.7
+
+    @classmethod
+    def normalize_add_gap(cls, val) -> float:
+        v = round(float(val), 1)
+        if not math.isfinite(v) or not 0.3 <= v <= 1.0:
+            raise ValueError("추가 매수 간격은 0.3~1.0% 사이")
+        return v
+
+    @classmethod
+    async def get_add_gap_pct(cls, symbol: str) -> float:
+        filepath = cls._get_file_path(symbol)
+        async with GlobalThrottle.get_file_lock(filepath):
+            def _read():
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    return cls.normalize_add_gap(data.get("add_gap_pct", cls.DEFAULT_ADD_GAP_PCT)) if isinstance(data, dict) else cls.DEFAULT_ADD_GAP_PCT
+                except Exception:
+                    return cls.DEFAULT_ADD_GAP_PCT
+            return await asyncio.to_thread(_read)
+
+    # NEW: 데이장 매매 켜짐 여부 (텔레그램 전술 제어반 · 기본 켜짐)
+    @classmethod
+    async def get_day_trading(cls, symbol: str) -> bool:
+        filepath = cls._get_file_path(symbol)
+        async with GlobalThrottle.get_file_lock(filepath):
+            def _read():
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    return bool(data.get("day_trading", True)) if isinstance(data, dict) else True
+                except Exception:
+                    return True
+            return await asyncio.to_thread(_read)
+
     # NEW: 현재 포지션의 누적 매수 횟수와 최대 매수 횟수 조회
     @classmethod
     async def get_buy_plan(cls, symbol: str) -> tuple[int, int]:
@@ -488,6 +525,8 @@ class AssassinLedger:
         buy_count: int = None,
         max_buy_count: int = None,
         stop_loss_pct: float = None,
+        day_trading: bool = None,
+        add_gap_pct: float = None,
     ):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
@@ -527,6 +566,10 @@ class AssassinLedger:
                     data["max_buy_count"] = cls.normalize_max_buys(max_buy_count)
                 if stop_loss_pct is not None:
                     data["stop_loss_pct"] = cls.normalize_stop_loss(stop_loss_pct)
+                if day_trading is not None:
+                    data["day_trading"] = bool(day_trading)
+                if add_gap_pct is not None:
+                    data["add_gap_pct"] = cls.normalize_add_gap(add_gap_pct)
                 if budget is not None:
                     data["budget"] = round(float(budget), 2)
                 if last_session_id is not None:

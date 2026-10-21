@@ -39,9 +39,9 @@ async def get_main_menu_text() -> str:
         f"🕒 <b>[ 프리장 SOXS 단방향 RSI≤30 스나이퍼 스케줄 ({dst_status_text}) ]</b>\n"
         f"▫️ 현재 설정: <b>목표 익절 +{active_rate:.2f}% (순수익 +{net_rate:.2f}%) · {comp_mode_str}</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "🔹 19:00~03:59: 🌙 <b>0세션 데이마켓 (실거래 · 프리장과 같은 규칙)</b>\n"
+        "🔹 19:00~03:29: 🌙 <b>데이마켓 자동매매 ① (제어반에서 켜기/끄기)</b>\n"
         "      (SOXS 1분봉 RSI ≤ 30.0 매수 · 추가 매수는 RSI 35 회복 + 직전 매수가 -0.7%)\n"
-        "      (데이장 보유분은 프리장으로 이어서 같은 사이클 · 최대 매수 횟수 공유)\n"
+        "🔹 03:30~03:59: 🛑 <b>데이장 강제 청산</b> (데이장 보유분 전량 매도 · 프리장과 별도 사이클)\n"
         "🔹 04:00~09:29: 🔫 <b>프리장 스나이퍼 골든타임 (실거래 무한 출동)</b>\n"
         "      (NQ=F 당일 진폭 2.0% 미만 & SOXS 1분봉 RSI ≤ 30.0 감시)\n"
         "      (포착 즉시 실시간 현재가 기준 LIMIT 지정가 매수 발사)\n"
@@ -492,6 +492,8 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     state_s = await AssassinLedger.get_state("SOXS")
     buy_id_s = await AssassinLedger.get_buy_order_id("SOXS")
     is_comp_s = await AssassinLedger.get_is_compound("SOXS")
+    day_on = await AssassinLedger.get_day_trading("SOXS")
+    gap_s = await AssassinLedger.get_add_gap_pct("SOXS")
 
     last_buy_p = float(state_s[0] or 0.0)
     budget_s = float(state_s[1] or 100.0)
@@ -544,8 +546,10 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
             strike_status_str = "🔒 09:30 정규장 신규진입 봉쇄 (관망 · 매수불가)"
     elif 1550 <= t <= 1601:
         strike_status_str = "🛑 15:50~16:01 제로-오버나이트 강제 청산 윈도우"
+    elif 330 <= t <= 359:
+        strike_status_str = "🛑 03:30~03:59 데이장 강제 청산 윈도우"
     elif t >= 1900 or t < 400:
-        strike_status_str = "🌙 데이마켓 실거래 감시 (RSI≤30 매수 · 프리장까지 한 사이클)"
+        strike_status_str = ("🌙 데이마켓 자동매매 감시 (RSI≤30 매수 · 03:30 청산)" if day_on else "🌙 데이마켓 대기 (데이장 매매 꺼짐)")
     else:
         strike_status_str = "⛔ 장외/애프터장 대기 (신규진입 차단)"
 
@@ -555,7 +559,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     text = (
         "⚙️ <b>[단방향 전술 코어 제어반 (프리장 SOXS 스나이퍼)]</b>\n"
         f"▫️ <b>전술 모드:</b> <code>🔫 프리장(04:00~09:29 EST) RSI≤30 요격 & +{rate_s:.2f}% 익절</code>\n"
-        "▫️ <b>데이장 모드:</b> <code>🌙 데이장(19:00~03:59 EST) 실거래 · 프리장과 같은 규칙</code>\n"
+        f"▫️ <b>데이장 모드:</b> <code>{'🌙 켜짐 · 19:00~03:29 매수 → 03:30 강제 청산 (EST)' if day_on else '⏸ 꺼짐 (데이장 매수 안 함)'}</code>\n"
         "▫️ <b>방어 체계:</b> <code>NQ=F 3단 매크로 손절 덤핑 & 15:50 제로-오버나이트 강제 청산</code>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
         "🐻 <b>SOXS (SHORT · 단방향 스나이퍼)</b>\n"
@@ -565,7 +569,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"▫️ 시드 운용방식: <code>{comp_s_str}</code>\n"
         f"▫️ 현재 출동시드: <code>${budget_s:,.2f}</code> | 목표 익절: <code>+{rate_s:.2f}% (순수익 +{net_rate_s:.2f}%)</code>\n"
         f"▫️ 추가 매수: <code>최대 {max_buys_s}회 (1회당 시드 ${budget_s:,.2f} · 최대 ${budget_s * max_buys_s:,.2f})</code>\n"
-        "▫️ 추가 규칙: <code>보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 1회 추가 · 매도는 전체 평단 기준</code>\n"
+        f"▫️ 추가 규칙: <code>보유 중 RSI 35 회복 뒤 RSI≤30 재포착 + 직전 매수가보다 -{gap_s:.1f}% 이상 하락 시 1회 추가 · 매도는 전체 평단 기준</code>\n"
         f"▫️ 손절 라인: <code>{('추가 매수 종료(최대 ' + str(max_buys_s) + '회 또는 09:30 마감) 후 평단 대비 -' + format(sl_s, '.1f') + '% 도달 시 전량 매도') if sl_s > 0 else '꺼짐'}</code>"
     )
     max_btns = [
@@ -597,6 +601,8 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
             ],
             max_btns,
             [InlineKeyboardButton(text=(f"🛑 손절 라인 -{sl_s:.1f}% 변경" if sl_s > 0 else "🛑 손절 라인 설정 (꺼짐)"), callback_data="set_sl_SOXS")],
+            [InlineKeyboardButton(text=f"📉 추가 매수 간격 -{gap_s:.1f}% 변경", callback_data="set_gap_SOXS")],
+            [InlineKeyboardButton(text=("🌙 데이장 매매 끄기 (지금 켜짐)" if day_on else "🌙 데이장 매매 켜기 (지금 꺼짐)"), callback_data="toggle_day_SOXS")],
             [
                 InlineKeyboardButton(text="🔫 스나이퍼 레이더", callback_data="open_avwap"),
                 InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main"),

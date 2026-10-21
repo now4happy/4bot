@@ -33,29 +33,47 @@ DAY_RSI_REARM_THRESHOLD = 35.0
 DAY_RSI_ALERT_COOLDOWN_SEC = 180.0
 # NEW: 프리장 보유 중 추가 매수 재장전 기준 — 직전 매수 뒤 RSI가 35 이상으로 회복했다가 다시 30 이하로 떨어져야 1회 추가 매수
 PRE_ADD_REARM_THRESHOLD = 35.0
-# NEW(혼합형 간격): RSI 재장전 + 직전 매수가보다 0.7% 이상 싸야 추가 매수 (같은 가격·더 비싼 가격 물타기 방지)
+# NEW(혼합형 간격): RSI 재장전 + 직전 매수가보다 N% 이상 싸야 추가 매수 (N = 제어반 설정 0.3~1.0%, 기본 0.7)
 PRE_ADD_MIN_GAP_PCT = 0.7
 # NEW(손절 슬리피지): 호가 간격이 0.5% 넘게 벌어지면 처음 15초는 중간 가격에 걸고, 그 뒤 1호가로 내려 팔기
 SL_WIDE_SPREAD_PCT = 0.5
 SL_MID_WAIT_SEC = 15.0
-# NEW(데이장 매매): 데이장(19:00~03:59 EST)도 프리장과 같은 규칙으로 실매수 · 한 사이클(데이장→프리장)로 이어서 최대 N회
-DAYMARKET_TRADING = True
+# NEW(데이장 매매): 하루 2번 자동매매 — ① 데이장 19:00~03:29 매수 → 03:30~03:59 강제 청산
+#                                     ② 프리장 04:00~09:29 매수 → 15:50~16:01 강제 청산 (두 사이클은 따로, 각각 최대 N회)
+#   데이장 매매는 텔레그램 전술 제어반에서 켜고 끔 (장부 day_trading · 기본 켜짐)
+_DAY = {"on": True}
+DAY_BUY_END = 329          # 데이장 신규·추가 매수 마지막 시각 (03:29 EST)
+DAY_CLOSE_START = 330      # 데이장 강제 청산 시작 (03:30 EST · 데이장 마감 30분 전)
+DAY_CLOSE_END = 359
 # NEW(강제 청산): 정규장 마감 10분 전(15:50 EST)부터 전량 청산 시작 → 마감 전에 다 팔릴 시간 확보 (기존 15:59)
 MOC_START_MINUTE = 50
 
 
+def set_day_trading(on: bool):
+    _DAY["on"] = bool(on)
+
+
+def is_day_trading_on() -> bool:
+    return bool(_DAY["on"])
+
+
+def is_day_close(est_hm: int) -> bool:
+    """데이장 강제 청산 시간 (03:30~03:59 EST) — 켜고 끔과 상관없이 데이장 보유분은 정리"""
+    return DAY_CLOSE_START <= est_hm <= DAY_CLOSE_END
+
+
 def is_buy_window(est_hm: int) -> bool:
-    """신규·추가 매수 가능 시간: 프리장 04:00~09:29 + (켜져 있으면) 데이장 19:00~03:59 EST"""
+    """신규·추가 매수 가능 시간: 프리장 04:00~09:29 + (켜져 있으면) 데이장 19:00~03:29 EST"""
     if 400 <= est_hm <= 929:
         return True
-    return DAYMARKET_TRADING and (est_hm >= 1900 or est_hm <= 359)
+    return _DAY["on"] and (est_hm >= 1900 or est_hm <= DAY_BUY_END)
 
 
 async def get_buy_end_state(symbol: str, now_est: datetime) -> tuple[bool, int, int]:
-    """(추가 매수 종료 여부, 산 횟수, 최대 횟수) — 최대 차수까지 샀거나 09:30~16:00 EST(신규 매수 마감)면 종료"""
+    """(추가 매수 종료 여부, 산 횟수, 최대 횟수) — 최대 차수까지 샀거나 매수 마감 뒤(09:30~16:00 · 데이장 03:30~03:59 EST)면 종료"""
     cnt, max_buys = await AssassinLedger.get_buy_plan(symbol)
     hm = now_est.hour * 100 + now_est.minute
-    return (cnt >= max_buys or 930 <= hm < 1600), cnt, max_buys
+    return (cnt >= max_buys or 930 <= hm < 1600 or is_day_close(hm)), cnt, max_buys
 
 # 무음 불발(Silent Drop) 방어 및 데이장 히스테리시스 스팸 억제용 인메모리 경보 캐시 (Case 18)
 _STRIKE_ALERT_CACHE = {
@@ -284,7 +302,7 @@ async def execute_moc_zero_overnight_plugin(
 ) -> bool:
     is_reg_moc = (now_est.hour == 15 and now_est.minute >= MOC_START_MINUTE) or (
         now_est.hour == 16 and 0 <= now_est.minute <= 1
-    )
+    ) or is_day_close(now_est.hour * 100 + now_est.minute)   # 데이장 강제 청산(03:30~03:59)도 같은 방식
     if not (is_reg_moc and is_active):
         runtime_state["moc_dump_active"] = False
         return False
@@ -304,6 +322,15 @@ async def execute_moc_zero_overnight_plugin(
                     has_unsettled_ledger = (st_chk[0] > 0.0 or st_chk[6] > 0.0 or bool(st_chk[7]))
                     if has_unsettled_ledger:
                         return False
+                    # 안 팔린(체결 안 된) 매수 주문이 남아 있으면 먼저 취소 (데이장 마감 뒤 늦게 체결되는 것 방지)
+                    pending_buy = await AssassinLedger.get_buy_order_id(symbol)
+                    if pending_buy:
+                        for oid in {pending_buy} | {str(o.get("orderId") or "") for o in await ctx.client.get_orders(status="OPEN", symbol=symbol) if o.get("side") == "BUY"}:
+                            if oid:
+                                try:
+                                    await ctx.client.cancel_order(oid)
+                                except Exception:
+                                    pass
                     await AssassinLedger.save_state(symbol, buy_order_id="", is_session_done=True)
                     return True
 
@@ -343,7 +370,7 @@ async def execute_moc_zero_overnight_plugin(
                         if not runtime_state["moc_dump_active"]:
                             runtime_state["moc_dump_active"] = True
                             await ctx.notify_tg(
-                                f"🔴 <b>[스나이퍼 {symbol}] 15:59~16:01 제로-오버나이트 덤핑망 결속</b>\n"
+                                f"🔴 <b>[스나이퍼 {symbol}] {'03:30 데이장' if is_day_close(now_est.hour * 100 + now_est.minute) else '15:50 정규장'} 강제 청산 시작</b>\n"
                                 f"▫️ 미체결 주문 선취소 완료 및 매수 1호가(<code>${bid_1_price:.2f}</code>, {exec_qty}주) 스윕 폭격 개시"
                             )
                     finally:
@@ -369,7 +396,7 @@ async def execute_moc_zero_overnight_plugin(
                     if not runtime_state["moc_dump_active"]:
                         runtime_state["moc_dump_active"] = True
                         await ctx.notify_tg(
-                            f"🔴 <b>[스나이퍼 {symbol}] 15:59~16:01 제로-오버나이트 정정 스윕 결속</b>\n"
+                            f"🔴 <b>[스나이퍼 {symbol}] {'데이장' if is_day_close(now_est.hour * 100 + now_est.minute) else '정규장'} 강제 청산 · 매도가 정정</b>\n"
                             f"▫️ 장마감 취소 병목 우회: 기존 매도 주문을 매수 1호가(<code>${bid_1_price:.2f}</code>)로 즉시 하향 정정 완료"
                         )
             except asyncio.TimeoutError:
@@ -614,7 +641,7 @@ async def reconcile_zero_holdings_exit_plugin(
         is_premarket_now = is_buy_window(est_hm_now)   # 프리장 + 데이장: 익절 뒤 다시 출동
         is_moc_time = (now_est_check.hour == 15 and now_est_check.minute >= MOC_START_MINUTE) or (
             now_est_check.hour == 16 and 0 <= now_est_check.minute <= 5
-        )
+        ) or (DAY_CLOSE_START <= est_hm_now <= 404)
         is_take_profit_exit, is_trap_survived = False, False
         exit_price, filled_qty = 0.0, 0.0
 
@@ -959,12 +986,13 @@ async def execute_premarket_rsi_add_buy_plugin(
             ref_price = 0.0
         if ref_price > 0.0:
             _STRIKE_ALERT_CACHE["last_add_price"] = ref_price
-    gap_line = ref_price * (1.0 - PRE_ADD_MIN_GAP_PCT / 100.0)
+    gap_pct = await AssassinLedger.get_add_gap_pct(symbol)   # 텔레그램 제어반에서 0.3~1.0% 설정 (기본 0.7%)
+    gap_line = ref_price * (1.0 - gap_pct / 100.0)
     if ref_price > 0.0 and current_price > gap_line:
         gap_key = f"{current_session_id}_{buy_count}_{ref_price:.2f}"
         if _STRIKE_ALERT_CACHE.get("last_gap_note") != gap_key:
             _STRIKE_ALERT_CACHE["last_gap_note"] = gap_key
-            print(f"⏳ [추가 매수 대기 {symbol}] RSI {rsi_val:.1f} 포착 · 현재가 ${current_price:.2f} > 기준 ${gap_line:.2f} (직전 ${ref_price:.2f} -{PRE_ADD_MIN_GAP_PCT}%)", flush=True)
+            print(f"⏳ [추가 매수 대기 {symbol}] RSI {rsi_val:.1f} 포착 · 현재가 ${current_price:.2f} > 기준 ${gap_line:.2f} (직전 ${ref_price:.2f} -{gap_pct}%)", flush=True)
         return
 
     async with ctx.dual_strike_mutex:
