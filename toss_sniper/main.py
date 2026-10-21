@@ -14,6 +14,7 @@
 # NEW: 시스템 기동 시 장부 내 선택된 목표 익절률(+0.64% vs +1.00%) 및 복리/단리 시드 모드를 동적으로 읽어 부팅 타전에 반영
 # NEW: 데이장(19:00~03:59 EST) SOXS 15초 캔들 스캔 가속 및 1.5초 실시간 틱 RSI<=30.0 관측 알림 플러그인(execute_daymarket_rsi_alert_plugin) 메인 루프 결속 (Case 53)
 # NEW: 프리장 보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 추가 매수(execute_premarket_rsi_add_buy_plugin, 최대 N회) 및 전체 평단 기준 익절 덫 재장전
+# NEW: 최대 차수 매수 후 손절 라인(execute_max_buy_stop_loss_plugin, 평단 대비 -1.0~-5.0%) 도달 시 전량 매도 및 당일 진입 중지
 
 import sys
 import os
@@ -47,6 +48,7 @@ from sniper_plugin import (
     reconcile_zero_holdings_exit_plugin,
     execute_premarket_rsi_sniper_strike_plugin,
     execute_premarket_rsi_add_buy_plugin,
+    execute_max_buy_stop_loss_plugin,
     manage_mechanical_profit_trap_plugin,
     execute_rsi_monitoring_plugin,
 )
@@ -437,6 +439,21 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
             if macro_dumped:
                 continue
 
+            # NEW: 최대 차수 매수 후 평단 대비 손절 라인(-1.0~-5.0%) 도달 시 전량 매도 (제어반 설정, 0 = 끄기)
+            sl_fired = await execute_max_buy_stop_loss_plugin(
+                ctx=ctx,
+                symbol=symbol,
+                now_est=now_est,
+                is_active=is_active,
+                holdings_qty=holdings_qty,
+                current_price=current_price,
+                avg_price=avg_price_dump,
+                sell_order_id=sell_order_id,
+                entry_session=entry_session,
+            )
+            if sl_fired:
+                continue
+
             if not is_open or current_price <= 0.0:
                 continue
 
@@ -496,7 +513,7 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
                 and not sell_order_id
                 and target_sell_price <= 0.0
                 and last_buy_price <= 0.0
-                and entry_session != "CANCELED_MACRO"
+                and entry_session not in ("CANCELED_MACRO", "STOP_LOSS")
             ):
                 await AssassinLedger.save_state(symbol, is_session_done=False)
                 is_session_done = False

@@ -45,6 +45,11 @@ class BudgetState(StatesGroup):
     waiting_for_budget = State()
 
 
+# NEW: 최대 차수 매수 후 손절 라인 입력 상태
+class StopLossState(StatesGroup):
+    waiting_for_stop_loss = State()
+
+
 @router.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user = getattr(message, "from_user", None)
@@ -263,6 +268,55 @@ async def process_set_max_buys(callback_query: types.CallbackQuery, state: FSMCo
             await callback_query.answer(f"🔁 최대 매수 {new_max}회 설정 완료")
         except Exception as e:
             pass
+
+
+# NEW: 전술 제어반(/settlement) 최대 차수 매수 후 손절 라인(-1.0~-5.0%, 0 = 끄기) 입력 핸들러
+@router.callback_query(F.data.startswith("set_sl_SOXS"))
+async def process_set_stop_loss(callback_query: types.CallbackQuery, state: FSMContext):
+    user = getattr(callback_query, "from_user", None)
+    if not user or getattr(user, "id", None) != ADMIN_CHAT_ID:
+        return
+    await state.set_state(StopLossState.waiting_for_stop_loss)
+    cur = await AssassinLedger.get_stop_loss_pct("SOXS")
+    _, max_buys = await AssassinLedger.get_buy_plan("SOXS")
+    text = (
+        "⌨️ <b>SOXS 최대 차수 매수 후 손절 라인 설정</b>\n\n"
+        f"▫️ 최대 {max_buys}회까지 모두 산 뒤, 현재가가 <b>전체 평단가 대비 몇 % 아래</b>로 떨어지면 전량 매도할지 숫자로 보내 주세요.\n"
+        "▫️ <b>1.0 ~ 5.0</b> 사이, 소수점 첫째 자리까지 (예: <code>2.5</code>) · <code>0</code> = 손절 끄기\n"
+        f"▫️ 현재 설정: <code>{'-' + format(cur, '.1f') + '%' if cur > 0 else '꺼짐'}</code>"
+    )
+    try:
+        await callback_query.message.edit_text(text, parse_mode="HTML")
+    except Exception as e:
+        pass
+
+
+@router.message(StopLossState.waiting_for_stop_loss)
+async def process_stop_loss_input(message: types.Message, state: FSMContext):
+    user = getattr(message, "from_user", None)
+    if not user or getattr(user, "id", None) != ADMIN_CHAT_ID:
+        return
+    raw = (message.text or "").strip().replace("%", "").replace("-", "")
+    try:
+        val = float(raw)
+        if val != 0.0 and (round(val, 1) != val or not 1.0 <= val <= 5.0):
+            raise ValueError()
+        val = AssassinLedger.normalize_stop_loss(val)
+    except Exception:
+        await message.answer("🚨 <b>1.0 ~ 5.0</b> 사이 숫자(소수점 첫째 자리까지)나 <code>0</code>(끄기)을 보내 주세요. 예: <code>2.5</code>", parse_mode="HTML")
+        return
+    await AssassinLedger.save_state("SOXS", stop_loss_pct=val)
+    if wakeup_event:
+        wakeup_event.set()
+    await state.clear()
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 제어반으로", callback_data="open_settlement")]]
+    )
+    await message.answer(
+        (f"✅ <b>손절 라인 -{val:.1f}% 설정 완료.</b>\n▫️ 최대 차수까지 산 뒤 평단 대비 -{val:.1f}% 아래로 떨어지면 전량 매도합니다."
+         if val > 0 else "✅ <b>손절 라인을 껐습니다.</b>"),
+        reply_markup=keyboard, parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data.startswith("set_budget_SOXS"))

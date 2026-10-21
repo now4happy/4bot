@@ -253,6 +253,32 @@ class AssassinLedger:
             return cls.DEFAULT_MAX_BUYS
         return max(1, min(10, n))
 
+    # NEW: 최대 차수 매수 후 손절 라인(평단 대비 -%) · 0 = 사용 안 함, 1.0~5.0 (소수점 첫째 자리)
+    @classmethod
+    def normalize_stop_loss(cls, val) -> float:
+        try:
+            v = round(float(val), 1)
+        except Exception:
+            return 0.0
+        if not math.isfinite(v) or v <= 0.0:
+            return 0.0
+        if 1.0 <= v <= 5.0:
+            return v
+        raise ValueError("손절 라인은 1.0~5.0% 사이(또는 0 = 끄기)")
+
+    @classmethod
+    async def get_stop_loss_pct(cls, symbol: str) -> float:
+        filepath = cls._get_file_path(symbol)
+        async with GlobalThrottle.get_file_lock(filepath):
+            def _read():
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    return cls.normalize_stop_loss(data.get("stop_loss_pct", 0.0)) if isinstance(data, dict) else 0.0
+                except Exception:
+                    return 0.0
+            return await asyncio.to_thread(_read)
+
     # NEW: 현재 포지션의 누적 매수 횟수와 최대 매수 횟수 조회
     @classmethod
     async def get_buy_plan(cls, symbol: str) -> tuple[int, int]:
@@ -461,6 +487,7 @@ class AssassinLedger:
         is_compound: bool = None,
         buy_count: int = None,
         max_buy_count: int = None,
+        stop_loss_pct: float = None,
     ):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
@@ -498,6 +525,8 @@ class AssassinLedger:
                     data["buy_count"] = max(0, int(buy_count))
                 if max_buy_count is not None:
                     data["max_buy_count"] = cls.normalize_max_buys(max_buy_count)
+                if stop_loss_pct is not None:
+                    data["stop_loss_pct"] = cls.normalize_stop_loss(stop_loss_pct)
                 if budget is not None:
                     data["budget"] = round(float(budget), 2)
                 if last_session_id is not None:

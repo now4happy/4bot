@@ -698,7 +698,7 @@ async def reconcile_zero_holdings_exit_plugin(
             next_entry_session = ""
         else:
             next_is_session_done = True
-            next_entry_session = "CANCELED_MACRO" if prev_entry_session == "CANCELED_MACRO" else ""
+            next_entry_session = prev_entry_session if prev_entry_session in ("CANCELED_MACRO", "STOP_LOSS") else ""
 
         await AssassinLedger.save_state(
             symbol, price=0.0, budget=updated_budget, target_sell_price=0.0, buy_order_id="", sell_order_id="",
@@ -731,6 +731,12 @@ async def reconcile_zero_holdings_exit_plugin(
                     f"▫️ 잔고 0주 (지정가 익절 매도 체결 확인){pnl_str}{compound_str}\n"
                     "▫️ 당일 신규 진입 권한 영구 소각"
                 )
+        elif prev_entry_session == "STOP_LOSS":
+            await ctx.notify_tg(
+                f"🛑 <b>[스나이퍼 {symbol}] 손절 청산 완료</b>\n"
+                f"▫️ 잔고 0주 (최대 차수 매수 후 손절 라인 도달){pnl_str}{compound_str}\n"
+                "▫️ 오늘 신규 진입은 멈추고 내일 프리장부터 다시 감시합니다"
+            )
         elif is_manual_exit:
             await ctx.notify_tg(
                 f"🛑 <b>[스나이퍼 {symbol}] 수동 매도/매크로 청산 감지 (퇴근 락온 완료)</b>\n"
@@ -996,12 +1002,85 @@ async def execute_premarket_rsi_add_buy_plugin(
             ctx.in_memory_ordering_lock[symbol] = False
 
 
+# NEW: 최대 차수까지 매수한 뒤 현재가가 평단가 대비 손절 라인(-1.0~-5.0%) 이하로 떨어지면 전량 매도
+# - 제어반에서 0(끄기) 또는 1.0~5.0% 설정 · 발동 후에는 체결될 때까지 매수 1호가로 계속 정정 매도
+# - 손절 뒤에는 당일 신규 진입을 멈춤 (17:00 EST 정리 후 다음 날 재가동)
+async def execute_max_buy_stop_loss_plugin(
+    ctx: SniperPluginContext, symbol: str, now_est: datetime, is_active: bool, holdings_qty: int,
+    current_price: float, avg_price: float, sell_order_id: str, entry_session: str,
+) -> bool:
+    if symbol != "SOXS" or not is_active or holdings_qty <= 0 or ctx.in_memory_ordering_lock[symbol]:
+        return False
+    triggered = (entry_session == "STOP_LOSS")
+    sl_pct = await AssassinLedger.get_stop_loss_pct(symbol)
+    if not triggered:
+        if sl_pct <= 0.0 or entry_session != "PRE_SNIPER" or avg_price <= 0.0 or current_price <= 0.0:
+            return False
+        buy_count, max_buys = await AssassinLedger.get_buy_plan(symbol)
+        if buy_count < max_buys:
+            return False
+        sl_line = avg_price * (1.0 - sl_pct / 100.0)
+        if current_price > sl_line:
+            return False
+        open_orders = await ctx.client.get_orders(status="OPEN", symbol=symbol)
+        if any(o.get("side") == "BUY" for o in open_orders):
+            return False   # 마지막 차수 매수가 아직 체결 중이면 대기
+    if time.time() - float(_STRIKE_ALERT_CACHE.get("last_sl_tick", 0.0)) < 3.0:
+        return True
+    _STRIKE_ALERT_CACHE["last_sl_tick"] = time.time()
+    ctx.in_memory_ordering_lock[symbol] = True
+    try:
+        det = await ctx.client.get_symbol_holdings_detail(symbol)
+        dump_qty = int(math.floor(det["qty"]))
+        if dump_qty <= 0:
+            return False
+        if not triggered:
+            await AssassinLedger.save_state(symbol, entry_session="STOP_LOSS", is_session_done=True)
+        sellable_q_int, surviving_sell_ids = await _cancel_open_orders_and_wait_sellable(
+            ctx=ctx, symbol=symbol, sell_order_id=sell_order_id, cancel_all_sides=False
+        )
+        orderbook = await ctx.client.get_orderbook(symbol)
+        bids = orderbook.get("bids", [])
+        bid_1 = float(bids[0]["price"]) if bids and float(bids[0]["price"]) > 0.0 else current_price
+        if bid_1 <= 0.0:
+            return True
+        if sellable_q_int > 0:
+            await asyncio.wait_for(
+                ctx.client.create_order(
+                    symbol=symbol, side="SELL", order_type="LIMIT",
+                    quantity=min(dump_qty, sellable_q_int), price=f"{bid_1:.2f}",
+                    client_order_id=f"SLOSS_{symbol}_{now_est.strftime('%H%M%S')}_{int(time.time() * 10) % 100}"[:36],
+                ), timeout=4.0,
+            )
+        elif surviving_sell_ids:
+            await asyncio.wait_for(
+                ctx.client.modify_order(order_id=surviving_sell_ids[0], price=f"{bid_1:.2f}",
+                                        order_type="LIMIT", market_country="US"), timeout=4.0,
+            )
+        if not triggered:
+            buy_count, max_buys = await AssassinLedger.get_buy_plan(symbol)
+            await ctx.notify_tg(
+                f"🛑 <b>[스나이퍼 {symbol}] 최대 {max_buys}회 매수 후 손절 라인 -{sl_pct:.1f}% 도달 ➡️ 전량 매도</b>\n"
+                f"▫️ 평단가: <code>${avg_price:.2f}</code> | 현재가: <code>${current_price:.2f}</code> "
+                f"(손절 라인 <code>${avg_price * (1.0 - sl_pct / 100.0):.2f}</code>)\n"
+                f"▫️ 조치: 익절 덫 취소 후 <code>{dump_qty}주</code> 매수 1호가(<code>${bid_1:.2f}</code>) 지정가 매도 · 체결될 때까지 정정\n"
+                "▫️ 오늘 신규 진입은 멈춥니다 (내일 프리장부터 다시 감시)"
+            )
+    except Exception as e:
+        print(f"🚨 [손절 방어 {symbol}] {e}", flush=True)
+    finally:
+        ctx.in_memory_ordering_lock[symbol] = False
+    return True
+
+
 async def manage_mechanical_profit_trap_plugin(
     ctx: SniperPluginContext, symbol: str, now_est: datetime, current_session_id: str,
     is_active: bool, just_turned_off: bool, holdings_qty: int, holdings_detail: dict,
     last_buy_price: float, target_profit_rate: float, target_sell_price: float,
     buy_order_id: str, sell_order_id: str, entry_session: str, runtime_state: dict,
 ):
+    if entry_session == "STOP_LOSS":
+        return   # NEW: 손절 매도 진행 중에는 익절 덫을 다시 걸지 않음
     open_orders = await ctx.client.get_orders(status="OPEN", symbol=symbol)
     has_open_sell = any(o.get("side") == "SELL" for o in open_orders)
     has_open_buy = any(o.get("side") == "BUY" for o in open_orders)

@@ -504,6 +504,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     sell_id_s = str(state_s[7] or "")
     entry_sess = str(state_s[8] or "")
     buy_cnt_s, max_buys_s = await AssassinLedger.get_buy_plan("SOXS")
+    sl_s = await AssassinLedger.get_stop_loss_pct("SOXS")
 
     act_s_str = "🟢 ON (시스템 활성)" if act_s else "🔴 OFF (수동 통제)"
     comp_s_str = (
@@ -565,7 +566,8 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"▫️ 시드 운용방식: <code>{comp_s_str}</code>\n"
         f"▫️ 현재 출동시드: <code>${budget_s:,.2f}</code> | 목표 익절: <code>+{rate_s:.2f}% (순수익 +{net_rate_s:.2f}%)</code>\n"
         f"▫️ 추가 매수: <code>최대 {max_buys_s}회 (1회당 시드 ${budget_s:,.2f} · 최대 ${budget_s * max_buys_s:,.2f})</code>\n"
-        "▫️ 추가 규칙: <code>보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 1회 추가 · 매도는 전체 평단 기준</code>"
+        "▫️ 추가 규칙: <code>보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 1회 추가 · 매도는 전체 평단 기준</code>\n"
+        f"▫️ 손절 라인: <code>{('최대 ' + str(max_buys_s) + '회 매수 후 평단 대비 -' + format(sl_s, '.1f') + '% 도달 시 전량 매도') if sl_s > 0 else '꺼짐'}</code>"
     )
     max_btns = [
         InlineKeyboardButton(
@@ -595,6 +597,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
                 InlineKeyboardButton(text="💵 SOXS 시드 설정", callback_data="set_budget_SOXS"),
             ],
             max_btns,
+            [InlineKeyboardButton(text=(f"🛑 손절 라인 -{sl_s:.1f}% 변경" if sl_s > 0 else "🛑 손절 라인 설정 (꺼짐)"), callback_data="set_sl_SOXS")],
             [
                 InlineKeyboardButton(text="🔫 스나이퍼 레이더", callback_data="open_avwap"),
                 InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main"),
