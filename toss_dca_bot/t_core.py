@@ -79,21 +79,8 @@ async def sync_holdings_from_toss(client: TossApiClient):
     return cfg
 
 async def smart_us_buy(client: TossApiClient, sym: str, buy_amt: float, cur_p: float, ord_id: str):
-    for m_name in ["place_us_fractional_buy_amount", "place_us_buy_amount", "place_us_fractional_buy", "place_us_order"]:
-        fn = getattr(client, m_name, None)
-        if fn:
-            params = list(inspect.signature(fn).parameters.keys())
-            try: return await (fn(sym, "buy", round(buy_amt, 2), ord_id) if "side" in params else fn(sym, round(buy_amt, 2), ord_id))
-            except Exception: pass
-    if cur_p > 0:
-        qty_order = round(buy_amt / cur_p, 4)
-        for m_name in ["place_us_fractional_buy_qty", "place_us_fractional_order"]:
-            fn = getattr(client, m_name, None)
-            if fn: return await fn(sym, qty_order, ord_id)
-    p_len = len(inspect.signature(execute_stock_dca_step).parameters)
-    if p_len >= 4: return await execute_stock_dca_step(client, None, CHAT_ID, sym)
-    elif p_len == 3: return await execute_stock_dca_step(client, CHAT_ID, sym)
-    return await execute_stock_dca_step(client, sym)
+    # 실제 존재하는 달러 금액 매수 함수만 호출. 오류를 삼키고 다른 방식으로 또 주문하면 중복 매수가 날 수 있어 그대로 올려보냄
+    return await client.place_us_fractional_buy(sym, round(buy_amt, 2), ord_id)
 
 async def auto_detect_cycle_days(client, sym: str, is_kr: bool, base_amt: float, avg_p: float, qty: float) -> int:
     # 1. 토스 API에서 체결/거래내역 조회 메서드가 있는지 탐색

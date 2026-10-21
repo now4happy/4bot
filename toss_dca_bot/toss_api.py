@@ -152,8 +152,8 @@ class TossApiClient:
             except _NonRetryableApiError as non_retry_err:
                 raise Exception(str(non_retry_err))
             except Exception as e:
-                if attempt == 2:
-                    raise e
+                if attempt == 2 or (method.upper() == "POST" and "/orders" in endpoint):
+                    raise e   # 주문은 응답이 끊겨도 체결됐을 수 있으므로 자동 재전송하지 않음
                 await asyncio.sleep(2 ** attempt)
 
     async def fetch_account_seq(self):
