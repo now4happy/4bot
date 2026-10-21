@@ -1,0 +1,2 @@
+# Repo file managed by Google OSConfig agent
+deb https://packages.cloud.google.com/apt google-cloud-ops-agent-jammy-2 main

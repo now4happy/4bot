@@ -1,0 +1,11 @@
+{
+  "coins": {
+    "BTC": 30000,
+    "ETH": 30000
+  },
+  "target_profit_pct": 10.0,
+  "sell_ratio_pct": 20.0,
+  "dip_drop_pct": 3.0,
+  "buy_hour": 19,
+  "normal_dca_mode": false
+}

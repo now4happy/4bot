@@ -1,0 +1,34 @@
+{
+  "is_master_active": true,
+  "kr_exec_time": "10:00",
+  "us_exec_time": "10:00",
+  "active_symbol": "NKE",
+  "stocks": {
+    "NKE": {
+      "symbol": "NKE",
+      "name": "나이키",
+      "currency": "USD",
+      "market_country": "US",
+      "enabled": true,
+      "base_amount": 40.0,
+      "target_profit_pct": 10.0,
+      "sell_ratio_pct": 20.0,
+      "kr_min_one_share": true,
+      "profit_lock": false,
+      "last_exec_date": "2026-10-20",
+      "last_action_summary": "대기 중",
+      "s_mode": "buy_1",
+      "s_day": 15,
+      "s_target_days": 100,
+      "has_held": true,
+      "sold_stage": 0
+    }
+  },
+  "cycle_mode": "buy_1",
+  "cycle_day": 10,
+  "max_days": 100,
+  "tp1_pct": 10.0,
+  "sr_pct": 20.0,
+  "last_fail_alert_kr": "",
+  "last_fail_alert_us": "2026-10-19"
+}

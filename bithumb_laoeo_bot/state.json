@@ -1,0 +1,23 @@
+{
+  "schedule_time": "매일 09:00 (KST)",
+  "coins": {
+    "BTC": {
+      "total_seed": 600000,
+      "remaining_seed": 585002,
+      "division": 40,
+      "t_value": 0.999867,
+      "target_profit_rate": 0.2,
+      "mode": "NORMAL",
+      "reverse_day": 0
+    },
+    "ETH": {
+      "total_seed": 600000,
+      "remaining_seed": 566413,
+      "division": 40,
+      "t_value": 2.239133,
+      "target_profit_rate": 0.2,
+      "mode": "NORMAL",
+      "reverse_day": 0
+    }
+  }
+}

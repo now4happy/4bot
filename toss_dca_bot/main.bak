@@ -1,0 +1,401 @@
+# ==========================================
+# Toss Smart 100-Day Cycle Bot - Version: v3.5
+# ==========================================
+import os, sys, time, json, glob, inspect, asyncio, requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
+from toss_api import TossApiClient
+from dca_engine import DcaConfigManager, execute_stock_dca_step
+
+BOT_VERSION = "v3.5"
+KST_TZ = ZoneInfo("Asia/Seoul")
+EST_TZ = ZoneInfo("America/New_York")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SNIPER_DIR = "/home/gieokkim/toss_sniper"
+VER_HISTORY_FILE = os.path.join(BASE_DIR, "update_history.json")
+
+DEFAULT_VER_HISTORY = [
+    {"ver": "v1.0", "date": "2026-10-16", "desc": "토스 스마트 적립 및 분할익절 봇 최초 구축"},
+    {"ver": "v2.2", "date": "2026-10-18", "desc": "보유달러 차감 브리핑 및 수익률 +1.0%↑ 시 1/2배 매수 도입"},
+    {"ver": "v2.3", "date": "2026-10-19", "desc": "한국시간 평일 정상 개장 판별 수정 및 10%·20%·30% 구간별 매도 표시"},
+    {"ver": "v3.0", "date": "2026-10-19", "desc": "관제탑 종목수 요약 경량화, 개장 2시간 뒤 매매, 100일 사이클 도입"},
+    {"ver": "v3.2", "date": "2026-10-20", "desc": "미국주식 매수 호출 수정, 매매 미진행/실패 알람 및 History 추가"},
+    {"ver": "v3.4", "date": "2026-10-20", "desc": "토스앱 보유종목 자동 연동(종목추가/삭제 버튼 제거) 및 보안 강화"},
+    {"ver": "v3.5", "date": "2026-10-20", "desc": "전체 코드 클린 재구축, 환전 계산 무응답 해결 및 +1% 수익 시 절반 계산 반영"}
+]
+
+def load_ver_history():
+    try:
+        with open(VER_HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(DEFAULT_VER_HISTORY, f, ensure_ascii=False, indent=2)
+    except: pass
+    return DEFAULT_VER_HISTORY
+
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+TOSS_ID = os.getenv("TOSS_CLIENT_ID", "").strip()
+TOSS_SECRET = os.getenv("TOSS_CLIENT_SECRET", "").strip()
+TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+wait_state = {"mode": None}
+fail_reasons = {}
+
+def tg_api(method, payload=None):
+    if not TG_TOKEN: return None
+    try: return requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{method}", json=payload, timeout=10).json()
+    except: return None
+
+def send_panel(text, inline_kb, msg_id=None):
+    payload = {"chat_id": CHAT_ID, "text": text, "reply_markup": {"inline_keyboard": inline_kb}}
+    if msg_id:
+        payload["message_id"] = msg_id
+        res = tg_api("editMessageText", payload)
+        if res and (res.get("ok") or "not modified" in str(res.get("description", ""))): return
+    tg_api("sendMessage", payload)
+def check_holiday():
+    if datetime.now(KST_TZ).weekday() >= 5: return True, "주말 휴장 (Weekend)"
+    return False, "정상 개장일 (시스템 대기 중)"
+
+def get_sniper_seed() -> float:
+    try:
+        for pat in ["*.json", "data/*.json", "state/*.json"]:
+            for p in glob.glob(os.path.join(SNIPER_DIR, pat)):
+                try:
+                    with open(p, "r", encoding="utf-8") as f: d = json.load(f)
+                    if isinstance(d, dict):
+                        for k, v in d.items():
+                            if any(w in k.lower() for w in ["seed", "amount", "budget", "usd", "soxs"]) and isinstance(v, (int, float)) and 10 <= v <= 50000: return float(v)
+                except: pass
+    except: pass
+    return 105.00
+
+async def ensure_cycle_fields():
+    cfg = await DcaConfigManager.load()
+    changed = False
+    for k, v in [("kr_exec_time","11:00"), ("us_exec_time","11:30"), ("cycle_mode","buy_1"), ("cycle_day",0), ("max_days",100), ("tp1_pct",10.0), ("sr_pct",20.0), ("last_fail_alert_kr",""), ("last_fail_alert_us","")]:
+        if k not in cfg: cfg[k] = v; changed = True
+    if changed: await DcaConfigManager.save(cfg)
+    return cfg
+
+async def sync_holdings_from_toss(client: TossApiClient):
+    cfg = await ensure_cycle_fields()
+    stocks = cfg.get("stocks", {})
+    changed = False
+    for m_name in ["get_all_holdings", "get_holdings", "get_account_holdings", "get_positions", "get_portfolio"]:
+        fn = getattr(client, m_name, None)
+        if fn:
+            try:
+                res = await asyncio.wait_for(fn(), timeout=4.0)
+                items = res if isinstance(res, list) else (res.get("items", res.get("holdings", res.get("data", []))) if isinstance(res, dict) else [])
+                if isinstance(items, list):
+                    for it in items:
+                        if not isinstance(it, dict): continue
+                        sym = str(it.get("symbol", it.get("ticker", it.get("stock_code", "")))).upper().strip()
+                        if not sym or sym in ["SOXS", "SOXL", "USD", "KRW"]: continue
+                        q = sum(float(it[k]) for k in ["qty", "quantity", "holding_qty", "balance"] if it.get(k))
+                        if q > 0 and sym not in stocks:
+                            is_kr = sym.isdigit()
+                            stocks[sym] = {"name": it.get("name", sym), "currency": "KRW" if is_kr else "USD", "market": "KR" if is_kr else "US", "base_amount": 100000.0 if is_kr else 40.0, "target_profit_pct": float(cfg.get("tp1_pct", 10.0)), "sell_ratio_pct": float(cfg.get("sr_pct", 20.0)), "enabled": True, "has_held": True}
+                            changed = True
+            except Exception: pass
+            break
+    if changed: await DcaConfigManager.save(cfg)
+    return cfg
+
+def build_ver_history_view():
+    lines = [f"📜 [토스 적립봇 업데이트 History ({BOT_VERSION})]", "─────────────────"]
+    for item in load_ver_history(): lines.append(f"🔹 {item['ver']} ({item['date']})\n  └ {item['desc']}")
+    lines.append("─────────────────")
+    return "\n".join(lines), [[{"text": "🔙 관제탑으로", "callback_data": "panel"}]]
+async def build_fx_view(client: TossApiClient):
+    cfg = await ensure_cycle_fields()
+    sniper_usd = get_sniper_seed()
+    dca_usd_req, dca_krw_req, kr_cnt, us_cnt = 0.0, 0.0, 0, 0
+    usd_details = []
+    for sym, info in cfg.get("stocks", {}).items():
+        if not info.get("enabled", True): continue
+        amt = float(info.get("base_amount", 100000.0 if info.get("currency") == "KRW" else 40.0))
+        prof_pct = 0.0
+        try:
+            cur_p = float(await asyncio.wait_for(client.get_current_price(sym), timeout=3.0) or 0.0)
+            hold = await asyncio.wait_for(client.get_symbol_holdings(sym), timeout=3.0)
+            avg_p = 0.0
+            if isinstance(hold, dict):
+                for k in ["avg_price", "avg_buy_price", "average_price", "buy_avg_price", "pchs_avg_pric"]:
+                    if hold.get(k): avg_p = float(hold[k]); break
+            if avg_p > 0 and cur_p > 0: prof_pct = ((cur_p - avg_p) / avg_p) * 100
+        except Exception: pass
+        use_amt = (amt / 2.0) if prof_pct >= 1.0 else amt
+        if info.get("currency") == "KRW":
+            kr_cnt += 1
+            if cfg["cycle_mode"] in ["buy_1", "buy_2"]: dca_krw_req += use_amt
+        else:
+            us_cnt += 1
+            if cfg["cycle_mode"] in ["buy_1", "buy_2"]:
+                dca_usd_req += use_amt
+                usd_details.append(f"{sym} ${use_amt:.0f}({'1/2배' if prof_pct >= 1.0 else '1배'})")
+    cur_usd = 0.0
+    try: cur_usd = float(await asyncio.wait_for(client.get_buying_power("USD"), timeout=3.0) or 0.0)
+    except Exception: pass
+    tot_req = sniper_usd + dca_usd_req
+    final_need = max(0.0, tot_req - cur_usd)
+    is_hol, hol_reason = check_holiday()
+    now_str = datetime.now(KST_TZ).strftime("%m-%d %H:%M:%S KST")
+    d_str = f" [{', '.join(usd_details)}]" if usd_details else ""
+    lines = [
+        f"💱 [토스 당일 필요 달러 브리핑 ({BOT_VERSION})]",
+        f"▫️ 시장 상태: {'🛑 ' if is_hol else '🟢 '}{hol_reason}", "─────────────────",
+        f"🔫 [1] 토스 스나이퍼 시드: ${sniper_usd:,.2f}",
+        f"📈 [2] 스마트 적립 ({us_cnt}개 미국종목): ${dca_usd_req:,.2f}{d_str}",
+    ]
+    if kr_cnt > 0: lines.append(f"🇰🇷 [국내주식 {kr_cnt}개 종목 소요액]: {dca_krw_req:,.0f}원")
+    lines.extend([
+        "─────────────────", f"💵 현재 계좌 보유 달러: ${cur_usd:,.2f}", f"📊 당일 매매 총 소요액: ${tot_req:,.2f}",
+        f"✅ 최종 추가 필요 달러: $0.00 (충분!)" if final_need <= 0 else f"🚨 최종 추가 필요 달러: ${final_need:,.2f}",
+        f"⏱ 갱신: {now_str}"
+    ])
+    return "\n".join(lines), [[{"text": "🔄 새로고침", "callback_data": "fx"}], [{"text": "🔙 관제탑으로", "callback_data": "panel"}]]
+
+async def build_panel_view(client: TossApiClient):
+    cfg = await sync_holdings_from_toss(client)
+    stocks = cfg.get("stocks", {})
+    total_cnt = len(stocks)
+    kr_cnt = sum(1 for s in stocks.values() if s.get("currency") == "KRW")
+    us_cnt = total_cnt - kr_cnt
+    is_master = cfg.get("is_master_active", True)
+    c_mode, c_day, m_days = cfg.get("cycle_mode", "buy_1"), int(cfg.get("cycle_day", 0)), int(cfg.get("max_days", 100))
+    mode_map = {"buy_1": f"🛒 1차 100일 분할매수 ({c_day}/{m_days}일차)", "await_decision": "⏸ 100일 완료! 결정 대기 중 (정지)", "buy_2": f"🛒 2차 100일 분할매수 ({c_day}/{m_days}일차)", "sell_100": f"📤 100일 분할매도 ({c_day}/{m_days}일차)"}
+    master_str = "⏸ 100일 완료 대기(정지)" if c_mode == "await_decision" else ("🟢 가동 중 (ON)" if is_master else "🔴 정지됨 (OFF)")
+    is_hol, hol_reason = check_holiday()
+    tp1, sr = float(cfg.get("tp1_pct", 10.0)), float(cfg.get("sr_pct", 20.0))
+    now_str = datetime.now(KST_TZ).strftime("%H:%M:%S")
+    lines = [
+        f"🎛 [토스 초경량 관제탑 ({BOT_VERSION})]", f"▫️ 시스템 전원: {master_str}",
+        f"▫️ 시장 상태: {'🛑 ' if is_hol else '🟢 '}{hol_reason}",
+        f"▫️ 운용 종목수: 📦 총 {total_cnt}종목 (국내 {kr_cnt} / 미국 {us_cnt}) *토스앱 연동", "─────────────────",
+        "⏳ [100일 사이클 진행 현황]", f" • 단계: {mode_map.get(c_mode, c_mode)}",
+        " • 시각: 🇰🇷 11:00 KST | 🇺🇸 11:30 EST (개장 2시간 뒤)",
+        " • 규칙: 수익률 +1.0%↑ 시 1/2배 (그 외 1배)", "─────────────────",
+        "📊 [수익률 구간별 매도 계획]",
+        f" • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도",
+        f" • {tp1*2:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도",
+        f" • {tp1*3:.0f}% 이상 수익 도달 시 ➔ 미정 (매도 없음)", f"⏱ 조회: {now_str}"
+    ]
+    kb = []
+    if c_mode == "await_decision":
+        lines.append("\n🚨 [100일 완료! 다음 단계를 선택해 주세요]")
+        kb.append([{"text": "🔄 [선택1] 2차 100일 분할매수 시작", "callback_data": "start_buy2"}])
+        kb.append([{"text": "📤 [선택2] 100일 분할매도 시작", "callback_data": "start_sell100"}])
+    kb.extend([
+        [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}],
+        [{"text": "💰 기준금액 변경", "callback_data": "ask_amt"}, {"text": "🔢 일수(N일차) 조절", "callback_data": "ask_day"}],
+        [{"text": "🎯 익절/매도비율 변경", "callback_data": "ask_tp"}, {"text": "🔄 모드 수동전환", "callback_data": "ask_mode"}],
+        [{"text": "💱 오늘 필요환전 계산", "callback_data": "fx"}, {"text": "📜 History (업데이트 내역)", "callback_data": "ver_history"}],
+        [{"text": "🔄 새로고침", "callback_data": "panel"}]
+    ])
+    return "\n".join(lines), kb
+async def smart_us_buy(client: TossApiClient, sym: str, buy_amt: float, cur_p: float, ord_id: str):
+    for m_name in ["place_us_fractional_buy_amount", "place_us_buy_amount", "place_us_fractional_buy", "place_us_order"]:
+        fn = getattr(client, m_name, None)
+        if fn:
+            params = list(inspect.signature(fn).parameters.keys())
+            try: return await (fn(sym, "buy", round(buy_amt, 2), ord_id) if "side" in params else fn(sym, round(buy_amt, 2), ord_id))
+            except Exception: pass
+    if cur_p > 0:
+        qty_order = round(buy_amt / cur_p, 4)
+        for m_name in ["place_us_fractional_buy_qty", "place_us_fractional_order"]:
+            fn = getattr(client, m_name, None)
+            if fn: return await fn(sym, qty_order, ord_id)
+    p_len = len(inspect.signature(execute_stock_dca_step).parameters)
+    if p_len >= 4: return await execute_stock_dca_step(client, None, CHAT_ID, sym)
+    elif p_len == 3: return await execute_stock_dca_step(client, CHAT_ID, sym)
+    return await execute_stock_dca_step(client, sym)
+
+async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
+    cfg = await sync_holdings_from_toss(client)
+    if not cfg.get("is_master_active", True) or cfg.get("cycle_mode") == "await_decision": return
+    c_mode, c_day, m_days = cfg.get("cycle_mode", "buy_1"), int(cfg.get("cycle_day", 0)), int(cfg.get("max_days", 100))
+    stocks = cfg.get("stocks", {})
+    today_str = datetime.now(KST_TZ if is_kr_market else EST_TZ).strftime("%Y-%m-%d")
+    alert_k = "last_fail_alert_kr" if is_kr_market else "last_fail_alert_us"
+    if cfg.get(alert_k) == today_str: return
+    executed_any, logs = False, []
+    tp1, sr = float(cfg.get("tp1_pct", 10.0)), float(cfg.get("sr_pct", 20.0))
+
+    for sym, s in list(stocks.items()):
+        if not s.get("enabled", True) or ((s.get("currency") == "KRW") != is_kr_market) or s.get("last_exec_date") == today_str: continue
+        is_kr = (s.get("currency") == "KRW")
+        base_amt = float(s.get("base_amount", 100000.0 if is_kr else 40.0))
+        try:
+            cur_p = float(await client.get_current_price(sym) or 0.0)
+            hold = await client.get_symbol_holdings(sym)
+            avg_p, qty = 0.0, 0.0
+            if isinstance(hold, dict):
+                for k in ["avg_price", "avg_buy_price", "average_price", "buy_avg_price", "pchs_avg_pric"]:
+                    if hold.get(k): avg_p = float(hold[k]); break
+                for k in ["qty", "quantity", "holding_qty", "balance", "hold_qty", "ord_psbl_qty", "sellable_qty"]:
+                    if hold.get(k): qty = float(hold[k]); break
+            if qty == 0.0: qty = float(await client.get_sellable_quantity(sym) or 0.0)
+            if qty > 0: s["has_held"] = True
+            elif s.get("has_held") and qty <= 0:
+                stocks.pop(sym, None); await DcaConfigManager.save(cfg); continue
+            prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 and cur_p > 0 else 0.0
+            if not is_kr and c_mode in ["buy_1", "buy_2"]:
+                usd_bal = float(await client.get_buying_power("USD") or 0.0)
+                need_amt = (base_amt / 2.0) if (avg_p > 0 and qty > 0 and prof_pct >= 1.0) else base_amt
+                if usd_bal < need_amt:
+                    fail_reasons[sym] = f"달러 부족 (필요 ${need_amt:.2f} / 보유 ${usd_bal:.2f})"; continue
+            sold_stg = int(s.get("sold_stage", 0))
+            if prof_pct < tp1: sold_stg = 0; s["sold_stage"] = 0
+            target_stg = 1 if (tp1 <= prof_pct < tp1*2 and sold_stg < 1) else (2 if (tp1*2 <= prof_pct < tp1*3 and sold_stg < 2) else 0)
+            if qty > 0 and avg_p > 0 and target_stg > 0:
+                sell_q = min(int(qty), max(1, int(round(qty * (sr / 100.0))))) if is_kr else round(qty * (sr / 100.0), 4)
+                if sell_q > 0:
+                    if is_kr: await client.place_kr_integer_order(sym, "sell", sell_q, f"tp{target_stg}_{today_str}_{sym}")
+                    else: await client.place_us_fractional_sell(sym, sell_q, f"tp{target_stg}_{today_str}_{sym}")
+                    s["sold_stage"] = target_stg; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
+                    logs.append(f"🎯 {sym}: {target_stg}차 익절 ({prof_pct:+.2f}% / {sell_q}주)"); executed_any = True; continue
+            if c_mode in ["buy_1", "buy_2"]:
+                buy_amt = (base_amt / 2.0) if (avg_p > 0 and qty > 0 and prof_pct >= 1.0) else base_amt
+                ord_id = f"b_{today_str}_{sym}_{int(time.time())}"
+                if is_kr:
+                    buy_q = max(1, int(buy_amt // cur_p)) if cur_p > 0 else 1
+                    await client.place_kr_integer_order(sym, "buy", buy_q, ord_id)
+                    logs.append(f"🛒 {sym}: {buy_q}주 매수 완료 ({prof_pct:+.2f}%)")
+                else:
+                    await smart_us_buy(client, sym, buy_amt, cur_p, ord_id)
+                    logs.append(f"🛒 {sym}: ${buy_amt:.2f} 매수 완료 ({prof_pct:+.2f}%)")
+                s["last_exec_date"] = today_str; fail_reasons.pop(sym, None); executed_any = True
+            elif c_mode == "sell_100" and qty > 0:
+                rem_days = max(1, m_days - c_day)
+                sq = min(int(qty), max(1, int(round(qty / rem_days)))) if is_kr else (qty if (qty / rem_days * cur_p < 1.0 or rem_days == 1) else round(qty / rem_days, 4))
+                if is_kr: await client.place_kr_integer_order(sym, "sell", sq, f"s100_{today_str}_{sym}")
+                else: await client.place_us_fractional_sell(sym, sq, f"s100_{today_str}_{sym}")
+                s["last_exec_date"] = today_str; fail_reasons.pop(sym, None); logs.append(f"📤 {sym}: 분할매도 ({sq}주)"); executed_any = True
+        except Exception as e: fail_reasons[sym] = str(e)
+
+    if executed_any:
+        cfg["cycle_day"] = c_day + 1
+        if cfg["cycle_day"] >= m_days:
+            cfg["cycle_mode"] = "await_decision"; await DcaConfigManager.save(cfg)
+            t, kb = await build_panel_view(client); send_panel("🎉 [100일 완료 및 자동 정지!]\n\n" + t, kb)
+        else:
+            await DcaConfigManager.save(cfg)
+            send_panel(f"✅ [정기 매매 완료 ({cfg['cycle_day']}/{m_days}일차)]\n" + "\n".join(logs), [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
+async def check_missed_trades_alert(client: TossApiClient, is_kr_market: bool):
+    cfg = await ensure_cycle_fields()
+    if not cfg.get("is_master_active", True) or cfg.get("cycle_mode") == "await_decision": return
+    today_str = datetime.now(KST_TZ if is_kr_market else EST_TZ).strftime("%Y-%m-%d")
+    alert_key = "last_fail_alert_kr" if is_kr_market else "last_fail_alert_us"
+    if cfg.get(alert_key) == today_str: return
+    missed = [f"• {sym}: {fail_reasons.get(sym, '잔고/거래시간 확인 필요')}" for sym, s in cfg.get("stocks", {}).items() if s.get("enabled", True) and ((s.get("currency") == "KRW") == is_kr_market) and s.get("last_exec_date") != today_str]
+    if missed:
+        cfg[alert_key] = today_str; await DcaConfigManager.save(cfg)
+        m_name = "🇰🇷 한국장(11:00 KST)" if is_kr_market else "🇺🇸 미국장(11:30 EST)"
+        send_panel(f"🚨 [매매 미진행/실패 알람 - {m_name}]\n\n" + "\n".join(missed), [[{"text": "💱 필요환전 확인", "callback_data": "fx"}, {"text": "🎛 관제탑", "callback_data": "panel"}]])
+
+async def handle_callback(cb: dict, client: TossApiClient):
+    if str(cb.get("message", {}).get("chat", {}).get("id", "")) != str(CHAT_ID): return
+    cb_id, data, msg_id = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
+    wait_state["mode"] = None
+    tg_api("answerCallbackQuery", {"callback_query_id": cb_id})
+    cfg = await ensure_cycle_fields()
+    if data == "panel": send_panel(*(await build_panel_view(client)), msg_id)
+    elif data == "fx":
+        try: send_panel(*(await build_fx_view(client)), msg_id)
+        except Exception as e: send_panel(f"⚠️ [환전 계산 오류] {e}", [[{"text": "🔙 관제탑", "callback_data": "panel"}]], msg_id)
+    elif data == "ver_history": send_panel(*(build_ver_history_view()), msg_id)
+    elif data == "toggle_master":
+        cfg["is_master_active"] = not cfg.get("is_master_active", True); await DcaConfigManager.save(cfg); send_panel(*(await build_panel_view(client)), msg_id)
+    elif data == "start_buy2":
+        cfg["cycle_mode"] = "buy_2"; cfg["cycle_day"] = 0; cfg["is_master_active"] = True; await DcaConfigManager.save(cfg); send_panel(*(await build_panel_view(client)), msg_id)
+    elif data == "start_sell100":
+        cfg["cycle_mode"] = "sell_100"; cfg["cycle_day"] = 0; cfg["is_master_active"] = True; await DcaConfigManager.save(cfg); send_panel(*(await build_panel_view(client)), msg_id)
+    elif data == "ask_mode":
+        kb = [[{"text": "🛒 1차 매수", "callback_data": "setmode_buy_1"}, {"text": "🛒 2차 매수", "callback_data": "setmode_buy_2"}], [{"text": "📤 100일 매도", "callback_data": "setmode_sell_100"}, {"text": "⏸ 결정 대기", "callback_data": "setmode_await_decision"}], [{"text": "🔙 취소", "callback_data": "panel"}]]
+        send_panel("🔄 전환할 모드를 선택하세요.", kb, msg_id)
+    elif data.startswith("setmode_"):
+        cfg["cycle_mode"] = data.replace("setmode_", ""); await DcaConfigManager.save(cfg); send_panel(*(await build_panel_view(client)), msg_id)
+    elif data in ["ask_amt", "ask_day", "ask_tp"]:
+        wait_state["mode"] = data.replace("ask_", "")
+        p_map = {"amt": "💰 일일 기준금액 입력 (원화 100000 또는 달러 40)", "day": "🔢 진행 일수(0~100) 숫자 입력", "tp": "🎯 [1차익절% 매도비율%] 입력 (예: 10 20)"}
+        send_panel(p_map[wait_state["mode"]], [[{"text": "🔙 취소", "callback_data": "panel"}]], msg_id)
+
+async def handle_message(msg: dict, client: TossApiClient):
+    if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
+    text = msg.get("text", "").strip()
+    if not text: return
+    if text.startswith("/") or text in ["메뉴", "관제탑", "환전", "취소", "히스토리", "history"]:
+        wait_state["mode"] = None
+        if text in ["/fx", "환전"]: send_panel(*(await build_fx_view(client)))
+        elif text in ["/history", "히스토리", "history"]: send_panel(*(build_ver_history_view()))
+        else: send_panel(*(await build_panel_view(client)))
+        return
+    cfg = await ensure_cycle_fields(); stocks = cfg.get("stocks", {}); m = wait_state["mode"]
+    if m == "amt":
+        try:
+            val = float(text.replace(",", "").replace("$", "").replace("원", "").strip())
+            for s in stocks.values():
+                if (val >= 1000 and s.get("currency") == "KRW") or (val < 1000 and s.get("currency") != "KRW"): s["base_amount"] = val
+            await DcaConfigManager.save(cfg); wait_state["mode"] = None; send_panel(*(await build_panel_view(client)))
+        except: send_panel("❌ 숫자만 입력하세요.", [[{"text": "🔙 관제탑", "callback_data": "panel"}]])
+        return
+    elif m == "day":
+        try:
+            d = max(0, min(100, int(text.strip()))); cfg["cycle_day"] = d
+            if d >= int(cfg.get("max_days", 100)): cfg["cycle_mode"] = "await_decision"
+            await DcaConfigManager.save(cfg); wait_state["mode"] = None; send_panel(*(await build_panel_view(client)))
+        except: send_panel("❌ 0~100 사이 숫자만 입력하세요.", [[{"text": "🔙 관제탑", "callback_data": "panel"}]])
+        return
+    elif m == "tp":
+        try:
+            pts = text.split(); cfg["tp1_pct"] = float(pts[0])
+            if len(pts) >= 2: cfg["sr_pct"] = float(pts[1])
+            for s in stocks.values(): s["target_profit_pct"], s["sell_ratio_pct"] = cfg["tp1_pct"], cfg["sr_pct"]
+            await DcaConfigManager.save(cfg); wait_state["mode"] = None; send_panel(*(await build_panel_view(client)))
+        except: send_panel("❌ 예: 10 20", [[{"text": "🔙 관제탑", "callback_data": "panel"}]])
+        return
+    send_panel(*(await build_panel_view(client)))
+
+async def polling_loop(client: TossApiClient):
+    tg_api("deleteWebhook", {"drop_pending_updates": False}); offset = None
+    while True:
+        try:
+            params = {"timeout": 20}
+            if offset: params["offset"] = offset
+            res = await asyncio.to_thread(requests.get, f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates", params=params, timeout=25)
+            if res.status_code == 200:
+                for upd in res.json().get("result", []):
+                    offset = upd["update_id"] + 1
+                    if "callback_query" in upd: await handle_callback(upd["callback_query"], client)
+                    elif "message" in upd: await handle_message(upd["message"], client)
+        except: await asyncio.sleep(3)
+
+async def scheduler_loop(client: TossApiClient):
+    last_fx, last_hol = "", ""
+    while True:
+        try:
+            now_kst, now_est = datetime.now(KST_TZ), datetime.now(EST_TZ)
+            t_kst, hm_kst, hm_est = now_kst.strftime("%Y-%m-%d"), now_kst.strftime("%H:%M"), now_est.strftime("%H:%M")
+            if now_kst.weekday() < 5 and hm_kst == "09:00" and last_fx != t_kst:
+                last_fx = t_kst; send_panel(*(await build_fx_view(client)))
+            is_hol, reason = check_holiday()
+            if is_hol and hm_kst == "09:00" and last_hol != t_kst:
+                last_hol = t_kst; send_panel(f"🛑 [시스템 대기] {reason}", [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
+            if now_kst.weekday() < 5 and "11:00" <= hm_kst <= "15:00":
+                await execute_100day_step(client, is_kr_market=True)
+                if hm_kst >= "11:15": await check_missed_trades_alert(client, is_kr_market=True)
+            if now_est.weekday() < 5 and "11:30" <= hm_est <= "15:50":
+                await execute_100day_step(client, is_kr_market=False)
+                if hm_est >= "11:45": await check_missed_trades_alert(client, is_kr_market=False)
+        except Exception as e: print("Scheduler Error:", e)
+        await asyncio.sleep(50)
+
+async def main():
+    load_ver_history()
+    client = TossApiClient(client_id=TOSS_ID, client_secret=TOSS_SECRET)
+    t, kb = await build_panel_view(client)
+    send_panel(f"✨ [토스 적립봇 {BOT_VERSION} 클린 패치 완료!]\n\n" + t, kb)
+    await asyncio.gather(polling_loop(client), scheduler_loop(client))
+
+if __name__ == "__main__":
+    asyncio.run(main())

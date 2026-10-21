@@ -1,0 +1,16 @@
+[Unit]
+Description=Toss SOXS Pre-market Sniper Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gieokkim
+WorkingDirectory=/home/gieokkim/toss_sniper
+ExecStart=/home/gieokkim/toss_sniper/venv/bin/python /home/gieokkim/toss_sniper/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

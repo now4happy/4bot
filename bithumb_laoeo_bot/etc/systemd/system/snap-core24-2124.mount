@@ -1,0 +1,15 @@
+[Unit]
+Description=Mount unit for core24, revision 2124
+After=snapd.mounts-pre.target
+Before=snapd.mounts.target
+
+[Mount]
+What=/var/lib/snapd/snaps/core24_2124.snap
+Where=/snap/core24/2124
+Type=squashfs
+Options=nodev,ro,x-gdu.hide,x-gvfs-hide
+LazyUnmount=yes
+
+[Install]
+WantedBy=snapd.mounts.target
+WantedBy=multi-user.target

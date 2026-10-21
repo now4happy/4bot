@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+import ast,base64,os,subprocess,time,urllib.request
+from pathlib import Path
+ROOT=Path('/opt/bot-office')
+COLLECTOR=base64.b64decode('IiIiUmVhZC1vbmx5IGJvdCBtZXRhZGF0YSBjb2xsZWN0b3IuIE5ldmVyIGltcG9ydHMgYm90IGNvZGUgb3IgcmVhZHMgZW52IGZpbGVzLiIiIgppbXBvcnQgaGFzaGxpYixqc29uLG9zLHJlLHN1YnByb2Nlc3MKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmZyb20gZGF0ZXRpbWUgaW1wb3J0IGRhdGV0aW1lLHRpbWV6b25lCk9VVD1QYXRoKCcvdmFyL2xpYi9ib3Qtb2ZmaWNlL2ludmVudG9yeS5qc29uJykKVU5JVFM9KCdoYW40Mzg0dHVib3Quc2VydmljZScsJ2JpdGh1bWJfYm90LnNlcnZpY2UnLCd0b3NzX3NuaXBlci5zZXJ2aWNlJywndG9zc19kY2Euc2VydmljZScpCmRlZiBjb2xsZWN0KHVuaXQscHJldmlvdXMsY2xvY2spOgogZmllbGRzPXt9O25vdGVzPVtdCiB0cnk6CiAgcD1zdWJwcm9jZXNzLnJ1bihbJ3N5c3RlbWN0bCcsJ3Nob3cnLHVuaXQsJy0tbm8tcGFnZXInLCctcCcsJ0xvYWRTdGF0ZScsJy1wJywnV29ya2luZ0RpcmVjdG9yeScsJy1wJywnTWFpblBJRCcsJy1wJywnTlJlc3RhcnRzJywnLXAnLCdFeGVjTWFpblN0YXJ0VGltZXN0YW1wJywnLXAnLCdVbml0RmlsZVN0YXRlJ10sY2FwdHVyZV9vdXRwdXQ9VHJ1ZSx0ZXh0PVRydWUsdGltZW91dD0zLGNoZWNrPVRydWUpCiAgZmllbGRzPWRpY3Qocy5zcGxpdCgnPScsMSkgZm9yIHMgaW4gcC5zdGRvdXQuc3BsaXRsaW5lcygpIGlmICc9JyBpbiBzKQogZXhjZXB0IChPU0Vycm9yLHN1YnByb2Nlc3MuU3VicHJvY2Vzc0Vycm9yKTpub3Rlcy5hcHBlbmQoJ3NlcnZpY2VfbWV0YWRhdGFfdW5hdmFpbGFibGUnKQogY3dkPVBhdGgoZmllbGRzLmdldCgnV29ya2luZ0RpcmVjdG9yeScpIG9yICcvJykKIGVudHJ5PU5vbmUKIHRyeToKICBwaWQ9aW50KGZpZWxkcy5nZXQoJ01haW5QSUQnLCcwJykpCiAgaWYgcGlkPjAgYW5kIGN3ZC5pc19hYnNvbHV0ZSgpIGFuZCBjd2QhPVBhdGgoJy8nKToKICAgYXJncz1QYXRoKGYnL3Byb2Mve3BpZH0vY21kbGluZScpLnJlYWRfYnl0ZXMoKS5zcGxpdChiJ1wwJykKICAgZm9yIHJhdyBpbiBhcmdzWzE6XToKICAgIGE9cmF3LmRlY29kZShlcnJvcnM9J3JlcGxhY2UnKQogICAgaWYgbm90IGEuZW5kc3dpdGgoJy5weScpIG9yICc9JyBpbiBhOmNvbnRpbnVlCiAgICBwYXRoPVBhdGgoYSkgaWYgUGF0aChhKS5pc19hYnNvbHV0ZSgpIGVsc2UgY3dkL2EKICAgIGlmIHBhdGguaXNfc3ltbGluaygpOmNvbnRpbnVlCiAgICBpZiBwYXRoLnJlc29sdmUoKS5pc19yZWxhdGl2ZV90byhjd2QucmVzb2x2ZSgpKSBhbmQgcGF0aC5pc19maWxlKCk6ZW50cnk9cGF0aDticmVhawogZXhjZXB0IChPU0Vycm9yLFZhbHVlRXJyb3IpOm5vdGVzLmFwcGVuZCgnZW50cnlfdW5hdmFpbGFibGUnKQogdmVyc2lvbj1Ob25lO2ZpbmdlcnByaW50PU5vbmU7Y291bnQ9MAogaWYgZW50cnk6CiAgZGlnPWhhc2hsaWIuc2hhMjU2KCkKICBmb3IgcGF0aCBpbiBzb3J0ZWQoY3dkLmdsb2IoJyoucHknKSlbOjEwMF06CiAgIGlmIHBhdGguaXNfc3ltbGluaygpIG9yIG5vdCBwYXRoLmlzX2ZpbGUoKTpjb250aW51ZQogICB0cnk6CiAgICBpZiBwYXRoLnN0YXQoKS5zdF9zaXplPjEwMjQqKjI6Y29udGludWUKICAgIGNvbnRlbnQ9cGF0aC5yZWFkX2J5dGVzKCk7ZGlnLnVwZGF0ZShwYXRoLm5hbWUuZW5jb2RlKCkrYidcMCcrY29udGVudCk7Y291bnQrPTEKICAgIG1hdGNoPXJlLnNlYXJjaChyYicoP20pXkJPVF9WRVJTSU9OXHMqPVxzKltceDIyXHgyN10odj9bMC05XVswLTlBLVphLXouX34gLV17MCwzOX0pW1x4MjJceDI3XScsY29udGVudCkKICAgIGlmIG1hdGNoIGFuZCB2ZXJzaW9uIGlzIE5vbmU6dmVyc2lvbj1tYXRjaC5ncm91cCgxKS5kZWNvZGUoKQogICBleGNlcHQgT1NFcnJvcjpub3Rlcy5hcHBlbmQoJ2NvZGVfcmVhZF91bmF2YWlsYWJsZScpCiAgaWYgY291bnQ6ZmluZ2VycHJpbnQ9ZGlnLmhleGRpZ2VzdCgpCiBlbHNlOm5vdGVzLmFwcGVuZCgnZW50cnlfbm90X2lkZW50aWZpZWQnKQogb2xkaGFzaD1wcmV2aW91cy5nZXQoJ2NvZGVfaGFzaCcpO2NoYW5nZWQ9Ym9vbChvbGRoYXNoIGFuZCBmaW5nZXJwcmludCBhbmQgb2xkaGFzaCE9ZmluZ2VycHJpbnQpCiBsYXN0X2NoYW5nZWQ9Y2xvY2sgaWYgY2hhbmdlZCBlbHNlIHByZXZpb3VzLmdldCgnbGFzdF9jaGFuZ2VfZGV0ZWN0ZWRfYXQnKQogcmV0dXJuIHsndW5pdCc6dW5pdCwnZGVjbGFyZWRfdmVyc2lvbic6dmVyc2lvbiwnZW50cnknOmVudHJ5Lm5hbWUgaWYgZW50cnkgZWxzZSBOb25lLCdjb2RlX2hhc2gnOmZpbmdlcnByaW50LCdjb2RlX2ZpbGVzX2NvdW50Jzpjb3VudCwnY2hhbmdlZF9vbl90aGlzX2NoZWNrJzpjaGFuZ2VkLCdsYXN0X2NoYW5nZV9kZXRlY3RlZF9hdCc6bGFzdF9jaGFuZ2VkLCdyZXN0YXJ0X2NvdW50JzppbnQoZmllbGRzWydOUmVzdGFydHMnXSkgaWYgZmllbGRzLmdldCgnTlJlc3RhcnRzJywnJykuaXNkaWdpdCgpIGVsc2UgTm9uZSwnc3RhcnRlZF9hdCc6ZmllbGRzLmdldCgnRXhlY01haW5TdGFydFRpbWVzdGFtcCcpIG9yIE5vbmUsJ2Jvb3Rfc2V0dGluZyc6ZmllbGRzLmdldCgnVW5pdEZpbGVTdGF0ZScsJ3Vua25vd24nKSwnbm90ZXMnOnNvcnRlZChzZXQobm90ZXMpKX0KZGVmIG1haW4oKToKIE9VVC5wYXJlbnQubWtkaXIobW9kZT0wbzc1NSxwYXJlbnRzPVRydWUsZXhpc3Rfb2s9VHJ1ZSkKIHRyeTpvbGQ9anNvbi5sb2FkcyhPVVQucmVhZF90ZXh0KCkpCiBleGNlcHQgKE9TRXJyb3IsVmFsdWVFcnJvcik6b2xkPXt9CiBiZWZvcmU9e2IuZ2V0KCd1bml0Jyk6YiBmb3IgYiBpbiBvbGQuZ2V0KCdib3RzJyxbXSkgaWYgaXNpbnN0YW5jZShiLGRpY3QpfQogY2xvY2s9ZGF0ZXRpbWUubm93KHRpbWV6b25lLnV0YykuaXNvZm9ybWF0KCkKIGRhdGE9eydjb2xsZWN0ZWRfYXQnOmNsb2NrLCdzY29wZSc6J3RvcF9sZXZlbF9weXRob25fZmlsZXNfb25seScsJ2JvdHMnOltjb2xsZWN0KHUsYmVmb3JlLmdldCh1LHt9KSxjbG9jaykgZm9yIHUgaW4gVU5JVFNdfQogdG1wPU9VVC53aXRoX3N1ZmZpeCgnLnRtcCcpO3RtcC53cml0ZV90ZXh0KGpzb24uZHVtcHMoZGF0YSxlbnN1cmVfYXNjaWk9RmFsc2UpKTt0bXAuY2htb2QoMG82NDQpO29zLnJlcGxhY2UodG1wLE9VVCkKaWYgX19uYW1lX189PSdfX21haW5fXyc6bWFpbigpCg==')
+JS=base64.b64decode('CmNvbnN0IGludmVudG9yeT1kLmludmVudG9yeTtjb25zdCBpbnZlbnRvcnlGcmVzaD1pbnZlbnRvcnkmJkRhdGUubm93KCktbmV3IERhdGUoaW52ZW50b3J5LmNvbGxlY3RlZF9hdCkuZ2V0VGltZSgpPDE4MDAwMDtkb2N1bWVudC5xdWVyeVNlbGVjdG9yQWxsKCcuYm90c3RhdHVzJykuZm9yRWFjaCgoZWwsaSk9Pntjb25zdCBpbmZvPWludmVudG9yeUZyZXNoP2ludmVudG9yeS5ib3RzLmZpbmQoeD0+eC51bml0PT09ZC5ib3RzW2ldPy51bml0KTpudWxsO2NvbnN0IHNtYWxsPWRvY3VtZW50LmNyZWF0ZUVsZW1lbnQoJ3NtYWxsJyk7c21hbGwuc3R5bGUuY3NzVGV4dD0nZGlzcGxheTpibG9jazttYXJnaW4tdG9wOjdweDtmb250LXNpemU6MTBweDtsaW5lLWhlaWdodDoxLjc7Y29sb3I6IzdjOGI4MCc7c21hbGwudGV4dENvbnRlbnQ9IWluZm8/J+uyhOyghCDsiJjsp5Eg64yA6riwL+yngOyXsCc6KGluZm8uZGVjbGFyZWRfdmVyc2lvbnx8J+uyhOyghCDrr7jtkZzquLAnKSsnIMK3IOy9lOuTnCAnKyhpbmZvLmNvZGVfaGFzaD9pbmZvLmNvZGVfaGFzaC5zbGljZSgwLDEwKTon7ZmV7J24IOu2iOqwgCcpKycgwrcg7J6s7Iuc7J6RICcrKGluZm8ucmVzdGFydF9jb3VudD8/J+uvuO2ZleyduCcpKyftmowgwrcg7J6Q64+Z7Iuc7J6RICcraW5mby5ib290X3NldHRpbmcrKGluZm8ubGFzdF9jaGFuZ2VfZGV0ZWN0ZWRfYXQ/JyDCtyDrs4Dqsr0g6rCQ7KeAICcrbmV3IERhdGUoaW5mby5sYXN0X2NoYW5nZV9kZXRlY3RlZF9hdCkudG9Mb2NhbGVTdHJpbmcoJ2tvLUtSJyx7dGltZVpvbmU6J0FzaWEvU2VvdWwnfSk6JycpO2VsLmFwcGVuZChzbWFsbCl9KTsK').decode()
+SERVICE="""[Unit]
+Description=Bot Office read-only inventory
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/bot-office/collect_inventory.py
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/bot-office
+PrivateTmp=true
+CPUQuota=15%
+MemoryMax=64M
+TimeoutStartSec=30
+"""
+TIMER="""[Unit]
+Description=Collect bot inventory every minute
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+AccuracySec=5
+[Install]
+WantedBy=timers.target
+"""
+def main():
+ if os.geteuid()!=0:raise SystemExit('sudo python3 bot_office_inventory_update.py 로 실행하세요.')
+ server=ROOT/'server.py';index=ROOT/'index.html'
+ src=server.read_text();html=index.read_text()
+ if 'BOT_OFFICE_INVENTORY_V1' in src:raise SystemExit('이미 적용되어 있습니다. 변경 없음.')
+ anchor="    data = {'observed_at':"
+ marker="const gib=x=>"
+ if src.count(anchor)!=1 or html.count(marker)!=1:raise SystemExit('예상과 다른 버전입니다. 변경 없이 중단합니다.')
+ addition="""    # BOT_OFFICE_INVENTORY_V1
+    try:
+        inventory = json.loads(Path('/var/lib/bot-office/inventory.json').read_text())
+    except (OSError, ValueError):
+        inventory = None
+"""
+ updated=src.replace(anchor,addition+anchor).replace("'read_only':True, 'note':", "'inventory':inventory, 'read_only':True, 'note':")
+ ast.parse(updated);ast.parse(COLLECTOR)
+ patched=html.replace(marker,JS+marker)
+ stamp=time.strftime('%Y%m%d_%H%M%S');backup=ROOT/('backup_inventory_'+stamp);backup.mkdir()
+ (backup/'server.py').write_text(src);(backup/'index.html').write_text(html)
+ data=Path('/var/lib/bot-office');data.mkdir(mode=0o755,exist_ok=True)
+ cp=ROOT/'collect_inventory.py';cp.write_bytes(COLLECTOR);cp.chmod(0o644)
+ subprocess.run(['/usr/bin/python3',str(cp)],check=True,timeout=30)
+ for file,text in ((server,updated),(index,patched)):
+  temp=file.with_suffix('.new');temp.write_text(text);temp.chmod(0o644);os.replace(temp,file)
+ Path('/etc/systemd/system/bot-office-inventory.service').write_text(SERVICE)
+ Path('/etc/systemd/system/bot-office-inventory.timer').write_text(TIMER)
+ try:
+  subprocess.run(['systemctl','daemon-reload'],check=True)
+  subprocess.run(['systemctl','restart','bot-office.service'],check=True)
+  for _ in range(10):
+   try:
+    with urllib.request.urlopen('http://127.0.0.1:8765/healthz',timeout=2) as r:
+     if r.status==200:break
+   except OSError:time.sleep(.5)
+  else:raise RuntimeError('health check failed')
+  subprocess.run(['systemctl','enable','--now','bot-office-inventory.timer'],check=True)
+ except Exception:
+  server.write_text(src);index.write_text(html)
+  subprocess.run(['systemctl','restart','bot-office.service'])
+  raise SystemExit('적용 실패: 기존 화면/서버 코드로 복구했습니다. 오류 화면을 보내주세요.')
+ print('완료: 1분마다 버전/코드 지문/재시작/자동 시작 상태 수집')
+ print('봇 서비스는 변경/재시작하지 않았습니다. 사무실에 다시 로그인하세요.')
+ print('백업:',backup)
+ subprocess.run(['systemctl','is-active','bot-office.service','bot-office-inventory.timer'],check=False)
+if __name__=='__main__':main()

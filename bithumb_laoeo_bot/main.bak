@@ -1,0 +1,309 @@
+# ==========================================
+# Bithumb Smart DCA Bot - Version: v3.5
+# ==========================================
+import os, sys, time, json, uuid, hashlib, jwt, requests, threading
+from urllib.parse import urlencode
+from datetime import datetime, timezone, timedelta
+
+BOT_VERSION = "v3.5"
+KST = timezone(timedelta(hours=9))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "bot_config.json")
+STATE_FILE = os.path.join(BASE_DIR, "bot_state.json")
+HISTORY_FILE = os.path.join(BASE_DIR, "trade_history.json")
+VER_HISTORY_FILE = os.path.join(BASE_DIR, "update_history.json")
+
+ACCESS_KEY = os.environ.get("BITHUMB_ACCESS_KEY", "").strip()
+SECRET_KEY = os.environ.get("BITHUMB_SECRET_KEY", "").strip()
+TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "6979340028").strip()
+
+BITHUMB_VER_HISTORY = [
+    {"ver": "v1.0", "date": "2026-10-15", "desc": "빗썸 스마트 적립 및 분할익절 봇 최초 구축"},
+    {"ver": "v2.1", "date": "2026-10-18", "desc": "보유 코인(BTC/ETH) 정리 및 수익률 +1.0%↑ 시 1/2배 매수 도입"},
+    {"ver": "v2.3", "date": "2026-10-19", "desc": "10%·20%·30% 구간별 분할매도 계획 직관화"},
+    {"ver": "v3.0", "date": "2026-10-19", "desc": "실시간 급락 감시 제거 및 60초 저전력 초경량화"},
+    {"ver": "v3.2", "date": "2026-10-20", "desc": "19:00 매매 미진행/실패 감시 알람 및 History 메뉴 탑재"},
+    {"ver": "v3.4", "date": "2026-10-20", "desc": "1,000회 매매 시뮬레이션 검증 및 CHAT_ID 보안 잠금"},
+    {"ver": "v3.5", "date": "2026-10-20", "desc": "전체 코드 클린 재구축, 매수/익절 상태 분리 및 예외 방어 완료"}
+]
+
+def load_json(path, default):
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f: return json.load(f)
+        except: pass
+    return default
+
+def save_json(path, data):
+    try:
+        with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
+    except: pass
+
+save_json(VER_HISTORY_FILE, BITHUMB_VER_HISTORY)
+config = load_json(CONFIG_FILE, {"power": True, "coins": {"BTC": 10000, "ETH": 10000}, "target_profit_pct": 10.0, "sell_ratio_pct": 20.0, "buy_hour": 19})
+save_json(CONFIG_FILE, config)
+state = load_json(STATE_FILE, {"last_action_date": {}, "last_action_type": {}, "last_low_bal_ts": 0, "sold_stage": {}})
+for k in ["last_action_date", "last_action_type", "sold_stage"]:
+    if k not in state or not isinstance(state[k], dict): state[k] = {}
+save_json(STATE_FILE, state)
+history = load_json(HISTORY_FILE, [])
+wait_state = {"mode": None}
+def tg_api(method, payload=None):
+    if not TG_TOKEN: return None
+    try: return requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{method}", json=payload, timeout=10).json()
+    except: return None
+
+def send_panel(text, inline_kb, msg_id=None):
+    payload = {"chat_id": CHAT_ID, "text": text, "reply_markup": {"inline_keyboard": inline_kb}}
+    if msg_id:
+        payload["message_id"] = msg_id
+        res = tg_api("editMessageText", payload)
+        if res and (res.get("ok") or "not modified" in str(res.get("description", ""))): return
+    tg_api("sendMessage", payload)
+
+def bithumb_headers(query_params=None):
+    payload = {"access_key": ACCESS_KEY, "nonce": str(uuid.uuid4()), "timestamp": round(time.time() * 1000)}
+    if query_params:
+        m = hashlib.sha512(); m.update(urlencode(query_params).encode())
+        payload["query_hash"] = m.hexdigest(); payload["query_hash_alg"] = "SHA512"
+    return {"Authorization": f"Bearer {jwt.encode(payload, SECRET_KEY, algorithm='HS256')}", "Content-Type": "application/json"}
+
+def get_accounts():
+    try:
+        r = requests.get("https://api.bithumb.com/v1/accounts", headers=bithumb_headers(), timeout=10)
+        if r.status_code == 200: return r.json()
+    except: pass
+    return []
+
+def get_ticker(coin):
+    try:
+        r = requests.get(f"https://api.bithumb.com/v1/ticker?markets=KRW-{coin}", timeout=10)
+        if r.status_code == 200 and len(r.json()) > 0: return r.json()[0]
+    except: pass
+    return None
+
+def place_order(coin, side, price_or_vol, ord_type):
+    try:
+        body = {"market": f"KRW-{coin}", "side": side, "ord_type": ord_type}
+        if ord_type == "price": body["price"] = str(int(price_or_vol))
+        else: body["volume"] = str(price_or_vol)
+        r = requests.post("https://api.bithumb.com/v1/orders", headers=bithumb_headers(body), data=json.dumps(body), timeout=10)
+        return r.status_code in [200, 201], r.json()
+    except Exception as e: return False, str(e)
+
+def add_history(coin, action, detail):
+    now_str = datetime.now(KST).strftime("%m-%d %H:%M")
+    history.append(f"[{now_str}] {coin} {action}: {detail}")
+    if len(history) > 100: history.pop(0)
+    save_json(HISTORY_FILE, history)
+
+def calc_today_required_krw(accs):
+    today_str = datetime.now(KST).strftime("%Y-%m-%d")
+    total_req, details = 0, []
+    for coin, base_amt in config.get("coins", {}).items():
+        if base_amt <= 0 or state["last_action_date"].get(coin) == today_str: continue
+        t = get_ticker(coin)
+        cur_p = float(t["trade_price"]) if t else 0
+        acc = accs.get(coin, {})
+        bal, avg_p = float(acc.get("balance", 0)), float(acc.get("avg_buy_price", 0))
+        prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 and cur_p > 0 else 0.0
+        req = base_amt if (avg_p == 0 or bal == 0 or cur_p == 0) else (int(base_amt / 2) if prof_pct >= 1.0 else base_amt)
+        req = max(5000, req)
+        total_req += req; details.append(f"{coin}({req:,.0f}원)")
+    return total_req, details
+def build_balance_board():
+    accs_list = get_accounts()
+    accs = {a["currency"]: a for a in accs_list if isinstance(a, dict) and "currency" in a}
+    krw_bal = float(accs.get("KRW", {}).get("balance", 0))
+    req_krw, req_details = calc_today_required_krw(accs)
+    shortfall = max(0, req_krw - krw_bal)
+    now_str = datetime.now(KST).strftime("%m-%d %H:%M:%S KST")
+    lines = [
+        f"💰 [빗썸 자산 상황판 ({BOT_VERSION})]",
+        f"💵 보유 현금(KRW): {krw_bal:,.0f}원",
+        f"🛒 금일 매수 필요액: {req_krw:,.0f}원 " + (f"({', '.join(req_details)})" if req_details else "(금일 완료)"),
+        f"🚨 잔액 상태: " + (f"⚠️ {shortfall:,.0f}원 부족!" if shortfall > 0 else "✅ 잔액 충분"),
+        "─────────────────", "📦 [보유 코인 현황]"
+    ]
+    total_eval, has_coin = krw_bal, False
+    for cur in list(config.get("coins", {}).keys()):
+        a = accs.get(cur, {})
+        bal = float(a.get("balance", 0)) + float(a.get("locked", 0))
+        if bal <= 0: continue
+        has_coin = True
+        avg_p = float(a.get("avg_buy_price", 0))
+        t = get_ticker(cur)
+        cur_p = float(t["trade_price"]) if t else avg_p
+        eval_krw = bal * cur_p; total_eval += eval_krw
+        prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 else 0.0
+        tag = "1/2배 대상" if prof_pct >= 1.0 else "1배 대상"
+        lines.append(f"🪙 {cur} [{tag}]\n • 수량: {bal:.6f} | 평가: {eval_krw:,.0f}원 ({prof_pct:+.2f}%)\n • 평단/현재: {avg_p:,.0f}원 / {cur_p:,.0f}원")
+    if not has_coin: lines.append(" • 현재 보유 중인 코인이 없습니다.")
+    lines.extend(["─────────────────", f"🏦 총 추정 자산: {total_eval:,.0f}원\n⏱ 갱신: {now_str}"])
+    kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "⚙️ 전술 제어반", "callback_data": "control"}], [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]]
+    return "\n".join(lines), kb
+
+def build_control_view():
+    pwr_On = config.get("power", True)
+    pwr_txt = "🟢 ON (가동 중)" if pwr_On else "🔴 OFF (일시정지)"
+    pwr_btn = "🔴 스마트 적립 정지" if pwr_On else "🟢 스마트 적립 가동"
+    coins_str = ", ".join([f"{k}: {v:,}원" for k, v in config.get("coins", {}).items()]) or "없음"
+    tp1, sr = float(config.get("target_profit_pct", 10.0)), float(config.get("sell_ratio_pct", 20.0))
+    now_str = datetime.now(KST).strftime("%H:%M:%S")
+    text = (
+        f"⚙️ [스마트 적립 전술 제어반 ({BOT_VERSION})]\n"
+        f"▫️ 마스터 전원: {pwr_txt}\n▫️ 현재 기준시드: {coins_str}\n"
+        f"▫️ 정기 매수시각: 매일 오후 {config.get('buy_hour', 19)}:00 KST\n"
+        f"▫️ 매수 배율규칙: 수익률 +1.0% 이상 시 1/2배 (그 외 1배)\n"
+        f"▫️ 실패 감시알람: 19:15까지 미체결 시 즉시 사유 알림\n─────────────────\n"
+        f"📊 [수익률 구간별 매도 계획]\n"
+        f" • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n"
+        f" • {tp1*2:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n"
+        f" • {tp1*3:.0f}% 이상 수익 도달 시 ➔ 미정 (매도 없음)\n⏱ 조회: {now_str}"
+    )
+    kb = [
+        [{"text": pwr_btn, "callback_data": "toggle_power"}],
+        [{"text": ("✅ " if tp1==10.0 and sr==20.0 else "") + "🎯 10%·20% (잔고 20%매도)", "callback_data": "prof_10_20"}, {"text": ("✅ " if tp1==5.0 and sr==20.0 else "") + "🎯 5%·10% (잔고 20%매도)", "callback_data": "prof_5_20"}],
+        [{"text": "💵 코인 시드 설정", "callback_data": "ask_buy"}, {"text": "🎯 익절/매도비율 직접입력", "callback_data": "ask_custom"}],
+        [{"text": "💰 내 자산 상황판", "callback_data": "balance"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]
+    ]
+    return text, kb
+
+def build_ver_history_view():
+    lines = [f"📜 [빗썸 봇 업데이트 History ({BOT_VERSION})]", "─────────────────"]
+    for item in load_json(VER_HISTORY_FILE, BITHUMB_VER_HISTORY):
+        lines.append(f"🔹 {item['ver']} ({item['date']})\n  └ {item['desc']}")
+    lines.append("─────────────────")
+    return "\n".join(lines), [[{"text": "🔙 메인 메뉴", "callback_data": "main"}]]
+
+def build_main_view():
+    text = f"🤖 [빗썸 스마트 적립 초경량 관제탑 ({BOT_VERSION})]\n\n• 매일 19:00 정기 매수 (+1.0%↑ 시 1/2배, 그 외 1배)\n• 10% / 20% 수익 도달 시 잔고의 20% 분할매도 (30%↑ 미정)"
+    kb = [[{"text": "💰 내 자산 상황판", "callback_data": "balance"}], [{"text": "⚙️ 전술 제어반", "callback_data": "control"}], [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "📜 History(버전내역)", "callback_data": "ver_history"}]]
+    return text, kb
+def handle_callback(cb):
+    if str(cb.get("message", {}).get("chat", {}).get("id", "")) != str(CHAT_ID): return
+    cb_id, data, msg_id = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
+    wait_state["mode"] = None
+    tg_api("answerCallbackQuery", {"callback_query_id": cb_id})
+    if data == "balance": send_panel(*(build_balance_board()), msg_id)
+    elif data == "control": send_panel(*(build_control_view()), msg_id)
+    elif data == "main": send_panel(*(build_main_view()), msg_id)
+    elif data == "ver_history": send_panel(*(build_ver_history_view()), msg_id)
+    elif data == "history":
+        h_txt = f"📝 [최근 거래내역 ({BOT_VERSION})]\n\n" + ("\n".join(history[-15:]) if history else "체결 내역 없음")
+        send_panel(h_txt, [[{"text": "💰 상황판", "callback_data": "balance"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]], msg_id)
+    elif data == "toggle_power":
+        config["power"] = not config.get("power", True); save_json(CONFIG_FILE, config); send_panel(*(build_control_view()), msg_id)
+    elif data.startswith("prof_"):
+        _, tp, sr = data.split("_"); config["target_profit_pct"], config["sell_ratio_pct"] = float(tp), float(sr); save_json(CONFIG_FILE, config); send_panel(*(build_control_view()), msg_id)
+    elif data == "ask_buy":
+        wait_state["mode"] = "setbuy"; send_panel("💵 [코인 시드 설정] 예: BTC 20000 / 삭제: BTC 0", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
+    elif data == "ask_custom":
+        wait_state["mode"] = "setcustom"; send_panel("🎯 [1차익절% 매도비율%] 예: 10 20", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
+
+def handle_message(msg):
+    if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
+    text = msg.get("text", "").strip()
+    if not text: return
+    if text.startswith("/") or text in ["메뉴", "상황판", "잔고", "제어반", "취소", "히스토리", "history"]:
+        wait_state["mode"] = None
+        if text in ["/balance", "상황판", "잔고"]: send_panel(*(build_balance_board()))
+        elif text in ["/control", "제어반"]: send_panel(*(build_control_view()))
+        elif text in ["/history", "히스토리", "history"]: send_panel(*(build_ver_history_view()))
+        else: send_panel(*(build_main_view()))
+        return
+    if wait_state["mode"] == "setbuy":
+        parts = text.split()
+        try:
+            coin = "BTC" if len(parts) == 1 else parts[0].upper()
+            amt = int((parts[0] if len(parts) == 1 else parts[1]).replace(",", "").replace("원", ""))
+            if amt <= 0: config["coins"].pop(coin, None)
+            else: config["coins"][coin] = amt
+            save_json(CONFIG_FILE, config); wait_state["mode"] = None; send_panel(*(build_control_view()))
+        except: send_panel("❌ 예: BTC 20000", [[{"text": "🔙 제어반", "callback_data": "control"}]])
+        return
+    elif wait_state["mode"] == "setcustom":
+        parts = text.split()
+        try:
+            config["target_profit_pct"] = float(parts[0])
+            if len(parts) >= 2: config["sell_ratio_pct"] = float(parts[1])
+            save_json(CONFIG_FILE, config); wait_state["mode"] = None; send_panel(*(build_control_view()))
+        except: send_panel("❌ 숫자만 입력하세요. (예: 10 20)", [[{"text": "🔙 제어반", "callback_data": "control"}]])
+        return
+    send_panel(*(build_main_view()))
+
+def telegram_polling_loop():
+    offset = None
+    while True:
+        try:
+            params = {"timeout": 20}
+            if offset: params["offset"] = offset
+            r = requests.get(f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates", params=params, timeout=25)
+            if r.status_code == 200:
+                for upd in r.json().get("result", []):
+                    offset = upd["update_id"] + 1
+                    if "callback_query" in upd: handle_callback(upd["callback_query"])
+                    elif "message" in upd: handle_message(upd["message"])
+        except: time.sleep(3)
+
+def trading_monitor_loop():
+    while True:
+        try:
+            if config.get("power", True):
+                now = datetime.now(KST); today_str = now.strftime("%Y-%m-%d")
+                accs_list = get_accounts()
+                accs = {a["currency"]: a for a in accs_list if isinstance(a, dict) and "currency" in a}
+                krw_bal = float(accs.get("KRW", {}).get("balance", 0))
+                req_krw, req_details = calc_today_required_krw(accs)
+                if req_krw > 0 and krw_bal < req_krw and (time.time() - float(state.get("last_low_bal_ts", 0)) >= 1800):
+                    state["last_low_bal_ts"] = time.time(); save_json(STATE_FILE, state)
+                    send_panel(f"⚠️ [빗썸 잔액 부족 ({BOT_VERSION})]\n• 필요: {req_krw:,.0f}원 / 보유: {krw_bal:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                tp1, sr = float(config.get("target_profit_pct", 10.0)), float(config.get("sell_ratio_pct", 20.0))
+                for coin, base_amt in list(config.get("coins", {}).items()):
+                    if base_amt <= 0: continue
+                    t = get_ticker(coin)
+                    if not t: continue
+                    cur_p = float(t["trade_price"])
+                    acc = accs.get(coin, {})
+                    bal, avg_p = float(acc.get("balance", 0)), float(acc.get("avg_buy_price", 0))
+                    prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 and bal > 0 else 0.0
+                    if prof_pct < tp1 and state["sold_stage"].get(coin, 0) != 0:
+                        state["sold_stage"][coin] = 0; save_json(STATE_FILE, state)
+                    sold_stg = int(state["sold_stage"].get(coin, 0))
+                    target_stg = 1 if (tp1 <= prof_pct < tp1*2 and sold_stg < 1) else (2 if (tp1*2 <= prof_pct < tp1*3 and sold_stg < 2) else 0)
+                    if bal > 0 and avg_p > 0 and target_stg > 0:
+                        sell_vol = round(bal * (sr / 100.0), 8)
+                        if sell_vol * cur_p >= 5000:
+                            ok, _ = place_order(coin, "ask", sell_vol, "market")
+                            if ok:
+                                state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = f"{target_stg}차익절"
+                                save_json(STATE_FILE, state); add_history(coin, f"🎯{target_stg}차익절", f"{prof_pct:+.2f}% ({sr:.0f}% 매도)")
+                                send_panel(f"🎉 [{coin} {target_stg}차 익절 완료] {prof_pct:+.2f}%", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                                continue
+                    if state["last_action_date"].get(coin) != today_str and now.hour >= config.get("buy_hour", 19):
+                        buy_amt = max(5000, base_amt if (avg_p == 0 or bal == 0) else (int(base_amt / 2) if prof_pct >= 1.0 else base_amt))
+                        if krw_bal >= buy_amt:
+                            ok, res_json = place_order(coin, "bid", buy_amt, "price")
+                            if ok:
+                                krw_bal -= buy_amt; state["last_action_date"][coin], state["last_action_type"][coin] = today_str, "매수완료"
+                                save_json(STATE_FILE, state); add_history(coin, "🛒정기매수", f"{buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
+                                send_panel(f"✅ [{coin} 19:00 정기매수 완료] {buy_amt:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                            else:
+                                fk = f"fail_{today_str}_{coin}"
+                                if not state.get(fk):
+                                    state[fk] = True; save_json(STATE_FILE, state)
+                                    send_panel(f"🚨 [{coin} 매수 실패]\n• 사유: {res_json}", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                        elif now.minute >= 15:
+                            fk = f"fail_{today_str}_{coin}"
+                            if not state.get(fk):
+                                state[fk] = True; save_json(STATE_FILE, state)
+                                send_panel(f"🚨 [{coin} 매수 미진행]\n• 사유: 원화 부족 (필요 {buy_amt:,.0f}원 / 보유 {krw_bal:,.0f}원)", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+        except Exception as e: print("Loop Error:", e)
+        time.sleep(60)
+
+if __name__ == "__main__":
+    t, kb = build_control_view()
+    send_panel(f"✨ [빗썸 봇 {BOT_VERSION} 클린 패치 완료!]\n\n" + t, kb)
+    threading.Thread(target=telegram_polling_loop, daemon=True).start()
+    trading_monitor_loop()

@@ -1,0 +1,13 @@
+[Unit]
+Description=Absolute Snowball Quant Engine
+After=network.target
+
+[Service]
+User=gieokkim
+WorkingDirectory=/home/gieokkim
+ExecStart=/home/gieokkim/venv/bin/python /home/gieokkim/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
