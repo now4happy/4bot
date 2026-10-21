@@ -1,10 +1,51 @@
+# ==========================================================
+# 화이트리스트 방식 (2026-10-21): 기본은 전부 제외, 아래 '!' 로 허용한 것만 GitHub 에 올라갑니다.
+# 새 폴더/파일을 올리려면 여기에 '!' 줄을 추가하세요. 키/설정/장부/로그는 절대 추가하지 마세요.
+# ==========================================================
+/*
+!/.gitignore
+!/.github/
+!/README.md
+!/CONTEXT.md
+!/TODO.md
+!/LICENSE
+!/.env.example
+!/*.py
+!/*.md
+!/*.sh
+!/background.png
+!/background.gif
+!/프롬프트.txt
+!/Vwap 연구.txt
+!/리버스모드.txt
+!/롤백 구조 봇.txt
+!/차세대 avwap 프롬프트.txt
+!/자가 업데이트 설치 가이드.txt
+!/[[]긴급 실전 팁] KST(한국시간) 영구 고정 비기.txt
+
+# 봇 폴더: 코드와 README 만
+!/toss_dca_bot/
+/toss_dca_bot/*
+!/toss_dca_bot/*.py
+!/toss_dca_bot/README.md
+
+!/toss_sniper/
+/toss_sniper/*
+!/toss_sniper/*.py
+!/toss_sniper/README.md
+!/toss_sniper/LICENSE
+
+!/bithumb_laoeo_bot/
+/bithumb_laoeo_bot/*
+!/bithumb_laoeo_bot/*.py
+!/bithumb_laoeo_bot/README.md
+
+# 허용 범위 안이라도 항상 제외
 .env
 .env.*
 !.env.example
-venv/
-__pycache__/
-logs/
-data/
+*.bak
+*.save
 *.log
-*.zip
-.DS_Store
+__pycache__/
+venv/
