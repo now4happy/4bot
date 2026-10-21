@@ -241,6 +241,37 @@ class AssassinLedger:
     ROUND_TRIP_COMM_PCT = 0.14
     ONE_WAY_COMM_RATE = 0.0007
     MIN_BUDGET_FLOOR = 10.0
+    # NEW: 프리장 과매도 재포착 시 추가 매수(분할 매수) 최대 횟수 (제어반에서 변경, 1회 = 기존과 동일한 단발 매수)
+    DEFAULT_MAX_BUYS = 5
+    ALLOWED_MAX_BUYS = (1, 2, 3, 5, 7, 10)
+
+    @classmethod
+    def normalize_max_buys(cls, val) -> int:
+        try:
+            n = int(float(val))
+        except Exception:
+            return cls.DEFAULT_MAX_BUYS
+        return max(1, min(10, n))
+
+    # NEW: 현재 포지션의 누적 매수 횟수와 최대 매수 횟수 조회
+    @classmethod
+    async def get_buy_plan(cls, symbol: str) -> tuple[int, int]:
+        filepath = cls._get_file_path(symbol)
+        async with GlobalThrottle.get_file_lock(filepath):
+            def _read():
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        data = {}
+                except Exception:
+                    data = {}
+                try:
+                    cnt = max(0, int(data.get("buy_count", 0)))
+                except Exception:
+                    cnt = 0
+                return cnt, cls.normalize_max_buys(data.get("max_buy_count", cls.DEFAULT_MAX_BUYS))
+            return await asyncio.to_thread(_read)
 
     @classmethod
     def _validate_symbol(cls, symbol: str) -> str:
@@ -428,6 +459,8 @@ class AssassinLedger:
         nq_entry_amp: float = None,
         entry_trend: str = None,
         is_compound: bool = None,
+        buy_count: int = None,
+        max_buy_count: int = None,
     ):
         filepath = cls._get_file_path(symbol)
         async with GlobalThrottle.get_file_lock(filepath):
@@ -455,6 +488,16 @@ class AssassinLedger:
 
                 if price is not None:
                     data["last_buy_price"] = price
+                    # NEW: 포지션 초기화(price=0) 시 누적 매수 횟수도 함께 0으로
+                    try:
+                        if float(price) <= 0.0:
+                            data["buy_count"] = 0
+                    except Exception:
+                        pass
+                if buy_count is not None:
+                    data["buy_count"] = max(0, int(buy_count))
+                if max_buy_count is not None:
+                    data["max_buy_count"] = cls.normalize_max_buys(max_buy_count)
                 if budget is not None:
                     data["budget"] = round(float(budget), 2)
                 if last_session_id is not None:

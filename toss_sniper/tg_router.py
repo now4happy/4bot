@@ -242,6 +242,29 @@ async def process_toggle_compound(callback_query: types.CallbackQuery, state: FS
             pass
 
 
+# NEW: 전술 제어반(/settlement) 프리장 최대 매수 횟수(추가 매수 한도) 원클릭 선택 핸들러
+@router.callback_query(F.data.startswith("set_maxbuy_SOXS_"))
+async def process_set_max_buys(callback_query: types.CallbackQuery, state: FSMContext):
+    user = getattr(callback_query, "from_user", None)
+    if not user or getattr(user, "id", None) != ADMIN_CHAT_ID:
+        return
+    raw_str = callback_query.data.replace("set_maxbuy_SOXS_", "").strip()
+    new_max = AssassinLedger.normalize_max_buys(raw_str)
+    await AssassinLedger.save_state("SOXS", max_buy_count=new_max)
+    if wakeup_event:
+        wakeup_event.set()
+    text, keyboard = await build_settlement_board()
+    try:
+        await callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        pass
+    finally:
+        try:
+            await callback_query.answer(f"🔁 최대 매수 {new_max}회 설정 완료")
+        except Exception as e:
+            pass
+
+
 @router.callback_query(F.data.startswith("set_budget_SOXS"))
 async def process_set_budget(callback_query: types.CallbackQuery, state: FSMContext):
     user = getattr(callback_query, "from_user", None)

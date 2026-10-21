@@ -31,6 +31,8 @@ PRE_SNIPER_RSI_THRESHOLD = 30.0
 # NEW: 데이장(19:00~03:59 EST) SOXS RSI<=30 알림 재장전 히스테리시스 임계치 및 쿨다운 상수
 DAY_RSI_REARM_THRESHOLD = 35.0
 DAY_RSI_ALERT_COOLDOWN_SEC = 180.0
+# NEW: 프리장 보유 중 추가 매수 재장전 기준 — 직전 매수 뒤 RSI가 35 이상으로 회복했다가 다시 30 이하로 떨어져야 1회 추가 매수
+PRE_ADD_REARM_THRESHOLD = 35.0
 
 # 무음 불발(Silent Drop) 방어 및 데이장 히스테리시스 스팸 억제용 인메모리 경보 캐시 (Case 18)
 _STRIKE_ALERT_CACHE = {
@@ -40,6 +42,9 @@ _STRIKE_ALERT_CACHE = {
     "day_logical_date": "",
     "day_rsi30_armed": True,
     "last_day_rsi30_ts": 0.0,
+    # NEW: 추가 매수 재장전 상태 (재기동 직후에는 False → RSI 35 회복을 먼저 확인)
+    "add_armed": False,
+    "last_add_warn": "",
 }
 
 
@@ -850,12 +855,14 @@ async def execute_premarket_rsi_sniper_strike_plugin(
                 await AssassinLedger.save_state(
                     symbol, buy_order_id=new_buy_id, entry_session="PRE_SNIPER", entry_trend="SHORT",
                     entry_time=time.time(), nq_entry_price=nq_c_global, nq_entry_amp=nq_amp_global,
-                    is_session_done=True, last_session_id=current_session_id,
+                    is_session_done=True, last_session_id=current_session_id, buy_count=1,
                 )
+                _STRIKE_ALERT_CACHE["add_armed"] = False
                 _STRIKE_ALERT_CACHE["last_err_msg"] = ""
                 ctx.wakeup_event.set()
+                _, max_buys = await AssassinLedger.get_buy_plan(symbol)
                 await ctx.notify_tg(
-                    f"🔫 <b>[프리장 스나이퍼] {symbol} RSI≤30 과매도 포착 ➡️ 실거래 지정가 요격 발사</b>\n"
+                    f"🔫 <b>[프리장 스나이퍼] {symbol} RSI≤30 과매도 포착 ➡️ 실거래 지정가 요격 발사 (1/{max_buys}회)</b>\n"
                     f"▫️ 실시간 1분봉 RSI: <code>{rsi_val:.1f}</code> (기준 ≤ 30.0)\n"
                     f"▫️ 요격 지정가(LIMIT): <code>${target_price:.2f}</code> ({mode_tag}시드 <code>${budget:,.2f}</code> ➔ <code>{target_qty}주</code>)\n"
                     f"▫️ NQ=F 기준점: <code>{nq_c_global:.2f}</code> (당일 진폭 <code>{nq_amp_global:.2f}%</code>)\n"
@@ -878,6 +885,117 @@ async def execute_premarket_rsi_sniper_strike_plugin(
             ctx.in_memory_ordering_lock[symbol] = False
 
 
+# NEW: 프리장(04:00~09:29 EST) 보유 중 SOXS RSI≤30 재포착 시 시드만큼 추가 지정가 매수 (최대 N회)
+# - 직전 매수 뒤 RSI가 35 이상으로 회복해야 다음 과매도에서 1회 추가 (같은 과매도 구간 연속 매수 방지)
+# - 매도 덫은 체결 후 전체 보유분 평단가 기준 목표 익절가로 manage_mechanical_profit_trap_plugin 이 자동 재장전
+async def execute_premarket_rsi_add_buy_plugin(
+    ctx: SniperPluginContext, symbol: str, now_est: datetime, current_session_id: str,
+    current_price: float, budget: float, target_profit_rate: float, rsi_val: float,
+    holdings_qty: int, entry_session: str,
+):
+    if symbol != "SOXS" or holdings_qty <= 0 or entry_session != "PRE_SNIPER":
+        return
+
+    if rsi_val >= PRE_ADD_REARM_THRESHOLD:
+        _STRIKE_ALERT_CACHE["add_armed"] = True
+        return
+
+    est_hm = now_est.hour * 100 + now_est.minute
+    if not (400 <= est_hm <= 929):
+        return
+    if not (0.0 < rsi_val <= PRE_SNIPER_RSI_THRESHOLD) or not _STRIKE_ALERT_CACHE.get("add_armed"):
+        return
+    if ctx.in_memory_ordering_lock[symbol]:
+        return
+
+    buy_count, max_buys = await AssassinLedger.get_buy_plan(symbol)
+    if buy_count >= max_buys:
+        _STRIKE_ALERT_CACHE["add_armed"] = False
+        warn_key = f"max_{current_session_id}_{buy_count}"
+        if _STRIKE_ALERT_CACHE.get("last_add_warn") != warn_key:
+            _STRIKE_ALERT_CACHE["last_add_warn"] = warn_key
+            await ctx.notify_tg(
+                f"⏸️ <b>[프리장 스나이퍼 {symbol}] 최대 매수 {max_buys}회 도달</b>\n"
+                f"▫️ RSI <code>{rsi_val:.1f}</code> 재포착했지만 추가 매수 없이 평단 기준 익절만 대기합니다."
+            )
+        return
+
+    async with ctx.dual_strike_mutex:
+        ctx.in_memory_ordering_lock[symbol] = True
+        try:
+            st = await AssassinLedger.get_state(symbol)
+            if not st[5] or str(st[8] or "") != "PRE_SNIPER":
+                return
+
+            open_orders_check = await ctx.client.get_orders(status="OPEN", symbol=symbol)
+            if any(o.get("side") == "BUY" for o in open_orders_check):
+                return
+
+            # 같은 과매도 구간에서 중복 주문이 나가지 않도록 주문 전에 재장전 해제 (실패해도 RSI 35 회복 후에만 재시도)
+            _STRIKE_ALERT_CACHE["add_armed"] = False
+
+            _, _, _, nq_c, nq_h, nq_l = await MacroDataCache.get_nq_sniper_signal(force_refresh=True)
+            nq_amp = (((nq_h - nq_l) / nq_l * 100.0) if nq_l > 0.0 else 0.0)
+            if nq_amp >= 2.0:
+                await ctx.notify_tg(
+                    f"🛑 <b>[프리장 스나이퍼 {symbol}] 추가 매수 보류 (대세장 과열)</b>\n"
+                    f"▫️ 사유: NQ=F 당일 진폭 <code>{nq_amp:.2f}%</code> (2.0% 이상) · 보유분 익절 대기는 유지"
+                )
+                return
+
+            latest_price = await ctx.client.get_current_price(symbol)
+            if latest_price <= 0.0:
+                latest_price = current_price
+            if latest_price <= 0.0:
+                return
+
+            current_bp = -1.0
+            try:
+                current_bp = await ctx.client.get_usd_buying_power()
+                actual_budget = min(budget, current_bp * 0.995)
+            except Exception:
+                actual_budget = budget
+
+            target_price = math.floor(latest_price * 100.0) / 100.0
+            target_qty = int(math.floor(actual_budget / target_price)) if target_price > 0.0 else 0
+            if target_qty <= 0:
+                bp_str = f"${current_bp:,.2f}" if current_bp >= 0.0 else "조회실패"
+                await ctx.notify_tg(
+                    f"⚠️ <b>[프리장 스나이퍼 {symbol}] 추가 매수 보류 — 주문 수량 0주</b>\n"
+                    f"▫️ 포착 RSI: <code>{rsi_val:.1f}</code> | 현재가: <code>${target_price:.2f}</code>\n"
+                    f"▫️ 설정 시드: <code>${budget:,.2f}</code> | USD 가능금액: <code>{bp_str}</code>"
+                )
+                return
+
+            res = await ctx.client.create_order(
+                symbol=symbol, side="BUY", order_type="LIMIT",
+                quantity=target_qty, price=f"{target_price:.2f}",
+                client_order_id=f"PADD_{symbol}_{now_est.strftime('%H%M%S')}"[:36],
+            )
+            if res and isinstance(res, dict) and res.get("result", {}).get("orderId"):
+                new_buy_id = str(res["result"]["orderId"])
+                await AssassinLedger.save_state(symbol, buy_order_id=new_buy_id, buy_count=buy_count + 1)
+                ctx.wakeup_event.set()
+                active_rate = AssassinLedger.normalize_target_rate(target_profit_rate)
+                await ctx.notify_tg(
+                    f"➕ <b>[프리장 스나이퍼] {symbol} RSI≤30 재포착 ➡️ 추가 매수 ({buy_count + 1}/{max_buys}회)</b>\n"
+                    f"▫️ 실시간 1분봉 RSI: <code>{rsi_val:.1f}</code> (RSI 35 회복 뒤 재하락)\n"
+                    f"▫️ 추가 지정가(LIMIT): <code>${target_price:.2f}</code> × <code>{target_qty}주</code>\n"
+                    f"▫️ 기존 보유: <code>{holdings_qty}주</code> ➡️ 체결 후 <b>전체 평단가 기준 +{active_rate:.2f}%</b>로 매도 덫 재장전"
+                )
+        except Exception as e:
+            err_str = str(e)
+            print(f"🚨 [프리장 추가 매수 방어 {symbol}] {err_str}", flush=True)
+            await ctx.notify_tg(
+                f"🚨 <b>[프리장 스나이퍼 추가 매수 에러 {symbol}]</b>\n"
+                f"▫️ 포착 RSI: <code>{rsi_val:.1f}</code>\n"
+                f"▫️ 사유: <code>{html.escape(err_str)}</code>\n"
+                "▫️ 조치: RSI 35 회복 뒤 다음 과매도에서 다시 시도"
+            )
+        finally:
+            ctx.in_memory_ordering_lock[symbol] = False
+
+
 async def manage_mechanical_profit_trap_plugin(
     ctx: SniperPluginContext, symbol: str, now_est: datetime, current_session_id: str,
     is_active: bool, just_turned_off: bool, holdings_qty: int, holdings_detail: dict,
@@ -887,6 +1005,20 @@ async def manage_mechanical_profit_trap_plugin(
     open_orders = await ctx.client.get_orders(status="OPEN", symbol=symbol)
     has_open_sell = any(o.get("side") == "SELL" for o in open_orders)
     has_open_buy = any(o.get("side") == "BUY" for o in open_orders)
+    # NEW: 추가 매수 체결로 보유 수량이 매도 덫 잔량보다 많아졌는지 확인 (평단 변화가 0.01 미만이어도 재장전)
+    open_sell_left = 0.0
+    for o in open_orders:
+        if o.get("side") == "SELL":
+            try:
+                o_qty = float(o.get("quantity") or 0.0)
+                o_filled = float((o.get("execution") or {}).get("filledQuantity") or 0.0)
+                open_sell_left += max(0.0, o_qty - o_filled)
+            except Exception:
+                pass
+    trap_qty_short = (
+        has_open_sell and not has_open_buy and open_sell_left > 0.0
+        and int(math.floor(open_sell_left)) < holdings_qty
+    )
 
     if not is_active:
         if sell_order_id and not ctx.in_memory_ordering_lock[symbol]:
@@ -915,7 +1047,7 @@ async def manage_mechanical_profit_trap_plugin(
         and not ctx.in_memory_ordering_lock[symbol]
     ):
         expected_target = math.ceil(avg_price * (1.0 + active_rate / 100.0) * 100) / 100.0
-        if abs(expected_target - target_sell_price) >= 0.01:
+        if abs(expected_target - target_sell_price) >= 0.01 or trap_qty_short:
             ctx.in_memory_ordering_lock[symbol] = True
             try:
                 await _cancel_open_orders_and_wait_sellable(
@@ -987,7 +1119,7 @@ async def manage_mechanical_profit_trap_plugin(
 
             if avg_price > 0.0:
                 calculated_target = math.ceil(avg_price * (1.0 + active_rate / 100.0) * 100) / 100.0
-                if entry_session == "PRE_SNIPER" and buy_order_id:
+                if entry_session == "PRE_SNIPER":
                     trap_tag = f"프리장 RSI≤30 스나이퍼(+{active_rate:.2f}%)"
                 else:
                     trap_tag = f"수동개입(+{active_rate:.2f}%)"
@@ -1032,7 +1164,7 @@ async def manage_mechanical_profit_trap_plugin(
                         "sell_order_id": new_sell_id, "is_session_done": True,
                     }
 
-                    if not buy_order_id:
+                    if not buy_order_id and entry_session != "PRE_SNIPER":
                         kwargs.update({
                             "entry_session": "MANUAL", "entry_trend": "SHORT",
                             "nq_entry_price": nq_c_now, "nq_entry_amp": nq_amp_now,

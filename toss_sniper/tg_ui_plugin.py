@@ -503,6 +503,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     target_sell_p = float(state_s[6] or 0.0)
     sell_id_s = str(state_s[7] or "")
     entry_sess = str(state_s[8] or "")
+    buy_cnt_s, max_buys_s = await AssassinLedger.get_buy_plan("SOXS")
 
     act_s_str = "🟢 ON (시스템 활성)" if act_s else "🔴 OFF (수동 통제)"
     comp_s_str = (
@@ -522,13 +523,13 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     elif entry_sess == "CANCELED_MACRO":
         strike_status_str = "🛑 매크로 방어 발동 (금일 신규진입 영구 소각)"
     elif 400 <= t <= 929:
-        if buy_id_s:
-            strike_status_str = "⏳ 프리장 지정가 매수 체결 대기중"
-        elif has_position_in_ledger:
+        if has_position_in_ledger:
             if target_sell_p > 0.0:
-                strike_status_str = f"🎯 보유중 (목표 ${target_sell_p:.2f} [+{rate_s:.2f}%] 익절 시 무한 재출동)"
+                strike_status_str = f"🎯 보유중 {buy_cnt_s}/{max_buys_s}회 매수 (평단 기준 목표 ${target_sell_p:.2f} [+{rate_s:.2f}%] 익절 시 무한 재출동)"
             else:
-                strike_status_str = f"🎯 보유중 (+{rate_s:.2f}% 익절 덫 장전중)"
+                strike_status_str = f"🎯 보유중 {buy_cnt_s}/{max_buys_s}회 매수 (평단 기준 +{rate_s:.2f}% 익절 덫 장전중)"
+        elif buy_id_s:
+            strike_status_str = "⏳ 프리장 지정가 매수 체결 대기중"
         elif not is_done:
             strike_status_str = "🔫 프리장 RSI≤30 무한 출동 감시중 (신규진입 가능)"
         else:
@@ -562,8 +563,17 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         f"▫️ 현재 출동상태: <code>{strike_status_str}</code>\n"
         f"▫️ 목표 익절타점: <code>{rate_mode_desc}</code>\n"
         f"▫️ 시드 운용방식: <code>{comp_s_str}</code>\n"
-        f"▫️ 현재 출동시드: <code>${budget_s:,.2f}</code> | 목표 익절: <code>+{rate_s:.2f}% (순수익 +{net_rate_s:.2f}%)</code>"
+        f"▫️ 현재 출동시드: <code>${budget_s:,.2f}</code> | 목표 익절: <code>+{rate_s:.2f}% (순수익 +{net_rate_s:.2f}%)</code>\n"
+        f"▫️ 추가 매수: <code>최대 {max_buys_s}회 (1회당 시드 ${budget_s:,.2f} · 최대 ${budget_s * max_buys_s:,.2f})</code>\n"
+        "▫️ 추가 규칙: <code>보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 1회 추가 · 매도는 전체 평단 기준</code>"
     )
+    max_btns = [
+        InlineKeyboardButton(
+            text=(f"✅ {n}회" if n == max_buys_s else f"{n}회"),
+            callback_data=f"set_maxbuy_SOXS_{n}",
+        )
+        for n in AssassinLedger.ALLOWED_MAX_BUYS
+    ]
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -584,6 +594,7 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
                 ),
                 InlineKeyboardButton(text="💵 SOXS 시드 설정", callback_data="set_budget_SOXS"),
             ],
+            max_btns,
             [
                 InlineKeyboardButton(text="🔫 스나이퍼 레이더", callback_data="open_avwap"),
                 InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main"),

@@ -13,6 +13,7 @@
 # NEW: 프리장(04:00~09:29 EST) 미보유·무주문·비매크로차단 상태에서 구버전 잔재 잠금(is_session_done=True) 감지 시 즉시 해제하는 자가 치유(Self-Healing) 가드 주입 (Case 52)
 # NEW: 시스템 기동 시 장부 내 선택된 목표 익절률(+0.64% vs +1.00%) 및 복리/단리 시드 모드를 동적으로 읽어 부팅 타전에 반영
 # NEW: 데이장(19:00~03:59 EST) SOXS 15초 캔들 스캔 가속 및 1.5초 실시간 틱 RSI<=30.0 관측 알림 플러그인(execute_daymarket_rsi_alert_plugin) 메인 루프 결속 (Case 53)
+# NEW: 프리장 보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 추가 매수(execute_premarket_rsi_add_buy_plugin, 최대 N회) 및 전체 평단 기준 익절 덫 재장전
 
 import sys
 import os
@@ -45,6 +46,7 @@ from sniper_plugin import (
     enforce_0930_regular_cutoff_plugin,
     reconcile_zero_holdings_exit_plugin,
     execute_premarket_rsi_sniper_strike_plugin,
+    execute_premarket_rsi_add_buy_plugin,
     manage_mechanical_profit_trap_plugin,
     execute_rsi_monitoring_plugin,
 )
@@ -573,6 +575,27 @@ async def assassin_loop(ctx: SniperPluginContext, symbol: str):
                     budget=budget,
                     target_profit_rate=target_profit_rate,
                     rsi_val=live_rsi_val,
+                )
+
+            # NEW: 프리장 보유 중 RSI 35 회복 뒤 RSI≤30 재포착 시 추가 매수 (제어반 최대 매수 횟수까지, 매도는 전체 평단 기준)
+            if (
+                is_active
+                and is_premarket_window
+                and holdings_qty > 0
+                and entry_session == "PRE_SNIPER"
+                and live_rsi_val > 0.0
+            ):
+                await execute_premarket_rsi_add_buy_plugin(
+                    ctx=ctx,
+                    symbol=symbol,
+                    now_est=now_est,
+                    current_session_id=current_session_id,
+                    current_price=current_price,
+                    budget=budget,
+                    target_profit_rate=target_profit_rate,
+                    rsi_val=live_rsi_val,
+                    holdings_qty=holdings_qty,
+                    entry_session=entry_session,
                 )
 
             # 목표 2 & 초과 Case 50, 58, 64: 매수 전량 체결 확인 즉시 선택된 목표 익절가(+0.64% / +1.00%) 지정가 매도 덫(TRAP) 하드 락온
