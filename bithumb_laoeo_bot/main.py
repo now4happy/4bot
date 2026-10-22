@@ -124,7 +124,7 @@ def trading_monitor_loop():
                                 s_days[coin] = min(100, cur_d + 1)
                                 state["cycle_days"] = s_days
                                 save_json(STATE_FILE, state); add_history(coin, "🛒정기매수", f"{buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
-                                send_panel(f"✅ [{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                                send_panel(f"✅ [{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원 ({prof_pct:+.2f}%)", [[{"text": "💰 상황판", "callback_data": "balance"}]])
                             elif isinstance(res_json, str):
                                 # 통신 오류(응답 없음)는 체결됐을 수 있으므로 오늘은 다시 매수하지 않음 (중복 매수 방지)
                                 state["last_action_date"][coin], state["last_action_type"][coin] = today_str, "확인필요"
