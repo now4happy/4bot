@@ -113,94 +113,11 @@ last_holiday_notified_date = ""
 
 
 def _run_git_update_sync() -> tuple[bool, str]:
-    import subprocess
-    import py_compile
-
-    def run_cmd(cmd):
-        proc = subprocess.Popen(
-            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        try:
-            out, err = proc.communicate(timeout=30)
-            return proc.returncode, out.strip(), err.strip()
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            out, err = proc.communicate()
-            return -1, out.strip(), "Subprocess Timeout Expired (네트워크 교착 상태 방어)"
-
-    code, current_hash, err = run_cmd("git rev-parse HEAD")
-    if code != 0:
-        return False, f"해시 백업 실패: {err}"
-
-    code, fetch_out, fetch_err = run_cmd("git fetch origin main")
-    if code != 0:
-        return False, f"Fetch 실패:\n{fetch_err}"
-
-    code, local_hash, _ = run_cmd("git rev-parse HEAD")
-    code, remote_hash, _ = run_cmd("git rev-parse origin/main")
-
-    if local_hash == remote_hash:
-        return True, "Already up to date."
-
-    code, reset_out, reset_err = run_cmd("git reset --hard origin/main")
-    if code != 0:
-        run_cmd(f"git reset --hard {current_hash}")
-        return False, f"Hard Reset 붕괴 (원상 복구됨):\n{reset_err}"
-
-    try:
-        for mod_file in (
-            "main.py",
-            "sniper_plugin.py",
-            "tg_router.py",
-            "tg_ui_plugin.py",
-            "quant_engine.py",
-            "toss_api.py",
-            "candle_recorder.py",
-        ):
-            if os.path.exists(mod_file):
-                py_compile.compile(mod_file, doraise=True)
-    except Exception as e:
-        run_cmd(f"git reset --hard {current_hash}")
-        return False, f"문법 에러 감지. 롤백 완료:\n{str(e)}"
-
-    return True, f"업데이트 성공:\n{reset_out}"
+    return (False, '자가 업데이트 해제: 직접 관리 모드입니다.')
 
 
 async def auto_update_loop(bot: Bot, chat_id: int):
-    while True:
-        try:
-            now_est = datetime.now(EST_TZ)
-            est_hm = now_est.hour * 100 + now_est.minute
-            # Case 07 프리장 개장 전부터 애프터장 종료(03:30~17:00 EST)까지 무인 업데이트 전면 차단
-            if 330 <= est_hm < 1700:
-                await asyncio.sleep(3600.0)
-                continue
-
-            success, msg = await asyncio.to_thread(_run_git_update_sync)
-            if success:
-                if "Already up to date." not in msg:
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=(
-                            "🚀 <b>[무인 자동 업데이트 성공]</b>\n"
-                            "▫️ 최신 코드가 백그라운드에서 감지되어 구글 클라우드 서버에 안전하게 탑재되었습니다.\n"
-                            "▫️ 파이썬 컴파일 검증 완료. 코어 재기동(os._exit) 격발.\n"
-                            f"<pre>{html.escape(msg)}</pre>"
-                        ),
-                        parse_mode="HTML",
-                    )
-                    await asyncio.sleep(1.0)
-                    os._exit(0)
-            else:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"🚨 <b>[무인 자동 업데이트 실패 및 롤백]</b>\n<pre>{html.escape(msg)}</pre>",
-                    parse_mode="HTML",
-                )
-        except Exception as e:
-            print(f"🚨 [무인 업데이트망 붕괴 방어] {e}", flush=True)
-
-        await asyncio.sleep(3600.0)
+    return None
 
 
 async def rsi_radar_loop(ctx: SniperPluginContext, symbol: str):

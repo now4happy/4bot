@@ -532,51 +532,7 @@ async def process_execute_update(callback_query: types.CallbackQuery, state: FSM
         await callback_query.message.edit_text("🔄 <b>GitHub 최신 코드 다운로드 중...</b>", parse_mode="HTML")
 
         def _run_git_update():
-            import subprocess
-            import py_compile
-
-            def run_cmd(cmd):
-                proc = subprocess.Popen(
-                    cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-                )
-                try:
-                    out, err = proc.communicate(timeout=30)
-                    return proc.returncode, out.strip(), err.strip()
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    out, err = proc.communicate()
-                    return -1, out.strip(), "Subprocess Timeout Expired (네트워크 교착 상태 차단)"
-
-            code, current_hash, err = run_cmd("git rev-parse HEAD")
-            if code != 0:
-                return False, f"해시 백업 실패: {err}"
-            code, fetch_out, fetch_err = run_cmd("git fetch origin main")
-            if code != 0:
-                return False, f"Fetch 실패:\n{fetch_err}"
-            code, local_hash, _ = run_cmd("git rev-parse HEAD")
-            code, remote_hash, _ = run_cmd("git rev-parse origin/main")
-            if local_hash == remote_hash:
-                return True, "Already up to date."
-            code, reset_out, reset_err = run_cmd("git reset --hard origin/main")
-            if code != 0:
-                run_cmd(f"git reset --hard {current_hash}")
-                return False, f"Hard Reset 붕괴:\n{reset_err}"
-            try:
-                for mod_file in (
-                    "main.py",
-                    "sniper_plugin.py",
-                    "tg_router.py",
-                    "tg_ui_plugin.py",
-                    "quant_engine.py",
-                    "toss_api.py",
-                    "candle_recorder.py",
-                ):
-                    if os.path.exists(mod_file):
-                        py_compile.compile(mod_file, doraise=True)
-            except Exception as e:
-                run_cmd(f"git reset --hard {current_hash}")
-                return False, f"문법 에러 감지. 롤백 완료:\n{str(e)}"
-            return True, f"업데이트 성공:\n{reset_out}"
+            return (False, '자가 업데이트 해제: 직접 관리 모드입니다.')
 
         success, msg = await asyncio.to_thread(_run_git_update)
         if success:
