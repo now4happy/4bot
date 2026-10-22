@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AI 협업방</title>
+<style>
+:root{--bg:#f4f5f7;--panel:#fff;--line:#e2e4e8;--text:#1c1e21;--sub:#6b7078;--me:#2f6fed;--meText:#fff;--warn:#d93025;--ok:#188038;--chip:#eef1f6}
+@media (prefers-color-scheme:dark){:root{--bg:#15171a;--panel:#1f2226;--line:#30343a;--text:#e8eaed;--sub:#9aa0a6;--me:#3b78f0;--chip:#2a2e34}}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,"Noto Sans KR","Malgun Gothic",sans-serif;display:flex;flex-direction:column}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:8px;padding:6px 10px}
+button.pri{background:var(--me);color:#fff;border-color:var(--me)}button.sm{padding:3px 8px;font-size:13px}
+input,textarea,select{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;width:100%}
+header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ver{font-size:11px;color:var(--sub)}
+#strip{display:flex;gap:8px;overflow-x:auto;padding:6px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+#strip:empty{display:none}
+.card{flex:0 0 auto;border:1px solid var(--line);border-radius:10px;padding:5px 9px;font-size:13px;display:flex;gap:8px;align-items:center}
+.card b{font-size:14px}.dim{color:var(--sub)}.red{color:var(--warn);font-weight:600}.grn{color:var(--ok)}
+#log{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:min(720px,88%);display:flex;flex-direction:column;gap:3px}
+.msg.me{align-self:flex-end;align-items:flex-end}
+.who{font-size:12px;font-weight:700}.when{font-size:11px;color:var(--sub);font-weight:400;margin-left:6px}
+.bub{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 11px;word-break:break-word}
+.me .bub{background:var(--me);color:var(--meText);border-color:var(--me)}
+.bub pre{background:rgba(127,127,127,.15);padding:8px;border-radius:6px;overflow-x:auto;white-space:pre;font-size:13px}
+.bub code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+.err .bub{border-color:var(--warn)}
+.wait .bub{border-style:dashed}
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.dots::after{content:'…';animation:d 1.2s infinite}@keyframes d{0%{content:'.'}33%{content:'..'}66%{content:'...'}}
+footer{background:var(--panel);border-top:1px solid var(--line);padding:8px 10px calc(8px + env(safe-area-inset-bottom))}
+#chips{display:flex;gap:6px;overflow-x:auto;margin-bottom:6px}
+.chip{flex:0 0 auto;border-radius:16px;padding:4px 11px;font-size:13px;background:var(--chip);border:2px solid transparent}
+.chip.on{border-color:currentColor;font-weight:700}.chip.off{opacity:.45}
+.row{display:flex;gap:8px;align-items:flex-end}.row textarea{flex:1;resize:none;max-height:160px}
+#drawer{position:fixed;inset:0 auto 0 0;width:min(300px,85vw);background:var(--panel);border-right:1px solid var(--line);transform:translateX(-102%);transition:.2s;z-index:20;display:flex;flex-direction:column}
+#drawer.open{transform:none}#shade{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:15;display:none}#shade.open{display:block}
+.rl{flex:1;overflow-y:auto}.ri{padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;justify-content:space-between;gap:6px}
+.ri.cur{background:var(--chip);font-weight:700}.ri small{color:var(--sub)}
+.modal{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.45);display:none;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto}
+.modal.open{display:flex}.box{background:var(--panel);border-radius:14px;padding:16px;width:min(560px,100%);display:flex;flex-direction:column;gap:10px}
+.box h2{margin:0;font-size:17px}label{font-size:13px;color:var(--sub);display:flex;flex-direction:column;gap:3px}
+.ag{border:1px solid var(--line);border-radius:10px;padding:10px}.ag[open]>*+*{margin-top:8px}
+.ag summary{cursor:pointer;font-weight:700}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cb{flex-direction:row;align-items:center;gap:6px;color:var(--text)}.cb input{width:auto}
+.toast{position:fixed;left:50%;bottom:110px;transform:translateX(-50%);background:#333;color:#fff;padding:8px 14px;border-radius:8px;font-size:14px;z-index:40;display:none}
+</style></head><body>
+<header>
+  <button onclick="drawer(1)" aria-label="방 목록">☰</button>
+  <h1 id="title">AI 협업방</h1>
+  <button class="sm" onclick="editRoom(curRoom())">방 설정</button>
+  <button class="sm" onclick="openAgents()">AI 관리</button>
+</header>
+<div id="strip"></div>
+<div id="log"></div>
+<footer>
+  <div id="chips"></div>
+  <div class="row"><textarea id="txt" rows="2" placeholder="메시지 (AI를 위에서 고르거나 @이름, @모두)"></textarea>
+  <button class="pri" id="sendBtn" onclick="send()">보내기</button></div>
+</footer>
+<div id="shade" onclick="drawer(0)"></div>
+<nav id="drawer"><div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:center"><b>방 목록</b><span class="ver" id="ver"></span></div>
+<div class="rl" id="rooms"></div><div style="padding:12px"><button class="pri" style="width:100%" onclick="editRoom(null)">+ 새 방 (프로젝트)</button></div></nav>
+<div class="modal" id="mRoom"><div class="box" id="roomBox"></div></div>
+<div class="modal" id="mAgents"><div class="box" id="agentBox"></div></div>
+<div class="toast" id="toast"></div>
+<script>
+const API='/room/api/';let S={rooms:[],agents:[]},room=null,msgs={},lastId=0,openIds=new Set(),sel=new Set(),busy=false;
+const $=id=>document.getElementById(id);
+const esc=s=>(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function md(t){t=esc(t);const parts=t.split(/```/);return parts.map((p,i)=>i%2?'<pre><code>'+p.replace(/^[a-z]*\n/,'')+'</code></pre>':p.replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>')).join('')}
+function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',2200)}
+async function api(p,b){const r=await fetch(API+p,b===undefined?{credentials:'same-origin'}:{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+ if(r.status===401){location.href='/';throw 0}const j=await r.json().catch(()=>({error:'응답 오류 '+r.status}));if(!r.ok||j.error)throw new Error(j.error||r.status);return j}
+const ag=id=>S.agents.find(a=>a.id===id)||{name:'?',color:'#888'};
+const curRoom=()=>S.rooms.find(r=>r.id===room);
+function drawer(o){$('drawer').classList.toggle('open',!!o);$('shade').classList.toggle('open',!!o)}
+function fmtLeft(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return(h?h+'시간 ':'')+m+'분 '+(h?'':x+'초')}
+async function loadState(){S=await api('state');$('ver').textContent=S.version;if(!room||!curRoom()){room=+(localStorage.getItem('room')||0);if(!curRoom())room=S.rooms[0].id}renderRooms();renderTop()}
+function renderRooms(){$('rooms').innerHTML=S.rooms.map(r=>`<div class="ri ${r.id===room?'cur':''}" onclick="pick(${r.id})"><span>${esc(r.name)}<br><small>${esc(r.note||'')}</small></span><small>${r.members.length}명</small></div>`).join('')}
+function members(){const r=curRoom();return r?S.agents.filter(a=>r.members.includes(a.id)):[]}
+function renderTop(){const r=curRoom();$('title').textContent=r?r.name:'';
+ const ms=members();
+ $('strip').innerHTML=ms.filter(a=>a.kind==='indirect'&&a.enabled).map(a=>{
+  const d=a.dday===null?'<span class="dim">종료일 미입력</span>':a.dday<0?'<span class="red">종료됨</span>':`<span class="${a.dday<=3?'red':''}">D-${a.dday}</span>`;
+  const cd=a.cooldown_left>0?`<span class="red" data-cd="${a.id}">⏳ ${fmtLeft(a.cooldown_left)}</span> <button class="sm" onclick="cool(${a.id},'')">해제</button>`:`<button class="sm" onclick="coolAsk(${a.id})">한도 걸림</button>`;
+  return `<div class="card"><b style="color:${a.color}">${esc(a.name)}</b>${d}<span class="dim">오늘 ~${a.today_tokens.toLocaleString()}토큰</span>${cd}</div>`}).join('');
+ $('chips').innerHTML=ms.map(a=>{const off=!a.ready||a.cooldown_left>0;const why=!a.enabled?'꺼짐':a.kind==='direct'&&!a.key_ok?'키 없음':a.cooldown_left>0?'한도':'';
+  return `<button class="chip ${sel.has(a.id)?'on':''} ${off?'off':''}" style="color:${a.color}" onclick="tog(${a.id})">${a.kind==='direct'?'⚡':'📋'} ${esc(a.name)}${why?' ('+why+')':''}</button>`}).join('')+`<button class="chip" onclick="selAll()">모두</button>`}
+function tog(id){const a=ag(id);if(!a.ready){toast(a.name+': AI 관리에서 설정이 필요해요');return}sel.has(id)?sel.delete(id):sel.add(id);renderTop()}
+function selAll(){const ms=members().filter(a=>a.ready&&!(a.cooldown_left>0));if(ms.every(a=>sel.has(a.id)))sel.clear();else ms.forEach(a=>sel.add(a.id));renderTop()}
+async function pick(id){room=id;localStorage.setItem('room',id);msgs={};lastId=0;openIds=new Set();sel.clear();$('log').innerHTML='';drawer(0);renderRooms();renderTop();await poll(true)}
+function msgHtml(m){const a=m.agent_id?ag(m.agent_id):null,t=(m.created||'').slice(11,16);
+ if(!a)return `<div class="msg me" id="m${m.id}"><div class="who">나<span class="when">${t}</span></div><div class="bub">${md(m.content)}</div></div>`;
+ const head=`<div class="who" style="color:${a.color}">${a.kind==='direct'?'⚡':'📋'} ${esc(a.name)}<span class="when">${t}${m.tok?' · '+m.tok.toLocaleString()+'토큰':''}</span></div>`;
+ if(m.status==='pending')return `<div class="msg" id="m${m.id}">${head}<div class="bub dim"><span class="dots">답변 작성 중</span></div></div>`;
+ if(m.status==='waiting')return `<div class="msg wait" id="m${m.id}">${head}<div class="bub"><div class="dim">${esc(a.name)}는 사이트에서 직접 물어봐야 해요.</div>
+  <div class="steps"><button class="sm" onclick="copyCtx(${m.id})">① 문맥 복사</button><button class="sm" onclick="openSite(${m.agent_id})">② 사이트 열기</button><button class="sm" onclick="skip(${m.id})">건너뛰기</button></div>
+  <textarea id="p${m.id}" rows="3" placeholder="③ ${esc(a.name)}의 답변을 여기에 붙여넣기"></textarea><div class="steps"><button class="sm pri" onclick="paste(${m.id})">답변 올리기</button></div></div></div>`;
+ if(m.status==='error')return `<div class="msg err" id="m${m.id}">${head}<div class="bub"><span class="red">오류</span> ${esc(m.content)}${a.kind==='direct'?`<div class="steps"><button class="sm" onclick="retry(${m.id})">다시 시도</button></div>`:''}</div></div>`;
+ if(m.status==='skipped')return `<div class="msg" id="m${m.id}">${head}<div class="bub dim">(건너뜀)</div></div>`;
+ return `<div class="msg" id="m${m.id}">${head}<div class="bub">${md(m.content)}</div></div>`}
+function put(m){const old=$('m'+m.id),keep=old&&m.status==='waiting'?($('p'+m.id)||{}).value:null;msgs[m.id]=m;const h=msgHtml(m);
+ if(old){if(old._h!==h){old.outerHTML=h;$('m'+m.id)._h=h;if(keep&&$('p'+m.id))$('p'+m.id).value=keep}}
+ else{const log=$('log'),near=log.scrollHeight-log.scrollTop-log.clientHeight<120;log.insertAdjacentHTML('beforeend',h);$('m'+m.id)._h=h;if(near)log.scrollTop=log.scrollHeight}}
+async function poll(first){if(!room)return;const r=room;try{const d=await api(`messages?room=${r}&after=${first?0:lastId}`);if(r!==room)return;
+ d.messages.forEach(m=>{put(m);lastId=Math.max(lastId,m.id)});const now=new Set(d.open);
+ for(const id of openIds)if(!now.has(id)){const m=await api('message?id='+id);if(m.id)put(m)}
+ for(const id of now){const m=msgs[id];if(m&&m.status!=='pending'&&m.status!=='waiting'){const x=await api('message?id='+id);if(x.id)put(x)}}
+ const was=openIds.size;openIds=now;if(first)$('log').scrollTop=$('log').scrollHeight;if(was&&!now.size)loadState()}catch(e){if(e)console.warn(e)}}
+async function send(){const t=$('txt').value.trim();if(!t||busy)return;busy=true;$('sendBtn').disabled=true;
+ try{const r=await api('send',{room,text:t,to:[...sel]});$('txt').value='';if(!r.targets.length)toast('메모로 저장됨 (답할 AI를 고르지 않았어요)');await poll()}catch(e){toast(e.message)}busy=false;$('sendBtn').disabled=false}
+$('txt').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send()}});
+async function copyText(t){try{await navigator.clipboard.writeText(t);return true}catch(_){const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();const ok=document.execCommand('copy');a.remove();return ok}}
+async function copyCtx(id){try{const d=await api(`context?room=${room}&msg=${id}`);
+ if(/sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{20,}|\b\d{3}-?\d{2,}-?\d{6,}\b/.test(d.text)&&!confirm('키나 계좌번호처럼 보이는 내용이 있어요. 공유 계정에 보내면 다른 사람이 볼 수 있어요. 그래도 복사할까요?'))return;
+ if(await copyText(d.text)){toast('복사됨 · 사이트에 붙여넣으세요');api('copied',{agent_id:msgs[id].agent_id,chars:d.text.length}).catch(()=>{})}else toast('복사 실패')}catch(e){toast(e.message)}}
+function openSite(aid){const a=ag(aid);if(a.site_url)window.open(a.site_url,'_blank','noopener');else toast('사이트 주소가 없어요')}
+async function paste(id){const t=($('p'+id)||{}).value||'';if(!t.trim())return toast('답변을 붙여넣어 주세요');try{await api('paste',{id,text:t});const m=await api('message?id='+id);put(m);loadState()}catch(e){toast(e.message)}}
+async function skip(id){try{await api('cancel',{id});put(await api('message?id='+id))}catch(e){toast(e.message)}}
+async function retry(id){try{await api('retry',{id});put(await api('message?id='+id));openIds.add(id)}catch(e){toast(e.message)}}
+function coolAsk(id){const t=prompt('사이트에 나온 "다시 사용 가능" 시간을 입력하세요 (예: 14:30)');if(t&&/^\d{1,2}:\d{2}$/.test(t.trim()))cool(id,t.trim());else if(t)toast('14:30 같은 형식으로 넣어주세요')}
+async function cool(id,until){try{await api('agent/cooldown',{id,until});await loadState()}catch(e){toast(e.message)}}
+setInterval(()=>{let need=false;S.agents.forEach(a=>{if(a.cooldown_left>0){a.cooldown_left--;if(!a.cooldown_left)need=true;const e=document.querySelector(`[data-cd="${a.id}"]`);if(e)e.textContent='⏳ '+fmtLeft(a.cooldown_left)}});if(need){toast('사용 한도가 풀렸어요');loadState()}},1000);
+function editRoom(r){const box=$('roomBox');box.innerHTML=`<h2>${r?'방 설정':'새 방 (프로젝트)'}</h2>
+ <label>방 이름<input id="rn" value="${esc(r?r.name:'')}" placeholder="예: 스나이퍼 개선"></label>
+ <label>방 설명 (AI들에게도 알려줘요)<textarea id="rd" rows="2" placeholder="예: 2번 토스 스나이퍼 봇 손절 로직 개선">${esc(r?r.note:'')}</textarea></label>
+ <div><div class="dim" style="font-size:13px;margin-bottom:4px">입장할 AI</div>${S.agents.map(a=>`<label class="cb"><input type="checkbox" value="${a.id}" ${!r||r.members.includes(a.id)?'checked':''}> <span style="color:${a.color}">${a.kind==='direct'?'⚡ 직접':'📋 간접'} · ${esc(a.name)}</span>${a.enabled?'':' <span class="dim">(꺼짐)</span>'}</label>`).join('')}</div>
+ <div style="display:flex;gap:8px;justify-content:space-between">${r?`<button onclick="delRoom(${r.id})" style="color:var(--warn)">방 삭제</button>`:'<span></span>'}<span><button onclick="closeM('mRoom')">취소</button> <button class="pri" onclick="saveRoom(${r?r.id:0})">저장</button></span></div>`;
+ $('mRoom').classList.add('open');drawer(0)}
+async function saveRoom(id){const members=[...document.querySelectorAll('#roomBox input[type=checkbox]:checked')].map(x=>+x.value);
+ try{const r=await api('room/save',{id:id||null,name:$('rn').value,note:$('rd').value,members});closeM('mRoom');await loadState();if(!id)pick(r.id);else renderTop()}catch(e){toast(e.message)}}
+async function delRoom(id){if(!confirm('이 방과 대화 기록을 모두 지울까요? 되돌릴 수 없어요.'))return;try{await api('room/delete',{id});closeM('mRoom');room=null;await loadState();pick(room)}catch(e){toast(e.message)}}
+function closeM(id){$(id).classList.remove('open')}
+function agForm(a){const n=!a.id,d=a.kind==='direct';return `<details class="ag" ${n?'open':''}><summary style="color:${a.color||'inherit'}">${n?'+ 새 AI':(d?'⚡ ':'📋 ')+esc(a.name)} <span class="dim" style="font-weight:400">${n?'':d?(a.key_ok?'키 있음':'키 없음'):(a.account?esc(a.account):'')}${a.enabled||n?'':' · 꺼짐'}</span></summary>
+ <div class="grid"><label>이름 (띄어쓰기 없이)<input data-f="name" value="${esc(a.name||'')}"></label>
+ <label>연결 방식<select data-f="kind" onchange="this.closest('details').querySelectorAll('[data-k]').forEach(e=>e.style.display=e.dataset.k===this.value?'':'none')"><option value="direct" ${d?'selected':''}>⚡ 직접 (API)</option><option value="indirect" ${d?'':'selected'}>📋 간접 (아이디 로그인)</option></select></label></div>
+ <div class="grid" data-k="direct" style="${d?'':'display:none'}"><label>모델 이름<input data-f="model" value="${esc(a.model||'')}"></label><label>API 주소<input data-f="base_url" value="${esc(a.base_url||'')}" placeholder="https://..."></label>
+ <label>키 이름 (서버 ai.env)<input data-f="key_env" value="${esc(a.key_env||'')}" placeholder="예: DEEPSEEK_API_KEY"></label><label>&nbsp;<button type="button" ${n?'disabled':''} onclick="models(${a.id||0},this)">모델 목록 불러오기</button></label></div>
+ <div class="grid" data-k="indirect" style="${d?'display:none':''}"><label>아이디 (메모용)<input data-f="account" value="${esc(a.account||'')}"></label><label>종료일<input type="date" data-f="end_date" value="${esc(a.end_date||'')}"></label></div>
+ <div class="grid"><label>사이트 주소<input data-f="site_url" value="${esc(a.site_url||'')}"></label><label>색상<input type="color" data-f="color" value="${esc(a.color||'#888888')}" style="height:38px;padding:2px"></label></div>
+ <label>추가 지시 (선택, 직접 연결 AI에게 전달)<input data-f="persona" value="${esc(a.persona||'')}" placeholder="예: 코드 검토 담당, 위험 요소를 먼저 말해줘"></label>
+ <div style="display:flex;justify-content:space-between;align-items:center"><label class="cb"><input type="checkbox" data-f="enabled" ${a.enabled||n?'checked':''}> 사용 (입장 가능)</label><button class="pri" onclick="saveAgent(this,${a.id||0})">저장</button></div></details>`}
+function openAgents(){$('agentBox').innerHTML=`<h2>AI 관리</h2><div class="dim" style="font-size:13px">⚡ 직접: API 키로 방에서 자동 답변 · 📋 간접: 사이트에서 문맥 붙여넣기 → 답변 올리기<br>API 키는 보안을 위해 이 화면이 아니라 서버(/etc/bot-office/ai.env)에 넣어요. 비밀번호는 저장하지 않아요.</div>
+ ${S.agents.map(agForm).join('')}${agForm({kind:'indirect',color:'#888888'})}<button onclick="closeM('mAgents')">닫기</button>`;$('mAgents').classList.add('open')}
+async function saveAgent(btn,id){const box=btn.closest('details'),b={id:id||null};box.querySelectorAll('[data-f]').forEach(e=>b[e.dataset.f]=e.type==='checkbox'?e.checked:e.value.trim());
+ try{await api('agent/save',b);toast('저장됨');await loadState();openAgents()}catch(e){toast(e.message)}}
+async function models(id,btn){btn.disabled=true;try{const d=await api('models?agent='+id);alert('사용 가능한 모델:\n\n'+d.models.join('\n'))}catch(e){toast(e.message)}btn.disabled=false}
+(async()=>{try{await loadState();await pick(room)}catch(e){if(e)toast('불러오기 실패: '+e.message)}
+ setInterval(()=>poll(),2500);setInterval(loadState,30000)})();
+</script></body></html>

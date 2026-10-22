@@ -7,6 +7,33 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# ===== AI 협업방 연결 (room-1.0.0): /room 주소는 로그인 확인 후 127.0.0.1:8770 으로 전달 =====
+import urllib.request as _room_ur, urllib.error as _room_ue
+def _room_proxy(h):
+    if not h.session():
+        if h.command == 'GET' and not h.path.startswith('/room/api'):
+            h.send_response(302); h.send_header('Location', '/'); h.end_headers(); return
+        data = b'{"error":"login_required"}'; code = 401; ctype = 'application/json'
+    else:
+        n = int(h.headers.get('Content-Length') or 0)
+        req = _room_ur.Request('http://127.0.0.1:8770' + h.path, data=h.rfile.read(n) if n else None, method=h.command)
+        req.add_header('Content-Type', h.headers.get('Content-Type') or 'application/json')
+        try:
+            r = _room_ur.urlopen(req, timeout=60); code = r.status
+        except _room_ue.HTTPError as e:
+            r = e; code = e.code
+        except Exception as e:
+            r = None; code = 502; data = ('AI room offline: %s' % e).encode(); ctype = 'text/plain; charset=utf-8'
+        if r is not None:
+            data = r.read(); ctype = r.headers.get('Content-Type', 'application/octet-stream')
+    h.send_response(code)
+    h.send_header('Content-Type', ctype)
+    h.send_header('Content-Length', str(len(data)))
+    h.send_header('Cache-Control', 'no-store')
+    h.end_headers()
+    h.wfile.write(data)
+# ===== AI 협업방 연결 끝 =====
+
 ROOT = Path(__file__).resolve().parent
 AUTH_PATH = Path(os.environ.get('BOT_OFFICE_AUTH', '/etc/bot-office/auth.json'))
 UNITS = ('han4384tubot.service', 'bithumb_bot.service', 'toss_sniper.service', 'toss_dca.service')
@@ -87,6 +114,7 @@ class Handler(BaseHTTPRequestHandler):
                 if SESSIONS[k]<now: SESSIONS.pop(k,None)
             return token in SESSIONS
     def do_GET(self):
+        if self.path.startswith('/room'): return _room_proxy(self)
         route=self.path.split('?',1)[0]
         if route=='/healthz': return self.send(200,{'ok':True})
         if route=='/login': return self.send(200,(ROOT/'login.html').read_bytes(),'text/html; charset=utf-8')
@@ -149,6 +177,7 @@ class Handler(BaseHTTPRequestHandler):
         if route=='/api/status': return self.send(200,snapshot())
         self.send(404,{'error':'not_found'})
     def do_POST(self):
+        if self.path.startswith('/room'): return _room_proxy(self)
         origin=self.headers.get('Origin')
         if origin and origin not in ('https://'+self.headers.get('Host',''),'http://'+self.headers.get('Host','')):
             return self.send(403,{'error':'origin_rejected'})
