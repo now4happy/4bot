@@ -2,7 +2,7 @@ import os, time, json, uuid, hashlib, jwt, requests, threading
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 
-BOT_VERSION = "v4.0"
+BOT_VERSION = "v4.0.1"
 KST = timezone(timedelta(hours=9))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE, STATE_FILE = os.path.join(BASE_DIR, "bot_config.json"), os.path.join(BASE_DIR, "bot_state.json")
