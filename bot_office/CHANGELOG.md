@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.6 · 2026-10-23 18:32 (KST)
+- 파일: fanding_trade.py
+- 내용: 딥시크 분석 추가
+- 브랜치: staging
+
 ## v1.0.5 · 2026-10-23 18:18 (KST)
 - 파일: fanding_fetch_win.py, fanding_trade.py
 - 내용: 팬딩 1.3.0: 전용 봇 · Gemini 재시도 · 과거 가격표 수집
