@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.5.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.5.1)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -12,6 +12,7 @@
 #        (DeepSeek 키는 미팅룸과 같은 /etc/bot-office/ai.env 의 DEEPSEEK_API_KEY 사용) · /판독 명령으로 상태 확인
 # 1.5.0: 가격표 판별을 '읽어보고 판단'으로 변경 — AI 가 아니라고 해도 날짜·종가가 메리츠 실제 종가와 맞으면 가격표로 인정
 #        (AI 의 판별 실수로 가격표를 놓치는 문제 해결) · 판별 이유를 기록 · 처리 끝난 가격표 이미지는 서버에서 자동 삭제
+# 1.5.1: 1.5.0 판독 형식이 비어 있던 오류 수정 · 없어진 예비 모델(gemini-2.5-flash) 대신 기본 모델 재시도 → DeepSeek
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -40,7 +41,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -67,7 +68,7 @@ DEFAULTS = {
     "auto_before_min": 10,
     "missing_alert_kst": "11:00",  # 이 시각까지 가격표가 안 오면 알림
     "gemini_model": "gemini-3.8-flash",
-    "gemini_fallback": "gemini-2.5-flash",   # 기본 모델이 바쁠 때 쓰는 예비 모델
+    "gemini_fallback": "",                   # Gemini 예비 모델 (비우면 기본 모델로 재시도 → 그래도 안 되면 DeepSeek)
     "vision_order": ["gemini", "deepseek"],  # 이미지 판독 AI 순서 (앞에서 안 되면 다음)
     "deepseek_model": "deepseek-flash",
     "upload_token": "",
@@ -269,8 +270,6 @@ PROMPTS = [
     "avg_price = 보유 평단. holding_qty = 현재 보유 개수. cycle = 현사이클 차수. Copy every decimal digit exactly.",
 ]
 
-
-COMBINED_SCHEMA = None   # 아래 SCHEMA 정의 뒤에 만듦
 
 CLASSIFY_SCHEMA = {"type": "OBJECT", "properties": {
     "is_price_sheet": {"type": "BOOLEAN"}, "reason": {"type": "STRING"}}, "required": ["is_price_sheet"]}
