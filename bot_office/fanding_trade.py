@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.0.1)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.1.0)
+# 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
+#        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -29,7 +31,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -216,17 +218,24 @@ PROMPTS = [
 ]
 
 
-def gemini_read(img_bytes, prompt):
+CLASSIFY_SCHEMA = {"type": "OBJECT", "properties": {
+    "is_price_sheet": {"type": "BOOLEAN"}, "reason": {"type": "STRING"}}, "required": ["is_price_sheet"]}
+CLASSIFY_PROMPT = ("이 이미지가 미국주식 매매 '가격표'인지 판단하세요. 가격표의 특징: 'Limit Vwap' 제목 아래 "
+                   "'매수가/개수' 표와 '매도가/개수' 표, 그리고 '종가날짜', '종가', '보유 평단' 칸이 숫자와 함께 있음. "
+                   "안내문·공지·차트·광고·설명 이미지는 가격표가 아닙니다.")
+
+
+def _gemini(img_bytes, prompt, schema, max_tokens=2048):
     g = load(GEMINI_CFG, {})
     key = g.get("api_key")
     if not key:
         raise RuntimeError("Gemini 키 없음 (/etc/bot-office/gemini.json)")
-    mime = "image/png" if img_bytes[:4] == b"\x89PNG" else "image/jpeg"
+    mime = "image/png" if img_bytes[:4] == b"\x89PNG" else ("image/webp" if img_bytes[:4] == b"RIFF" else "image/jpeg")
     payload = {
         "contents": [{"parts": [{"inline_data": {"mime_type": mime, "data": base64.b64encode(img_bytes).decode()}},
                                 {"text": prompt}]}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
-                             "responseSchema": SCHEMA, "maxOutputTokens": 2048},
+                             "responseSchema": schema, "maxOutputTokens": max_tokens},
     }
     model = cfg()["gemini_model"]
     req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -236,7 +245,16 @@ def gemini_read(img_bytes, prompt):
         d = json.load(r)
     cand = (d.get("candidates") or [{}])[0]
     text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
-    return normalize(json.loads(text))
+    return json.loads(text)
+
+
+def is_price_sheet(img_bytes):
+    r = _gemini(img_bytes, CLASSIFY_PROMPT, CLASSIFY_SCHEMA, 512)
+    return bool(r.get("is_price_sheet")), str(r.get("reason") or "")[:120]
+
+
+def gemini_read(img_bytes, prompt):
+    return normalize(_gemini(img_bytes, prompt, SCHEMA))
 
 
 def normalize(p):
@@ -395,18 +413,49 @@ def process_inbox(tg):
         data = f.read_bytes()
         sha = hashlib.sha256(data).hexdigest()
         try:
-            handle_image(tg, data, sha, meta)
+            kind = handle_image(tg, data, sha, meta)
         except Exception as e:
+            kind = "error"
             print("가격표 처리 오류:", type(e).__name__, e, flush=True)
             tg.send(f"🚨 <b>팬딩 가격표 처리 실패</b>\n{html.escape(str(e))[:500]}\n가격표를 직접 확인해 주세요.")
         f.unlink(missing_ok=True)
         f.with_suffix(".json").unlink(missing_ok=True)
+        batch_done(tg, meta, kind)
+
+
+def batch_done(tg, meta, kind):
+    """윈도우가 한 글의 이미지 n장을 묶어 보냄 → 다 처리했는데 가격표가 없으면 알림"""
+    bid, n = meta.get("batch"), int(meta.get("count") or 0)
+    if not bid or n <= 0:
+        return
+    with locked_state() as st:
+        b = st.setdefault("batches", {}).setdefault(bid, {"n": n, "done": 0, "kinds": [], "at": time.time()})
+        b["done"] += 1
+        b["kinds"].append(kind)
+        if b["done"] >= b["n"]:
+            st["batches"].pop(bid, None)
+            if not any(k in ("sheet", "sheet_dup", "error") for k in b["kinds"]):
+                tg.send(f"❓ <b>팬딩 글에서 가격표를 못 찾았어요</b>\n이미지 {b['n']}장을 확인했지만 모두 가격표가 아니었어요."
+                        f"\n글: {html.escape(meta.get('post', ''))[:200]}\n가격표가 다른 글에 올라왔는지 확인해 주세요.")
+        for k in [k for k, v in st["batches"].items() if time.time() - v.get("at", 0) > 86400]:
+            st["batches"].pop(k, None)
 
 
 def handle_image(tg, data, sha, meta):
+    """돌려주는 값: sheet(새 가격표) / sheet_dup(이미 받은 가격표) / other(가격표 아님)"""
     with locked_state() as st:
-        if sha in st.get("seen", []):
-            print("같은 이미지 다시 받음 → 무시", flush=True); return
+        known = st.setdefault("kinds", {})
+        if sha in st.get("seen", []) or known.get(sha) == "sheet":
+            print("이미 받은 가격표 → 무시", flush=True); return "sheet_dup"
+        if known.get(sha) == "other":
+            return "other"
+    ok, why = is_price_sheet(data)
+    if not ok:
+        with locked_state() as st:
+            st["kinds"][sha] = "other"
+            st["kinds"] = dict(list(st["kinds"].items())[-200:])
+        print("가격표 아님:", why, flush=True)
+        return "other"
     reads = [gemini_read(data, PROMPTS[0]), gemini_read(data, PROMPTS[1])]
     agree = core(reads[0]) == core(reads[1])
     parsed = reads[0]
@@ -416,14 +465,15 @@ def handle_image(tg, data, sha, meta):
     (IMAGES / img_name).write_bytes(data)
     with locked_state() as st:
         st["seen"] = (st.get("seen", []) + [sha])[-60:]
+        st.setdefault("kinds", {})[sha] = "sheet"
         date = parsed["close_date"]
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
             tg.send("🚨 가격표에서 날짜를 못 읽었어요. 주문하지 않습니다. 직접 확인해 주세요.")
-            return
+            return "sheet"
         old = st["sheets"].get(date)
         if old and old["status"] in ("submitted", "partial", "submitting"):
             tg.send(f"⚠️ <b>{date} 가격표가 바뀐 것 같아요</b> (이미 주문 접수 후)\n자동으로 고치지 않았어요. 앱에서 직접 확인해 주세요.")
-            return
+            return "sheet"
         sd = datetime.strptime(date, "%Y-%m-%d").date()
         sheet = {"date": date, "img": img_name, "sha": sha, "parsed": parsed, "reads": reads, "reads_agree": agree,
                  "market": market, "mult": int(st["multiplier"]), "status": "pending", "ver": (old or {}).get("ver", 0) + 1,
@@ -438,6 +488,7 @@ def handle_image(tg, data, sha, meta):
         head = "📋 <b>팬딩 가격표가 바뀌었어요 (새 숫자)</b>" if old else "📋 <b>팬딩 가격표 도착</b>"
         if sheet["status"] == "pending":
             send_sheet_alert(tg, sheet, head)
+    return "sheet"
 
 
 # ---------------------------------------------------------- 주문 접수
@@ -557,6 +608,27 @@ def loop():
         except Exception as e:
             print("루프 오류:", type(e).__name__, e, flush=True)
         time.sleep(20)
+        if _file_changed():   # 업데이트 비서가 새 코드를 넣으면 스스로 다시 시작
+            print("새 코드 감지 → 다시 시작", flush=True)
+            os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
+
+
+_LOADED_MTIME = os.path.getmtime(os.path.abspath(__file__))
+
+
+def _file_changed():
+    try:
+        return os.path.getmtime(os.path.abspath(__file__)) != _LOADED_MTIME
+    except OSError:
+        return False
+
+
+def _reload_if_changed():
+    """비서 봇이 오래 켜져 있어도 이 파일이 바뀌었으면 새 코드로 다시 불러옴. 바뀌었으면 새 모듈, 아니면 None"""
+    if _file_changed():
+        import importlib
+        return importlib.reload(sys.modules[__name__])
+    return None
 
 
 # ---------------------------------------------------------- 비서 봇 연결 (office_secretary 에서 호출)
@@ -567,8 +639,11 @@ def _pending_sheet(st):
     return None
 
 
-def secretary_message(tg_s, text):
+def secretary_message(tg_s, text, _reloaded=False):
     """처리했으면 True. tg_s 는 비서 봇의 TG 객체"""
+    mod = None if _reloaded else _reload_if_changed()
+    if mod:
+        return mod.secretary_message(tg_s, text, True)
     t = text.strip()
     low = t.lower()
     m = re.fullmatch(r"(?:/배수|배수|/mult)\s*(\d+)?", t)
@@ -616,7 +691,10 @@ def secretary_message(tg_s, text):
     return False
 
 
-def secretary_callback(tg_s, cb):
+def secretary_callback(tg_s, cb, _reloaded=False):
+    mod = None if _reloaded else _reload_if_changed()
+    if mod:
+        return mod.secretary_callback(tg_s, cb, True)
     data = cb.get("data", "")
     if not data.startswith("fd:"):
         return False
@@ -674,8 +752,11 @@ def http_upload(h):
             note = urllib.parse.unquote(note)[:300]
         except Exception:
             note = note[:300]
-        INBOX.mkdir(parents=True, exist_ok=True)   # 전송은 상시 프로그램(root)이 함
-        (INBOX / f"{int(time.time())}_{uuid.uuid4().hex[:6]}.note").write_text(note, encoding="utf-8")
+        try:   # 전송은 상시 프로그램(root)이 함
+            INBOX.mkdir(parents=True, exist_ok=True)
+            (INBOX / f"{int(time.time())}_{uuid.uuid4().hex[:6]}.note").write_text(note, encoding="utf-8")
+        except OSError as e:
+            return h.send(500, {"error": "save_failed", "detail": str(e)[:200]})
         return h.send(200, {"ok": True})
     if not 1000 < n <= 8_000_000:
         return h.send(400, {"error": "bad_size"})
@@ -683,11 +764,16 @@ def http_upload(h):
     data = h.rfile.read(n)
     if not (data[:3] == b"\xff\xd8\xff" or data[:4] == b"\x89PNG" or data[:4] == b"RIFF"):
         return h.send(400, {"error": "not_image"})
-    INBOX.mkdir(parents=True, exist_ok=True)
     name = f"{int(time.time())}_{hashlib.sha256(data).hexdigest()[:10]}"
-    meta = {"post": h.headers.get("X-Fanding-Post", "")[:300], "at": now_kst().isoformat()}
-    (INBOX / f"{name}.json").write_text(json.dumps(meta, ensure_ascii=False))
-    (INBOX / f"{name}.img").write_bytes(data)
+    meta = {"post": h.headers.get("X-Fanding-Post", "")[:300], "at": now_kst().isoformat(),
+            "batch": re.sub(r"[^0-9a-f]", "", h.headers.get("X-Fanding-Batch", ""))[:16],
+            "idx": h.headers.get("X-Fanding-Index", ""), "count": h.headers.get("X-Fanding-Count", "")}
+    try:
+        INBOX.mkdir(parents=True, exist_ok=True)
+        (INBOX / f"{name}.json").write_text(json.dumps(meta, ensure_ascii=False))
+        (INBOX / f"{name}.img").write_bytes(data)
+    except OSError as e:
+        return h.send(500, {"error": "save_failed", "detail": str(e)[:200]})
     return h.send(200, {"ok": True})
 
 
