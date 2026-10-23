@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.3.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.4.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -8,6 +8,8 @@
 # 1.3.0: 팬딩 전용 텔레그램 봇 지원(/etc/bot-office/telegram_fanding.json 이 있으면 그 봇으로 알림·버튼·명령)
 #        · Gemini 바쁨(503)·시간초과 → 재시도·예비 모델, 실패한 이미지는 2분 뒤 다시 시도, 알림은 한 번만
 #        · 과거 가격표 수집(윈도우가 하루 10개씩 보냄) → 알림·주문 없이 기록만
+# 1.4.0: 이미지 판독 AI 2개 — Gemini 가 안 되면 DeepSeek(deepseek-flash)로 자동 전환, 그날 되는 쪽을 기억
+#        (DeepSeek 키는 미팅룸과 같은 /etc/bot-office/ai.env 의 DEEPSEEK_API_KEY 사용) · /판독 명령으로 상태 확인
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -36,10 +38,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
+AI_ENV = R / "etc/bot-office/ai.env"          # 미팅룸과 같은 키 파일 (DEEPSEEK_API_KEY=...)
 TELEGRAM_CFG = R / "etc/bot-office/telegram.json"
 FANDING_TG_CFG = R / "etc/bot-office/telegram_fanding.json"   # 팬딩 전용 봇 (있으면 이걸 씀)
 HOME = R / "var/lib/bot-office/fanding"
@@ -63,6 +66,8 @@ DEFAULTS = {
     "missing_alert_kst": "11:00",  # 이 시각까지 가격표가 안 오면 알림
     "gemini_model": "gemini-3.8-flash",
     "gemini_fallback": "gemini-2.5-flash",   # 기본 모델이 바쁠 때 쓰는 예비 모델
+    "vision_order": ["gemini", "deepseek"],  # 이미지 판독 AI 순서 (앞에서 안 되면 다음)
+    "deepseek_model": "deepseek-flash",
     "upload_token": "",
 }
 
@@ -280,7 +285,7 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
                              "responseSchema": schema, "maxOutputTokens": max_tokens},
     }
     c = cfg()
-    tries = [c["gemini_model"], c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"]]
+    tries = [c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"]]
     last = None
     for i, model in enumerate(tries):
         req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -296,22 +301,99 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
                 raise
         except (TimeoutError, OSError) as e:      # 시간초과·연결 끊김
             last = e
-        print(f"Gemini 바쁨({type(last).__name__}) → {[5, 15, 30, 0][i]}초 뒤 다시 ({model})", flush=True)
-        time.sleep([5, 15, 30, 0][i])
+        print(f"Gemini 바쁨({type(last).__name__}) → {[5, 15, 0][i]}초 뒤 다시 ({model})", flush=True)
+        time.sleep([5, 15, 0][i])
     else:
-        raise RuntimeError(f"Gemini 응답 없음 (재시도 4번 실패): {last}")
+        raise RuntimeError(f"Gemini 응답 없음: {last}")
     cand = (d.get("candidates") or [{}])[0]
     text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
     return json.loads(text)
 
 
+def _env_key(name):
+    try:
+        for line in AI_ENV.read_text(encoding="utf-8").splitlines():
+            k, _, v = line.strip().partition("=")
+            if k.strip() == name:
+                return v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
+def _schema_hint(schema):
+    props = schema.get("properties", {})
+    return "{" + ", ".join(f'"{k}": {v.get("type", "").lower()}' for k, v in props.items()) + "}"
+
+
+def _deepseek(img_bytes, prompt, schema, max_tokens=2048):
+    key = _env_key("DEEPSEEK_API_KEY")
+    if not key:
+        raise RuntimeError("DeepSeek 키 없음 (/etc/bot-office/ai.env 의 DEEPSEEK_API_KEY)")
+    mime = "image/png" if img_bytes[:4] == b"\x89PNG" else ("image/webp" if img_bytes[:4] == b"RIFF" else "image/jpeg")
+    text = (prompt + "\n\n반드시 아래 형식의 JSON 객체 하나만 출력하세요. 설명·코드블록 없이.\n" + _schema_hint(schema)
+            + "\nbuys/sells 는 [{\"price\": 숫자, \"qty\": 정수}] 배열입니다." * ("buys" in schema.get("properties", {})))
+    body = {"model": cfg()["deepseek_model"], "temperature": 0, "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(img_bytes).decode()}}]}]}
+    last = None
+    for i in range(3):
+        req = urllib.request.Request("https://api.deepseek.com/chat/completions", data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                d = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code not in (429, 500, 502, 503, 504):
+                raise RuntimeError(f"DeepSeek 오류 HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
+        except (TimeoutError, OSError) as e:
+            last = e
+        time.sleep([5, 15, 0][i])
+    else:
+        raise RuntimeError(f"DeepSeek 응답 없음: {last}")
+    out = d["choices"][0]["message"]["content"] or ""
+    m = re.search(r"\{.*\}", out, re.S)
+    if not m:
+        raise RuntimeError("DeepSeek 응답에서 JSON 을 못 찾음")
+    return json.loads(m.group(0))
+
+
+PROVIDERS = {"gemini": _gemini, "deepseek": _deepseek}
+
+
+def vision(img_bytes, prompt, schema, max_tokens=2048):
+    """그날 되는 AI 로 이미지 판독. 실패하면 다음 AI 로 넘어가고, 성공한 AI 를 오늘 먼저 쓰도록 기억"""
+    order = [p for p in cfg().get("vision_order", ["gemini", "deepseek"]) if p in PROVIDERS]
+    today = now_kst().date().isoformat()
+    st = load(STATE, {})
+    best = (st.get("vision_today") or {})
+    if best.get("date") == today and best.get("provider") in order:
+        order.remove(best["provider"]); order.insert(0, best["provider"])
+    errors = []
+    for prov in order:
+        try:
+            r = PROVIDERS[prov](img_bytes, prompt, schema, max_tokens)
+        except Exception as e:
+            errors.append(f"{prov}: {str(e)[:120]}")
+            print("판독 AI 실패 →", prov, e, flush=True)
+            continue
+        if best.get("date") != today or best.get("provider") != prov:
+            with locked_state() as s2:
+                s2["vision_today"] = {"date": today, "provider": prov, "errors": errors}
+        return r
+    raise RuntimeError("판독 AI 모두 실패 · " + " / ".join(errors))
+
+
 def is_price_sheet(img_bytes):
-    r = _gemini(img_bytes, CLASSIFY_PROMPT, CLASSIFY_SCHEMA, 512)
+    r = vision(img_bytes, CLASSIFY_PROMPT, CLASSIFY_SCHEMA, 512)
     return bool(r.get("is_price_sheet")), str(r.get("reason") or "")[:120]
 
 
 def gemini_read(img_bytes, prompt):
-    return normalize(_gemini(img_bytes, prompt, SCHEMA))
+    return normalize(vision(img_bytes, prompt, SCHEMA))
 
 
 def normalize(p):
@@ -726,7 +808,8 @@ def loop():
 
 
 HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
-             "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황")
+             "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황\n"
+             "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)")
 
 
 def poll_own_bot(tg):
@@ -751,6 +834,14 @@ def poll_own_bot(tg):
                 t = (m.get("text") or "").strip()
                 if t.lower() in ("/start", "/help", "도움말", "?"):
                     tg.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT)
+                elif t in ("/판독", "판독"):
+                    v = load(STATE, {}).get("vision_today") or {}
+                    names = {"gemini": "Gemini", "deepseek": "DeepSeek"}
+                    msg = (f"🔎 오늘 판독 AI: <b>{names.get(v.get('provider'), '아직 사용 안 함')}</b>"
+                           if v.get("date") == now_kst().date().isoformat() else "🔎 오늘은 아직 판독한 이미지가 없어요")
+                    if v.get("errors"):
+                        msg += "\n앞 순서 AI 실패: " + html.escape(" / ".join(v["errors"]))[:300]
+                    tg.send(msg + f"\n순서: {' → '.join(names.get(p, p) for p in cfg()['vision_order'])}")
                 elif t in ("/과거", "과거"):
                     st = load(STATE, {})
                     tg.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")
