@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.1)
+# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.2)
 # V1.1: 예약주문 발주 시간 선택 (장개시 0 / 장마감 10분 전 1 / 장마감 30분 전 2 / 장개시 30분 후 3)
+# V1.2: 살아 있는 예약주문 목록 조회 (앱에서 직접 취소한 건 구분)
 # 메리츠증권 Open API 최소 연결 (해외주식: 현재가·잔고·예약주문)
 #  - 키는 /etc/bot-office/meritz.json 에만 둡니다 (GitHub 에 절대 올리지 않음)
 #    {"app_key": "...", "app_secret": "..."}
@@ -130,6 +131,18 @@ class Meritz:
         if warn and warn != "0":
             raise WarnNeeded(str(data.get("warn_msg") or f"경고코드 {warn}"))
         return {"no": data.get("oder_rsev_mst_no"), "msg": d.get("rsp_msg", ""), "body": body}
+
+    def reserved_active(self, date_from, date_to):
+        """아직 살아 있는(취소 안 된) 해외 예약주문 목록"""
+        rows, q = [], {"iqry_sta_date": date_from, "iqry_fin_date": date_to, "seln_byov_clcd": "0",
+                       "iqry_cls_code": "2", "iqry_idnt_clcd": "2"}
+        for _ in range(10):
+            d = self._call("GET", "/trading/v1/overseas/reserved-orders", q)
+            rows += [r for r in (d.get("data") or []) if str(r.get("rsev_cncl_yn", "N")).upper() != "Y"]
+            if d.get("tr_cont") != "1" or not d.get("tr_cont_key"):
+                break
+            q = dict(q, tr_cont="1", tr_cont_key=d["tr_cont_key"])
+        return rows
 
     def reserve_cancel(self, date_kst, no):
         return self._call("POST", "/trading/v1/overseas/reserved-orders/cancel",

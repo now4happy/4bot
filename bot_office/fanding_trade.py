@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.1)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -17,6 +17,7 @@
 #        · Gemini 한도초과(429)는 기다리지 않고 바로 넘어감 · 확인용 두 번째 판독이 실패해도 가격표는 알림(자동주문만 막음)
 # 1.6.0: 예약 발주 시간 설정(기본: 장마감 30분 전 = 30분 VWAP) · /재예약 (오늘 예약 취소 후 새 시간으로 다시)
 #        · 확인용 두 번째 판독은 첫 번째와 다른 AI 로 (DeepSeek ↔ Gemini 교차 확인)
+# 1.6.1: /재예약 때 메리츠 앱에서 이미 직접 취소한 예약은 건너뜀(살아 있는 예약 목록 확인) · /재예약강제 추가
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -45,7 +46,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -885,7 +886,8 @@ def loop():
 HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
              "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황\n"
              "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
-             "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시")
+             "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
+             "▫️ <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기")
 
 
 def poll_own_bot(tg):
@@ -993,6 +995,16 @@ def secretary_message(tg_s, text, _reloaded=False):
                       "<code>/자동켜기</code> 또는 <code>/자동끄기</code>"); return True
         save(CFG, c)
         tg_s.send(f"🤖 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b>"); return True
+    if low in ("/재예약강제", "재예약강제"):
+        with locked_state() as st:
+            sh = st["sheets"].get(sorted(st["sheets"])[-1]) if st["sheets"] else None
+            if not sh or sh["status"] not in ("submitted", "partial") or now_kst() >= deadlines(sh)[2]:
+                tg_s.send("다시 넣을 수 있는 주문이 없거나 마감이 지났어요."); return True
+            tg_s.send(f"⚠️ <b>{sh['date']} 가격표를 취소 없이 새로 넣을까요?</b>\n메리츠 앱에서 기존 SOXL 예약을 <b>모두 직접 취소한 경우에만</b> 누르세요. "
+                      "하나라도 남아 있으면 주문이 두 번 나가요.",
+                      [[{"text": "✅ 모두 취소했어요 · 새로 넣기", "callback_data": f"fd:rf:{sh['date']}:{sh['ver']}"},
+                        {"text": "↩️ 그만", "callback_data": f"fd:rx:{sh['date']}:{sh['ver']}"}]])
+        return True
     if low in ("/재예약", "재예약"):
         with locked_state() as st:
             sh = st["sheets"].get(sorted(st["sheets"])[-1]) if st["sheets"] else None
@@ -1073,19 +1085,37 @@ def secretary_callback(tg_s, cb, _reloaded=False):
             tg_s.answer(cb_id, "취소 중…")
             from meritz_client import Meritz
             m = Meritz()
-            fails = []
+            fails, skipped = [], 0
+            dates = sorted({o.get("rsv_date") or datetime.fromisoformat(o["at"]).strftime("%Y%m%d") for o in sh["orders"] if o.get("no")})
+            try:
+                alive = m.reserved_active(dates[0], now_kst().strftime("%Y%m%d")) if dates else []
+                alive_nos = {str(int(float(r.get("rsev_acpt_srno") or 0))) for r in alive}
+            except Exception as e:
+                alive_nos = None
+                print("예약 목록 조회 실패 (전부 취소 시도):", e, flush=True)
             for o in sh["orders"]:
-                if o.get("no"):
-                    try:
-                        m.reserve_cancel(o.get("rsv_date") or datetime.fromisoformat(o["at"]).strftime("%Y%m%d"), o["no"])
-                    except Exception as e:
-                        fails.append(f"{o['side']} {o['price']:g}×{o['qty']}: {str(e)[:80]}")
+                if not o.get("no"):
+                    continue
+                if alive_nos is not None and str(int(float(o["no"]))) not in alive_nos:
+                    skipped += 1; continue           # 이미 앱에서 취소된 예약
+                try:
+                    m.reserve_cancel(o.get("rsv_date") or datetime.fromisoformat(o["at"]).strftime("%Y%m%d"), o["no"])
+                except Exception as e:
+                    fails.append(f"{o['side']} {o['price']:g}×{o['qty']}: {str(e)[:80]}")
             if fails:
                 tg_s.send("🚨 <b>예약 취소 일부 실패</b> — 새로 넣지 않았어요 (중복 방지).\n" + html.escape("\n".join(fails))
                           + "\n메리츠 앱에서 예약 내역을 확인해 주세요.")
                 return True
             sh["orders"], sh["status"] = [], "approved"
-            tg_s.send(f"✅ 기존 예약 취소 완료 → <b>{RESERVE_NAMES.get(str(cfg().get('reserve_time', '2')))} 발주</b>로 1분 안에 다시 넣을게요.")
+            tg_s.send(f"✅ 기존 예약 정리 완료" + (f" (이미 취소돼 있던 {skipped}건은 건너뜀)" if skipped else "")
+                      + f" → <b>{RESERVE_NAMES.get(str(cfg().get('reserve_time', '2')))} 발주</b>로 1분 안에 다시 넣을게요.")
+        elif kind == "rf":
+            tg_s.buttons(msg_id, [])
+            if sh["status"] not in ("submitted", "partial") or now_kst() >= deadlines(sh)[2]:
+                tg_s.answer(cb_id, "다시 넣을 수 없는 상태예요"); return True
+            sh["orders"], sh["status"] = [], "approved"
+            tg_s.answer(cb_id, "새로 넣을게요")
+            tg_s.send(f"✅ <b>{RESERVE_NAMES.get(str(cfg().get('reserve_time', '2')))} 발주</b>로 1분 안에 새로 넣을게요.")
         elif kind in ("wy", "re"):
             if sh["status"] != "partial":
                 tg_s.answer(cb_id, "다시 넣을 주문이 없어요"); tg_s.buttons(msg_id, []); return True
