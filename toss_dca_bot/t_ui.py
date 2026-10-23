@@ -202,4 +202,12 @@ async def build_stock_detail_view(client: TossApiClient, sym: str):
         kb.append([{"text": "🛒 몇 일 동안 2차 매수할지 설정", "callback_data": f"next_buy2_{sym}"}])
     kb.append([{"text": "🔄 새로고침", "callback_data": f"detail_{sym}"}, {"text": "📋 종목 리스트로", "callback_data": "stock_list"}])
     kb.append([{"text": "🔙 관제탑 메인으로", "callback_data": "panel"}])
+
+    # 종목별 매매 버튼 v1
+    trade_enabled = bool(s.get("enabled", True))
+    lines.append("• 자동매매: " + ("🟢 실행 중" if trade_enabled else "⏸ 대기 / 중지"))
+    kb.insert(0, [
+        {"text": "▶️ 매매 시작", "callback_data": f"trade_on_{sym}"},
+        {"text": "⏸ 매매 중지", "callback_data": f"trade_off_{sym}"}
+    ])
     return "\n".join(lines), kb

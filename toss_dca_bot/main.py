@@ -14,6 +14,15 @@ async def save_merged(cfg: dict, sym: str, drop: bool = False):
             if k in src: fs[sym][k] = src[k]
     await DcaConfigManager.save(fresh)
 
+
+async def stock_trade_allowed(sym):
+    latest = await DcaConfigManager.load()
+    return (
+        latest.get("is_master_active", True)
+        and sym in latest.get("stocks", {})
+        and bool(latest["stocks"][sym].get("enabled", True))
+    )
+
 async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
     cfg = await sync_holdings_from_toss(client)
     if not cfg.get("is_master_active", True): return
@@ -57,7 +66,9 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
             if qty > 0 and avg_p > 0 and target_stg > 0:
                 sell_q = min(int(qty), max(1, int(round(qty * (sr / 100.0))))) if is_kr else round(qty * (sr / 100.0), 4)
                 if sell_q > 0:
+                    if not await stock_trade_allowed(sym): continue
                     if is_kr: await client.place_kr_integer_order(sym, "sell", sell_q, f"tp{target_stg}_{today_str}_{sym}")
+                    if not await stock_trade_allowed(sym): continue
                     else: await client.place_us_fractional_sell(sym, sell_q, f"tp{target_stg}_{today_str}_{sym}")
                     s["sold_stage"] = target_stg; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
                     logs.append(f"🎯 {sym}: {target_stg}차 익절 ({prof_pct:+.2f}% / {sell_q}주)"); await save_merged(cfg, sym); continue
@@ -72,8 +83,10 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
                 try:
                     if is_kr:
                         buy_q = max(1, int(buy_amt // cur_p)) if cur_p > 0 else 1
+                        if not await stock_trade_allowed(sym): continue
                         await client.place_kr_integer_order(sym, "buy", buy_q, ord_id); logs.append(f"🛒 {sym}: {buy_q}주 매수 ({s_day+1}/{s_target}일차)")
                     else:
+                        if not await stock_trade_allowed(sym): continue
                         await smart_us_buy(client, sym, buy_amt, cur_p, ord_id); logs.append(f"🛒 {sym}: ${buy_amt:.2f} 매수 ({s_day+1}/{s_target}일차)")
                 except Exception as oe:
                     if "API HTTP" in str(oe): raise   # 토스가 거절한 주문(체결 안 됨) → 기존처럼 실패 알림 후 재시도
@@ -87,7 +100,9 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
             elif s_mode == "sell" and qty > 0:
                 rem_days = max(1, s_target - s_day)
                 sq = min(int(qty), max(1, int(round(qty / rem_days)))) if is_kr else (qty if (qty / rem_days * cur_p < 1.0 or rem_days == 1) else round(qty / rem_days, 4))
+                if not await stock_trade_allowed(sym): continue
                 if is_kr: await client.place_kr_integer_order(sym, "sell", sq, f"s_{today_str}_{sym}")
+                if not await stock_trade_allowed(sym): continue
                 else: await client.place_us_fractional_sell(sym, sq, f"s_{today_str}_{sym}")
                 s["s_day"] = s_day + 1; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
                 logs.append(f"📤 {sym}: 분할매도 ({sq}주 / {s['s_day']}/{s_target}일차)")
@@ -114,6 +129,26 @@ async def handle_callback(cb: dict, client: TossApiClient):
     cb_id, data, msg_id = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
     wait_state["mode"] = None; tg_api("answerCallbackQuery", {"callback_query_id": cb_id})
     cfg = await ensure_cycle_fields()
+
+    # 종목별 매매 버튼 v1
+    if data.startswith(("trade_on_", "trade_off_")):
+        turn_on = data.startswith("trade_on_")
+        sym = data.split("_", 2)[2].strip().upper()
+        latest = await DcaConfigManager.load()
+        stocks = latest.get("stocks", {})
+        if sym not in stocks:
+            send_panel("종목이 목록에 없습니다. 보유종목을 새로고침해 주세요.",
+                       [[{"text": "보유종목", "callback_data": "stock_list"}]], msg_id)
+            return
+        stocks[sym]["enabled"] = turn_on
+        await DcaConfigManager.save(latest)
+        text, kb = await build_stock_detail_view(client, sym)
+        notice = ("▶️ 해당 종목 자동매매를 시작했습니다."
+                  if turn_on else "⏸ 해당 종목의 신규 자동주문을 중지했습니다.")
+        if turn_on and not latest.get("is_master_active", True):
+            notice += "\n전체 매매가 중지돼 있어 전체 시작 후 실행됩니다."
+        send_panel(notice + "\n\n" + text, kb, msg_id)
+        return
     if data == "panel": send_panel(*(await build_panel_view(client)), msg_id)
     elif data == "stock_list": send_panel(*(await build_stock_list_view(client, 0)), msg_id)
     elif data.startswith("slist_"): send_panel(*(await build_stock_list_view(client, int(data.split("_")[1]))), msg_id)

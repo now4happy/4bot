@@ -71,7 +71,7 @@ async def sync_holdings_from_toss(client: TossApiClient):
                         q = sum(float(it[k]) for k in ["qty", "quantity", "holding_qty", "balance"] if it.get(k))
                         if q > 0 and sym not in stocks:
                             is_kr = sym.isdigit()
-                            stocks[sym] = {"name": it.get("name", sym), "currency": "KRW" if is_kr else "USD", "market": "KR" if is_kr else "US", "base_amount": 100000.0 if is_kr else 40.0, "target_profit_pct": float(cfg.get("tp1_pct", 10.0)), "sell_ratio_pct": float(cfg.get("sr_pct", 20.0)), "enabled": True, "has_held": True}
+                            stocks[sym] = {"name": it.get("name", sym), "currency": "KRW" if is_kr else "USD", "market": "KR" if is_kr else "US", "base_amount": 100000.0 if is_kr else 40.0, "target_profit_pct": float(cfg.get("tp1_pct", 10.0)), "sell_ratio_pct": float(cfg.get("sr_pct", 20.0)), "enabled": False, "has_held": True}
                             changed = True
             except Exception: pass
             break
