@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.0.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.0.1)
+# 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -28,7 +29,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -65,12 +66,21 @@ def load(p, default):
 
 
 def save(p, data, mode=0o600):
+    """원자적 저장. 이미 있는 파일이면 소유자·그룹·권한을 그대로 유지 (웹서버가 계속 읽을 수 있게)"""
     p = Path(p)
     p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        st = p.stat(); uid, gid, mode = st.st_uid, st.st_gid, st.st_mode & 0o777
+    except FileNotFoundError:
+        st = p.parent.stat(); uid, gid = st.st_uid, st.st_gid
     fd, tmp = tempfile.mkstemp(dir=p.parent)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
         f.flush(); os.fsync(f.fileno())
+    try:
+        os.chown(tmp, uid, gid)
+    except PermissionError:
+        pass
     os.chmod(tmp, mode)
     os.replace(tmp, p)
 
@@ -377,6 +387,9 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
 # ---------------------------------------------------------- 새 가격표 처리
 def process_inbox(tg):
     INBOX.mkdir(parents=True, exist_ok=True)
+    for f in sorted(INBOX.glob("*.note")):
+        tg.send("🖥 <b>윈도우 PC (팬딩)</b>\n" + html.escape(f.read_text(encoding="utf-8", errors="replace")[:300]))
+        f.unlink(missing_ok=True)
     for f in sorted(INBOX.glob("*.img")):
         meta = load(f.with_suffix(".json"), {})
         data = f.read_bytes()
@@ -661,7 +674,8 @@ def http_upload(h):
             note = urllib.parse.unquote(note)[:300]
         except Exception:
             note = note[:300]
-        TG().send("🖥 <b>윈도우 PC (팬딩)</b>\n" + html.escape(note))
+        INBOX.mkdir(parents=True, exist_ok=True)   # 전송은 상시 프로그램(root)이 함
+        (INBOX / f"{int(time.time())}_{uuid.uuid4().hex[:6]}.note").write_text(note, encoding="utf-8")
         return h.send(200, {"ok": True})
     if not 1000 < n <= 8_000_000:
         return h.send(400, {"error": "bad_size"})

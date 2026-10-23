@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.1 · 2026-10-23 (KST)
+- 파일: fanding_trade.py (FANDING_TRADE 1.0.1)
+- 내용: 윈도우 PC 알림을 상시 프로그램이 전송하도록 변경(웹서버 계정 권한 문제) · 설정 저장 시 권한 유지
+- 브랜치: staging
+
 ## v1.1.0 · 2026-10-23 (KST)
 - 파일: fanding_trade.py(신규), meritz_client.py(신규), office_secretary.py(V2), server.py, ../fanding_windows/(신규)
 - 내용: 팬딩 가격표 → Gemini 2회 판독·안전점검 → 비서 봇 [✅ 주문] → 메리츠 Limit VWAP 예약주문 · 마감 30분 전 알림 · 10분 전 자동주문(점검 통과 시) · /배수 /자동 /가격표
