@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.5 · 2026-10-23 16:44 (KST)
+- 파일: averaging_merge.py, averaging_plugin.py, candle_recorder.py, defense_plugin.py, main.py, plugin_updater.py, quant_engine.py, sniper_plugin.py, tg_router.py, tg_ui_plugin.py, toss_api.py, whipsaw_plugin.py
+- 내용: 2번 스나이퍼 v1.0.5 + 원작 자동 합치기
+- 브랜치: staging
+
 ## v1.0.4 · 2026-10-22 08:10 (KST)
 - 파일: sniper_plugin.py, main.py, tg_ui_plugin.py, tg_router.py, quant_engine.py
 - 내용: (이전 버전에 이어서) 하루 2번 자동매매(데이장 19:00~03:29 EST 매수 → 03:30 강제 청산 / 프리장 04:00~09:29 매수 → 15:50 강제 청산), 데이장 매매 텔레그램 켜기·끄기, 추가 매수 혼합형 간격(RSI 35 재장전 + 직전 매수가 -N%, 제어반 0.3~1.0% 설정·기본 0.7), 손절 호가 간격 대응(15초 중간가), 손절 체결 결과 알림
