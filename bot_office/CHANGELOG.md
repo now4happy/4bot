@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.5 · 2026-10-23 18:18 (KST)
+- 파일: fanding_fetch_win.py, fanding_trade.py
+- 내용: 팬딩 1.3.0: 전용 봇 · Gemini 재시도 · 과거 가격표 수집
+- 브랜치: staging
+
 ## v1.0.4 · 2026-10-23 17:55 (KST)
 - 파일: fanding_fetch_win.py
 - 내용: 팬딩 윈도우 1.2.0: 시리즈의 가장 최근 글 가져오기
