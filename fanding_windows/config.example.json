@@ -1,0 +1,8 @@
+{
+  "office_url": "https://여기에-사무실-주소",
+  "upload_token": "서버에서-만든-업로드-암호",
+  "series_url": "https://fanding.kr/@laofus/series/1933/",
+  "stop_at": "11:30",
+  "retry_min": 5,
+  "headless": true
+}
