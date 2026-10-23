@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.4.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.5.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -10,6 +10,8 @@
 #        · 과거 가격표 수집(윈도우가 하루 10개씩 보냄) → 알림·주문 없이 기록만
 # 1.4.0: 이미지 판독 AI 2개 — Gemini 가 안 되면 DeepSeek(deepseek-flash)로 자동 전환, 그날 되는 쪽을 기억
 #        (DeepSeek 키는 미팅룸과 같은 /etc/bot-office/ai.env 의 DEEPSEEK_API_KEY 사용) · /판독 명령으로 상태 확인
+# 1.5.0: 가격표 판별을 '읽어보고 판단'으로 변경 — AI 가 아니라고 해도 날짜·종가가 메리츠 실제 종가와 맞으면 가격표로 인정
+#        (AI 의 판별 실수로 가격표를 놓치는 문제 해결) · 판별 이유를 기록 · 처리 끝난 가격표 이미지는 서버에서 자동 삭제
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -38,7 +40,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -250,6 +252,9 @@ SCHEMA = {
     },
     "required": ["close_date", "close", "buys", "sells"],
 }
+COMBINED_SCHEMA = {"type": "OBJECT", "properties": dict(SCHEMA["properties"], is_price_sheet={"type": "BOOLEAN"},
+                                                        reason={"type": "STRING"}),
+                   "required": ["is_price_sheet", "close_date", "close", "buys", "sells"]}
 
 PROMPTS = [
     "이 이미지는 미국주식 매매 가격표(표)입니다. 표에 적힌 숫자만 그대로 옮겨 적으세요. 추측하지 마세요.\n"
@@ -264,6 +269,8 @@ PROMPTS = [
     "avg_price = 보유 평단. holding_qty = 현재 보유 개수. cycle = 현사이클 차수. Copy every decimal digit exactly.",
 ]
 
+
+COMBINED_SCHEMA = None   # 아래 SCHEMA 정의 뒤에 만듦
 
 CLASSIFY_SCHEMA = {"type": "OBJECT", "properties": {
     "is_price_sheet": {"type": "BOOLEAN"}, "reason": {"type": "STRING"}}, "required": ["is_price_sheet"]}
@@ -385,6 +392,28 @@ def vision(img_bytes, prompt, schema, max_tokens=2048):
                 s2["vision_today"] = {"date": today, "provider": prov, "errors": errors}
         return r
     raise RuntimeError("판독 AI 모두 실패 · " + " / ".join(errors))
+
+
+def read_and_judge(img_bytes):
+    """한 번에 '가격표인지 + 숫자 읽기'. (AI판정, 읽은 값, 이유)"""
+    prompt = (CLASSIFY_PROMPT + "\n\n가격표가 맞으면 is_price_sheet=true 로 하고 아래 지시대로 숫자를 옮기세요. "
+              "아니면 is_price_sheet=false, 숫자 칸은 0 이나 빈 배열로 두세요.\n\n" + PROMPTS[0])
+    r = vision(img_bytes, prompt, COMBINED_SCHEMA)
+    flag = r.get("is_price_sheet")
+    flag = flag if isinstance(flag, bool) else str(flag).strip().lower() in ("true", "yes", "1")
+    return flag, normalize(r), str(r.get("reason") or "")[:120]
+
+
+def judge_sheet(flag, parsed, market=None):
+    """가격표로 인정할지. AI 판정 + 숫자 모양 + (있으면) 메리츠 종가 대조"""
+    looks = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", parsed.get("close_date") or "")) and (parsed.get("close") or 0) > 0 \
+        and bool(parsed.get("buys") or parsed.get("sells"))
+    strong = False
+    if looks and market and market.get("price"):
+        refs = [x for x in (market.get("price"), market.get("prev_close")) if x]
+        strong = parsed["close_date"] == last_session_date().isoformat() and \
+            any(abs(parsed["close"] - x) / x <= 0.005 for x in refs)
+    return (flag and looks) or strong, strong
 
 
 def is_price_sheet(img_bytes):
@@ -549,8 +578,8 @@ def sheet_rows(sheet):
 
 def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     tg.clear_buttons(sheet.get("msg_id"))
-    img = IMAGES / sheet["img"]
-    res = tg.photo(img, sheet_text(sheet, head), sheet_rows(sheet)) if img.exists() else tg.send(sheet_text(sheet, head), sheet_rows(sheet))
+    img = IMAGES / (sheet.get("img") or "_none_")
+    res = tg.photo(img, sheet_text(sheet, head), sheet_rows(sheet)) if img.is_file() else tg.send(sheet_text(sheet, head), sheet_rows(sheet))
     sheet["msg_id"] = res.get("message_id")
 
 
@@ -589,17 +618,17 @@ def process_inbox(tg):
 def handle_history_image(data, sha, meta):
     """과거 가격표: 알림·주문 없이 기록만 (Gemini 판독 1번)"""
     with locked_state() as st:
-        known = st.setdefault("kinds", {})
+        known = st.setdefault("kinds2", {})
         if known.get(sha):
             return known[sha]
-    ok, _ = is_price_sheet(data)
+    flag, parsed, why = read_and_judge(data)
+    ok, _ = judge_sheet(flag, parsed)
     kind = "sheet" if ok else "other"
     if ok:
-        parsed = gemini_read(data, PROMPTS[0])
         log_history("past_sheet", {"date": parsed.get("close_date"), "parsed": parsed, "post": meta.get("post", "")})
     with locked_state() as st:
-        st["kinds"][sha] = kind
-        st["kinds"] = dict(list(st["kinds"].items())[-500:])
+        st["kinds2"][sha] = kind
+        st["kinds2"] = dict(list(st["kinds2"].items())[-800:])
         if ok:
             st["past_count"] = int(st.get("past_count", 0)) + 1
     return kind
@@ -626,28 +655,29 @@ def batch_done(tg, meta, kind):
 def handle_image(tg, data, sha, meta):
     """돌려주는 값: sheet(새 가격표) / sheet_dup(이미 받은 가격표) / other(가격표 아님)"""
     with locked_state() as st:
-        known = st.setdefault("kinds", {})
+        known = st.setdefault("kinds2", {})
         if sha in st.get("seen", []) or known.get(sha) == "sheet":
             print("이미 받은 가격표 → 무시", flush=True); return "sheet_dup"
         if known.get(sha) == "other":
             return "other"
-    ok, why = is_price_sheet(data)
+    market = market_snapshot()
+    flag, first, why = read_and_judge(data)
+    ok, strong = judge_sheet(flag, first, market)
+    print(f"판별: AI={flag} 날짜·종가일치={strong} → {'가격표' if ok else '아님'} ({why})", flush=True)
     if not ok:
         with locked_state() as st:
-            st["kinds"][sha] = "other"
-            st["kinds"] = dict(list(st["kinds"].items())[-500:])
-        print("가격표 아님:", why, flush=True)
+            st["kinds2"][sha] = "other"
+            st["kinds2"] = dict(list(st["kinds2"].items())[-500:])
         return "other"
-    reads = [gemini_read(data, PROMPTS[0]), gemini_read(data, PROMPTS[1])]
+    reads = [first, gemini_read(data, PROMPTS[1])]
     agree = core(reads[0]) == core(reads[1])
     parsed = reads[0]
-    market = market_snapshot()
     IMAGES.mkdir(parents=True, exist_ok=True)
     img_name = f"{parsed['close_date'] or 'unknown'}_{sha[:8]}.jpg"
     (IMAGES / img_name).write_bytes(data)
     with locked_state() as st:
         st["seen"] = (st.get("seen", []) + [sha])[-60:]
-        st.setdefault("kinds", {})[sha] = "sheet"
+        st.setdefault("kinds2", {})[sha] = "sheet"
         date = parsed["close_date"]
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
             tg.send("🚨 가격표에서 날짜를 못 읽었어요. 주문하지 않습니다. 직접 확인해 주세요.")
@@ -720,6 +750,19 @@ def submit(tg, sheet, confirm_warn=False):
 
 
 # ---------------------------------------------------------- 시간표 처리
+def cleanup_images(st):
+    """처리가 끝난 가격표 이미지는 서버에서 지움 (텔레그램 알림에 원본이 남아 있음). 남은 것도 3일 지나면 삭제"""
+    done = ("submitted", "cancelled", "skipped", "expired")
+    for sh in st["sheets"].values():
+        if sh.get("img") and sh["status"] in done:
+            (IMAGES / sh["img"]).unlink(missing_ok=True)
+            sh["img"] = ""
+    if IMAGES.exists():
+        for f in IMAGES.glob("*"):
+            if time.time() - f.stat().st_mtime > 3 * 86400:
+                f.unlink(missing_ok=True)
+
+
 def tick(tg):
     c = cfg()
     now = now_kst()
@@ -776,6 +819,7 @@ def tick(tg):
                     "윈도우 PC가 켜져 있는지, 팬딩 로그인이 풀리지 않았는지 확인해 주세요. (휴장일이면 무시)")
         for k in sorted(k for k in st if k.startswith("missing:"))[:-10]:
             st.pop(k, None)
+        cleanup_images(st)
 
 
 def loop():
