@@ -39,7 +39,17 @@
 /bithumb_laoeo_bot/*
 !/bithumb_laoeo_bot/*.py
 !/bithumb_laoeo_bot/README.md
-
+!/bot_office/
+/bot_office/*
+!/bot_office/*.py
+!/bot_office/*.html
+!/bot_office/*.md
+# 팬딩 가격표: 윈도우용 코드만 (config.json·브라우저 로그인·가격표 이미지는 절대 올리지 않음)
+!/fanding_windows/
+/fanding_windows/*
+!/fanding_windows/*.py
+!/fanding_windows/*.bat
+!/fanding_windows/config.example.json
 # 허용 범위 안이라도 항상 제외
 .env
 .env.*
