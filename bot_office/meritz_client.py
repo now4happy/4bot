@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1)
+# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.1)
+# V1.1: 예약주문 발주 시간 선택 (장개시 0 / 장마감 10분 전 1 / 장마감 30분 전 2 / 장개시 30분 후 3)
 # 메리츠증권 Open API 최소 연결 (해외주식: 현재가·잔고·예약주문)
 #  - 키는 /etc/bot-office/meritz.json 에만 둡니다 (GitHub 에 절대 올리지 않음)
 #    {"app_key": "...", "app_secret": "..."}
@@ -116,12 +117,12 @@ class Meritz:
         return self._call("GET", "/reference/v1/overseas/market-hours", {"ovrs_stck_mrkt_tr_cls_code": "01"}).get("data") or {}
 
     # ---------------- 예약주문 (Limit VWAP, 장개시 발주)
-    def reserve(self, side, symbol, exch_id, qty, price, date_us, aspr="8", confirm_warn=False):
+    def reserve(self, side, symbol, exch_id, qty, price, date_us, aspr="8", confirm_warn=False, hour_code="2"):
         """예약주문 접수. 증권사 착오매매 경고가 오면 WarnNeeded 를 올림 (자동으로 '확인' 하지 않음)"""
         body = {"ovrs_stck_symb_iscd": symbol, "ovrs_exch_vndr_idno": exch_id, "rsev_aspr_tpcd": aspr,
                 "odqt": str(int(qty)), "ovrs_stck_oder_prc": f"{price:.4f}".rstrip("0").rstrip("."),
                 "warn_cnfr_yn": "Y" if confirm_warn else "N", "oder_rsev_cls_code": "1",
-                "oder_rsev_hour_clcd": "0", "oder_sta_date": date_us, "oder_fin_date": date_us}
+                "oder_rsev_hour_clcd": str(hour_code), "oder_sta_date": date_us, "oder_fin_date": date_us}
         path = f"/trading/v1/overseas/reserved-orders/{'buy' if side == 'buy' else 'sell'}"
         d = self._call("POST", path, body=body)
         data = d.get("data") or {}

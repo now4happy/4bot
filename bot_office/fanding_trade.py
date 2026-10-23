@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.5.2)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -15,6 +15,8 @@
 # 1.5.1: 1.5.0 판독 형식이 비어 있던 오류 수정 · 없어진 예비 모델(gemini-2.5-flash) 대신 기본 모델 재시도 → DeepSeek
 # 1.5.2: DeepSeek 를 먼저 사용(Gemini API 무료 한도 문제) · DeepSeek 답이 형식에 안 맞으면 한 번 더 요청
 #        · Gemini 한도초과(429)는 기다리지 않고 바로 넘어감 · 확인용 두 번째 판독이 실패해도 가격표는 알림(자동주문만 막음)
+# 1.6.0: 예약 발주 시간 설정(기본: 장마감 30분 전 = 30분 VWAP) · /재예약 (오늘 예약 취소 후 새 시간으로 다시)
+#        · 확인용 두 번째 판독은 첫 번째와 다른 AI 로 (DeepSeek ↔ Gemini 교차 확인)
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -43,7 +45,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -56,6 +58,8 @@ HISTORY = HOME / "history.jsonl"
 STATE, LOCKF = HOME / "state.json", HOME / ".lock"
 TELEGRAM_API = os.environ.get("OFFICE_TELEGRAM_API", "https://api.telegram.org")
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
+RESERVE_NAMES = {"0": "장개시", "1": "장마감 10분 전", "2": "장마감 30분 전", "3": "장개시 30분 후"}
+LAST_PROVIDER = {"name": ""}
 
 DEFAULTS = {
     "symbol": "SOXL",
@@ -65,6 +69,7 @@ DEFAULTS = {
     "max_buy_usd": 8000,         # 1회 매수 총액 한도(배수 적용 후). 넘으면 주문 막음
     "auto_order": True,          # 버튼 안 누르면 마감 10분 전 자동주문
     "submit_kst": "09:01",       # 예약주문 접수 시작 (한국시간)
+    "reserve_time": "2",         # 예약 발주 시간: "2" 장마감 30분 전(30분 VWAP) · "1" 장마감 10분 전 · "0" 장개시 · "3" 장개시 30분 후
     "cutoff_et": "08:30",        # 예약 마감으로 보는 시각 (미국 동부시간, 정규장 9:30 1시간 전)
     "alarm_before_min": 30,
     "auto_before_min": 10,
@@ -384,7 +389,7 @@ def _deepseek(img_bytes, prompt, schema, max_tokens=2048, _again=False):
 PROVIDERS = {"gemini": _gemini, "deepseek": _deepseek}
 
 
-def vision(img_bytes, prompt, schema, max_tokens=2048):
+def vision(img_bytes, prompt, schema, max_tokens=2048, avoid=""):
     """그날 되는 AI 로 이미지 판독. 실패하면 다음 AI 로 넘어가고, 성공한 AI 를 오늘 먼저 쓰도록 기억"""
     order = [p for p in cfg().get("vision_order", ["deepseek", "gemini"]) if p in PROVIDERS]
     today = now_kst().date().isoformat()
@@ -392,6 +397,8 @@ def vision(img_bytes, prompt, schema, max_tokens=2048):
     best = (st.get("vision_today") or {})
     if best.get("date") == today and best.get("provider") in order:
         order.remove(best["provider"]); order.insert(0, best["provider"])
+    if avoid in order and len(order) > 1:          # 교차 확인: 방금 쓴 AI 는 맨 뒤로
+        order.remove(avoid); order.append(avoid)
     errors = []
     for prov in order:
         try:
@@ -400,9 +407,10 @@ def vision(img_bytes, prompt, schema, max_tokens=2048):
             errors.append(f"{prov}: {str(e)[:120]}")
             print("판독 AI 실패 →", prov, e, flush=True)
             continue
-        if best.get("date") != today or best.get("provider") != prov:
+        if not avoid and (best.get("date") != today or best.get("provider") != prov):
             with locked_state() as s2:
                 s2["vision_today"] = {"date": today, "provider": prov, "errors": errors}
+        LAST_PROVIDER["name"] = prov
         return r
     raise RuntimeError("판독 AI 모두 실패 · " + " / ".join(errors))
 
@@ -434,8 +442,8 @@ def is_price_sheet(img_bytes):
     return bool(r.get("is_price_sheet")), str(r.get("reason") or "")[:120]
 
 
-def gemini_read(img_bytes, prompt):
-    return normalize(vision(img_bytes, prompt, SCHEMA))
+def gemini_read(img_bytes, prompt, avoid=""):
+    return normalize(vision(img_bytes, prompt, SCHEMA, avoid=avoid))
 
 
 def normalize(p):
@@ -564,7 +572,7 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     alarm, auto, cutoff = deadlines(sheet)
     us = datetime.strptime(sheet["us_date"], "%Y%m%d")
     L = [head, f"▫️ {c['symbol']} · {html.escape(p['close_date'])} 종가 {p['close']} · {html.escape(p.get('cycle') or '')}",
-         f"▫️ 배수 <b>×{mult}</b> · 주문일(미국) {us:%m/%d} · Limit VWAP 예약"]
+         f"▫️ 배수 <b>×{mult}</b> · 주문일(미국) {us:%m/%d} · Limit VWAP 예약 · <b>{RESERVE_NAMES.get(str(c.get('reserve_time', '2')), '')} 발주</b>"]
     for side, price, qty in order_lines(sheet):
         L.append(f"{'🔴 매수' if side == 'buy' else '🔵 매도'} <b>{price:g} × {qty}</b>"
                  f"  <i>(표 {qty // mult})</i>  {fmt_money(price * qty)}")
@@ -675,6 +683,7 @@ def handle_image(tg, data, sha, meta):
             return "other"
     market = market_snapshot()
     flag, first, why = read_and_judge(data)
+    first_ai = LAST_PROVIDER["name"]
     ok, strong = judge_sheet(flag, first, market)
     print(f"판별: AI={flag} 날짜·종가일치={strong} → {'가격표' if ok else '아님'} ({why})", flush=True)
     if not ok:
@@ -683,7 +692,8 @@ def handle_image(tg, data, sha, meta):
             st["kinds2"] = dict(list(st["kinds2"].items())[-500:])
         return "other"
     try:
-        second = gemini_read(data, PROMPTS[1])
+        second = gemini_read(data, PROMPTS[1], avoid=first_ai)
+        print(f"교차 확인: 1차 {first_ai} · 2차 {LAST_PROVIDER['name']}", flush=True)
     except Exception as e:          # 확인용 판독 실패 → 가격표는 알리되 자동주문은 막음
         print("확인용 두 번째 판독 실패:", e, flush=True)
         second = dict(first, close=-1)
@@ -740,8 +750,11 @@ def submit(tg, sheet, confirm_warn=False):
             continue
         o = {"side": side, "price": price, "qty": qty, "at": now_kst().isoformat()}
         try:
-            r = m.reserve(side, c["symbol"], exch, qty, price, sheet["us_date"], confirm_warn=confirm_warn)
+            r = m.reserve(side, c["symbol"], exch, qty, price, sheet["us_date"], confirm_warn=confirm_warn,
+                          hour_code=str(c.get("reserve_time", "2")))
             o["no"] = r["no"]
+            o["rsv_date"] = now_kst().strftime("%Y%m%d")
+            o["hour"] = str(c.get("reserve_time", "2"))
         except WarnNeeded as e:
             o["warn"] = str(e)
         except Exception as e:
@@ -871,7 +884,8 @@ def loop():
 
 HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
              "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황\n"
-             "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)")
+             "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
+             "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시")
 
 
 def poll_own_bot(tg):
@@ -979,6 +993,30 @@ def secretary_message(tg_s, text, _reloaded=False):
                       "<code>/자동켜기</code> 또는 <code>/자동끄기</code>"); return True
         save(CFG, c)
         tg_s.send(f"🤖 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b>"); return True
+    if low in ("/재예약", "재예약"):
+        with locked_state() as st:
+            sh = st["sheets"].get(sorted(st["sheets"])[-1]) if st["sheets"] else None
+            if not sh or sh["status"] not in ("submitted", "partial"):
+                tg_s.send("다시 예약할 접수 완료 주문이 없어요."); return True
+            if now_kst() >= deadlines(sh)[2]:
+                tg_s.send("예약 마감이 지나 다시 예약할 수 없어요. 메리츠 앱에서 확인해 주세요."); return True
+            new = RESERVE_NAMES.get(str(cfg().get("reserve_time", "2")))
+            olds = sorted({RESERVE_NAMES.get(o.get("hour", "0"), "장개시") for o in sh["orders"] if o.get("no")})
+            tg_s.send(f"🔁 <b>{sh['date']} 가격표 예약을 다시 넣을까요?</b>\n지금 예약({', '.join(olds)} 발주)을 모두 취소하고 "
+                      f"<b>{new} 발주</b>로 같은 주문을 다시 넣어요.",
+                      [[{"text": "✅ 취소하고 다시 예약", "callback_data": f"fd:rr:{sh['date']}:{sh['ver']}"},
+                        {"text": "↩️ 그대로 두기", "callback_data": f"fd:rx:{sh['date']}:{sh['ver']}"}]])
+        return True
+    m2 = re.fullmatch(r"/발주시간\s*([0-3])?", t)
+    if m2:
+        c = load(CFG, {})
+        if m2.group(1):
+            c["reserve_time"] = m2.group(1); save(CFG, c)
+        cur = str(cfg().get("reserve_time", "2"))
+        tg_s.send(f"⏱ 예약 발주 시간: <b>{RESERVE_NAMES[cur]}</b>\n바꾸기: <code>/발주시간 2</code> 장마감 30분 전 · "
+                  "<code>/발주시간 1</code> 장마감 10분 전 · <code>/발주시간 0</code> 장개시 · <code>/발주시간 3</code> 장개시 30분 후\n"
+                  "(이미 접수된 주문은 <b>/재예약</b> 으로 바꿔요)")
+        return True
     if low in ("/가격표", "가격표", "/팬딩", "팬딩"):
         with locked_state() as st:
             if not st["sheets"]:
@@ -1026,6 +1064,28 @@ def secretary_callback(tg_s, cb, _reloaded=False):
             sh["status"] = "cancelled"
             tg_s.answer(cb_id, "이번엔 주문 안 해요"); tg_s.buttons(msg_id, [])
             tg_s.send(f"❌ {date} 가격표: 이번엔 주문하지 않아요. (자동주문도 안 함)")
+        elif kind == "rx":
+            tg_s.answer(cb_id, "그대로 둘게요"); tg_s.buttons(msg_id, [])
+        elif kind == "rr":
+            tg_s.buttons(msg_id, [])
+            if sh["status"] not in ("submitted", "partial") or now_kst() >= deadlines(sh)[2]:
+                tg_s.answer(cb_id, "다시 예약할 수 없는 상태예요"); return True
+            tg_s.answer(cb_id, "취소 중…")
+            from meritz_client import Meritz
+            m = Meritz()
+            fails = []
+            for o in sh["orders"]:
+                if o.get("no"):
+                    try:
+                        m.reserve_cancel(o.get("rsv_date") or datetime.fromisoformat(o["at"]).strftime("%Y%m%d"), o["no"])
+                    except Exception as e:
+                        fails.append(f"{o['side']} {o['price']:g}×{o['qty']}: {str(e)[:80]}")
+            if fails:
+                tg_s.send("🚨 <b>예약 취소 일부 실패</b> — 새로 넣지 않았어요 (중복 방지).\n" + html.escape("\n".join(fails))
+                          + "\n메리츠 앱에서 예약 내역을 확인해 주세요.")
+                return True
+            sh["orders"], sh["status"] = [], "approved"
+            tg_s.send(f"✅ 기존 예약 취소 완료 → <b>{RESERVE_NAMES.get(str(cfg().get('reserve_time', '2')))} 발주</b>로 1분 안에 다시 넣을게요.")
         elif kind in ("wy", "re"):
             if sh["status"] != "partial":
                 tg_s.answer(cb_id, "다시 넣을 주문이 없어요"); tg_s.buttons(msg_id, []); return True
