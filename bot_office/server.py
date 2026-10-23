@@ -182,6 +182,9 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in ('https://'+self.headers.get('Host',''),'http://'+self.headers.get('Host','')):
             return self.send(403,{'error':'origin_rejected'})
         route=self.path
+        if route=='/api/fanding/upload':  # FANDING_UPLOAD_V1: 윈도우 PC가 가격표 이미지를 올리는 곳 (전용 암호 필요)
+            import fanding_trade
+            return fanding_trade.http_upload(self)
         if route=='/logout':
             try:
                 c=SimpleCookie();c.load(self.headers.get('Cookie',''))

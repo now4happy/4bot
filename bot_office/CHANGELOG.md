@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.0 · 2026-10-23 (KST)
+- 파일: fanding_trade.py(신규), meritz_client.py(신규), office_secretary.py(V2), server.py, ../fanding_windows/(신규)
+- 내용: 팬딩 가격표 → Gemini 2회 판독·안전점검 → 비서 봇 [✅ 주문] → 메리츠 Limit VWAP 예약주문 · 마감 30분 전 알림 · 10분 전 자동주문(점검 통과 시) · /배수 /자동 /가격표
+- 브랜치: staging
+
 ## v1.0.1 · 2026-10-22 14:26 (KST)
 - 파일: ai_room.py, room.html, server.py
 - 내용: office: AI 협업방 room-1.0.0 · 방(프로젝트)별 채팅 · 직접(API)/간접(아이디) AI 입장 · /room 연결 [ai_room.py 외 2개]

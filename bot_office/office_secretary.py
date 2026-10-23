@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V1)
+# FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V2)
+# V2 (2026-10-23): 팬딩 가격표 주문 버튼(fd:)·/배수·/자동·/가격표 연결 (fanding_trade.py)
 # 텔레그램 "사무실 비서" 대화 담당 (항상 실행: bot-office-secretary.service)
 #  - 평소 말투로 보낸 메시지 → 어느 봇인지 확인 → 사무실 수정 요청으로 접수 (고칠 파일은 사무실이 자동으로 찾음)
 #  - 결재 요청 메시지의 [✅ 승인] [❌ 반려] [🔍 바뀐 코드 보기] 버튼 처리 (승인은 확인 한 번 더)
@@ -8,6 +9,12 @@
 #  안전: 등록된 대표님 채팅방(chat_id)에서 온 것만 처리. 코드 변경은 승인 후 기존 적용 담당(deploy_worker)이 진행.
 # ==========================================================
 import hashlib, html, json, os, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import fanding_trade  # 팬딩 가격표 주문 (없어도 비서는 정상 동작)
+except Exception as _e:
+    fanding_trade = None
+    print("팬딩 연결 안 됨:", _e, flush=True)
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -37,6 +44,7 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "   → 어느 봇인지 확인 → 사무실이 고칠 파일을 스스로 찾아 수정안 작성 → 결재 요청이 오면 버튼으로 승인\n"
         "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
         "▫️ <b>현황</b> : 결재 대기·진행 중인 안건 보기\n"
+        "▫️ <b>/가격표</b> : 최근 팬딩 가격표·주문 상태 · <b>/배수</b> 6 : 배수 변경 · <b>/자동</b> : 자동주문 켜기/끄기\n"
         "▫️ 큰 기능 추가나 매매 로직 변경은 Claude에게 요청하면 시뮬레이션까지 해서 결재함에 올려 드립니다.")
 
 
@@ -230,6 +238,8 @@ def handle_message(tg, st, msg):
     text = (msg.get("text") or "").strip()
     if not text:
         return
+    if fanding_trade and fanding_trade.secretary_message(tg, text):
+        return
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?"):
         tg.send(HELP); return
@@ -255,6 +265,12 @@ def handle_message(tg, st, msg):
 def handle_callback(tg, st, cb):
     data, cb_id = cb.get("data", ""), cb.get("id")
     msg_id = (cb.get("message") or {}).get("message_id")
+    if data.startswith("fd:"):
+        if fanding_trade:
+            fanding_trade.secretary_callback(tg, cb)
+        else:
+            tg.answer(cb_id, "팬딩 모듈이 꺼져 있어요")
+        return
     kind, _, rest = data.partition(":")
     pend = st.setdefault("pending", {})
     if kind in ("rb", "ch", "rq", "cx"):
