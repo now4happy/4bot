@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.10 · 2026-10-23 19:19 (KST)
+- 파일: fanding_trade.py, meritz_client.py
+- 내용: 팬딩 1.6.0: 장마감 30분 전 발주 · 재예약
+- 브랜치: staging
+
 ## v1.0.9 · 2026-10-23 19:12 (KST)
 - 파일: fanding_trade.py
 - 내용: 팬딩 1.5.2: DeepSeek 우선 · 형식 재요청
