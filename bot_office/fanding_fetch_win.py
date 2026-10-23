@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.2.0)
+# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.3.0)
 #   저장소 위치: bot_office/fanding_fetch_win.py (서버에선 실행하지 않음 · 윈도우가 GitHub 에서 내려받음)
 # 윈도우 PC 전용: 팬딩 가격표 이미지를 가져와 사무실 서버로 보내고 종료
 # 1.1.0: 글 안의 큰 이미지를 모두 보냄 → 서버가 가격표만 골라냄 (이미지 순서가 바뀌어도 OK)
 # 1.2.0: 시리즈 목록 끝까지 내려 모든 글을 모은 뒤 글 번호가 가장 큰 것(= 가장 최근 글)을 고름
+# 1.3.0: 매일 실행 끝에 과거 글 10개씩 천천히(글마다 20~40초 쉬며) 보내 매매 규칙 분석용 기록 쌓기
 #
 #  준비 (한 번만)
 #    py -m pip install playwright
@@ -20,15 +21,16 @@
 #     "series_url": "https://fanding.kr/@laofus/series/1933/", "stop_at": "11:30",
 #     "retry_min": 5, "headless": true}
 # ==========================================================
-import hashlib, json, re, sys, time, urllib.parse, urllib.request
+import hashlib, json, random, re, sys, time, urllib.parse, urllib.request
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"      # 팬딩 로그인이 저장되는 전용 브라우저 폴더
 LAST = HERE / "last_sent.txt"
+BACKFILL = HERE / "backfill_done.json"     # 이미 보낸 과거 글 목록
 DEBUG = HERE / "debug"
 
 
@@ -37,12 +39,13 @@ def log(*a):
 
 
 def cfg():
-    c = {"series_url": "https://fanding.kr/@laofus/series/1933/", "stop_at": "11:30", "retry_min": 5, "headless": True}
+    c = {"series_url": "https://fanding.kr/@laofus/series/1933/", "stop_at": "11:30", "retry_min": 5, "headless": True,
+         "backfill_per_day": 10}
     c.update(json.loads(CFG.read_text(encoding="utf-8")))
     return c
 
 
-def post_server(c, data=b"", note="", post="", batch="", idx=0, count=0):
+def post_server(c, data=b"", note="", post="", batch="", idx=0, count=0, mode="live"):
     url = c["office_url"].rstrip("/") + "/api/fanding/upload"
     h = {"X-Fanding-Token": c["upload_token"], "Content-Type": "application/octet-stream"}
     if note:
@@ -51,6 +54,8 @@ def post_server(c, data=b"", note="", post="", batch="", idx=0, count=0):
         h["X-Fanding-Post"] = urllib.parse.quote(post, safe=":/@?=&%")
     if batch:
         h.update({"X-Fanding-Batch": batch, "X-Fanding-Index": str(idx), "X-Fanding-Count": str(count)})
+    if mode == "history":
+        h["X-Fanding-Mode"] = "history"
     req = urllib.request.Request(url, data=data or b"-", headers=h, method="POST")
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.load(r)
@@ -187,6 +192,44 @@ def once(c, upload=True):
             ctx.close()
 
 
+def backfill(c, n=None):
+    """과거 글 n개를 최신→과거 순서로 천천히 보냄 (알림·주문 없이 서버에 기록만)"""
+    n = int(c.get("backfill_per_day", 10) if n is None else n)
+    if n <= 0:
+        return
+    from playwright.sync_api import sync_playwright
+    done = set(json.loads(BACKFILL.read_text(encoding="utf-8"))) if BACKFILL.exists() else set()
+    sent = 0
+    with sync_playwright() as p:
+        ctx = browser(p, c["headless"])
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        try:
+            posts = latest_post_url(page, c["series_url"])
+            if looks_logged_out(page) or not posts:
+                log("과거 수집: 로그인 풀림 또는 글 목록 없음 → 건너뜀"); return
+            todo = [u for u in posts[1:] if u not in done][:n]
+            for u in todo:
+                time.sleep(random.uniform(20, 40))        # 사람이 보듯 천천히
+                try:
+                    images, _ = grab_images(page, u)
+                    b = hashlib.sha256(u.encode()).hexdigest()[:16]
+                    for i, d in enumerate(images, 1):
+                        post_server(c, d, post=u, batch=b, idx=i, count=len(images), mode="history")
+                    done.add(u); sent += 1
+                    BACKFILL.write_text(json.dumps(sorted(done)), encoding="utf-8")
+                    log(f"과거 글 보냄 {sent}/{len(todo)}: {u} ({len(images)}장)")
+                except Exception as e:
+                    log("과거 글 실패:", u, e)
+            left = len([u for u in posts[1:] if u not in done])
+        finally:
+            ctx.close()
+    if sent:
+        try:
+            post_server(c, note=f"과거 가격표 글 {sent}개 보냄 · 남은 글 {left}개")
+        except Exception as e:
+            log("서버 알림 실패:", e)
+
+
 def cmd_login():
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
@@ -211,7 +254,7 @@ def cmd_run():
             r, info = "error", f"{type(e).__name__}: {e}"
         log("결과:", r, info or "")
         if r == "sent":
-            return
+            break
         if r == "logged_out" and not warned:
             warned = True
             try:
@@ -226,8 +269,14 @@ def cmd_run():
                 post_server(c, note=f"{c['stop_at']}까지 시도했지만 실패 · {msg}")
             except Exception as e:
                 log("서버 알림 실패:", e)
-            return
+            if r == "logged_out":
+                return
+            break
         time.sleep(int(c["retry_min"]) * 60)
+    try:
+        backfill(c)          # 오늘 가격표 다음에 과거 글 10개
+    except Exception as e:
+        log("과거 수집 오류:", e)
 
 
 if __name__ == "__main__":
@@ -240,6 +289,8 @@ if __name__ == "__main__":
         print("결과:", r, info or "")
         if r == "test_ok":
             print("test_images 폴더의 사진들 중에 가격표가 들어 있는지 확인하세요. (순서는 상관없어요)")
+    elif cmd == "backfill":   # 과거 글 지금 바로 보내기 (예: py fanding_fetch.py backfill 3)
+        backfill(cfg(), int(sys.argv[2]) if len(sys.argv) > 2 else None)
     elif cmd == "send":       # 지금 바로 1번 보내기 (같은 그림이어도 다시 보냄)
         LAST.unlink(missing_ok=True)
         print("결과:", *once(cfg()))

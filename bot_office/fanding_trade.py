@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.1.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.3.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
+# 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
+#        /var/lib/bot-office/fanding/history.jsonl 에 하루 한 줄씩 영구 보관 (서버에만, GitHub 에 안 올라감)
+# 1.3.0: 팬딩 전용 텔레그램 봇 지원(/etc/bot-office/telegram_fanding.json 이 있으면 그 봇으로 알림·버튼·명령)
+#        · Gemini 바쁨(503)·시간초과 → 재시도·예비 모델, 실패한 이미지는 2분 뒤 다시 시도, 알림은 한 번만
+#        · 과거 가격표 수집(윈도우가 하루 10개씩 보냄) → 알림·주문 없이 기록만
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -25,19 +30,21 @@
 #   python3 fanding_trade.py inject 그림   서버에서 직접 그림 넣기 (윈도우 없이 테스트)
 #   python3 fanding_trade.py status        현재 상태 출력
 # ==========================================================
-import base64, fcntl, hashlib, hmac, html, json, os, re, sys, tempfile, time, urllib.parse, urllib.request, uuid
+import base64, fcntl, hashlib, hmac, html, json, os, re, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.1.0"
+VERSION = "1.3.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
 TELEGRAM_CFG = R / "etc/bot-office/telegram.json"
+FANDING_TG_CFG = R / "etc/bot-office/telegram_fanding.json"   # 팬딩 전용 봇 (있으면 이걸 씀)
 HOME = R / "var/lib/bot-office/fanding"
 INBOX, IMAGES = HOME / "inbox", HOME / "images"
+HISTORY = HOME / "history.jsonl"
 STATE, LOCKF = HOME / "state.json", HOME / ".lock"
 TELEGRAM_API = os.environ.get("OFFICE_TELEGRAM_API", "https://api.telegram.org")
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -55,6 +62,7 @@ DEFAULTS = {
     "auto_before_min": 10,
     "missing_alert_kst": "11:00",  # 이 시각까지 가격표가 안 오면 알림
     "gemini_model": "gemini-3.8-flash",
+    "gemini_fallback": "gemini-2.5-flash",   # 기본 모델이 바쁠 때 쓰는 예비 모델
     "upload_token": "",
 }
 
@@ -142,8 +150,33 @@ def fmt_money(x):
 # ---------------------------------------------------------- 텔레그램
 class TG:
     def __init__(self):
-        c = load(TELEGRAM_CFG, {})
+        own = load(FANDING_TG_CFG, {})
+        c = own if own.get("token") else load(TELEGRAM_CFG, {})
+        self.own = bool(own.get("token"))        # 팬딩 전용 봇이면 이 프로그램이 직접 메시지를 받음
         self.token, self.chat = c.get("token"), str(c.get("chat_id", ""))
+
+    def buttons(self, msg_id, rows):
+        if not msg_id:
+            return
+        try:
+            self._post("editMessageReplyMarkup", {"chat_id": self.chat, "message_id": msg_id,
+                                                  "reply_markup": {"inline_keyboard": rows or []}})
+        except Exception:
+            pass
+
+    def answer(self, cb_id, text=""):
+        try:
+            self._post("answerCallbackQuery", {"callback_query_id": cb_id, "text": text[:180]})
+        except Exception:
+            pass
+
+    def updates(self, offset, timeout=15):
+        q = {"timeout": timeout, "allowed_updates": json.dumps(["message", "callback_query"])}
+        if offset:
+            q["offset"] = offset
+        url = f"{TELEGRAM_API}/bot{self.token}/getUpdates?" + urllib.parse.urlencode(q)
+        with urllib.request.urlopen(url, timeout=timeout + 10) as r:
+            return json.load(r).get("result", [])
 
     def _post(self, method, payload):
         req = urllib.request.Request(f"{TELEGRAM_API}/bot{self.token}/{method}", data=json.dumps(payload).encode(),
@@ -197,6 +230,14 @@ SCHEMA = {
         "avg_price": {"type": "NUMBER", "description": "보유 평단"},
         "holding_qty": {"type": "INTEGER", "description": "현재 보유 개수"},
         "cycle": {"type": "STRING", "description": "현사이클 차수 (예: 33차)"},
+        "cycle_start_date": {"type": "STRING", "description": "현사이클시작 날짜 (예: 10/2)"},
+        "prev_trade_qty": {"type": "INTEGER", "description": "직전 매매 개수"},
+        "cycle_start_usd": {"type": "NUMBER", "description": "현사이클 시작 $"},
+        "cash_usd": {"type": "NUMBER", "description": "잔금 $"},
+        "realized_today_usd": {"type": "NUMBER", "description": "당일실현 $ (비어 있으면 생략)"},
+        "cycle_realized_usd": {"type": "NUMBER", "description": "현사이클 실현수익 $ (음수 가능)"},
+        "total_return_pct": {"type": "NUMBER", "description": "올해 총 수익률 % 숫자만"},
+        "total_realized_usd": {"type": "NUMBER", "description": "올해 누적실현수익"},
         "buys": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
             "price": {"type": "NUMBER"}, "qty": {"type": "INTEGER"}}, "required": ["price", "qty"]}},
         "sells": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
@@ -210,6 +251,7 @@ PROMPTS = [
     "- 'Limit Vwap 매수가 / 개수' 칸의 각 줄 → buys (비어 있는 줄은 넣지 않음)\n"
     "- 'Limit Vwap 매도가 / 개수' 칸의 각 줄 → sells (위에서 아래 순서, 비어 있는 줄은 넣지 않음)\n"
     "- 종가날짜(예: 2026. 10. 22 → 2026-10-22), 종가, 보유 평단, 현재 보유 개수, 현사이클 차수\n"
+    "- 현사이클시작 날짜, 직전 매매 개수, 현사이클 시작 $, 잔금 $, 당일실현 $, 현사이클 실현수익 $, 총 수익률 %, 누적실현수익 (있는 것만)\n"
     "가격은 소수점까지 정확히, 개수는 정수로 적으세요.",
     "Transcribe this trading price sheet exactly. Do not guess or compute anything.\n"
     "buys = every filled row under the BUY table (매수가, 개수). sells = every filled row under the SELL table "
@@ -237,12 +279,27 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
                              "responseSchema": schema, "maxOutputTokens": max_tokens},
     }
-    model = cfg()["gemini_model"]
-    req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                                 data=json.dumps(payload).encode(), method="POST",
-                                 headers={"Content-Type": "application/json", "x-goog-api-key": key})
-    with urllib.request.urlopen(req, timeout=90) as r:
-        d = json.load(r)
+    c = cfg()
+    tries = [c["gemini_model"], c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"]]
+    last = None
+    for i, model in enumerate(tries):
+        req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                     data=json.dumps(payload).encode(), method="POST",
+                                     headers={"Content-Type": "application/json", "x-goog-api-key": key})
+        try:
+            with urllib.request.urlopen(req, timeout=90) as r:
+                d = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code not in (429, 500, 502, 503, 504):
+                raise
+        except (TimeoutError, OSError) as e:      # 시간초과·연결 끊김
+            last = e
+        print(f"Gemini 바쁨({type(last).__name__}) → {[5, 15, 30, 0][i]}초 뒤 다시 ({model})", flush=True)
+        time.sleep([5, 15, 30, 0][i])
+    else:
+        raise RuntimeError(f"Gemini 응답 없음 (재시도 4번 실패): {last}")
     cand = (d.get("candidates") or [{}])[0]
     text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
     return json.loads(text)
@@ -274,7 +331,20 @@ def normalize(p):
     num = lambda k: round(float(p[k]), 4) if p.get(k) not in (None, "") else None
     return {"close_date": date, "close": num("close"), "avg_price": num("avg_price"),
             "holding_qty": int(p["holding_qty"]) if p.get("holding_qty") not in (None, "") else None,
-            "cycle": str(p.get("cycle") or ""), "buys": rows(p.get("buys")), "sells": rows(p.get("sells"))}
+            "cycle": str(p.get("cycle") or ""), "buys": rows(p.get("buys")), "sells": rows(p.get("sells")),
+            "extra": {k: p.get(k) for k in ("cycle_start_date", "prev_trade_qty", "cycle_start_usd", "cash_usd",
+                                            "realized_today_usd", "cycle_realized_usd", "total_return_pct",
+                                            "total_realized_usd") if p.get(k) not in (None, "")}}
+
+
+def log_history(kind, data):
+    """매매 규칙 분석용 영구 기록 (한 줄 = 한 사건). 실패해도 매매에는 영향 없음"""
+    try:
+        HISTORY.parent.mkdir(parents=True, exist_ok=True)
+        with open(HISTORY, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": kind, "at": now_kst().isoformat(), **data}, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("기록 실패:", e, flush=True)
 
 
 def core(p):
@@ -409,18 +479,48 @@ def process_inbox(tg):
         tg.send("🖥 <b>윈도우 PC (팬딩)</b>\n" + html.escape(f.read_text(encoding="utf-8", errors="replace")[:300]))
         f.unlink(missing_ok=True)
     for f in sorted(INBOX.glob("*.img")):
-        meta = load(f.with_suffix(".json"), {})
+        mf = f.with_suffix(".json")
+        meta = load(mf, {})
+        if meta.get("retry_at", 0) > time.time():
+            continue                                  # 잠시 뒤 다시 시도할 이미지
         data = f.read_bytes()
         sha = hashlib.sha256(data).hexdigest()
         try:
-            kind = handle_image(tg, data, sha, meta)
+            kind = handle_history_image(data, sha, meta) if meta.get("mode") == "history" else handle_image(tg, data, sha, meta)
         except Exception as e:
+            n = int(meta.get("tries", 0)) + 1
+            print(f"가격표 처리 오류({n}번째):", type(e).__name__, e, flush=True)
+            if n < 5:                                 # 2분 뒤 다시 (Gemini 일시 장애 대비)
+                meta.update(tries=n, retry_at=time.time() + 120, last_error=str(e)[:200])
+                mf.write_text(json.dumps(meta, ensure_ascii=False))
+                continue
             kind = "error"
-            print("가격표 처리 오류:", type(e).__name__, e, flush=True)
-            tg.send(f"🚨 <b>팬딩 가격표 처리 실패</b>\n{html.escape(str(e))[:500]}\n가격표를 직접 확인해 주세요.")
+            if meta.get("mode") != "history":
+                tg.send(f"🚨 <b>팬딩 가격표 처리 실패</b> (5번 시도)\n{html.escape(str(e))[:300]}\n"
+                        "윈도우 PC에서 <code>py fanding_fetch.py send</code> 로 다시 보내거나 가격표를 직접 확인해 주세요.")
         f.unlink(missing_ok=True)
-        f.with_suffix(".json").unlink(missing_ok=True)
-        batch_done(tg, meta, kind)
+        mf.unlink(missing_ok=True)
+        if meta.get("mode") != "history":
+            batch_done(tg, meta, kind)
+
+
+def handle_history_image(data, sha, meta):
+    """과거 가격표: 알림·주문 없이 기록만 (Gemini 판독 1번)"""
+    with locked_state() as st:
+        known = st.setdefault("kinds", {})
+        if known.get(sha):
+            return known[sha]
+    ok, _ = is_price_sheet(data)
+    kind = "sheet" if ok else "other"
+    if ok:
+        parsed = gemini_read(data, PROMPTS[0])
+        log_history("past_sheet", {"date": parsed.get("close_date"), "parsed": parsed, "post": meta.get("post", "")})
+    with locked_state() as st:
+        st["kinds"][sha] = kind
+        st["kinds"] = dict(list(st["kinds"].items())[-500:])
+        if ok:
+            st["past_count"] = int(st.get("past_count", 0)) + 1
+    return kind
 
 
 def batch_done(tg, meta, kind):
@@ -453,7 +553,7 @@ def handle_image(tg, data, sha, meta):
     if not ok:
         with locked_state() as st:
             st["kinds"][sha] = "other"
-            st["kinds"] = dict(list(st["kinds"].items())[-200:])
+            st["kinds"] = dict(list(st["kinds"].items())[-500:])
         print("가격표 아님:", why, flush=True)
         return "other"
     reads = [gemini_read(data, PROMPTS[0]), gemini_read(data, PROMPTS[1])]
@@ -480,6 +580,8 @@ def handle_image(tg, data, sha, meta):
                  "us_date": next_session_date(sd).strftime("%Y%m%d"), "received": now_kst().isoformat(),
                  "post": meta.get("post", ""), "orders": [], "alarm_sent": False, "msg_id": (old or {}).get("msg_id")}
         sheet["checks"], sheet["auto_ok"] = run_checks(sheet, sheet["mult"], market)
+        log_history("sheet", {"date": date, "parsed": parsed, "reads_agree": agree, "market": market,
+                              "mult": sheet["mult"], "us_date": sheet["us_date"], "post": sheet["post"], "img": img_name})
         if old and old["status"] == "cancelled":
             sheet["status"] = "cancelled"
         st["sheets"][date] = sheet
@@ -519,6 +621,8 @@ def submit(tg, sheet, confirm_warn=False):
         time.sleep(0.3)
     ok = all(o.get("no") for o in sheet["orders"]) and len(sheet["orders"]) == len(order_lines(sheet))
     sheet["status"] = "submitted" if ok else "partial"
+    log_history("orders", {"date": sheet["date"], "us_date": sheet["us_date"], "mult": sheet["mult"],
+                           "by": sheet.get("approved_by"), "orders": sheet["orders"]})
     L = [f"{'✅' if ok else '⚠️'} <b>메리츠 예약주문 {'완료' if ok else '일부 실패'}</b> · {sheet['date']} 가격표"
          f" · {'자동' if sheet.get('approved_by') == 'auto' else '승인'}"]
     for o in sheet["orders"]:
@@ -601,16 +705,61 @@ def loop():
                 sh["status"] = "partial"
                 tg.send(f"⚠️ {d} 가격표 주문 접수 도중 프로그램이 다시 켜졌어요. 메리츠 앱에서 접수 여부를 확인해 주세요.",
                         [[{"text": "🔁 빠진 것만 다시", "callback_data": f"fd:re:{d}:{sh['ver']}"}]])
+    if tg.own:
+        print("팬딩 전용 텔레그램 봇 사용 (버튼·명령을 직접 받음)", flush=True)
+        if not load(HOME / "tg_offset.json", {}).get("hello"):
+            tg.send(f"👋 <b>팬딩 봇 연결 완료</b> (v{VERSION})\n앞으로 팬딩 가격표 알림·주문 버튼은 여기로 와요.\n" + HELP_TEXT)
+            save(HOME / "tg_offset.json", {"hello": True})
     while True:
         try:
             process_inbox(tg)
             tick(tg)
         except Exception as e:
             print("루프 오류:", type(e).__name__, e, flush=True)
-        time.sleep(20)
+        if tg.own:
+            poll_own_bot(tg)          # 약 15초 동안 버튼·명령 기다림
+        else:
+            time.sleep(20)
         if _file_changed():   # 업데이트 비서가 새 코드를 넣으면 스스로 다시 시작
             print("새 코드 감지 → 다시 시작", flush=True)
             os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
+
+
+HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
+             "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황")
+
+
+def poll_own_bot(tg):
+    """팬딩 전용 봇의 버튼·명령 처리 (이 봇은 이 프로그램만 받으므로 충돌 없음)"""
+    off = load(HOME / "tg_offset.json", {})
+    try:
+        ups = tg.updates(off.get("offset"))
+    except Exception as e:
+        print("텔레그램 받기 오류:", type(e).__name__, e, flush=True)
+        time.sleep(5); return
+    for u in ups:
+        off["offset"] = u["update_id"] + 1
+        try:
+            if "callback_query" in u:
+                cb = u["callback_query"]
+                if str(((cb.get("message") or {}).get("chat") or {}).get("id")) == tg.chat:
+                    secretary_callback(tg, cb)
+            elif "message" in u:
+                m = u["message"]
+                if str((m.get("chat") or {}).get("id")) != tg.chat:
+                    continue
+                t = (m.get("text") or "").strip()
+                if t.lower() in ("/start", "/help", "도움말", "?"):
+                    tg.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT)
+                elif t in ("/과거", "과거"):
+                    st = load(STATE, {})
+                    tg.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")
+                elif not secretary_message(tg, t):
+                    tg.send("모르는 명령이에요. <b>도움말</b> 을 보내 보세요.")
+        except Exception as e:
+            print("버튼·명령 처리 오류:", type(e).__name__, e, flush=True)
+    if ups:
+        save(HOME / "tg_offset.json", off)
 
 
 _LOADED_MTIME = os.path.getmtime(os.path.abspath(__file__))
@@ -767,7 +916,8 @@ def http_upload(h):
     name = f"{int(time.time())}_{hashlib.sha256(data).hexdigest()[:10]}"
     meta = {"post": h.headers.get("X-Fanding-Post", "")[:300], "at": now_kst().isoformat(),
             "batch": re.sub(r"[^0-9a-f]", "", h.headers.get("X-Fanding-Batch", ""))[:16],
-            "idx": h.headers.get("X-Fanding-Index", ""), "count": h.headers.get("X-Fanding-Count", "")}
+            "idx": h.headers.get("X-Fanding-Index", ""), "count": h.headers.get("X-Fanding-Count", ""),
+            "mode": "history" if h.headers.get("X-Fanding-Mode") == "history" else "live"}
     try:
         INBOX.mkdir(parents=True, exist_ok=True)
         (INBOX / f"{name}.json").write_text(json.dumps(meta, ensure_ascii=False))
