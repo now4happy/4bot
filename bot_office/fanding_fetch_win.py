@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.1.0)
+# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.2.0)
 #   저장소 위치: bot_office/fanding_fetch_win.py (서버에선 실행하지 않음 · 윈도우가 GitHub 에서 내려받음)
 # 윈도우 PC 전용: 팬딩 가격표 이미지를 가져와 사무실 서버로 보내고 종료
 # 1.1.0: 글 안의 큰 이미지를 모두 보냄 → 서버가 가격표만 골라냄 (이미지 순서가 바뀌어도 OK)
+# 1.2.0: 시리즈 목록 끝까지 내려 모든 글을 모은 뒤 글 번호가 가장 큰 것(= 가장 최근 글)을 고름
 #
 #  준비 (한 번만)
 #    py -m pip install playwright
@@ -23,7 +24,7 @@ import hashlib, json, re, sys, time, urllib.parse, urllib.request
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"      # 팬딩 로그인이 저장되는 전용 브라우저 폴더
@@ -62,21 +63,48 @@ def browser(p, headless):
         viewport={"width": 1280, "height": 1800}, args=["--disable-blink-features=AutomationControlled"])
 
 
+def _post_links(page, creator, series_path):
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    out = {}
+    for u in hrefs:
+        path = urllib.parse.urlparse(u).path.rstrip("/")
+        m = re.search(r"/(?:post|posts|p|series/\d+)/(\d+)$", path)
+        if creator in path and path != series_path and m:
+            out[u.split("?")[0].split("#")[0]] = int(m.group(1))
+    return out
+
+
 def latest_post_url(page, series_url):
+    """시리즈의 글을 끝까지 모아서 글 번호가 가장 큰(=가장 최근) 글부터 돌려줌"""
     page.goto(series_url, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(4000)
-    for _ in range(3):
-        page.mouse.wheel(0, 1500); page.wait_for_timeout(700)
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    for label in ("최신순", "최신"):          # 정렬 버튼이 있으면 최신순으로
+        try:
+            btn = page.get_by_text(label, exact=True)
+            if btn.count():
+                btn.first.click(timeout=3000); page.wait_for_timeout(2500); break
+        except Exception:
+            pass
     m = re.search(r"fanding\.kr/(@[^/]+)/", series_url)
     creator = m.group(1) if m else "@"
     series_path = urllib.parse.urlparse(series_url).path.rstrip("/")
-    posts = []
-    for u in hrefs:
-        path = urllib.parse.urlparse(u).path.rstrip("/")
-        if creator in path and path != series_path and re.search(r"/(post|posts|p|series/\d+)/\d+", path):
-            if u not in posts:
-                posts.append(u)
+    links, same = {}, 0
+    for _ in range(60):                        # 목록 끝까지 내리기 (더 안 늘어나면 멈춤)
+        before = len(links)
+        links.update(_post_links(page, creator, series_path))
+        for label in ("더보기", "더 보기"):
+            try:
+                more = page.get_by_text(label, exact=True)
+                if more.count():
+                    more.first.click(timeout=2000); page.wait_for_timeout(1500)
+            except Exception:
+                pass
+        page.mouse.wheel(0, 4000); page.wait_for_timeout(900)
+        same = same + 1 if len(links) == before else 0
+        if same >= 4:
+            break
+    posts = sorted(links, key=lambda u: links[u], reverse=True)
+    log(f"시리즈 글 {len(posts)}개 발견 · 최신 글 번호 {links[posts[0]] if posts else '-'}")
     return posts
 
 
