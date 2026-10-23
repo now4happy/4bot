@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from toss_api import TossApiClient, GlobalThrottle
 
-RAW_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "raw_data")
+RAW_DATA_DIR = "/home/pipiosToss/raw_data"
 
 def _sync_append_csv(filepath: str, new_df: pd.DataFrame):
     """

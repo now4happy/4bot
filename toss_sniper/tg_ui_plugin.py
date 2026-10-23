@@ -1,15 +1,19 @@
 # =====================================================================
 # FILE: tg_ui_plugin.py
-# 목적: 프리장(04:00~09:29 EST) SOXS 단방향 RSI<=30 무한 출동 스나이퍼 텔레그램 UI 렌더링 모듈
+# 목적: 프리장 초중반 골든타임 (04:07 ~ 08:14 EST · 08:15 EST 거시지표 선제 컷오프)
+#       양방향 대칭 클라이맥스 듀얼 스나이퍼(SOXS/SOXL · 옵션 A 원형),
+#       단일 '하이킨 아시 + 고점 트레일링(HA_HYB_1.0 × 🚀 NQ_VEL_BYPASS)',
+#       3차 실시간 QQQ 최소 0.80% 역행 방어 및 최저점 반등 재진입(🪤 RE_BOT_TRAIL),
+#       19:00 ~ 03:57 EST 데이장 100% [모의] 관측(개시 1분 09:00 KST 한정 역산버퍼 포함),
+#       03:58 ~ 04:07 EST 듀얼 1주 무비용 휩소 매수 덫 및 초슬림 텔레그램 UI 렌더링 모듈
 # =====================================================================
-# MODIFIED: 제3헌법 및 Case 43 의거 구버전 03:58/04:07 암살자 스케줄 및 타임쉴드 UI 잔재 영구 소각
-# MODIFIED: 제3헌법 의거 RSI<=20/10 경보 상태 머신(level) 폐기에 따른 /avwap 듀얼 RSI 상태 표출 직관화 (Case 44)
-# MODIFIED: 프리장(04:00~09:29 EST) SOXS RSI<=30 무한 출동 및 09:30 정규장 컷오프 상태 표출 결속 (Case 13, 52, 53, 57)
-# NEW: 관제탑(/avwap) 내 NQ=F 3단 매크로 방어선(체결 기준 지수 및 동적 역행 임계치) 실시간 상태 렌더링 주입 (Case 13, 66, 67)
-# MODIFIED: 텔레그램 HTML 파서 크래시(Unsupported start tag) 방어를 위해 코드 블록 내 원시 부등호(<, >) 전면 소각 및 한글 치환 (Case 17)
-# MODIFIED: 전술 제어반(/settlement) 내 마스터 전원(ON/OFF)과 세션별 실시간 출동상태(09:30 정규장 진입봉쇄 등) 분리 렌더링 결속 (Case 13, 37, 53, 57)
-# NEW: 전술 제어반(/settlement) 내 목표 익절률(+0.64%[순+0.50%] vs +1.00%[순+0.86%]) 선택 버튼 및 복리/단리 모드 토글, 소수점 둘째 자리 시드 실시간 표출 결속
-# NEW: 데이장(19:00~03:59 EST) SOXS RSI<=30.0 관측 알림 전용 모드(매수차단 · 재장전 RSI>=35.0) 상태 표출 동기화 (Case 53, 57)
+# MODIFIED: 제3헌법 및 Case 43 의거 구버전 +0.64% / +1.00% 익절률 선택 버튼 및 데드코드 영구 소각
+# MODIFIED: 초과 Case 13, 38, 77 — 메인 메뉴(/start), 듀얼 지시서(/sync), 관제탑(/avwap), 제어반(/settlement)에서
+#           불필요한 부연 설명을 전면 삭제하여 모든 항목이 모바일 화면에서 2줄을 넘어가지 않도록 초슬림화
+# MODIFIED: 초과 Case 93 — 프리장 본진 UI에서 선행 역산버퍼(AMP_BUFFER) 표시를 전면 제거하고 옵션 A 원형으로 복원
+# MODIFIED: 초과 Case 92 & Case 94 — 최소 0.80% 실시간 QQQ 역행 하한선(MIN_STAGE3_QQQ_ADVERSE_PCT = 0.80) 반영 및
+#           SOXS·SOXL 동시 수동 보유 시 /avwap 3차 방어 라인과 /settlement 출동 상태에서 양쪽 종목을 모두 독립 표출
+# MODIFIED: 텔레그램 HTML 파서 크래시(Unsupported start tag) 방어를 위해 코드 블록 내 원시 부등호(<, >) 전면 소각 (Case 17)
 
 import asyncio
 from datetime import datetime, timedelta
@@ -17,47 +21,48 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from quant_engine import AssassinLedger, MacroDataCache
+from quant_engine import (
+    AssassinLedger,
+    MacroDataCache,
+    MIN_STAGE3_QQQ_ADVERSE_PCT,
+)
+from sniper_plugin import (
+    get_daymarket_sim_status,
+    get_whipsaw_runtime_status,
+    get_trailing_runtime_status,
+    get_bottom_track_status,
+)
 
 EST_TZ = ZoneInfo("America/New_York")
-NQ_UI_BETA = 4.2
-NQ_DYNAMIC_FLOOR_UI = 0.8
+NQ_DYNAMIC_FLOOR_UI = MIN_STAGE3_QQQ_ADVERSE_PCT
 
 
+# MODIFIED: 메인 메뉴(/start 및 메인 복귀) 화면 불필요 설명 삭제 및 1줄 고정 슬림화 (Case 38, 77)
 async def get_main_menu_text() -> str:
     now_est = datetime.now(EST_TZ)
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_status_text = "🌞서머타임 ON (EDT)" if is_dst else "❄️서머타임 OFF (EST)"
 
-    state_s = await AssassinLedger.get_state("SOXS")
     is_comp_s = await AssassinLedger.get_is_compound("SOXS")
-    active_rate = AssassinLedger.normalize_target_rate(state_s[2])
-    net_rate = AssassinLedger.get_net_compound_rate(active_rate)
-    comp_mode_str = f"복리 ON (익절 시 +{net_rate:.2f}% 증액)" if is_comp_s else "단리 ON (시드 고정)"
+    comp_mode_str = "통합 복리 ON" if is_comp_s else "단리 ON"
 
     return (
-        f"🕒 <b>[ 프리장 SOXS 단방향 RSI≤30 스나이퍼 스케줄 ({dst_status_text}) ]</b>\n"
-        f"▫️ 현재 설정: <b>목표 익절 +{active_rate:.2f}% (순수익 +{net_rate:.2f}%) · {comp_mode_str}</b>\n"
+        f"🕒 <b>[ 듀얼 스나이퍼 ({dst_status_text}) ]</b>\n"
+        f"▫️ 익절·복구: <b>🔥 +1.00% 점화 HA·트레일링 ({comp_mode_str})</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "🔹 19:00~03:29: 🌙 <b>데이마켓 자동매매 ① (제어반에서 켜기/끄기)</b>\n"
-        "      (SOXS 1분봉 RSI ≤ 30.0 매수 · 추가 매수는 RSI 35 회복 + 직전 매수가 -0.7%)\n"
-        "🔹 03:30~03:59: 🛑 <b>데이장 강제 청산</b> (데이장 보유분 전량 매도 · 프리장과 별도 사이클)\n"
-        "🔹 04:00~09:29: 🔫 <b>프리장 스나이퍼 골든타임 (실거래 무한 출동)</b>\n"
-        "      (NQ=F 당일 진폭 2.0% 미만 & SOXS 1분봉 RSI ≤ 30.0 감시)\n"
-        "      (포착 즉시 실시간 현재가 기준 LIMIT 지정가 매수 발사)\n"
-        f"      (전량 체결 확인 즉시 팩트 평단가 +{active_rate:.2f}% 매도 덫 하드 락온)\n"
-        f"      (복리 모드 시: 익절마다 순수익 +{net_rate:.2f}% 가산 · 손절 시 수수료포함 차감)\n"
-        f"      (프리장 내 +{active_rate:.2f}% 익절 완료 시 09:29까지 무한 재출동)\n"
-        "🔹 09:30~15:58: 🔥 <b>정규장 본장 (09:30 신규 매수 마감)</b>\n"
-        "      (09:30 정각 프리장 미체결 매수 주문 즉각 선취소)\n"
-        f"      (보유 물량 +{active_rate:.2f}% 익절 홀딩 & NQ=F 2·3차 매크로 손절 감시)\n"
-        "🔹 15:50~16:01: 🛑 제로-오버나이트 매수 1호가 스윕 강제 청산 (마감 10분 전 시작)\n"
-        "🔹 17:00: 🧹 정산 스캔 및 가비지 컬렉션(GC)\n\n"
+        "🔹 18:00 ~ 18:59: 🌐 <b>선물 신세션 개장</b>\n"
+        "🔹 19:00 ~ 03:57: 🌙 <b>[모의] 데이장</b>\n"
+        "🔹 03:58 ~ 03:59: 🔇 <b>휩소 묵음</b>\n"
+        "🔹 03:58 ~ 04:07: 🌪️ <b>'휩소 노출 작전'</b>\n"
+        "🔹 04:07 ~ 08:14: 🔫 <b>프리장 본진</b>\n"
+        "🔹 08:15 ~ 15:58: 🔒 <b>정규장 본장</b>\n"
+        "🔹 15:59 ~ 16:01: 🛑 <b>제로-오버나이트</b>\n"
+        "🔹 17:00: 🧹 <b>가비지 컬렉션(GC)</b>\n\n"
         "🛠 <b>[ 핵심 명령어 ]</b>\n"
-        "▶️ /avwap : 🔫 프리장 스나이퍼 레이더 관제탑\n"
-        "▶️ /sync : 📜 SOXS 스나이퍼 지시서 동기화\n"
-        "▶️ /settlement : ⚙️ 전술 제어반 (+0.64%/+1.00% · 복리/단리 · 시드)\n\n"
-        "⚠️ /reset : 🧹 SOXS 장부 0점 소각\n"
+        "▶️ /avwap : 🔫 스나이퍼 레이더 관제탑\n"
+        "▶️ /sync : 📜 듀얼 지시서 동기화\n"
+        "▶️ /settlement : ⚙️ 전술 제어반\n\n"
+        "⚠️ /reset : 🧹 듀얼 장부 0점 소각\n\n"
         "⚠️ /update : 🚀 시스템 자가 업데이트\n\n"
         "🌙 <b>수동 오버나이트를 원할 경우 [전술 제어반]에서 가동을 OFF 해주세요.</b>"
     )
@@ -184,7 +189,8 @@ async def _fetch_session_stats(api_client, symbol: str, now_est: datetime) -> di
     return await asyncio.to_thread(parse_session_data, all_candles, session_start_est)
 
 
-# MODIFIED: Case 13 & 초과 Case 57 프리장 스나이퍼 헌법 기반 세션별 상태(데이장 RSI≤30 알림감시 포함) 표출
+# MODIFIED: Case 13 & 초과 Case 38, 50, 57, 83, 84, 85, 86, 87, 89, 90, 91, 92, 93, 94 —
+#           하단 종목 상태가 2줄을 넘어가지 않도록 간결화 및 옵션 A 원형 복원
 def build_compact_status(
     symbol: str,
     state_tuple: tuple,
@@ -192,170 +198,406 @@ def build_compact_status(
     current_session: str,
     est_time_int: int,
     qty: float,
+    opp_qty: float = 0.0,
+    opp_buy_id: str = "",
     is_compound: bool = True,
+    ha_bull: bool = True,
 ) -> str:
-    budget = state_tuple[1]
-    active_rate = AssassinLedger.normalize_target_rate(state_tuple[2])
     is_done = state_tuple[4]
     is_active = state_tuple[5]
     target_sell_price = state_tuple[6]
     entry_session = state_tuple[8]
     state_flag = "ON" if is_active else "OFF"
-    comp_tag = "복리" if is_compound else "단리"
+    sym_icon = "🐻" if symbol == "SOXS" else "🐂"
+    opp_sym = "SOXL" if symbol == "SOXS" else "SOXS"
+    day_sim = get_daymarket_sim_status()
+    whip_st = get_whipsaw_runtime_status()
+    trail_st = get_trailing_runtime_status(symbol)
+    bot_st = get_bottom_track_status(symbol)
+    nq_bypass_on = bool(trail_st.get("nq_vel_bypass", False))
+
+    if ha_bull:
+        ha_badge = "🕯️HA양봉"
+    elif nq_bypass_on:
+        ha_badge = "🚀HA바이패스"
+    else:
+        ha_badge = "🌑HA음봉"
+
+    is_manual_hold = (
+        qty > 0
+        and not buy_order_id
+        and entry_session not in ("PRE_SNIPER", "PRE_SNIPER_REARM", "WHIPSAW_1SH")
+    )
 
     if not is_active:
-        state_text = "가동OFF(수동대기)"
+        state_text = "⏸️ 가동OFF(수동대기)"
     elif qty > 0:
-        if target_sell_price > 0.0:
-            state_text = f"보유(목표 ${target_sell_price:.2f} · +{active_rate:.2f}%)"
+        if entry_session == "WHIPSAW_1SH":
+            if target_sell_price > 0.0:
+                state_text = f"🌪️ 휩소보유(1주 · 목표 ${target_sell_price:.2f})"
+            else:
+                state_text = "🌪️ 휩소보유(1주 · 장전중)"
+        elif trail_st.get("armed", False):
+            pk_p = float(trail_st.get("peak_price", 0.0))
+            st_p = float(trail_st.get("stop_price", target_sell_price))
+            prefix_tag = "🔥 수동·트레일링" if is_manual_hold else "🔥 HA트레일링"
+            state_text = f"{prefix_tag}({int(qty)}주 · 고점 ${pk_p:.2f} / 스탑 ${st_p:.2f})"
+        elif target_sell_price > 0.0:
+            prefix_tag = "🎯 수동보유" if is_manual_hold else "🎯 보유"
+            state_text = f"{prefix_tag}({int(qty)}주 · 점화 ${target_sell_price:.2f} · {ha_badge})"
         else:
-            state_text = f"보유(+{active_rate:.2f}% 덫 장전중)"
+            prefix_tag = "🎯 수동보유" if is_manual_hold else "🎯 보유"
+            state_text = f"{prefix_tag}({int(qty)}주 · 안전캡 장전중)"
     elif buy_order_id:
-        state_text = f"⏳ 프리장 매수 체결대기(목표+{active_rate:.2f}%)"
-    elif entry_session == "CANCELED_MACRO":
-        state_text = "🛑 매크로방어 발동(금일 마감)"
-    elif current_session == "dayMarket":
-        state_text = f"🌙 데이장 RSI≤30 실거래 감시(목표+{active_rate:.2f}%)"
-    elif 400 <= est_time_int <= 929:
-        if not is_done:
-            state_text = f"🔫 프리장 RSI≤30 감시중(목표+{active_rate:.2f}%)"
+        if entry_session == "WHIPSAW_1SH":
+            w_bp = whip_st.get("buy_price", 0.0)
+            state_text = f"🌪️ 휩소1주 매수덫(${w_bp:.2f})"
+        elif entry_session == "PRE_SNIPER":
+            state_text = "🪤 1차 매수덫(30초 쉴드)"
         else:
-            state_text = "🔒 금일 프리장 타격마감"
+            state_text = "⚡ 재장전 매수 대기"
+    elif opp_qty > 0 or bool(opp_buy_id):
+        state_text = f"🔒 대기({opp_sym} 운용중)"
+    elif current_session == "HOLIDAY":
+        state_text = "🌙 휴장(관망)"
+    elif current_session == "cmeOpenWait" or (1800 <= est_time_int <= 1859 and current_session != "HOLIDAY"):
+        state_text = "⏳ 데이장 대기(19:00 개장)"
+    elif entry_session == "CANCELED_MACRO" and (400 <= est_time_int <= 1759):
+        state_text = "🛑 매크로방어(자동마감)"
+    elif 358 <= est_time_int <= 406:
+        if whip_st.get("target_sym") == symbol and whip_st.get("locked_vwap", 0.0) > 0.0:
+            state_text = f"🌪️ 휩소타겟(${whip_st['buy_price']:.2f} ➡️ ${whip_st['sell_target']:.2f})"
+        else:
+            state_text = "🌪️ 휩소구간(04:07 쉴드)"
+    elif current_session == "dayMarket" and (est_time_int >= 1900 or est_time_int <= 357):
+        if day_sim.get("active", False) and day_sim.get("symbol") == symbol:
+            if day_sim.get("phase") == "BUFFER_WAIT":
+                td_d = float(day_sim.get("target_drop_p", 0.0))
+                rp_d = float(day_sim.get("rebound_trig_p", 0.0))
+                state_text = f"🛡️ [모의] 개시버퍼(${td_d:.2f} ➔ 반등 ${rp_d:.2f})"
+            elif day_sim.get("phase") == "TRAP_WAIT":
+                state_text = f"🪤 [모의] 1차덫(${day_sim['trap_price']:.2f})"
+            else:
+                state_text = f"🔔 [모의] 추격(목표 ${day_sim['target_price']:.2f})"
+        else:
+            state_text = f"🔔 [모의] 대칭감시(≤30 &amp; {opp_sym}≥79.9)"
+    elif 407 <= est_time_int <= 814:
+        if bot_st.get("active", False):
+            lp_v = float(bot_st.get("post_stop_low", 0.0))
+            rp_v = float(bot_st.get("rebound_trig_price", 0.0))
+            state_text = f"🪤 최저점추적(최저 ${lp_v:.2f} ➔ 반등 ${rp_v:.2f})"
+        elif not is_done:
+            state_text = f"🔫 대칭감시(≤30 &amp; {opp_sym}≥79.9)"
+        else:
+            state_text = "🔒 프리장 타격잠금"
+    elif 815 <= est_time_int < 930:
+        state_text = "🔒 08:15 마감(관망)"
     elif 930 <= est_time_int < 1600:
-        state_text = "🔒 09:30 정규장 진입마감(관망)"
+        state_text = "🔒 마감(관망)"
+    elif 1600 <= est_time_int <= 1759:
+        state_text = "🛑 마감(관망)"
     else:
-        state_text = "장외대기"
+        state_text = "🛑 장외대기"
 
-    return f"🐻 <b>{symbol}</b> <code>[{state_flag}·{comp_tag}]</code> {state_text} | <code>${budget:,.2f}</code>"
+    return f"{sym_icon} <b>{symbol}</b> <code>[{state_flag}]</code> {state_text}"
 
 
+# MODIFIED: 초과 Case 38, 90, 91, 92, 93, 94 —
+#           관제탑(/avwap)에서 불필요한 설명 줄을 모두 제거하여 2줄 초과 줄바꿈을 원천 차단
 async def build_avwap_radar(api_client, shared_rsi_state=None) -> tuple[str, InlineKeyboardMarkup]:
     now_est = datetime.now(EST_TZ)
+    wk = now_est.weekday()  # Mon=0 ... Fri=4, Sat=5, Sun=6
     t = now_est.hour * 100 + now_est.minute
-    is_day_time = (t >= 1900 or t <= 359)
-    is_pre_time = (400 <= t <= 929)
 
-    if is_pre_time:
+    is_weekend_closed = (wk == 4 and t >= 1700) or (wk == 5) or (wk == 6 and t < 1800)
+    is_cme_open_wait = (not is_weekend_closed) and (1800 <= t <= 1859)
+    is_day_time = (not is_weekend_closed) and (t >= 1900 or t <= 359)
+    is_whipsaw_time = (not is_weekend_closed) and (358 <= t <= 406)
+    is_pre_sniper_time = (not is_weekend_closed) and (407 <= t <= 814)
+    is_pre_cutoff_time = (not is_weekend_closed) and (815 <= t <= 929)
+
+    if is_weekend_closed:
+        session_name_ui = "HOLIDAY"
+        market_header = "( <b>🌙 주말/휴장일</b> )"
+    elif is_cme_open_wait:
+        session_name_ui = "cmeOpenWait"
+        market_header = "( <b>🌐 선물 신세션 개장 · 19:00 데이장 대기</b> )"
+    elif is_whipsaw_time:
+        session_name_ui = "preMarket" if t >= 400 else "dayMarket"
+        market_header = "( <b>🌪️ 03:58 ~ 04:07 휩소작전</b> )"
+    elif is_pre_sniper_time:
         session_name_ui = "preMarket"
-        market_header = "( <b>🌅 PRE_MARKET · 스나이퍼 골든타임</b> )"
-        pre_window_label = "(04:00~09:29 · 무한 출동 가동중)"
+        market_header = "( <b>🌅 프리장 골든타임</b> )"
+    elif is_pre_cutoff_time:
+        session_name_ui = "preMarket"
+        market_header = "( <b>🔒 프리장 마감</b> )"
     elif 930 <= t <= 1559:
         session_name_ui = "regularMarket"
-        market_header = "( <b>🔥 REG_MARKET · 신규진입 마감</b> )"
-        pre_window_label = "(04:00~09:29 · 출동 마감)"
-    elif 1600 <= t <= 1659:
+        market_header = "( <b>🔥 정규장 · 신규진입 마감</b> )"
+    elif 1600 <= t <= 1759:
         session_name_ui = "afterMarket"
-        market_header = "( <b>🛑 AFT_MARKET</b> )"
-        pre_window_label = "(04:00~09:29 · 출동 마감)"
+        market_header = "( <b>🛑 애프터마켓</b> )"
     else:
         session_name_ui = "dayMarket"
-        market_header = "( <b>🌙 데이마켓 · SOXS RSI≤30 실거래</b> )"
-        pre_window_label = "(04:00~09:29 · 개장 대기)"
+        market_header = "( <b>🌙 데이마켓 · 🔔100% [모의] 감시</b> )"
 
     try:
         is_open, _, sess_name, _ = await asyncio.wait_for(api_client.is_market_open(), timeout=3.0)
         if not is_open:
-            session_name_ui = "dayMarket"
-            market_header = (
-                "( <b>🌙 주말/휴장일</b> )" if sess_name and "HOLIDAY" in sess_name else "( <b>🌙 시스템 대기</b> )"
-            )
+            if sess_name and "HOLIDAY" in sess_name:
+                session_name_ui = "HOLIDAY"
+                market_header = "( <b>🌙 주말/휴장일</b> )"
+            elif sess_name and "STANDBY" in sess_name:
+                if is_cme_open_wait:
+                    session_name_ui = "cmeOpenWait"
+                    market_header = "( <b>🌐 선물 신세션 개장 · 19:00 데이장 대기</b> )"
+                elif 1700 <= t <= 1759:
+                    market_header = "( <b>🧹 17:00 정산 대기</b> )"
     except Exception:
         pass
 
-    _, _, _, nq_c, nq_h, nq_l = await MacroDataCache.get_nq_sniper_signal()
+    nq_c, nq_h, nq_l = await MacroDataCache.get_cached_nq_data()
     nq_amp = ((nq_h - nq_l) / nq_l * 100.0) if nq_l > 0.0 else 0.0
     nq_curr_amp = (max(0.0, ((nq_c - nq_l) / nq_l * 100.0)) if (nq_l > 0.0 and nq_c > 0.0) else 0.0)
-    etf_expected_amp_ui = nq_amp * NQ_UI_BETA
 
-    price_s = await api_client.get_current_price("SOXS")
-    hold_s = await api_client.get_symbol_holdings_detail("SOXS")
+    prices_map = await api_client.get_current_prices_batch(("SOXS", "SOXL"))
+    price_s = float(prices_map.get("SOXS", 0.0))
+    price_l = float(prices_map.get("SOXL", 0.0))
+
+    hold_s, hold_l = await asyncio.gather(
+        api_client.get_symbol_holdings_detail("SOXS"),
+        api_client.get_symbol_holdings_detail("SOXL"),
+    )
     qty_s = float(hold_s.get("qty", 0.0))
-    amp_s, yest_amp_s, _ = await _fetch_5ma_amp(api_client, "SOXS")
+    qty_l = float(hold_l.get("qty", 0.0))
+
+    (amp_s, yest_amp_s, _), (amp_l, yest_amp_l, _) = await asyncio.gather(
+        _fetch_5ma_amp(api_client, "SOXS"),
+        _fetch_5ma_amp(api_client, "SOXL"),
+    )
 
     empty_sess = {
         "pre_h": 0.0, "pre_l": 0.0, "pre_amp": 0.0, "pre_vwap": 0.0, "pre_body": 0.0,
         "reg_h": 0.0, "reg_l": 0.0, "reg_amp": 0.0, "reg_vwap": 0.0, "reg_body": 0.0,
     }
-    if session_name_ui == "dayMarket":
+    if session_name_ui in ("dayMarket", "cmeOpenWait", "HOLIDAY"):
         sess_s = dict(empty_sess)
+        sess_l = dict(empty_sess)
     else:
-        sess_s = await _fetch_session_stats(api_client, "SOXS", now_est)
+        sess_s, sess_l = await asyncio.gather(
+            _fetch_session_stats(api_client, "SOXS", now_est),
+            _fetch_session_stats(api_client, "SOXL", now_est),
+        )
 
     pre_exp_l_s = sess_s["pre_h"] * (1.0 - amp_s / 100.0) if sess_s["pre_h"] > 0 else 0.0
     pre_exp_h_s = sess_s["pre_l"] * (1.0 + amp_s / 100.0) if sess_s["pre_l"] > 0 else 0.0
     reg_exp_l_s = sess_s["reg_h"] * (1.0 - amp_s / 100.0) if sess_s["reg_h"] > 0 else 0.0
     reg_exp_h_s = sess_s["reg_l"] * (1.0 + amp_s / 100.0) if sess_s["reg_l"] > 0 else 0.0
 
-    state_s = await AssassinLedger.get_state("SOXS")
-    buy_id_s = await AssassinLedger.get_buy_order_id("SOXS")
-    is_comp_s = await AssassinLedger.get_is_compound("SOXS")
-    status_s = build_compact_status("SOXS", state_s, buy_id_s, session_name_ui, t, qty_s, is_comp_s)
+    pre_exp_l_l = sess_l["pre_h"] * (1.0 - amp_l / 100.0) if sess_l["pre_h"] > 0 else 0.0
+    pre_exp_h_l = sess_l["pre_l"] * (1.0 + amp_l / 100.0) if sess_l["pre_l"] > 0 else 0.0
+    reg_exp_l_l = sess_l["reg_h"] * (1.0 - amp_l / 100.0) if sess_l["reg_h"] > 0 else 0.0
+    reg_exp_h_l = sess_l["reg_l"] * (1.0 + amp_l / 100.0) if sess_l["reg_l"] > 0 else 0.0
 
-    # Case 17 텔레그램 HTML 파서 충돌 방지를 위해 원시 부등호('<') 제거 및 '2.0%미만' 한글 치환
-    nq_entry_p = float(state_s[10] or 0.0)
-    nq_entry_a = float(state_s[11] or 0.0)
-    macro_1st_str = "🛑 과열차단(≥2.0%)" if nq_amp >= 2.0 else "🟢 진입허용(2.0%미만)"
-    if qty_s > 0.0 and nq_entry_p > 0.0:
-        dyn_thresh = max(nq_entry_a * 0.5, NQ_DYNAMIC_FLOOR_UI)
-        nq_diff = ((nq_c - nq_entry_p) / nq_entry_p * 100.0) if nq_c > 0.0 else 0.0
-        macro_3rd_line = (
-            f"\n▫️ 3차 역행방어: 기준 <code>{nq_entry_p:.2f}</code> 대비 "
-            f"<code>{nq_diff:+.2f}%</code> (한도 <code>+{dyn_thresh:.2f}%</code>)"
+    state_s, state_l = await asyncio.gather(
+        AssassinLedger.get_state("SOXS"),
+        AssassinLedger.get_state("SOXL"),
+    )
+    buy_id_s, buy_id_l = await asyncio.gather(
+        AssassinLedger.get_buy_order_id("SOXS"),
+        AssassinLedger.get_buy_order_id("SOXL"),
+    )
+
+    # 초과 Case 90 — 18:00 EST 선물 신세션 또는 데이장(18:00~03:57 EST) 중 미보유·무주문·비과열(nq_amp < 2.0%) 상태에서
+    # 전일/금요일에 남아 있던 CANCELED_MACRO 잠금 잔재 감지 시 즉시 자가 치유(Self-Healing) 클리어
+    if (
+        (is_cme_open_wait or is_day_time)
+        and nq_amp < 2.0
+        and qty_s <= 0.0
+        and qty_l <= 0.0
+        and not buy_id_s
+        and not buy_id_l
+        and (state_s[8] == "CANCELED_MACRO" or state_l[8] == "CANCELED_MACRO")
+    ):
+        for heal_sym in ("SOXS", "SOXL"):
+            await AssassinLedger.save_state(
+                heal_sym,
+                is_session_done=False,
+                entry_session="",
+                whipsaw_target_price=0.0,
+            )
+        state_s, state_l = await asyncio.gather(
+            AssassinLedger.get_state("SOXS"),
+            AssassinLedger.get_state("SOXL"),
         )
-    else:
-        macro_3rd_line = ""
 
-    # MODIFIED: 세션별(프리장 타격권 / 데이장 알림권 / 정규장 진입마감) RSI 관제 상태 렌더링 (Case 17, 44, 53)
+    is_comp_s = await AssassinLedger.get_is_compound("SOXS")
+    budget_s = float(state_s[1] or 100.0)
+    comp_label_str = "통합복리" if is_comp_s else "단리"
+
+    ewm_s = ((shared_rsi_state or {}).get("SOXS") or {}).get("ewm_state") or {}
+    ewm_l = ((shared_rsi_state or {}).get("SOXL") or {}).get("ewm_state") or {}
+    ha_bull_s = bool(ewm_s.get("ha_bull", True))
+    ha_bull_l = bool(ewm_l.get("ha_bull", True))
+
+    status_s = build_compact_status(
+        "SOXS", state_s, buy_id_s, session_name_ui, t, qty_s,
+        opp_qty=qty_l, opp_buy_id=buy_id_l, is_compound=is_comp_s, ha_bull=ha_bull_s,
+    )
+    status_l = build_compact_status(
+        "SOXL", state_l, buy_id_l, session_name_ui, t, qty_l,
+        opp_qty=qty_s, opp_buy_id=buy_id_s, is_compound=is_comp_s, ha_bull=ha_bull_l,
+    )
+
+    is_manual_s = (
+        qty_s > 0.0
+        and not buy_id_s
+        and str(state_s[8] or "") not in ("PRE_SNIPER", "PRE_SNIPER_REARM", "WHIPSAW_1SH")
+    )
+    is_manual_l = (
+        qty_l > 0.0
+        and not buy_id_l
+        and str(state_l[8] or "") not in ("PRE_SNIPER", "PRE_SNIPER_REARM", "WHIPSAW_1SH")
+    )
+
+    if is_manual_s or is_manual_l:
+        macro_1st_str = "🟢 수동보유(2차 패스)"
+    else:
+        if nq_amp >= 2.0:
+            macro_1st_str = "🛑 과열차단"
+        else:
+            macro_1st_str = "🟢 진입허용"
+
+    # 초과 Case 92 & Case 94 — 포지션 보유 시 3차 실시간 QQQ 역행 방어 상태 간결 표출 (양방향 동시 보유 지원)
+    macro_3rd_lines = []
+    if qty_s > 0.0 or qty_l > 0.0:
+        ref_curr, ref_src = await MacroDataCache.get_stage3_reference_price(realtime_probing=True)
+        ref_unit = "$" if ref_src == "QQQ실시간" else ""
+
+        if qty_s > 0.0:
+            nq_entry_p_s = float(state_s[10] or 0.0) or ref_curr
+            nq_entry_a_s = float(state_s[11] or 0.0) or nq_amp
+            if nq_entry_p_s > 0.0 and ref_curr > 0.0 and ((nq_entry_p_s > 3000.0) != (ref_curr > 3000.0)):
+                nq_entry_p_s = ref_curr
+                await AssassinLedger.save_state("SOXS", nq_entry_price=nq_entry_p_s)
+            dyn_thresh_s = max(nq_entry_a_s * 0.5, NQ_DYNAMIC_FLOOR_UI, MIN_STAGE3_QQQ_ADVERSE_PCT)
+            nq_adv_s = ((ref_curr - nq_entry_p_s) / nq_entry_p_s * 100.0) if (ref_curr > 0.0 and nq_entry_p_s > 0.0) else 0.0
+            macro_3rd_lines.append(
+                f"\n▫️ 3차 방어(🐻SOXS): <code>{nq_adv_s:+.2f}%</code> "
+                f"(기준 <code>{ref_unit}{nq_entry_p_s:.2f}</code> / 한도 <code>+{dyn_thresh_s:.2f}%</code>)"
+            )
+
+        if qty_l > 0.0:
+            nq_entry_p_l = float(state_l[10] or 0.0) or ref_curr
+            nq_entry_a_l = float(state_l[11] or 0.0) or nq_amp
+            if nq_entry_p_l > 0.0 and ref_curr > 0.0 and ((nq_entry_p_l > 3000.0) != (ref_curr > 3000.0)):
+                nq_entry_p_l = ref_curr
+                await AssassinLedger.save_state("SOXL", nq_entry_price=nq_entry_p_l)
+            dyn_thresh_l = max(nq_entry_a_l * 0.5, NQ_DYNAMIC_FLOOR_UI, MIN_STAGE3_QQQ_ADVERSE_PCT)
+            nq_adv_l = ((nq_entry_p_l - ref_curr) / nq_entry_p_l * 100.0) if (ref_curr > 0.0 and nq_entry_p_l > 0.0) else 0.0
+            macro_3rd_lines.append(
+                f"\n▫️ 3차 방어(🐂SOXL): <code>{nq_adv_l:+.2f}%</code> "
+                f"(기준 <code>{ref_unit}{nq_entry_p_l:.2f}</code> / 한도 <code>+{dyn_thresh_l:.2f}%</code>)"
+            )
+
+    macro_3rd_line = "".join(macro_3rd_lines)
+
+    day_sim = get_daymarket_sim_status()
+
+    # Case 17, 38, 44, 57, 78, 81, 83, 84, 85, 87, 89, 93: 실시간 RSI + 하이킨 아시 통합 렌더링
     rsi_ui_lines = []
     if shared_rsi_state:
+        r_s = float((shared_rsi_state.get("SOXS") or {}).get("value", 0.0))
+        r_l = float((shared_rsi_state.get("SOXL") or {}).get("value", 0.0))
+
         for r_sym in ("SOXS", "SOXL"):
-            if r_sym in shared_rsi_state:
-                rsi_data = shared_rsi_state[r_sym]
-                r_val = float(rsi_data.get("value", 0.0))
+            r_val = r_s if r_sym == "SOXS" else r_l
+            opp_val = r_l if r_sym == "SOXS" else r_s
+            opp_name = "SOXL" if r_sym == "SOXS" else "SOXS"
+            is_ha_g = ha_bull_s if r_sym == "SOXS" else ha_bull_l
+            tr_r = get_trailing_runtime_status(r_sym)
+            if is_ha_g:
+                ha_short = "🕯️HA양봉"
+            elif tr_r.get("armed", False) and tr_r.get("nq_vel_bypass", False):
+                ha_short = "🚀HA바이패스"
+            else:
+                ha_short = "🌑HA음봉"
+            bot_r = get_bottom_track_status(r_sym)
 
-                if r_sym == "SOXS":
-                    if 0.0 < r_val <= 30.0:
-                        if is_pre_time:
-                            warn_str = "🔫 스나이퍼 타격권(≤30)"
-                        elif is_day_time:
-                            warn_str = "🌙 데이장 매수권(≤30)"
-                        else:
-                            warn_str = "📉 과매도(≤30 · 진입마감)"
-                    else:
-                        warn_str = "🟢 안정(30초과)"
+            if 358 <= t <= 359:
+                warn_str = "🔇 마감휩소 묵음"
+            elif 400 <= t <= 406:
+                warn_str = "⏱️ 04:07 쉴드대기"
+            elif is_pre_sniper_time and bot_r.get("active", False):
+                lp_r = float(bot_r.get("post_stop_low", 0.0))
+                rp_r = float(bot_r.get("rebound_trig_price", 0.0))
+                warn_str = f"🪤 최저점추적(${lp_r:.2f} ➡️ ${rp_r:.2f})"
+            elif is_day_time and day_sim.get("active", False) and day_sim.get("symbol") == r_sym:
+                if day_sim.get("phase") == "BUFFER_WAIT":
+                    td_d = float(day_sim.get("target_drop_p", 0.0))
+                    rp_d = float(day_sim.get("rebound_trig_p", 0.0))
+                    warn_str = f"🛡️ 모의개시버퍼(${td_d:.2f} ➡️ ${rp_d:.2f})"
+                elif day_sim.get("phase") == "TRAP_WAIT":
+                    warn_str = f"🪤 모의1차덫(${day_sim['trap_price']:.2f})"
                 else:
-                    if 0.0 < r_val <= 30.0:
-                        warn_str = "📉 과매도(≤30 · 매매차단)"
+                    warn_str = f"🔒 모의추격(${day_sim['target_price']:.2f})"
+            elif 0.0 < r_val <= 30.0:
+                if opp_val >= 79.9:
+                    if is_pre_sniper_time:
+                        warn_str = f"🔫 대칭 타격권({opp_name} {opp_val:.1f})"
+                    elif is_day_time:
+                        warn_str = f"🔔 모의 타격권({opp_name} {opp_val:.1f})"
                     else:
-                        warn_str = "🟢 안정(30초과)"
+                        warn_str = f"📉 과매도({ha_short})"
+                elif opp_val >= 79.0 and (is_pre_sniper_time or is_day_time):
+                    warn_str = f"⚡ 0.4초 부스터({opp_name} {opp_val:.1f})"
+                else:
+                    warn_str = f"⏳ 과매도({ha_short})"
+            elif r_val >= 79.9:
+                warn_str = f"🔥 클라이맥스({ha_short})"
+            elif r_val >= 79.0 and (is_pre_sniper_time or is_day_time):
+                warn_str = f"⚡ 0.4초 부스터({ha_short})"
+            else:
+                warn_str = f"🟢 중립({ha_short})"
 
-                if r_val > 0.0:
-                    icon = "🐻" if r_sym == "SOXS" else "🐂"
-                    rsi_ui_lines.append(f"▫️ {icon} {r_sym} RSI(1m): <code>{r_val:.1f}</code> ➡️ {warn_str}")
+            if r_val > 0.0:
+                icon = "🐻" if r_sym == "SOXS" else "🐂"
+                rsi_ui_lines.append(f"▫️ {icon} {r_sym} RSI(1m): <code>{r_val:.1f}</code> ➡️ {warn_str}")
 
     rsi_ui_str = "\n".join(rsi_ui_lines) + "\n" if rsi_ui_lines else ""
-
     scan_time = now_est.strftime("%m-%d %H:%M:%S")
 
-    text = f"""📡 <b>[프리장 SOXS 단방향 RSI≤30 스나이퍼 레이더]</b> {market_header}
+    text = f"""📡 <b>[듀얼 스나이퍼 레이더]</b> {market_header}
 ➖➖➖➖➖➖➖➖➖➖➖➖➖➖
-🌐 <b>나스닥 100 선물 (NQ=F · 3단 매크로 방어)</b>
+🌐 <b>나스닥 100 선물</b>
 ▫️ 고가: <code>{nq_h:.2f}</code> | 저가: <code>{nq_l:.2f}</code>
-▫️ 현재: <code>{nq_c:.2f}</code> | 총 진폭: <code>{nq_amp:.2f}%</code> (레버 <code>{etf_expected_amp_ui:.1f}%</code>)
-▫️ 저가기준 진폭: <code>{nq_curr_amp:.2f}%</code> | 1·2차 방어: <code>{macro_1st_str}</code>{macro_3rd_line}
+▫️ 현재: <code>{nq_c:.2f}</code> | 총 진폭: <code>{nq_amp:.2f}%</code>
+▫️ 저가기준 진폭: <code>{nq_curr_amp:.2f}%</code>
+▫️ 1·2차 방어: <code>{macro_1st_str}</code>{macro_3rd_line}
 ➖➖➖➖➖➖➖➖➖➖➖➖➖➖
-📊 <b>현재가 & 5MA(어제 진폭) & 듀얼 RSI(1m)</b>
+📊 <b>현재가 &amp; 5MA(어제 진폭) &amp; RSI·HA(1m)</b>
 🐻 <b>SOXS</b> <code>${price_s:.2f}</code> | <code>{amp_s:.1f}%({yest_amp_s:.1f}%)</code>
+🐂 <b>SOXL</b> <code>${price_l:.2f}</code> | <code>{amp_l:.1f}%({yest_amp_l:.1f}%)</code>
 {rsi_ui_str}
-🌅 <b>프리장</b> {pre_window_label}
+🌅 <b>프리장</b>
 🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['pre_vwap']:.2f}</code>
-  ⤷ 팩트: <code>${sess_s['pre_l']:.2f}~${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code> | 예상: <code>${pre_exp_l_s:.2f}~${pre_exp_h_s:.2f}</code>
+  ⤷ 팩트: <code>${sess_s['pre_l']:.2f} ~ ${sess_s['pre_h']:.2f} ({sess_s['pre_amp']:.1f}%)</code>
+      | 예상: <code>${pre_exp_l_s:.2f} ~ ${pre_exp_h_s:.2f}</code>
+🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['pre_vwap']:.2f}</code>
+  ⤷ 팩트: <code>${sess_l['pre_l']:.2f} ~ ${sess_l['pre_h']:.2f} ({sess_l['pre_amp']:.1f}%)</code>
+      | 예상: <code>${pre_exp_l_l:.2f} ~ ${pre_exp_h_l:.2f}</code>
 
-🔥 <b>정규장</b> (09:30~16:00 · 신규진입 봉쇄)
+🔥 <b>정규장</b>
 🐻 <b>SOXS</b> <code>[VWAP] ${sess_s['reg_vwap']:.2f}</code>
-  ⤷ 팩트: <code>${sess_s['reg_l']:.2f}~${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code> | 예상: <code>${reg_exp_l_s:.2f}~${reg_exp_h_s:.2f}</code>
+  ⤷ 팩트: <code>${sess_s['reg_l']:.2f} ~ ${sess_s['reg_h']:.2f} ({sess_s['reg_amp']:.1f}%)</code>
+      | 예상: <code>${reg_exp_l_s:.2f} ~ ${reg_exp_h_s:.2f}</code>
+🐂 <b>SOXL</b> <code>[VWAP] ${sess_l['reg_vwap']:.2f}</code>
+  ⤷ 팩트: <code>${sess_l['reg_l']:.2f} ~ ${sess_l['reg_h']:.2f} ({sess_l['reg_amp']:.1f}%)</code>
+      | 예상: <code>${reg_exp_l_l:.2f} ~ ${reg_exp_h_l:.2f}</code>
 ➖➖➖➖➖➖➖➖➖➖➖➖➖➖
 {status_s}
+{status_l}
+💰 <b>{comp_label_str} 시드:</b> <code>${budget_s:,.2f}</code>
 
 ⏱️ 갱신: <code>{scan_time} EST</code>"""
 
@@ -369,20 +611,31 @@ async def build_avwap_radar(api_client, shared_rsi_state=None) -> tuple[str, Inl
     return text, keyboard
 
 
+# MODIFIED: 듀얼 지시서(/sync)에서 종목 대기 상태의 불필요한 부연 설명을 삭제하여 1줄 고정 (Case 38)
 async def build_sync_board(api_client) -> str:
     now_est = datetime.now(EST_TZ)
+    wk = now_est.weekday()
     is_dst = now_est.dst() is not None and now_est.dst().total_seconds() != 0
     dst_str = "🌞 서머타임" if is_dst else "❄️ 서머타임 OFF"
     t = now_est.hour * 100 + now_est.minute
+    is_weekend_closed = (wk == 4 and t >= 1700) or (wk == 5) or (wk == 6 and t < 1800)
 
-    if 400 <= t <= 929:
-        market_state = "🔫 프리장 스나이퍼 가동"
+    if is_weekend_closed:
+        market_state = "🌙 주말/휴장일"
+    elif 1800 <= t <= 1859:
+        market_state = "🌐 선물 신세션 개장"
+    elif 358 <= t <= 406:
+        market_state = "🌪️ 03:58~04:07 휩소 작전"
+    elif 407 <= t <= 814:
+        market_state = "🔫 프리장 본진 가동"
+    elif 815 <= t <= 929:
+        market_state = "🔒 프리장 마감"
     elif 930 <= t <= 1559:
         market_state = "🔥 정규장 (신규매수 마감)"
-    elif 1600 <= t <= 1659:
-        market_state = "⛔ 장마감"
+    elif 1600 <= t <= 1759:
+        market_state = "🛑 애프터마켓"
     else:
-        market_state = "🌙 데이마켓 (🔔RSI≤30 알림가동)"
+        market_state = "🌙 데이마켓 (🔔100% [모의] 대칭·역산버퍼 추격)"
 
     bp = await api_client.get_usd_buying_power()
     exchange_rate = 1400.0
@@ -401,14 +654,15 @@ async def build_sync_board(api_client) -> str:
         state = await AssassinLedger.get_state(symbol)
         is_comp = await AssassinLedger.get_is_compound(symbol)
         budget = state[1]
-        active_rate = AssassinLedger.normalize_target_rate(state[2])
-        net_rate = AssassinLedger.get_net_compound_rate(active_rate)
+        target_sell_p = float(state[6] or 0.0)
         entry_session = state[8]
         hold = await api_client.get_symbol_holdings_detail(symbol)
         qty, avg_price = hold.get("qty", 0.0), hold.get("avg_price", 0.0)
         profit_usd, profit_rate = hold.get("profit_usd", 0.0), hold.get("profit_rate", 0.0) * 100.0
         profit_krw = profit_usd * exchange_rate
         curr = await api_client.get_current_price(symbol)
+        trail_st = get_trailing_runtime_status(symbol)
+        bot_st = get_bottom_track_status(symbol)
 
         prev_close = curr
         high, low = curr, curr
@@ -448,24 +702,52 @@ async def build_sync_board(api_client) -> str:
 
         return {
             "symbol": symbol, "budget": budget, "is_compound": is_comp,
-            "target_profit_rate": active_rate, "net_profit_rate": net_rate,
+            "target_sell_p": target_sell_p, "trail_st": trail_st, "bot_st": bot_st,
             "entry_session": entry_session, "curr": curr, "avg_price": avg_price, "qty": qty,
             "high": high, "high_rate": high_rate, "low": low, "low_rate": low_rate,
             "profit_rate": profit_rate, "profit_usd": profit_usd, "profit_krw": profit_krw,
         }
 
-    soxs_data = await get_symbol_sync_data("SOXS")
+    soxs_data, soxl_data = await asyncio.gather(
+        get_symbol_sync_data("SOXS"),
+        get_symbol_sync_data("SOXL"),
+    )
 
     def format_symbol(d: dict) -> str:
+        sym = d["symbol"]
+        icon = "🐻" if sym == "SOXS" else "🐂"
         profit_sign = "+" if d["profit_usd"] >= 0 else "-"
-        comp_label = "📈 복리시드" if d["is_compound"] else "💵 단리시드"
+        comp_label = "📈 통합복리시드" if d["is_compound"] else "💵 단리시드"
+        tr_st = d["trail_st"]
+        bt_st = d["bot_st"]
+        es_str = str(d["entry_session"] or "")
+        is_man = es_str not in ("PRE_SNIPER", "PRE_SNIPER_REARM", "WHIPSAW_1SH")
         if d["qty"] > 0:
-            flag_str = f"⚡ [{d['entry_session'] or 'HOLD'}: +{d['target_profit_rate']:.2f}% (순+{d['net_profit_rate']:.2f}%)]"
+            if es_str == "WHIPSAW_1SH":
+                flag_str = "🌪️ 휩소 1주 보유"
+            elif tr_st.get("armed", False):
+                pk_p = float(tr_st.get("peak_price", 0.0))
+                st_p = float(tr_st.get("stop_price", d["target_sell_p"]))
+                flag_str = f"🔥 HA트레일링 (고점 ${pk_p:.2f} / 스탑 ${st_p:.2f})"
+            elif is_man:
+                flag_str = f"🎯 수동보유 (점화 ${d['target_sell_p']:.2f})"
+            else:
+                flag_str = f"🎯 보유 (점화 ${d['target_sell_p']:.2f})"
+        elif (407 <= t <= 814) and bt_st.get("active", False):
+            lp_b = float(bt_st.get("post_stop_low", 0.0))
+            rp_b = float(bt_st.get("rebound_trig_price", 0.0))
+            flag_str = f"🪤 최저점추적 (${lp_b:.2f} ➔ ${rp_b:.2f})"
+        elif is_weekend_closed:
+            flag_str = "🌙 주말 휴장"
+        elif 1800 <= t <= 1859:
+            flag_str = "⏳ 데이장 대기"
+        elif 815 <= t <= 1759:
+            flag_str = "🔒 신규진입 마감"
         else:
-            flag_str = f"⏳ 대기 (목표 +{d['target_profit_rate']:.2f}% · 순수익 +{d['net_profit_rate']:.2f}%)"
+            flag_str = "⏳ 대기"
         return (
-            f"🐻 <b>[SOXS] 프리장 RSI≤30 스나이퍼 지시서</b>\n"
-            f"{comp_label}: <code>${d['budget']:,.2f}</code> | 🎯 {flag_str}\n"
+            f"{icon} <b>[{sym}] 양방향 대칭 클라이맥스 지시서</b>\n"
+            f"{comp_label}: <code>${d['budget']:,.2f}</code> | {flag_str}\n"
             f"💰 현재 ${d['curr']:.2f} / 평단 ${d['avg_price']:.2f} ({int(d['qty'])}주)\n"
             f"📈 금일 고가: ${d['high']:.2f} ({d['high_rate']:+.2f}%)\n"
             f"📉 금일 저가: ${d['low']:.2f} ({d['low_rate']:+.2f}%)\n"
@@ -473,136 +755,146 @@ async def build_sync_board(api_client) -> str:
         )
 
     text = (
-        f"📜 <b>[ SOXS 단독 지시서 ({market_state}) ]</b>\n"
+        f"📜 <b>[ SOXS &amp; SOXL 듀얼 지시서 ({market_state}) ]</b>\n"
         f"📅 {dst_str} ({now_est.strftime('%H:%M')} EST)\n"
         f"💵 주문가능금액: ${bp:,.2f}\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         f"{format_symbol(soxs_data)}\n\n"
+        f"{format_symbol(soxl_data)}\n\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "▶️ /avwap : 🔫 스나이퍼 레이더 관제탑"
+        "▶️ /avwap : 🔫 듀얼 스나이퍼 레이더 관제탑"
     )
     return text
 
 
-# MODIFIED: 전술 제어반(/settlement) 내 목표 익절률(+0.64% vs +1.00%) 선택 버튼, 복리/단리 토글 및 데이장 알림 가동 상태 렌더링
+# MODIFIED: 전술 제어반(/settlement) 슬림화 및 양방향 동시 보유 표출 (Case 37, 77, 94)
 async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
     now_est = datetime.now(EST_TZ)
+    wk = now_est.weekday()
     t = now_est.hour * 100 + now_est.minute
+    is_weekend_closed = (wk == 4 and t >= 1700) or (wk == 5) or (wk == 6 and t < 1800)
 
-    state_s = await AssassinLedger.get_state("SOXS")
-    buy_id_s = await AssassinLedger.get_buy_order_id("SOXS")
+    state_s, state_l = await asyncio.gather(
+        AssassinLedger.get_state("SOXS"),
+        AssassinLedger.get_state("SOXL"),
+    )
+    buy_id_s, buy_id_l = await asyncio.gather(
+        AssassinLedger.get_buy_order_id("SOXS"),
+        AssassinLedger.get_buy_order_id("SOXL"),
+    )
     is_comp_s = await AssassinLedger.get_is_compound("SOXS")
-    day_on = await AssassinLedger.get_day_trading("SOXS")
-    gap_s = await AssassinLedger.get_add_gap_pct("SOXS")
+    day_sim = get_daymarket_sim_status()
+    whip_st = get_whipsaw_runtime_status()
+    bot_all = get_bottom_track_status()
 
-    last_buy_p = float(state_s[0] or 0.0)
     budget_s = float(state_s[1] or 100.0)
-    rate_s = AssassinLedger.normalize_target_rate(state_s[2])
-    net_rate_s = AssassinLedger.get_net_compound_rate(rate_s)
-    is_done = bool(state_s[4])
     act_s = bool(state_s[5])
-    target_sell_p = float(state_s[6] or 0.0)
-    sell_id_s = str(state_s[7] or "")
-    entry_sess = str(state_s[8] or "")
-    buy_cnt_s, max_buys_s = await AssassinLedger.get_buy_plan("SOXS")
-    sl_s = await AssassinLedger.get_stop_loss_pct("SOXS")
 
-    act_s_str = "🟢 ON (시스템 활성)" if act_s else "🔴 OFF (수동 통제)"
-    comp_s_str = (
-        f"📈 복리 모드 (익절 +{net_rate_s:.2f}% 가산 · 손절 수수료포함 차감)"
-        if is_comp_s
-        else "💵 단리 모드 (설정 시드 고정 출동)"
-    )
-    rate_mode_desc = (
-        "🎯 고승률 회전형 (+0.64% 익절 · 5개년 승률 90.6%)"
-        if abs(rate_s - 0.64) < 1e-4
-        else "🚀 고수익 복리형 (+1.00% 익절 · 5개년 복리 +720.54%)"
-    )
-    has_position_in_ledger = (target_sell_p > 0.0 or bool(sell_id_s) or last_buy_p > 0.0)
+    active_pos_syms = []
+    for sym_chk, st_chk, bid_chk in (("SOXS", state_s, buy_id_s), ("SOXL", state_l, buy_id_l)):
+        if float(st_chk[0] or 0.0) > 0.0 or float(st_chk[6] or 0.0) > 0.0 or bool(st_chk[7]) or bool(bid_chk):
+            active_pos_syms.append((sym_chk, st_chk, bid_chk))
+
+    act_s_str = "🟢 ON" if act_s else "🔴 OFF"
+    comp_s_str = "📈 통합 복리" if is_comp_s else "💵 단리 고정"
+    rate_mode_desc = "🔥 +1.00% 점화 HA·트레일링"
+
+    def _format_single_pos_status(sym_a: str, st_a: tuple, bid_a: str) -> str:
+        tp_a = float(st_a[6] or 0.0)
+        es_a = str(st_a[8] or "")
+        tr_a = get_trailing_runtime_status(sym_a)
+        is_man_a = (not bid_a and es_a not in ("PRE_SNIPER", "PRE_SNIPER_REARM", "WHIPSAW_1SH"))
+        if bid_a:
+            if es_a == "WHIPSAW_1SH":
+                return f"🌪️ [{sym_a}] 휩소 1주 매수덫 (${whip_st['buy_price']:.2f})"
+            elif es_a == "PRE_SNIPER":
+                return f"🪤 [{sym_a}] 1차 매수덫 대기중"
+            return f"⚡ [{sym_a}] 재장전 체결 대기중"
+        if es_a == "WHIPSAW_1SH":
+            return f"🌪️ [{sym_a}] 휩소 1주 보유 (목표 ${tp_a:.2f})"
+        if tr_a.get("armed", False):
+            pk_a = float(tr_a.get("peak_price", 0.0))
+            sp_a = float(tr_a.get("stop_price", tp_a))
+            m_lbl = f"수동·{sym_a}" if is_man_a else sym_a
+            return f"🔥 [{m_lbl}] 트레일링 (고점 ${pk_a:.2f} / 스탑 ${sp_a:.2f})"
+        if tp_a > 0.0:
+            m_lbl = f"수동·{sym_a}" if is_man_a else sym_a
+            return f"🎯 [{m_lbl}] 보유 (점화 ${tp_a:.2f})"
+        m_lbl = f"수동·{sym_a}" if is_man_a else sym_a
+        return f"🎯 [{m_lbl}] 보유중 (안전캡 장전중)"
 
     if not act_s:
-        strike_status_str = "⏸️ 가동OFF (자동 매수·방어·MOC·알림 전면 중지)"
-    elif entry_sess == "CANCELED_MACRO":
-        strike_status_str = "🛑 매크로 방어 발동 (금일 신규진입 영구 소각)"
-    elif 400 <= t <= 929:
-        if has_position_in_ledger:
-            if target_sell_p > 0.0:
-                strike_status_str = f"🎯 보유중 {buy_cnt_s}/{max_buys_s}회 매수 (평단 기준 목표 ${target_sell_p:.2f} [+{rate_s:.2f}%] 익절 시 무한 재출동)"
-            else:
-                strike_status_str = f"🎯 보유중 {buy_cnt_s}/{max_buys_s}회 매수 (평단 기준 +{rate_s:.2f}% 익절 덫 장전중)"
-        elif buy_id_s:
-            strike_status_str = "⏳ 프리장 지정가 매수 체결 대기중"
-        elif not is_done:
-            strike_status_str = "🔫 프리장 RSI≤30 무한 출동 감시중 (신규진입 가능)"
+        strike_status_str = "⏸️ 가동 OFF (수동 대기)"
+    elif 1559 <= t <= 1601 and not is_weekend_closed:
+        strike_status_str = "🛑 제로-오버나이트 청산중"
+    elif active_pos_syms:
+        strike_status_str = " / ".join(
+            _format_single_pos_status(sym_a, st_a, bid_a)
+            for sym_a, st_a, bid_a in active_pos_syms
+        )
+    elif is_weekend_closed:
+        strike_status_str = "🌙 주말 휴장"
+    elif 1800 <= t <= 1859:
+        strike_status_str = "🌐 선물 신세션 개장 (19:00 데이장 대기)"
+    elif (state_s[8] == "CANCELED_MACRO" or state_l[8] == "CANCELED_MACRO") and (400 <= t <= 1759):
+        strike_status_str = "🛑 매크로 과열방어 (자동마감)"
+    elif 358 <= t <= 406:
+        strike_status_str = "🌪️ 휩소 노출 작전중 (03:58 ~ 04:07)"
+    elif 407 <= t <= 814:
+        if bot_all.get("active", False):
+            b_sym = str(bot_all.get("symbol", "SOXS"))
+            lp_b = float(bot_all.get("post_stop_low", 0.0))
+            rp_b = float(bot_all.get("rebound_trig_price", 0.0))
+            strike_status_str = f"🪤 [{b_sym}] 최저점추적 (${lp_b:.2f} ➔ ${rp_b:.2f})"
+        elif not bool(state_s[4]) and not bool(state_l[4]):
+            strike_status_str = "🔫 프리장 본진 감시중 (04:07 ~ 08:14)"
         else:
-            strike_status_str = "🔒 금일 프리장 타격 잠금"
-    elif 930 <= t <= 1558:
-        if has_position_in_ledger:
-            if target_sell_p > 0.0:
-                strike_status_str = f"🔒 09:30 신규진입 마감 (보유분 ${target_sell_p:.2f} [+{rate_s:.2f}%] 감시)"
-            else:
-                strike_status_str = f"🔒 09:30 신규진입 마감 (보유분 +{rate_s:.2f}% 감시)"
+            strike_status_str = "🔒 프리장 타격 잠금"
+    elif 815 <= t <= 1558:
+        if t < 930:
+            strike_status_str = "🔒 08:15 마감 (관망)"
         else:
-            strike_status_str = "🔒 09:30 정규장 신규진입 봉쇄 (관망 · 매수불가)"
-    elif 1550 <= t <= 1601:
-        strike_status_str = "🛑 15:50~16:01 제로-오버나이트 강제 청산 윈도우"
-    elif 330 <= t <= 359:
-        strike_status_str = "🛑 03:30~03:59 데이장 강제 청산 윈도우"
-    elif t >= 1900 or t < 400:
-        strike_status_str = ("🌙 데이마켓 자동매매 감시 (RSI≤30 매수 · 03:30 청산)" if day_on else "🌙 데이마켓 대기 (데이장 매매 꺼짐)")
+            strike_status_str = "🔒 정규장 마감 (관망)"
+    elif t >= 1900 or t <= 357:
+        if day_sim.get("active", False):
+            sim_sym = day_sim.get("symbol", "SOXS")
+            if day_sim.get("phase") == "BUFFER_WAIT":
+                td_d = float(day_sim.get("target_drop_p", 0.0))
+                strike_status_str = f"🛡️ [모의·{sim_sym}] 개시버퍼 대기 (${td_d:.2f})"
+            elif day_sim.get("phase") == "TRAP_WAIT":
+                strike_status_str = f"🪤 [모의·{sim_sym}] 1차덫 대기 (${day_sim['trap_price']:.2f})"
+            else:
+                strike_status_str = f"🔔 [모의·{sim_sym}] 추격중 (목표 ${day_sim['target_price']:.2f})"
+        else:
+            strike_status_str = "🌙 [모의] 데이장 감시중"
     else:
-        strike_status_str = "⛔ 장외/애프터장 대기 (신규진입 차단)"
-
-    btn_064_label = "✅ 🎯 +0.64% (순+0.50%)" if abs(rate_s - 0.64) < 1e-4 else "🎯 +0.64% (순+0.50%)"
-    btn_100_label = "✅ 🚀 +1.00% (순+0.86%)" if abs(rate_s - 1.00) < 1e-4 else "🚀 +1.00% (순+0.86%)"
+        strike_status_str = "🛑 애프터마켓 (마감)"
 
     text = (
-        "⚙️ <b>[단방향 전술 코어 제어반 (프리장 SOXS 스나이퍼)]</b>\n"
-        f"▫️ <b>전술 모드:</b> <code>🔫 프리장(04:00~09:29 EST) RSI≤30 요격 & +{rate_s:.2f}% 익절</code>\n"
-        f"▫️ <b>데이장 모드:</b> <code>{'🌙 켜짐 · 19:00~03:29 매수 → 03:30 강제 청산 (EST)' if day_on else '⏸ 꺼짐 (데이장 매수 안 함)'}</code>\n"
-        "▫️ <b>방어 체계:</b> <code>NQ=F 3단 매크로 손절 덤핑 & 15:50 제로-오버나이트 강제 청산</code>\n"
+        "⚙️ <b>[ 듀얼 스나이퍼 전술 제어반 ]</b>\n"
         "➖➖➖➖➖➖➖➖➖➖➖➖➖➖\n"
-        "🐻 <b>SOXS (SHORT · 단방향 스나이퍼)</b>\n"
         f"▫️ 마스터 전원: <code>{act_s_str}</code>\n"
-        f"▫️ 현재 출동상태: <code>{strike_status_str}</code>\n"
-        f"▫️ 목표 익절타점: <code>{rate_mode_desc}</code>\n"
-        f"▫️ 시드 운용방식: <code>{comp_s_str}</code>\n"
-        f"▫️ 현재 출동시드: <code>${budget_s:,.2f}</code> | 목표 익절: <code>+{rate_s:.2f}% (순수익 +{net_rate_s:.2f}%)</code>\n"
-        f"▫️ 추가 매수: <code>최대 {max_buys_s}회 (1회당 시드 ${budget_s:,.2f} · 최대 ${budget_s * max_buys_s:,.2f})</code>\n"
-        f"▫️ 추가 규칙: <code>보유 중 RSI 35 회복 뒤 RSI≤30 재포착 + 직전 매수가보다 -{gap_s:.1f}% 이상 하락 시 1회 추가 · 매도는 전체 평단 기준</code>\n"
-        f"▫️ 손절 라인: <code>{('추가 매수 종료(최대 ' + str(max_buys_s) + '회 또는 09:30 마감) 후 평단 대비 -' + format(sl_s, '.1f') + '% 도달 시 전량 매도') if sl_s > 0 else '꺼짐'}</code>"
+        f"▫️ 출동 상태: <code>{strike_status_str}</code>\n"
+        f"▫️ 익절 엔진: <code>{rate_mode_desc}</code>\n"
+        f"▫️ 운용 방식: <code>{comp_s_str}</code>\n"
+        f"▫️ 통합 시드: <code>${budget_s:,.2f}</code>"
     )
-    max_btns = [
-        InlineKeyboardButton(
-            text=(f"✅ {n}회" if n == max_buys_s else f"{n}회"),
-            callback_data=f"set_maxbuy_SOXS_{n}",
-        )
-        for n in AssassinLedger.ALLOWED_MAX_BUYS
-    ]
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔴 SOXS 스나이퍼 정지" if act_s else "🟢 SOXS 스나이퍼 가동",
+                    text="🔴 듀얼 스나이퍼 정지" if act_s else "🟢 듀얼 스나이퍼 가동",
                     callback_data="toggle_set_act_SOXS",
                 )
             ],
             [
-                InlineKeyboardButton(text=btn_064_label, callback_data="set_rate_SOXS_0.64"),
-                InlineKeyboardButton(text=btn_100_label, callback_data="set_rate_SOXS_1.00"),
-            ],
-            [
                 InlineKeyboardButton(
-                    text="💵 단리(시드고정) 전환" if is_comp_s else f"📈 복리(+{net_rate_s:.2f}%증액) 전환",
+                    text="💵 단리(시드고정) 전환" if is_comp_s else "📈 통합복리(실수익가감) 전환",
                     callback_data="toggle_compound_SOXS",
                 ),
-                InlineKeyboardButton(text="💵 SOXS 시드 설정", callback_data="set_budget_SOXS"),
+                InlineKeyboardButton(text="💵 통합 시드 설정", callback_data="set_budget_SOXS"),
             ],
-            max_btns,
-            [InlineKeyboardButton(text=(f"🛑 손절 라인 -{sl_s:.1f}% 변경" if sl_s > 0 else "🛑 손절 라인 설정 (꺼짐)"), callback_data="set_sl_SOXS")],
-            [InlineKeyboardButton(text=f"📉 추가 매수 간격 -{gap_s:.1f}% 변경", callback_data="set_gap_SOXS")],
-            [InlineKeyboardButton(text=("🌙 데이장 매매 끄기 (지금 켜짐)" if day_on else "🌙 데이장 매매 켜기 (지금 꺼짐)"), callback_data="toggle_day_SOXS")],
             [
                 InlineKeyboardButton(text="🔫 스나이퍼 레이더", callback_data="open_avwap"),
                 InlineKeyboardButton(text="🔙 메인 메뉴", callback_data="back_to_main"),
@@ -610,3 +902,8 @@ async def build_settlement_board() -> tuple[str, InlineKeyboardMarkup]:
         ]
     )
     return text, keyboard
+
+
+# [💧물타기 HOOK D] 메뉴·제어반·/sync 화면에 버전·💧 물타기 줄과 버튼 덧붙이기 (원작 함수는 그대로 감싸기만)
+from averaging_plugin import install_ui_wrappers as _avg_install_ui
+_avg_install_ui(globals())
