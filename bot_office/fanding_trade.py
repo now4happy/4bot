@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.5.1)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.5.2)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -13,6 +13,8 @@
 # 1.5.0: 가격표 판별을 '읽어보고 판단'으로 변경 — AI 가 아니라고 해도 날짜·종가가 메리츠 실제 종가와 맞으면 가격표로 인정
 #        (AI 의 판별 실수로 가격표를 놓치는 문제 해결) · 판별 이유를 기록 · 처리 끝난 가격표 이미지는 서버에서 자동 삭제
 # 1.5.1: 1.5.0 판독 형식이 비어 있던 오류 수정 · 없어진 예비 모델(gemini-2.5-flash) 대신 기본 모델 재시도 → DeepSeek
+# 1.5.2: DeepSeek 를 먼저 사용(Gemini API 무료 한도 문제) · DeepSeek 답이 형식에 안 맞으면 한 번 더 요청
+#        · Gemini 한도초과(429)는 기다리지 않고 바로 넘어감 · 확인용 두 번째 판독이 실패해도 가격표는 알림(자동주문만 막음)
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -41,7 +43,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -69,7 +71,7 @@ DEFAULTS = {
     "missing_alert_kst": "11:00",  # 이 시각까지 가격표가 안 오면 알림
     "gemini_model": "gemini-3.8-flash",
     "gemini_fallback": "",                   # Gemini 예비 모델 (비우면 기본 모델로 재시도 → 그래도 안 되면 DeepSeek)
-    "vision_order": ["gemini", "deepseek"],  # 이미지 판독 AI 순서 (앞에서 안 되면 다음)
+    "vision_order": ["deepseek", "gemini"],  # 이미지 판독 AI 순서 (앞에서 안 되면 다음)
     "deepseek_model": "deepseek-flash",
     "upload_token": "",
 }
@@ -303,7 +305,9 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
             break
         except urllib.error.HTTPError as e:
             last = e
-            if e.code not in (429, 500, 502, 503, 504):
+            if e.code == 429:
+                raise RuntimeError("Gemini API 사용 한도 초과(429) — 앱 요금제와 API 한도는 별개")
+            if e.code not in (500, 502, 503, 504):
                 raise
         except (TimeoutError, OSError) as e:      # 시간초과·연결 끊김
             last = e
@@ -332,14 +336,16 @@ def _schema_hint(schema):
     return "{" + ", ".join(f'"{k}": {v.get("type", "").lower()}' for k, v in props.items()) + "}"
 
 
-def _deepseek(img_bytes, prompt, schema, max_tokens=2048):
+def _deepseek(img_bytes, prompt, schema, max_tokens=2048, _again=False):
     key = _env_key("DEEPSEEK_API_KEY")
     if not key:
         raise RuntimeError("DeepSeek 키 없음 (/etc/bot-office/ai.env 의 DEEPSEEK_API_KEY)")
     mime = "image/png" if img_bytes[:4] == b"\x89PNG" else ("image/webp" if img_bytes[:4] == b"RIFF" else "image/jpeg")
     text = (prompt + "\n\n반드시 아래 형식의 JSON 객체 하나만 출력하세요. 설명·코드블록 없이.\n" + _schema_hint(schema)
             + "\nbuys/sells 는 [{\"price\": 숫자, \"qty\": 정수}] 배열입니다." * ("buys" in schema.get("properties", {})))
-    body = {"model": cfg()["deepseek_model"], "temperature": 0, "max_tokens": max_tokens,
+    if _again:
+        text = "중요: 이번에는 설명 없이 JSON 객체 하나만, 반드시 { 로 시작해서 } 로 끝나게 출력하세요.\n\n" + text
+    body = {"model": cfg()["deepseek_model"], "temperature": 0, "max_tokens": max(max_tokens, 6000),
             "messages": [{"role": "user", "content": [
                 {"type": "text", "text": text},
                 {"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(img_bytes).decode()}}]}]}
@@ -360,11 +366,19 @@ def _deepseek(img_bytes, prompt, schema, max_tokens=2048):
         time.sleep([5, 15, 0][i])
     else:
         raise RuntimeError(f"DeepSeek 응답 없음: {last}")
-    out = d["choices"][0]["message"]["content"] or ""
-    m = re.search(r"\{.*\}", out, re.S)
-    if not m:
-        raise RuntimeError("DeepSeek 응답에서 JSON 을 못 찾음")
-    return json.loads(m.group(0))
+    msg = (d.get("choices") or [{}])[0].get("message") or {}
+    out = (msg.get("content") or "") + "\n" + (msg.get("reasoning_content") or "")
+    for m in [msg.get("content") or "", out]:
+        hit = re.search(r"\{.*\}", m, re.S)
+        if hit:
+            try:
+                return json.loads(hit.group(0))
+            except ValueError:
+                pass
+    if not _again:   # 형식이 어긋났으면 더 엄격하게 한 번 더
+        print("DeepSeek 답 형식 어긋남 → 다시 요청:", (msg.get("content") or "")[:150].replace("\n", " "), flush=True)
+        return _deepseek(img_bytes, prompt, schema, max_tokens, _again=True)
+    raise RuntimeError("DeepSeek 응답에서 JSON 을 못 찾음: " + (msg.get("content") or "(빈 답)")[:80])
 
 
 PROVIDERS = {"gemini": _gemini, "deepseek": _deepseek}
@@ -372,7 +386,7 @@ PROVIDERS = {"gemini": _gemini, "deepseek": _deepseek}
 
 def vision(img_bytes, prompt, schema, max_tokens=2048):
     """그날 되는 AI 로 이미지 판독. 실패하면 다음 AI 로 넘어가고, 성공한 AI 를 오늘 먼저 쓰도록 기억"""
-    order = [p for p in cfg().get("vision_order", ["gemini", "deepseek"]) if p in PROVIDERS]
+    order = [p for p in cfg().get("vision_order", ["deepseek", "gemini"]) if p in PROVIDERS]
     today = now_kst().date().isoformat()
     st = load(STATE, {})
     best = (st.get("vision_today") or {})
@@ -470,8 +484,8 @@ def run_checks(sheet, mult, market=None):
     out = []
     add = lambda ok, msg: out.append({"ok": bool(ok), "msg": msg})
 
-    add(sheet.get("reads_agree"), "Gemini 두 번 판독 결과 일치" if sheet.get("reads_agree")
-        else "Gemini 두 번 판독 결과가 서로 다름 → 숫자 꼭 확인")
+    add(sheet.get("reads_agree"), "AI 두 번 판독 결과 일치" if sheet.get("reads_agree")
+        else "AI 두 번 판독 결과가 다르거나 확인 판독 실패 → 숫자 꼭 확인")
     exp = last_session_date().isoformat()
     add(p["close_date"] == exp, f"종가날짜 {p['close_date']} (오늘 기대값 {exp})")
     if not p["buys"] and not p["sells"]:
@@ -668,7 +682,12 @@ def handle_image(tg, data, sha, meta):
             st["kinds2"][sha] = "other"
             st["kinds2"] = dict(list(st["kinds2"].items())[-500:])
         return "other"
-    reads = [first, gemini_read(data, PROMPTS[1])]
+    try:
+        second = gemini_read(data, PROMPTS[1])
+    except Exception as e:          # 확인용 판독 실패 → 가격표는 알리되 자동주문은 막음
+        print("확인용 두 번째 판독 실패:", e, flush=True)
+        second = dict(first, close=-1)
+    reads = [first, second]
     agree = core(reads[0]) == core(reads[1])
     parsed = reads[0]
     IMAGES.mkdir(parents=True, exist_ok=True)
