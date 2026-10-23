@@ -3,6 +3,7 @@
 #  · Gemini/Jules/딥시크 등 누가 올려도 main 이 아닌 브랜치면 감지 (main 은 서버가 적용한 결과만 올라가는 곳)
 #  · 1~4번 봇 + 5번 사무실 비서(저장소 bot_office/ → 서버 /opt/bot-office) · 업데이트 비서 자신도 업데이트(실패 시 2분 뒤 자동 복구)
 #  · 적용: 보유·매매시간 확인 → 병합 → 문법 검사 → 해당 봇만 재시작 → 실패 시 원래 코드로 자동 복구 → 버전 기록 → main 업로드
+#  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
 import json, os, pwd, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -22,6 +23,11 @@ NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service":
          "toss_dca.service": "3번 토스 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 OWNER = pwd.getpwuid(os.stat(REPO).st_uid)
+try:   # 2번 스나이퍼 원작 업데이트 + 💧물타기 자동 합치기 부품 (없어도 비서는 정상 작동)
+    import sniper_upstream as SU
+except Exception as _e:
+    SU = None
+    print("sniper_upstream 불러오기 실패:", _e, flush=True)
  
  
 def sh(*a, timeout=120):
@@ -118,10 +124,17 @@ def busy_reason(unit):
     now_k, now_e = datetime.now(KST), datetime.now(ET)
     k, e = now_k.hour * 100 + now_k.minute, now_e.hour * 100 + now_e.minute
     if unit == "toss_sniper.service":
-        L = load(os.path.join(targets().get(unit, ""), "AssassinLedger_SOXS.json"), {})
-        b = [x for x in ("buy_order_id", "sell_order_id") if L.get(x)] + [x for x in ("buy_count", "last_buy_price", "target_sell_price") if float(L.get(x) or 0) > 0]
-        if b:
-            return "스나이퍼가 주식을 들고 있거나 주문 중 (강제 청산 뒤 다시 눌러 주세요)"
+        root = targets().get(unit, "")
+        for sym in ("SOXS", "SOXL"):   # 듀얼 스나이퍼: 두 종목 장부 모두 확인
+            L = load(os.path.join(root, f"AssassinLedger_{sym}.json"), {})
+            b = [x for x in ("sell_order_id",) if L.get(x)] + [x for x in ("last_buy_price", "target_sell_price") if float(L.get(x) or 0) > 0]
+            if L.get("buy_order_id") and not float(L.get("last_buy_price") or 0) > 0 and L.get("entry_session") not in ("", "CANCELED_MACRO"):
+                b.append("buy_order_id")
+            if b:
+                return f"스나이퍼가 {sym} 을 들고 있거나 주문 중 (청산 뒤 다시 눌러 주세요)"
+        A = load(os.path.join(root, "Averaging_state.json"), {})
+        if any(isinstance(v, dict) and v.get("order_id") for v in A.values()):
+            return "스나이퍼 💧물타기 추가 매수 주문 진행 중"
     if unit == "toss_dca.service" and (1050 <= k <= 1510 or 1120 <= e <= 1600):
         return "3번 봇 매매 시간 (한국장 11시 · 미국장 11:30 EST 전후)"
     if unit == "bithumb_bot.service" and 1850 <= k <= 1925:
@@ -209,7 +222,7 @@ def bump_versions(units, old_head):
     for u in units:
         root = roots.get(u, "")
         for f in sorted(os.listdir(root)) if root else []:
-            if not f.endswith("_core.py"):
+            if not (f.endswith("_core.py") or f == "averaging_plugin.py"):   # 2번 스나이퍼 버전은 averaging_plugin.py
                 continue
             p = os.path.join(root, f); src = open(p, encoding="utf-8").read()
             m = re.search(r"""^(BOT_VERSION\s*=\s*["'])v?(\d+)\.(\d+)(?:\.(\d+))?(["'])""", src, re.M)
@@ -358,8 +371,14 @@ def handle(st, upd):
             show_diff(st, key)
         elif act == "ig":
             st.get("offers", {}).pop(key, None); say("🗑 이 업데이트는 무시했습니다. (봇 그대로)")
+        elif act in ("um", "ud", "ui") and SU:   # 2번 스나이퍼 원작 새 버전 (합치기 / 보기 / 무시)
+            {"um": SU.merge, "ud": SU.show, "ui": SU.ignore}[act](sys.modules[__name__], st, key)
     elif msg and str(msg.get("chat", {}).get("id")) == str(CFG.get("chat_id")):
-        if (msg.get("text") or "").strip() in ("업데이트", "업데이트 확인", "/update"):
+        txt = (msg.get("text") or "").strip()
+        if txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
+            say("🔄 원작 스나이퍼 저장소를 확인합니다…")
+            SU.check(sys.modules[__name__], st, force=True)
+        elif txt in ("업데이트", "업데이트 확인", "/update"):
             say("🔄 GitHub를 확인합니다…"); before = len(st.get("offers", {}))
             scan(st, force=True)
             if len(st.get("offers", {})) == before:
@@ -379,6 +398,11 @@ def main():
                 scan(st)
             except Exception as e:
                 print("확인 오류:", e, flush=True)
+            if SU:
+                try:
+                    SU.check(sys.modules[__name__], st)   # 하루 1번(09:02 KST) 원작 스나이퍼 새 버전 확인
+                except Exception as e:
+                    print("원작 확인 오류:", e, flush=True)
             save(STATE, st)
         r = tg("getUpdates", timeout=25, offset=offset, allowed_updates=["message", "callback_query"]) if offset else tg("getUpdates", timeout=25, allowed_updates=["message", "callback_query"])
         if not r.get("ok"):
