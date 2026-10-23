@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.3 · 2026-10-23 17:44 (KST)
+- 파일: fanding_fetch_win.py, fanding_trade.py
+- 내용: 팬딩 1.1.0: 이미지 여러 장 중 가격표 자동 선택
+- 브랜치: staging
+
 ## v1.0.2 · 2026-10-23 16:44 (KST)
 - 파일: bot_updater.py, sniper_upstream.py
 - 내용: 2번 스나이퍼 v1.0.5 + 원작 자동 합치기
