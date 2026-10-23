@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.1)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.2)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -18,6 +18,7 @@
 # 1.6.0: 예약 발주 시간 설정(기본: 장마감 30분 전 = 30분 VWAP) · /재예약 (오늘 예약 취소 후 새 시간으로 다시)
 #        · 확인용 두 번째 판독은 첫 번째와 다른 AI 로 (DeepSeek ↔ Gemini 교차 확인)
 # 1.6.1: /재예약 때 메리츠 앱에서 이미 직접 취소한 예약은 건너뜀(살아 있는 예약 목록 확인) · /재예약강제 추가
+# 1.6.2: 금요일 가격표는 월요일 아침에 받아도 됨 → '가격표 안 옴' 알림을 토요일이 아닌 월요일에 확인
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -46,7 +47,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -844,7 +845,8 @@ def tick(tg):
         # 가격표가 안 오는 날 알림: 미국 장 다음 날 한국 오전, 정해진 시각까지 안 오면 1번만
         exp = last_session_date(now)
         key = f"missing:{exp.isoformat()}"
-        if (exp.isoformat() not in st["sheets"] and now.date() == exp + timedelta(days=1)
+        due = exp + timedelta(days=3 if exp.weekday() == 4 else 1)   # 금요일 가격표는 월요일 아침에 받음
+        if (exp.isoformat() not in st["sheets"] and now.date() == due
                 and (now.hour, now.minute) >= hm(c["missing_alert_kst"]) and not st.get(key)):
             st[key] = True
             tg.send(f"❓ <b>{exp.isoformat()} 가격표가 아직 안 왔어요</b> ({c['missing_alert_kst']} 기준)\n"
