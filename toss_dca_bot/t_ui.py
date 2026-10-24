@@ -113,64 +113,97 @@ async def build_panel_view(client: TossApiClient):
     ]
     return "\n".join(lines), kb
 
-async def build_stock_list_view(client: TossApiClient, page: int = 0):
+# 현재 허용된 단일 텔레그램 채팅의 목록 위치. 매매 설정과 별도로 메모리에만 저장.
+STOCK_LIST_CONTEXT = {"market": "all", "status": "all", "page": 0, "query": ""}
+
+
+def stock_market(info):
+    return "kr" if info.get("currency") == "KRW" else "us"
+
+
+def stock_list_callback(market=None, status=None, page=None, keep_query=True):
+    ctx = STOCK_LIST_CONTEXT
+    return "browse|{}|{}|{}|{}".format(
+        market if market is not None else ctx["market"],
+        status if status is not None else ctx["status"],
+        page if page is not None else ctx["page"], int(keep_query))
+
+
+def select_stock_items(stocks, market="all", status="all", query=""):
+    query = query.strip().casefold()
+    items = []
+    for sym, info in stocks.items():
+        if market != "all" and stock_market(info) != market:
+            continue
+        enabled = bool(info.get("enabled", True))
+        if status == "on" and not enabled:
+            continue
+        if status == "off" and enabled:
+            continue
+        if query and query not in str(sym).casefold() and query not in str(info.get("name", sym)).casefold():
+            continue
+        items.append((sym, info))
+    return sorted(items, key=lambda item: (
+        0 if item[1].get("s_mode") == "decision" else 1,
+        str(item[1].get("name", item[0])).casefold(), item[0]))
+
+
+async def build_stock_list_view(client: TossApiClient, page: int = 0,
+                                market=None, status=None, query=None):
+    ctx = STOCK_LIST_CONTEXT
+    market = market if market in ("all", "kr", "us") else ctx["market"]
+    status = status if status in ("all", "on", "off") else ctx["status"]
+    query = ctx["query"] if query is None else query.strip()[:80]
     cfg = await sync_holdings_from_toss(client)
     stocks = cfg.get("stocks", {})
-    for sym, s in stocks.items():
-        is_kr = (s.get("currency") == "KRW")
-        ensure_stock_cycle(s, is_kr)
-        if int(s.get("s_day", 0)) == 0:
-            try:
-                hold = await asyncio.wait_for(client.get_symbol_holdings(sym), timeout=2.5)
-                avg_p, qty = 0.0, 0.0
-                if isinstance(hold, dict):
-                    for k in ["avg_price", "avg_buy_price", "average_price", "buy_avg_price", "pchs_avg_pric"]:
-                        if hold.get(k): avg_p = float(hold[k]); break
-                    for k in ["qty", "quantity", "holding_qty", "balance", "hold_qty", "ord_psbl_qty", "sellable_qty"]:
-                        if hold.get(k): qty = float(hold[k]); break
-                if qty > 0:
-                    s["s_day"] = await auto_detect_cycle_days(client, sym, is_kr, float(s.get("base_amount", 100000 if is_kr else 40)), avg_p, qty)
-                    await DcaConfigManager.save(cfg)
-            except Exception: pass
-
-    # 결정대기(decision) 종목을 무조건 맨 위로, 그다음 진행일수 높은 순으로 정렬
-    sorted_items = sorted(stocks.items(), key=lambda x: (0 if x[1].get("s_mode") == "decision" else 1, -int(x[1].get("s_day", 0)), x[0]))
-    total = len(sorted_items)
-    per_page = 5
-    max_page = max(0, (total - 1) // per_page)
-    page = max(0, min(page, max_page))
-    slice_items = sorted_items[page * per_page : (page + 1) * per_page]
-
-    lines = [
-        f"📋 [보유종목 리스트 (총 {total}종목 | {page+1}/{max_page+1}페이지)]",
-        "• 버튼을 누르거나 채팅창에 [티커]를 입력하면 바로 열립니다.",
-        "─────────────────"
-    ]
-    kb, row = [], []
-    mode_short = {"buy_1": "1차매수", "pause": "⏸정지", "buy_2": "2차매수", "sell": "📤매도", "decision": "🚨결정대기"}
-    for idx, (sym, s) in enumerate(slice_items, start=page * per_page + 1):
-        is_kr = (s.get("currency") == "KRW")
-        amt = float(s.get("base_amount", 100000 if is_kr else 40))
-        amt_s = f"{amt:,.0f}원" if is_kr else f"${amt:.0f}"
-        m_s = mode_short.get(s["s_mode"], "진행")
-        lines.append(f"{idx}. {s.get('name', sym)}({sym}) : {amt_s} | {m_s} ({s['s_day']}/{s['s_target_days']}일)")
-        row.append({"text": f"🎯 {idx}. {s.get('name', sym)} ({sym})", "callback_data": f"detail_{sym}"})
-        if len(row) == 2: kb.append(row); row = []
-    if row: kb.append(row)
-    if not stocks: lines.append("• 현재 연동된 보유종목이 없습니다.")
-
-    if max_page > 0:
-        nav = []
-        if page > 0: nav.append({"text": f"⬅️ 이전 ({page}/{max_page+1})", "callback_data": f"slist_{page-1}"})
-        if page < max_page: nav.append({"text": f"다음 ({page+2}/{max_page+1}) ➡️", "callback_data": f"slist_{page+1}"})
+    # 목록은 가격/개별 잔고를 종목마다 요청하거나 진행 일수를 추정·저장하지 않음.
+    market_items = select_stock_items(stocks, market)
+    items = select_stock_items(stocks, market, status, query)
+    max_page = max(0, (len(items)-1)//5)
+    page = max(0, min(int(page), max_page))
+    ctx.update(market=market, status=status, query=query, page=page)
+    title = {"all": "전체 주식", "kr": "🇰🇷 한국주식", "us": "🇺🇸 미국주식"}[market]
+    status_title = {"all": "전체", "on": "🟢 매매 켜짐", "off": "⏸ 대기·중지"}[status]
+    on_count = sum(bool(info.get("enabled", True)) for _, info in market_items)
+    lines = [f"📋 [{title} · 총 {len(market_items)}종목]",
+             f"🟢 매매 켜짐 {on_count} · ⏸ 대기·중지 {len(market_items)-on_count}",
+             f"필터: {status_title} · {page+1}/{max_page+1}페이지"]
+    if not cfg.get("is_master_active", True):
+        lines.append("🔴 전체 전원 OFF · 모든 종목 자동주문 정지")
+    if query:
+        lines.append(f"🔎 검색: {query} · {len(items)}종목")
+    lines += ["• 종목명·티커를 입력하거나 아래 종목을 선택하세요.", "─────────────────"]
+    def btn(text, m=market, st=status, pg=0, keep=True):
+        return {"text": text, "callback_data": stock_list_callback(m, st, pg, keep)}
+    kb = [[btn("전체시장", "all", keep=False), btn("🇰🇷 한국", "kr", keep=False), btn("🇺🇸 미국", "us", keep=False)],
+          [btn("전체", st="all"), btn("🟢 매매 켜짐", st="on"), btn("⏸ 대기·중지", st="off")]]
+    for idx, (sym, info) in enumerate(items[page*5:(page+1)*5], page*5+1):
+        icon = "🟢" if info.get("enabled", True) else "⏸"
+        label = f"{icon} {info.get('name', sym)} ({sym})"
+        if info.get("s_mode") == "decision":
+            label += " · 결정 대기"
+        lines.append(f"{idx}. {label}")
+        kb.append([{"text": label[:100], "callback_data": f"detail_{sym}"}])
+    if not items:
+        lines.append("조건에 맞는 종목이 없습니다.")
+    nav = []
+    if page > 0:
+        nav.append(btn("◀ 이전", pg=page-1))
+    if page < max_page:
+        nav.append(btn("다음 ▶", pg=page+1))
+    if nav:
         kb.append(nav)
-
-    kb.append([{"text": "🔄 보유종목 새로고침", "callback_data": f"slist_{page}"}, {"text": "🔙 관제탑 메인으로", "callback_data": "panel"}])
+    kb.append([{"text": "🔎 종목 검색", "callback_data": "stock_search"},
+               btn("🔄 새로고침", pg=page)])
+    if query:
+        kb.append([btn("검색 해제", keep=False)])
+    kb.append([{"text": "🔙 관제탑 메인으로", "callback_data": "panel"}])
     return "\n".join(lines), kb
+
 
 async def build_stock_detail_view(client: TossApiClient, sym: str):
     cfg = await ensure_cycle_fields(); stocks = cfg.get("stocks", {})
-    if sym not in stocks: return await build_stock_list_view(client)
+    if sym not in stocks: return await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])
     s = stocks[sym]; is_kr = (s.get("currency") == "KRW"); ensure_stock_cycle(s, is_kr); await DcaConfigManager.save(cfg)
     cur_p, avg_p, qty = 0.0, 0.0, 0.0
     try:
@@ -193,14 +226,14 @@ async def build_stock_detail_view(client: TossApiClient, sym: str):
     p_str = f"현재가: {cur_p:,.0f}원 | 평단가: {avg_p:,.0f}원 ({prof_pct:+.2f}% / {qty:.0f}주)" if is_kr else f"현재가: ${cur_p:.2f} | 평단가: ${avg_p:.2f} ({prof_pct:+.2f}% / {qty:.4f}주)"
     s_mode, s_day, s_target = s["s_mode"], int(s["s_day"]), int(s["s_target_days"])
     m_desc = {"buy_1": f"🛒 1차 분할매수 ({s_day}/100일 고정)", "pause": f"⏸ 정지 대기 중 ({s_day}/{s_target}일)", "buy_2": f"🛒 2차 분할매수 ({s_day}/{s_target}일)", "sell": f"📤 분할매도 ({s_day}/{s_target}일)", "decision": f"🚨 기간({s_target}일) 완료! 결정 대기(정지)"}
-    lines = [f"🎯 [{s.get('name', sym)} ({sym}) 상세 설정]", "─────────────────", f"📈 {p_str}", f"💰 1회 기준 매수금: {amt_str}", f"⏳ 진행 거래일수: {m_desc.get(s_mode, s_mode)}", f"🕒 최근 실행일: {s.get('last_exec_date', '대기 중')}"]
+    lines = [f"{'🇰🇷 한국주식' if is_kr else '🇺🇸 미국주식'} · [{s.get('name', sym)} ({sym}) 상세 설정]", "─────────────────", f"📈 {p_str}", f"💰 1회 기준 매수금: {amt_str}", f"⏳ 진행 거래일수: {m_desc.get(s_mode, s_mode)}", f"🕒 최근 실행일: {s.get('last_exec_date', '대기 중')}"]
     kb = [[{"text": f"💰 [{sym}] 기준금액 변경", "callback_data": f"setamt_{sym}"}, {"text": f"🔢 [{sym}] 진행일수 보정", "callback_data": f"setday_{sym}"}]]
     if s_mode == "decision":
         lines.append("\n🚨 [기간이 완료되었습니다! 다음 진행 방향을 선택하세요]")
         kb.append([{"text": "⏸ 몇 일 정지하며 기다릴지 설정", "callback_data": f"next_pause_{sym}"}])
         kb.append([{"text": "📤 몇 일 동안 나눠서 매도할지 설정", "callback_data": f"next_sell_{sym}"}])
         kb.append([{"text": "🛒 몇 일 동안 2차 매수할지 설정", "callback_data": f"next_buy2_{sym}"}])
-    kb.append([{"text": "🔄 새로고침", "callback_data": f"detail_{sym}"}, {"text": "📋 종목 리스트로", "callback_data": "stock_list"}])
+    kb.append([{"text": "🔄 새로고침", "callback_data": f"detail_{sym}"}, {"text": "📋 종목 리스트로", "callback_data": stock_list_callback()}])
     kb.append([{"text": "🔙 관제탑 메인으로", "callback_data": "panel"}])
 
     # 종목별 매매 버튼 v1

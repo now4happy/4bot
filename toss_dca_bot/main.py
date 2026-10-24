@@ -68,7 +68,6 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
                 if sell_q > 0:
                     if not await stock_trade_allowed(sym): continue
                     if is_kr: await client.place_kr_integer_order(sym, "sell", sell_q, f"tp{target_stg}_{today_str}_{sym}")
-                    if not await stock_trade_allowed(sym): continue
                     else: await client.place_us_fractional_sell(sym, sell_q, f"tp{target_stg}_{today_str}_{sym}")
                     s["sold_stage"] = target_stg; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
                     logs.append(f"🎯 {sym}: {target_stg}차 익절 ({prof_pct:+.2f}% / {sell_q}주)"); await save_merged(cfg, sym); continue
@@ -102,7 +101,6 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
                 sq = min(int(qty), max(1, int(round(qty / rem_days)))) if is_kr else (qty if (qty / rem_days * cur_p < 1.0 or rem_days == 1) else round(qty / rem_days, 4))
                 if not await stock_trade_allowed(sym): continue
                 if is_kr: await client.place_kr_integer_order(sym, "sell", sq, f"s_{today_str}_{sym}")
-                if not await stock_trade_allowed(sym): continue
                 else: await client.place_us_fractional_sell(sym, sq, f"s_{today_str}_{sym}")
                 s["s_day"] = s_day + 1; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
                 logs.append(f"📤 {sym}: 분할매도 ({sq}주 / {s['s_day']}/{s_target}일차)")
@@ -149,8 +147,20 @@ async def handle_callback(cb: dict, client: TossApiClient):
             notice += "\n전체 매매가 중지돼 있어 전체 시작 후 실행됩니다."
         send_panel(notice + "\n\n" + text, kb, msg_id)
         return
+    if data.startswith("browse|"):
+        parts = data.split("|")
+        if len(parts) != 5 or parts[1] not in ("all", "kr", "us") or parts[2] not in ("all", "on", "off") or not parts[3].isdigit() or parts[4] not in ("0", "1"):
+            return
+        send_panel(*(await build_stock_list_view(client, int(parts[3]), parts[1], parts[2],
+                    None if parts[4] == "1" else "")), msg_id)
+        return
+    if data == "stock_search":
+        wait_state["mode"] = "stock_search"
+        send_panel("🔎 보유종목 이름 또는 티커를 입력하세요. (예: 나이키, NKE, QLD)\n검색은 전체 시장·전체 상태에서 진행합니다.",
+                   [[{"text": "🔙 목록으로", "callback_data": stock_list_callback()}]], msg_id)
+        return
     if data == "panel": send_panel(*(await build_panel_view(client)), msg_id)
-    elif data == "stock_list": send_panel(*(await build_stock_list_view(client, 0)), msg_id)
+    elif data == "stock_list": send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])), msg_id)
     elif data.startswith("slist_"): send_panel(*(await build_stock_list_view(client, int(data.split("_")[1]))), msg_id)
     elif data.startswith("detail_"): send_panel(*(await build_stock_detail_view(client, data.split("_", 1)[1])), msg_id)
     elif data.startswith("setday_"):
@@ -184,6 +194,10 @@ async def handle_message(msg: dict, client: TossApiClient):
         else: send_panel(*(await build_panel_view(client)))
         return
     stocks = cfg.get("stocks", {}); m, sym = wait_state.get("mode"), wait_state.get("sym")
+    if m == "stock_search":
+        wait_state["mode"] = None
+        send_panel(*(await build_stock_list_view(client, 0, "all", "all", text)))
+        return
     if m == "day_sym" and sym in stocks:
         try:
             d = max(0, min(100, int("".join(ch for ch in text if ch.isdigit()))))
@@ -217,7 +231,14 @@ async def handle_message(msg: dict, client: TossApiClient):
             await DcaConfigManager.save(cfg); wait_state["mode"] = None; send_panel(*(await build_panel_view(client)))
         except: send_panel("❌ 예: 10 20", [[{"text": "🔙 관제탑", "callback_data": "panel"}]])
         return
-    send_panel(*(await build_panel_view(client)))
+    # 설정값 입력 처리를 마친 일반 메시지는 보유종목 검색으로 처리.
+    matches = select_stock_items(stocks, query=text)
+    exact = [sym for sym, info in matches if text.casefold() in
+             (sym.casefold(), str(info.get("name", sym)).casefold())]
+    if len(exact) == 1:
+        send_panel(*(await build_stock_detail_view(client, exact[0])))
+    else:
+        send_panel(*(await build_stock_list_view(client, 0, "all", "all", text)))
 
 async def polling_loop(client: TossApiClient):
     tg_api("deleteWebhook", {"drop_pending_updates": False}); offset = None
