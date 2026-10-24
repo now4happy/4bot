@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from toss_api import TossApiClient
 from dca_engine import DcaConfigManager, execute_stock_dca_step
 
-BOT_VERSION = "v4.3"
+BOT_VERSION = "v4.3.1"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SNIPER_DIR = "/home/gieokkim/toss_sniper"
