@@ -135,8 +135,17 @@ def busy_reason(unit):
         A = load(os.path.join(root, "Averaging_state.json"), {})
         if any(isinstance(v, dict) and v.get("order_id") for v in A.values()):
             return "스나이퍼 💧물타기 추가 매수 주문 진행 중"
-    if unit == "toss_dca.service" and (1050 <= k <= 1510 or 1120 <= e <= 1600):
-        return "3번 봇 매매 시간 (한국장 11시 · 미국장 11:30 EST 전후)"
+    if unit == "toss_dca.service":
+        # 각 시장의 현지 요일을 사용: 한국 토요일 새벽의 미국 금요일 장은 보호.
+        kr_busy = now_k.weekday() < 5 and 1050 <= k <= 1510
+        us_busy = now_e.weekday() < 5 and 1120 <= e <= 1600
+        if kr_busy or us_busy:
+            markets = []
+            if kr_busy:
+                markets.append("한국장 평일 10:50~15:10 KST")
+            if us_busy:
+                markets.append("미국장 평일 11:20~16:00 뉴욕시간")
+            return "3번 봇 매매 보호 시간 (" + " · ".join(markets) + ")"
     if unit == "bithumb_bot.service" and 1850 <= k <= 1925:
         return "4번 봇 19:00 정기 매수 시간"
     if unit == "han4384tubot.service" and 925 <= e <= 1605 and now_e.weekday() < 5:
