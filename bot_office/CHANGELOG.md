@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.14 · 2026-10-24 13:43 (KST)
+- 파일: sniper_keep_addbuy.py, sniper_upstream.py
+- 내용: Delete bot_office/sniper_keep_addbuy.py
+- 브랜치: staging
+
 ## v1.0.13 · 2026-10-24 13:37 (KST)
 - 파일: bot_updater.py
 - 내용: 주말 예외 봇 수정
