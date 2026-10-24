@@ -1,1111 +1,1332 @@
-# =====================================================================
-# FILE: quant_engine.py
-# 목적: 양방향 대칭 클라이맥스 듀얼 스나이퍼(SOXS/SOXL · 옵션 A) 통합 시드 원장,
-#       NQ=F 18:00 EST 신세션 하드 컷오프 + fast_info 당일 실제 고/저가 강제 병합(해법 1 · 1/2차 방어 및 3차 임계치 max(진폭*0.5, 0.80%) 산출 기준),
-#       데이장 개시 1분(09:00:00~09:00:59 KST) [모의] 전용 진폭×3.0배 역산 하락가 버퍼 산출 엔진(초과 Case 93 · 🛡️ BUFFER_WAIT),
-#       토스 Open API QQQ 0.0초 실시간 3차 역행 비교 기준가(1.5초 프로빙 · 최소 0.80% 역행 하한 강제) + 10분/3분 단기 변화율 산출(해법 2 방법 A) 및
-#       Wilder's RSI(14) + 하이킨 아시(Heikin-Ashi) 1분봉 벡터/틱 합성 엔진
-# =====================================================================
-# MODIFIED: RSI 연산을 세션 절단 전 전체 캔들(df)에서 선행하여 EWM 워밍업 무결성 100% 락온 (Case 72)
-# NEW: 폴링 사각지대(원인 D) 소각을 위한 Wilder's EWM 기저 상태(ewm_state_out) 추출 및 O(1) 실시간 틱 RSI 점화식(compute_realtime_tick_rsi) 탑재 (Case 73)
-# NEW: 200봉 전체 100% 벡터화 하이킨 아시(Heikin-Ashi, ewm alpha=0.5) 기저 추출 및 O(1) 실시간 틱 하이킨 아시 양봉 판별식(compute_realtime_tick_heikin_ashi) 탑재 (Case 85)
-# MODIFIED: 기존 +0.64% / +1.00% 선택 모드를 전면 폐기하고 단일 '하이킨 아시 + 고점 트레일링(HA_HYB_1.0)' 상수로 100% 단일화 (Case 85)
-# NEW: 초과 Case 61 & Case 89 — MacroDataCache 갱신 주기를 15.0초로 가속하고 최근 10분 변화율(nq_vel_10m) 및 3분 변화율(nq_vel_3m) 벡터 산출 탑재 (🚀 NQ_VEL_BYPASS 지원)
-# NEW: 초과 Case 62 & Case 90 — CME 나스닥 100 선물(NQ=F) 18:00 EST 신세션 경계 하드 컷오프(get_cme_session_window_est)로 금요일 과열 진폭 이월 원천 소각
-# NEW: 초과 Case 91 [해법 1] — NQ=F fast_info의 당일 실제 고가(day_high)·저가(day_low)를 강제 병합하여 개장 첫 틱 밑꼬리 저가(예: 29,226) 누락 원천 차단
-# NEW: 초과 Case 91 [해법 2 방법 A] — 토스 Open API QQQ 실시간 현재가·1분봉으로 최근 10분/3분 변화율(±0.20% 동일 임계치)을 최우선 산출
-# NEW: 초과 Case 92 — 3차 역행 안전망의 진입 임계치 공식 max(nq_entry_amp * 0.5, 0.80%)은 NQ=F 선물 진폭(nq_entry_amp)을 기준으로 산출하고,
-#      해당 임계치를 적용하는 진입 기준가 및 실시간 역행 비교가는 토스 Open API QQQ 0.0초 실시간 현재가(get_stage3_reference_price, 보유중 1.5초 프로빙)로 전면 대체
-# MODIFIED: 초과 Case 93 — 데이장 개시 1분(09:00:00~09:00:59 KST) [모의] 전용 충격 전 기준 고가(session_anchor_high) 벡터 추출 및
-#           3배 레버리지 역산 예상 하락가 버퍼 산출 함수(compute_amp_buffer_target_price) 유지 (프리장 본진은 순수 옵션 A 원복)
-# NEW: 초과 Case 94 — 포지션 자체 손실률 기반 즉시 손절 절대 금지 및 실시간 QQQ 최소 0.80% 역행 하한선(MIN_STAGE3_QQQ_ADVERSE_PCT = 0.80) 강제
-# MODIFIED: 초과 Case 82, 95 & 96 — lock_all_symbols_macro 호출 시 수동 보유 종목(MANUAL)과 03:58 ~ 04:06 EST 진행 중인
-#           1주 휩소 노출 작전(WHIPSAW_1SH)을 보호하되, 04:07 EST 이후 미체결 buy_order_id 잔재는 즉시 ""로 소각하여 장부 고착 무한 루프를 원천 차단
-# MODIFIED: 듀얼 스나이퍼 화이트리스트 ALLOWED_SYMBOLS = ("SOXS", "SOXL") 확장 및 임시 파일 os.replace 원자적 저장 (Case 06, 09, 30)
-# MODIFIED: 통합 시드 풀(Unified Seed Pool) 및 실제 발생 순수익금((매도가-매수가)*체결수량 - 왕복수수료 0.14%) 기반 복리 정산 동기화 (Case 76)
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: quant_engine.py
+순수 롱(SOXL) 전용 '8%(12.5분할) 황금비율 정액제 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67 탑재) ·
+자투리 절약금 및 세후 실물 수익금 실시간 시드 풀 무리셋 연속 복리 산입 ·
+최종 확정 챔피언(🔥 03_7G_PURE_10_01 / 01_7L_STATIC_CYCLE_MIN) 보유 회차별 4단 와이드 점진 활주로
+(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% 및 1층 +1.50% / 2~7층 +1.00%) ·
+상단 그리드(2층 ~ 7층) 보유 중 1층 공석 시 10분 게이트 눌림목(-1.00%) OR 상승돌파(+1.00%) 하이브리드 독립 1층(REENTRY_1FL) 재장전 판정기 ·
+1층 ~ 7층 순수 원가 골디락스 멀티 그리드 관리(MAX_GRID_TIERS_7 = 7 : 1층 공격수 + 2~6층 개별 완충층[5개] + 통합 7층 본대[GRID_L7] ·
+REENTRY_1FL 독립 1층 배치 vs DIP_1FL 2~6층 개별 승격 및 8회차 이상 최상단 6층+7층 통합 7층 병합 · Case 53 하드 캡핑 · Case 71, Case 72) ·
+2층 ~ 7층 통합 이동평균(wma_2_to_7) 산출 및 3중 다중 익절 판정(① 1층 +1.50% / ② 2~6층 개별 및 통합 7층 +1.00% / ③ 2~7층 통합 이동평균 +1.00% · Case 71, Case 72) ·
+순수 실물 원가 무결성(book_price == actual_avg_price · 리앵커링 원가 차감 영구 폐기 · Case 69, Case 71) ·
+정적 기억 최저 매수가(cycle_min_buy_price) 잠금 및 당일 프리장~정규장 시드보호 패스(daily_seed_protect_pass_cnt) 요약 · TDD 검증' 코어 모듈 (Step 01 / 02)
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 72 완벽 준수
+"""
 
-import os
-import json
-import time
+from __future__ import annotations
+
+import logging
 import math
-import asyncio
-import numpy as np
-import pandas as pd
-import yfinance as yf
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-from toss_api import GlobalThrottle
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-EST_TZ = ZoneInfo("America/New_York")
+import toss_api
+from toss_api import safe_float, safe_int
 
-# 초과 Case 93 — 데이장 개시 1분(09:00:00 ~ 09:00:59 KST) [모의] 스나이퍼 전용 진폭 역산 하락가 버퍼(BUFFER_WAIT) 전역 상수
-AMP_BUFFER_ACTIVATE_NQ_PCT = 0.80      # 데이장 개시 1분 중 NQ=F 당일 진폭이 0.80% 이상일 때 [모의] 역산 버퍼 가동
-AMP_BUFFER_LEVERAGE_MULT = 3.0         # NQ=F 진폭 대비 3배 레버리지 ETF 기대 하락폭 역산 배수 (3.0x)
-AMP_BUFFER_PARTIAL_MULT = 2.1          # 최소 부분 흡수 인정 배수 (2.1x, 포착가 대비 최소 -1.00% 추가 하락 병행)
-AMP_BUFFER_REBOUND_PCT = 0.30          # 역산 하락가 도달 후 최저점 대비 +0.30% 양봉 반등 시 모의 가상 체결
+logger = logging.getLogger("toss_sniper.quant_engine")
 
-# 초과 Case 94 — 3차 안전망 최소 실시간 QQQ 역행 하한선 (0.80% 하드 락온)
-MIN_STAGE3_QQQ_ADVERSE_PCT = 0.80
+# toss_api.py 내부 상수 존재 여부와 무관하게 100% 안전하게 작동하는 자립형 폴백 상수 정의
+DEFAULT_INITIAL_SEED_USD: float = float(
+    getattr(toss_api, "DEFAULT_INITIAL_SEED_USD", 10000.0)
+)
+PORTION_RATIO_LOCKED: float = float(
+    getattr(toss_api, "PORTION_RATIO_LOCKED", 0.08)
+)
+REANCHOR_NET_BUFFER_MULT: float = float(
+    getattr(toss_api, "REANCHOR_NET_BUFFER_MULT", 0.994)
+)
+ROUND_TRIP_FEE_RATE_PCT: float = float(
+    getattr(toss_api, "ROUND_TRIP_FEE_RATE_PCT", 0.14)
+)
+
+# 8%(12.5분할) 황금비율 기준 기본 분할 회차 및 1~7층 골디락스 멀티 그리드 최대 층수 상수 (Case 72)
+BASE_MAX_LOTS_8PCT: int = 12
+MAX_GRID_TIERS_7: int = int(getattr(toss_api, "MAX_GRID_TIERS_7", 7))
+MAX_GRID_TIERS: int = MAX_GRID_TIERS_7
+# 타 모듈 AST 심볼 임포트 호환을 위해 MAX_GRID_TIERS_12 별칭을 7 로 동시 유지
+MAX_GRID_TIERS_12: int = MAX_GRID_TIERS_7
+
+# 🎯 4 & Case 59, Case 71, Case 72: 상단 그리드(2~7층) 보유 중 1층 공석 시 10분 게이트 눌림목/상승돌파 임계치(%)
+REENTRY_PULLBACK_DROP_PCT: float = -1.00
+REENTRY_BREAKOUT_RISE_PCT: float = 1.00
 
 
-def compute_amp_buffer_target_price(
-    anchor_high_price: float,
-    spot_price: float,
-    nq_amp: float,
-    leverage_mult: float = AMP_BUFFER_LEVERAGE_MULT,
-) -> tuple[float, float, float, float]:
+# ---------------------------------------------------------------------------
+# [핵심 1] StratumBucket : 순수 실물 매수 원가(book_price == actual_avg_price) 그리드 구조체
+# ---------------------------------------------------------------------------
+@dataclass
+class StratumBucket:
     """
-    초과 Case 93 — 데이장 개시 시각(09:00:00 ~ 09:00:59 KST / 19:00:00 ~ 19:00:59 EST) 1분간
-    나스닥 100 선물(NQ=F)이 이미 급등·급락(nq_amp >= 0.80%)한 상태에서 [모의] 스나이퍼가
-    오프닝 휩소 고가에 즉시 모의 체결하지 않도록, 충격 전 기준 고가(anchor_high_price)에서
-    3배 레버리지 기대 하락률(expected_drop_pct = min(15.0, nq_amp * 3.0))을 역산하여
-    예상 하락가 버퍼(target_drop_p)와 유효 흡수 하한선(partial_drop_p)을 산출합니다.
-    반환값: (target_drop_price, partial_drop_price, expected_drop_pct, effective_anchor_high)
+    🎯 3 & Case 46 ~ 72:
+    SOXL 1층 ~ 7층 골디락스 멀티 그리드(1층 공격수 L1 / 2층 ~ 6층 개별 완충층 GRID_L2 ~ GRID_L6 / 통합 7층 본대 GRID_L7) 데이터 구조체.
+    - qty              : 보유 정수 주식 수 (주)
+    - book_price       : 목표 탈출 기준 단가 ($, 순수 원가 모드에서는 actual_avg_price 와 100% 동일)
+    - book_invested_usd: 장부상 투자금 ($, 순수 원가 모드에서는 actual_cost_usd 와 100% 동일)
+    - actual_cost_usd  : 실제 가용 현금 시드에서 지출된 순수 매수 원금 ($, 회계 항등식 보존용)
+    - lot_count        : 해당 그리드 층에 포함된 누적 매수 회차 수 (1~6층은 개별 회차, 7층은 7회차 이상 통합 회차 수)
+    - lot_type         : 지층 성격 태그 ("REENTRY_1FL", "DIP_1FL", "QUOTA_L1", "MANUAL_SYNC_L1", "GRID_L2" ~ "GRID_L7")
     """
-    sp_fl = math.floor(float(spot_price or 0.0) * 100.0) / 100.0
-    ah_fl = math.floor(float(anchor_high_price or 0.0) * 100.0) / 100.0
-    nq_a = max(0.0, float(nq_amp or 0.0))
 
-    if sp_fl <= 0.0 or nq_a <= 0.0:
-        return 0.0, 0.0, 0.0, max(ah_fl, sp_fl)
+    qty: int
+    book_price: float
+    book_invested_usd: float
+    actual_cost_usd: float
+    lot_count: int = 1
+    lot_type: str = "QUOTA_L1"
 
-    eff_anchor = max(ah_fl, sp_fl)
-    expected_drop_pct = min(15.0, nq_a * float(leverage_mult or AMP_BUFFER_LEVERAGE_MULT))
+    @property
+    def actual_avg_price(self) -> float:
+        if self.qty <= 0:
+            return 0.0
+        return round(self.actual_cost_usd / float(self.qty), 4)
 
-    if eff_anchor > sp_fl * 1.003:
-        target_drop_p = math.floor(eff_anchor * (1.0 - expected_drop_pct / 100.0) * 100.0) / 100.0
+    def to_dict(self) -> Dict[str, Any]:
+        q_int = max(1, safe_int(self.qty, 1))
+        a_cost = round(
+            max(
+                0.01 * float(q_int),
+                safe_float(
+                    self.actual_cost_usd,
+                    safe_float(
+                        self.book_invested_usd,
+                        float(q_int) * safe_float(self.book_price, 0.01),
+                    ),
+                ),
+            ),
+            4,
+        )
+        pure_p = round(max(0.0001, a_cost / float(q_int)), 4)
+        l_cnt = max(1, safe_int(self.lot_count, 1))
+        return {
+            "qty": q_int,
+            "book_price": pure_p,
+            "book_invested_usd": a_cost,
+            "actual_cost_usd": a_cost,
+            "lot_count": l_cnt,
+            "lot_type": str(self.lot_type or "QUOTA_L1").upper().strip(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> Optional["StratumBucket"]:
+        if not isinstance(data, dict):
+            return None
+        q_int = safe_int(data.get("qty"), 0)
+        if q_int <= 0:
+            return None
+        raw_p = safe_float(
+            data.get("book_price"), safe_float(data.get("buy_price"), 0.0)
+        )
+        raw_bi = safe_float(
+            data.get("book_invested_usd"), float(q_int) * max(0.0, raw_p)
+        )
+        a_cost = safe_float(data.get("actual_cost_usd"), raw_bi)
+        if a_cost <= 0.0 and raw_p > 0.0:
+            a_cost = float(q_int) * raw_p
+        if a_cost <= 0.0:
+            return None
+        # Case 69, Case 71 & Case 72: 순수 매수 원가(a_cost) 기준으로 단가와 장부원금을 100% 일치시켜 원가 훼손 원천 차단
+        clean_cost = round(a_cost, 4)
+        pure_p = round(clean_cost / float(q_int), 4)
+        l_cnt = max(1, safe_int(data.get("lot_count"), 1))
+        l_type = str(data.get("lot_type") or "QUOTA_L1").upper().strip()
+        return cls(
+            qty=q_int,
+            book_price=pure_p,
+            book_invested_usd=clean_cost,
+            actual_cost_usd=clean_cost,
+            lot_count=l_cnt,
+            lot_type=l_type,
+        )
+
+
+def buckets_from_dicts(
+    raw_list: Sequence[Dict[str, Any]],
+) -> List[StratumBucket]:
+    out: List[StratumBucket] = []
+    if not isinstance(raw_list, (list, tuple)):
+        return out
+    for item in raw_list:
+        b_obj = StratumBucket.from_dict(item)
+        if b_obj is not None:
+            out.append(b_obj)
+    return out
+
+
+def buckets_to_dicts(
+    buckets: Sequence[StratumBucket],
+) -> List[Dict[str, Any]]:
+    return [
+        b.to_dict()
+        for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+
+
+# ---------------------------------------------------------------------------
+# [핵심 1-B · Case 69, Case 71 & Case 72] 그리드 층 판별기 & 진성 손익분기점(순수 원가) 하한선 정규화기
+# ---------------------------------------------------------------------------
+def is_upper_grid_tier(bucket_or_lot_type: Any) -> bool:
+    """
+    🚨 [Case 71 & Case 72 상단 그리드(2층 ~ 7층) 여부 결정론적 판별기]:
+    - lot_type 이 "MERGED_UPPER" 이거나 "GRID_L2" ~ "GRID_L7" (즉, "GRID_L" 로 시작하되 "GRID_L1" 이 아닌 경우)이면
+      상단 그리드(2층 ~ 7층) 버킷이므로 True 를 반환한다.
+    - "REENTRY_1FL", "DIP_1FL", "QUOTA_L1", "MANUAL_SYNC_L1", "SYNCED_1FL", "GRID_L1" 등은
+      최하단 활성 공격수 1층이므로 False 를 반환한다.
+    """
+    if isinstance(bucket_or_lot_type, StratumBucket):
+        tag = str(bucket_or_lot_type.lot_type or "").upper().strip()
+    elif isinstance(bucket_or_lot_type, dict):
+        tag = str(bucket_or_lot_type.get("lot_type") or "").upper().strip()
     else:
-        rem_drop_pct = min(8.0, max(1.00, nq_a * 1.5))
-        target_drop_p = math.floor(sp_fl * (1.0 - rem_drop_pct / 100.0) * 100.0) / 100.0
-        eff_anchor = round(sp_fl / max(0.85, 1.0 - (expected_drop_pct - rem_drop_pct) / 100.0), 2)
+        tag = str(bucket_or_lot_type or "").upper().strip()
 
-    partial_drop_pct = min(12.0, nq_a * AMP_BUFFER_PARTIAL_MULT)
-    partial_from_anchor = math.floor(eff_anchor * (1.0 - partial_drop_pct / 100.0) * 100.0) / 100.0
-    partial_from_spot = math.floor(sp_fl * 0.9900 * 100.0) / 100.0
-    partial_drop_p = max(0.01, min(partial_from_anchor, partial_from_spot))
-
-    return (
-        max(0.01, target_drop_p),
-        partial_drop_p,
-        round(expected_drop_pct, 2),
-        round(eff_anchor, 2),
-    )
+    if tag == "MERGED_UPPER":
+        return True
+    if tag.startswith("GRID_L") and tag != "GRID_L1":
+        return True
+    return False
 
 
-def get_cme_session_window_est(now_est: datetime = None) -> tuple[bool, datetime]:
+def has_active_l1_bucket(buckets: Sequence[StratumBucket]) -> bool:
     """
-    현재 미국 동부 시각(now_est) 기준으로 CME 나스닥 100 선물(NQ=F) 시장 개장 여부(is_cme_open)와
-    현재 활성 선물 세션의 시작 시각(nq_session_start_est, 18:00:00 EST)을 반환합니다 (초과 Case 62, 90).
-    - 개장 구간: 일요일 18:00 EST ~ 금요일 16:59 EST (단, 월~목 17:00 ~ 17:59 EST 일일 점검 휴장 제외)
-    - 주말 휴장: 금요일 17:00 EST ~ 일요일 17:59 EST
+    🚨 [Case 71 & Case 72 활성 1층 공격수 보유 여부 판별기]:
+    - buckets 가 비어 있지 않고 맨 앞(buckets[0])이 상단 그리드(GRID_L2 ~ GRID_L7 / MERGED_UPPER)가 아니면
+      현재 활성 1층 공격수가 존재하는 상태(True)이다.
+    - 만약 1층이 익절되어 빠져나가고 buckets[0] 이 GRID_L2(또는 MERGED_UPPER)라면
+      현재 1층이 공석이고 상단 2층 ~ 7층 그리드만 보유 중인 상태(False)이다!
     """
-    if now_est is None:
-        now_est = datetime.now(EST_TZ)
-    wk = now_est.weekday()  # Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-    est_hm = now_est.hour * 100 + now_est.minute
+    valid = [
+        b
+        for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not valid:
+        return False
+    return not is_upper_grid_tier(valid[0])
 
-    # 1) 주말 휴장: 금요일 17:00 이후, 토요일 종일, 일요일 18:00 이전
-    if (wk == 4 and est_hm >= 1700) or (wk == 5) or (wk == 6 and est_hm < 1800):
-        days_back = (wk - 3) if wk >= 4 else (wk + 4)
-        last_start = (now_est - timedelta(days=days_back)).replace(
-            hour=18, minute=0, second=0, microsecond=0
+
+def relabel_upper_grid_tiers(
+    upper_buckets: Sequence[StratumBucket],
+    max_tiers: int = MAX_GRID_TIERS_7,
+) -> List[StratumBucket]:
+    """
+    🚨 MODIFIED [Case 71 & Case 72 상단 그리드(2층 ~ 6층 개별 완충층 + 통합 7층 본대) 번호 정규화 및 합병기]:
+    1층(공격수)을 제외한 상단 그리드 버킷 리스트를 받아:
+    - max_upper_cnt = max_tiers - 1 (기본 6개 : GRID_L2 ~ GRID_L7) 기준으로
+    - 2층 ~ 6층(GRID_L2 ~ GRID_L6, 5개 완충층)은 개별 순수 원가를 100% 분리 보존하고,
+    - 7층을 초과하는 물량(valid[5:])은 최상단 '통합 7층 본대(GRID_L7)'로 가중평균 합병(Case 53 하드 캡핑 적용)하여 반환한다.
+    """
+    valid = [
+        b
+        for b in (upper_buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not valid:
+        return []
+
+    max_upper_cnt = max(1, safe_int(max_tiers, MAX_GRID_TIERS_7) - 1)
+    if len(valid) > max_upper_cnt:
+        kept = valid[: max_upper_cnt - 1]
+        overflow = valid[max_upper_cnt - 1 :]
+        tot_q = sum(b.qty for b in overflow)
+        tot_cost = round(sum(b.actual_cost_usd for b in overflow), 4)
+        tot_lots = sum(max(1, b.lot_count) for b in overflow)
+        avg_p = round(max(0.01, tot_cost / float(tot_q)), 4)
+        merged_top = StratumBucket(
+            qty=tot_q,
+            book_price=avg_p,
+            book_invested_usd=tot_cost,
+            actual_cost_usd=tot_cost,
+            lot_count=tot_lots,
+            lot_type=f"GRID_L{max_upper_cnt + 1}",
         )
-        return False, last_start
+        valid = kept + [merged_top]
 
-    # 2) 평일(월~목) 17:00 ~ 17:59 EST 일일 점검 휴장 (1시간)
-    if wk in (0, 1, 2, 3) and (1700 <= est_hm < 1800):
-        last_start = (now_est - timedelta(days=1)).replace(
-            hour=18, minute=0, second=0, microsecond=0
+    out: List[StratumBucket] = []
+    for idx, b in enumerate(valid):
+        tier_no = min(max_upper_cnt + 1, idx + 2)
+        pure_cost = round(max(0.01 * float(b.qty), b.actual_cost_usd), 4)
+        pure_p = round(max(0.01, pure_cost / float(b.qty)), 4)
+        out.append(
+            StratumBucket(
+                qty=b.qty,
+                book_price=pure_p,
+                book_invested_usd=pure_cost,
+                actual_cost_usd=pure_cost,
+                lot_count=max(1, b.lot_count),
+                lot_type=f"GRID_L{tier_no}",
+            )
         )
-        return False, last_start
+    return out
 
-    # 3) 일~목 18:00 ~ 23:59 EST: 당일 18:00:00 EST에 개장한 신세션 활성 중
-    if est_hm >= 1800:
-        cur_start = now_est.replace(hour=18, minute=0, second=0, microsecond=0)
-        return True, cur_start
 
-    # 4) 월~금 00:00 ~ 16:59 EST: 전일 18:00:00 EST에 개장한 현세션 활성 중
-    cur_start = (now_est - timedelta(days=1)).replace(
-        hour=18, minute=0, second=0, microsecond=0
+def enforce_true_breakeven_floor_on_buckets(
+    buckets: Sequence[StratumBucket],
+    max_allowed_discount_usd: Optional[float] = None,
+) -> List[StratumBucket]:
+    """
+    🚨 [Case 69, Case 71 & Case 72 진성 손익분기점(순수 매수 원가) 하한선 강제]:
+    챔피언(🔥 03_7G_PURE_10_01)은 인위적 리앵커링 차감을 수행하지 않으므로,
+    모든 보유 지층(1층 ~ 7층)의 book_invested_usd 와 book_price 가 실제 매수 원금(actual_cost_usd / actual_avg_price)
+    밑으로 절대 내려가지 못하도록 100% 순수 원가 하한선을 강제한다.
+    """
+    valid = [
+        b
+        for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not valid:
+        return []
+
+    adjusted: List[StratumBucket] = []
+    for b in valid:
+        pure_cost = round(max(0.01 * float(b.qty), b.actual_cost_usd), 4)
+        pure_p = round(max(0.01, pure_cost / float(b.qty)), 4)
+        adjusted.append(
+            StratumBucket(
+                qty=b.qty,
+                book_price=pure_p,
+                book_invested_usd=pure_cost,
+                actual_cost_usd=pure_cost,
+                lot_count=max(1, b.lot_count),
+                lot_type=str(b.lot_type or "QUOTA_L1").upper().strip(),
+            )
+        )
+    return adjusted
+
+
+# ---------------------------------------------------------------------------
+# [핵심 2] 8%(12.5분할) 황금비율 정액 기반 정량 주수 산출 및 min(1회분, 고정정량) 캡핑 (🎯 1 & Case 25 ~ 35, 67)
+# ---------------------------------------------------------------------------
+def compute_golden8_quota_qty(
+    anchor_price: float,
+    current_total_equity: float,
+    initial_seed_usd: float = DEFAULT_INITIAL_SEED_USD,
+    portion_mode: str = "COMP_08PCT",
+    exec_price: Optional[float] = None,
+) -> Tuple[int, float]:
+    """
+    🎯 1 & Case 25 ~ 35 & Case 67:
+    직전 매매 기준가(anchor_price)를 기반으로 8%(12.5분할) 황금비율 1회분 예산(portion_budget)과
+    고정 목표 매수 주수(anchor_quota_qty)를 산출하되, 실제 매수 지정가(exec_price)가 제공된 경우
+    상승 돌파 등으로 인해 1회분(8%) 예산을 초과하지 않도록 min(budget_cap_qty, anchor_quota_qty)로 캡핑한다.
+    반환값: (target_qty, portion_budget)
+    """
+    init_seed = max(
+        100.0, safe_float(initial_seed_usd, DEFAULT_INITIAL_SEED_USD)
     )
-    return True, cur_start
+    tot_eq = max(init_seed, safe_float(current_total_equity, init_seed))
+    mode = str(portion_mode or "COMP_08PCT").upper().strip()
 
-
-def _compute_qqq_realtime_velocity_sync(
-    q_price: float, q_candles: list, now_est: datetime
-) -> tuple[bool, float, float, float]:
-    """
-    초과 Case 91 & Case 92 [해법 2 방법 A] — 토스 Open API에서 조회한 나스닥 100 현물 ETF(QQQ)의
-    0.0초 실시간 현재가(q_price)와 당일 세션 1분봉(q_candles)을 결합하여,
-    롱(SOXL)·숏(SOXS) 자체 노이즈에 전혀 영향받지 않고 지연 0.0초로
-    최근 10분 변화율(q_vel_10m), 최근 3분 변화율(q_vel_3m) 및 유효 실시간 QQQ 가격(curr_q)을 벡터 산출합니다.
-    """
-    if not q_candles:
-        return False, 0.0, 0.0, 0.0
-
-    wk = now_est.weekday()
-    est_hm = now_est.hour * 100 + now_est.minute
-
-    # 주말 휴장(금 17:00 ~ 일 18:59 EST) 또는 평일 장외/선물단독 구간(17:00 ~ 18:59 EST)에는
-    # QQQ 미국 데이장이 열리지 않으므로 False를 반환하여 NQ=F로 자동 폴백
-    if (wk == 4 and est_hm >= 1700) or (wk == 5) or (wk == 6 and est_hm < 1900):
-        return False, 0.0, 0.0, 0.0
-    if 1700 <= est_hm < 1900:
-        return False, 0.0, 0.0, 0.0
-
-    if now_est.hour >= 19:
-        etf_session_start = now_est.replace(hour=19, minute=0, second=0, microsecond=0)
+    if mode == "FIXED_800":
+        portion_budget = round(init_seed * PORTION_RATIO_LOCKED, 4)
     else:
-        etf_session_start = (now_est - timedelta(days=1)).replace(
-            hour=19, minute=0, second=0, microsecond=0
+        portion_budget = round(tot_eq * PORTION_RATIO_LOCKED, 4)
+
+    ref_p = max(0.01, safe_float(anchor_price, 0.01))
+    anchor_quota_qty = max(1, int(math.floor((portion_budget + 1e-9) / ref_p)))
+
+    # 🚨 Case 67: 실제 매수가(exec_price)가 기준가보다 높을 때 1회분(8%) 예산 초과 원천 차단!
+    if exec_price is not None and safe_float(exec_price, 0.0) > 0.0:
+        eff_exec_p = max(0.01, safe_float(exec_price, ref_p))
+        budget_cap_qty = max(
+            1, int(math.floor((portion_budget + 1e-9) / eff_exec_p))
         )
+        target_qty = min(budget_cap_qty, anchor_quota_qty)
+    else:
+        target_qty = anchor_quota_qty
 
-    df = pd.DataFrame(q_candles)
-    if df.empty or "timestamp" not in df.columns:
-        return False, 0.0, 0.0, 0.0
-
-    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", utc=True).dt.tz_convert(EST_TZ)
-    df.set_index("timestamp", inplace=True)
-    df = df[~df.index.duplicated(keep="last")]
-    df.sort_index(ascending=True, inplace=True)
-
-    for col in ["openPrice", "closePrice"]:
-        if col not in df.columns:
-            df[col] = 0.0
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
-
-    df = df[df["closePrice"] > 0.0].copy()
-    if df.empty:
-        return False, 0.0, 0.0, 0.0
-
-    df["openPrice"] = np.where(df["openPrice"] > 0.0, df["openPrice"], df["closePrice"])
-
-    # 당일 데이마켓 개장(19:00 EST) 이후 캔들만 분리하여 전일 종가 간섭 원천 차단
-    df_sess = df[df.index >= etf_session_start].copy()
-    if df_sess.empty:
-        return False, 0.0, 0.0, 0.0
-
-    # 휴장일 등으로 인해 최신 1분봉이 현재 시각보다 30분 이상 오래된 경우 무효 처리
-    newest_bar_ts = df_sess.index[-1]
-    if (now_est - newest_bar_ts) > timedelta(minutes=30):
-        return False, 0.0, 0.0, 0.0
-
-    # 실시간 현재가(q_price)를 최신 진행 분봉 종가에 즉시 동기화 (지연 0.0초)
-    if q_price is not None and float(q_price) > 0.0:
-        last_idx = df_sess.index[-1]
-        df_sess.at[last_idx, "closePrice"] = float(q_price)
-
-    curr_q = float(df_sess["closePrice"].iloc[-1])
-    if curr_q <= 0.0:
-        return False, 0.0, 0.0, 0.0
-
-    first_open = float(df_sess["openPrice"].iloc[0]) or float(df_sess["closePrice"].iloc[0])
-    ref_10m = float(df_sess["closePrice"].iloc[-11]) if len(df_sess) >= 11 else first_open
-    ref_3m = float(df_sess["closePrice"].iloc[-4]) if len(df_sess) >= 4 else first_open
-
-    vel_10m = ((curr_q - ref_10m) / ref_10m * 100.0) if ref_10m > 0.0 else 0.0
-    vel_3m = ((curr_q - ref_3m) / ref_3m * 100.0) if ref_3m > 0.0 else 0.0
-    return True, float(vel_10m), float(vel_3m), float(curr_q)
+    return target_qty, portion_budget
 
 
-def calculate_rsi_1m(
-    candles_json: list,
-    session_start_est: datetime,
-    period: int = 14,
-    current_price: float = 0.0,
-    ewm_state_out: dict = None,
-) -> tuple[float, float]:
+def resolve_affordable_buy_qty(
+    target_qty: int,
+    price_t: float,
+    free_cash_usd: float,
+    broker_buying_power_usd: Optional[float] = None,
+    max_portion_budget_usd: Optional[float] = None,
+) -> Tuple[int, float]:
     """
-    Pandas 기반 백그라운드 벡터 연산.
-    VWAP, Wilder's RSI(14), 하이킨 아시(Heikin-Ashi) 1분봉 및 데이장 개시 1분 [모의] 버퍼용 기준 고가(session_anchor_high)를
-    1개의 데이터프레임에서 동시 산출하여 CPU 블로킹 및 API 중복 호출을 원천 차단합니다.
+    🚨 Case 25 ~ 35 & Case 67:
+    직전 기준가로 산출된 목표 정량(target_qty)을 실제 주문가(price_t)로 매수하기 직전:
+    1) max_portion_budget_usd(1회분 8% 예산) 상한 주수(budget_cap_qty)와 target_qty 중 작은 값으로 캡핑한다.
+    2) 왕복 수수료 버퍼(0.14%)를 감안한 가용 현금(free_cash_usd) 및 토스 실계좌 매수가능금액 한도 내로 캡핑한다.
+    반환값: (buy_qty, actual_spent_usd)
     """
-    if not candles_json:
-        return 0.0, 0.0
+    t_qty = max(0, safe_int(target_qty, 0))
+    exec_p = safe_float(price_t, 0.0)
+    if t_qty <= 0 or exec_p <= 0.0:
+        return 0, 0.0
 
-    df = pd.DataFrame(candles_json)
-    if df.empty or "timestamp" not in df.columns:
-        return 0.0, 0.0
+    # 🚨 Case 67: 1회분(8%) 예산 상한 주수(budget_cap_qty) 하드 캡핑
+    if (
+        max_portion_budget_usd is not None
+        and safe_float(max_portion_budget_usd, 0.0) > 0.0
+    ):
+        p_bud = safe_float(max_portion_budget_usd, 0.0)
+        budget_cap_qty = max(1, int(math.floor((p_bud + 1e-9) / exec_p)))
+        t_qty = min(budget_cap_qty, t_qty)
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", utc=True).dt.tz_convert(EST_TZ)
-    df.set_index("timestamp", inplace=True)
-    df = df[~df.index.duplicated(keep="last")]
-    df.sort_index(ascending=True, inplace=True)
+    avail_cash = max(0.0, safe_float(free_cash_usd, 0.0))
+    if broker_buying_power_usd is not None:
+        bp_val = safe_float(broker_buying_power_usd, 0.0)
+        if bp_val >= 0.0:
+            avail_cash = min(avail_cash, bp_val)
 
-    # 하이킨 아시(Heikin-Ashi) 벡터 연산을 위해 openPrice 컬럼을 포함하여 5대 OHLCV 정규화
-    for col in ["openPrice", "highPrice", "lowPrice", "closePrice", "volume"]:
-        if col not in df.columns:
-            df[col] = 0.0
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    fee_mult = 1.0 + (ROUND_TRIP_FEE_RATE_PCT / 100.0)
+    unit_cost_with_fee = exec_p * fee_mult
+    if avail_cash < unit_cost_with_fee:
+        return 0, 0.0
 
-    df = df[df["closePrice"] > 0.0].copy()
-    if df.empty:
-        return 0.0, 0.0
+    max_affordable = int(math.floor((avail_cash + 1e-9) / unit_cost_with_fee))
+    buy_qty = max(0, min(t_qty, max_affordable))
+    actual_spent_usd = (
+        round(float(buy_qty) * exec_p, 4) if buy_qty > 0 else 0.0
+    )
+    return buy_qty, actual_spent_usd
 
-    # openPrice 결측 시 종가로 안전 폴백
-    df["openPrice"] = np.where(df["openPrice"] > 0.0, df["openPrice"], df["closePrice"])
-    df["highPrice"] = np.where(df["highPrice"] > 0.0, df["highPrice"], df["closePrice"])
-    df["lowPrice"] = np.where(df["lowPrice"] > 0.0, df["lowPrice"], df["closePrice"])
 
-    # 실시간 현재가(current_price)가 주입된 경우 최신 진행 분봉(iloc[-1])의 종가·고가·저가 즉시 동기화
-    if current_price is not None and current_price > 0.0:
-        last_idx = df.index[-1]
-        cur_p_float = float(current_price)
-        df.at[last_idx, "closePrice"] = cur_p_float
-        if float(df.at[last_idx, "openPrice"]) <= 0.0:
-            df.at[last_idx, "openPrice"] = cur_p_float
-        if float(df.at[last_idx, "highPrice"]) < cur_p_float:
-            df.at[last_idx, "highPrice"] = cur_p_float
-        cur_low = float(df.at[last_idx, "lowPrice"])
-        if cur_low <= 0.0 or cur_low > cur_p_float:
-            df.at[last_idx, "lowPrice"] = cur_p_float
+# ---------------------------------------------------------------------------
+# [핵심 3] 보유 회차별 4단 와이드 점진 단차 & 하이브리드 1층 재장전 판정기 (🎯 2, 🎯 4 & Case 36 ~ 72)
+# ---------------------------------------------------------------------------
+def get_golden8_prog_thresholds(
+    held_lots: int,
+    threshold_mode: str = "WIDE_RUNWAY",
+) -> Tuple[float, float, float]:
+    """
+    🎯 2 & Case 36 ~ 45, 60, 71, 72 : 챔피언 (🔥 03_7G_PURE_10_01) 4단 와이드 점진 활주로:
+    현재 보유 중인 총 투입 회차(held_lots)에 따른:
+    1) 10분 시드보호 매수 게이트 요구 하락률(drop_buy_pct):
+       -  1 ~  4회차 보유 중 : -1.00%
+       -  5 ~  8회차 보유 중 : -2.00%
+       -  9 ~ 10회차 보유 중 : -3.50%
+       - 11회차 이상 보유 중 : -5.50%
+    2) 60초 타임쉴드 주기 스나이퍼 매도 모니터 목표 상승률(rise_sell_l1_pct, rise_sell_upper_pct):
+       - 1층(공격수) +1.50% / 2층 ~ 7층(개별 완충층·통합 7층 및 상단 통합 이동평균) +1.00%
+    반환값: (drop_buy_pct, rise_sell_l1_pct, rise_sell_upper_pct)
+    """
+    lots = max(1, safe_int(held_lots, 1))
+    if lots <= 4:
+        drop_buy_pct = -1.00
+    elif lots <= 8:
+        drop_buy_pct = -2.00
+    elif lots <= 10:
+        drop_buy_pct = -3.50
+    else:
+        drop_buy_pct = -5.50
 
-    # 1. 전체 데이터(df)를 대상으로 Wilder's RSI(14) 선행 벡터 연산 (Case 23, 72)
-    delta = df["closePrice"].diff()
-    gain = delta.where(delta > 0.0, 0.0)
-    loss = -delta.where(delta < 0.0, 0.0)
+    mode = str(threshold_mode or "WIDE_RUNWAY").upper().strip()
+    if mode == "01_PROG_LOT":
+        prog_rise = 1.00 if lots <= 6 else (1.50 if lots <= 11 else 2.00)
+        return drop_buy_pct, prog_rise, prog_rise
+    return drop_buy_pct, 1.50, 1.00
 
-    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean()
 
-    # 2. 전체 데이터(df)를 대상으로 하이킨 아시(Heikin-Ashi) 1분봉 100% 벡터 연산 (for 루프 금지)
-    ha_close = (df["openPrice"] + df["highPrice"] + df["lowPrice"] + df["closePrice"]) / 4.0
-    ha_seed = ha_close.shift(1)
-    ha_seed.iloc[0] = (float(df["openPrice"].iloc[0]) + float(ha_close.iloc[0])) / 2.0
-    ha_open = ha_seed.ewm(alpha=0.5, adjust=False).mean()
+def evaluate_l2_only_hybrid_reentry_signal(
+    live_price: float,
+    anchor_price: float,
+    l2_book_price: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    🎯 4 & Case 59, Case 67, Case 71, Case 72:
+    1층이 실물 익절되어 장부에 상단 그리드(2층 ~ 7층)만 남아 1층이 공석일 때,
+    반등 고점에서의 이중 현금 소진을 막기 위해 회수 현금을 보유하다가 10분 매수 게이트에서:
+    - 조건 A (눌림목 재장전 : chg_from_exit <= -1.00%)
+    - 조건 B (상승돌파 재장전 : chg_from_exit >= +1.00%)
+    충족 시에만 상단 2층 ~ 7층 비병합 독립 실물 1층(REENTRY_1FL) 재장전을 승인한다.
+    """
+    lp = safe_float(live_price, 0.0)
+    anc = safe_float(anchor_price, 0.0)
+    b2_p = safe_float(l2_book_price, 0.0)
+    ref_anchor = anc if anc > 0.0 else (b2_p if b2_p > 0.0 else lp)
 
-    # VWAP 및 당일 세션/직전 세션 기준 고가 분리
-    session_df = df[df.index >= session_start_est].copy()
-    pre_session_df = df[df.index < session_start_est]
-
-    # 초과 Case 93 — 데이장 개시 1분(09:00 KST) [모의] 역산 버퍼용 충격 전 기준 고가(session_anchor_high) 추출
-    recent_60_high = float(df["highPrice"].tail(60).max()) if not df.empty else 0.0
-    sess_high = float(session_df["highPrice"].max()) if not session_df.empty else 0.0
-    prev_sess_ref = (
-        max(
-            float(pre_session_df["highPrice"].tail(15).max()),
-            float(pre_session_df["closePrice"].iloc[-1]),
-        )
-        if not pre_session_df.empty
+    pullback_target_p = (
+        round(ref_anchor * (1.0 + REENTRY_PULLBACK_DROP_PCT / 100.0), 2)
+        if ref_anchor > 0.0
         else 0.0
     )
-    anchor_high_val = max(recent_60_high, sess_high, prev_sess_ref)
-
-    # 메인 루프에서 O(1) 실시간 틱 RSI 및 실시간 틱 하이킨 아시를 합성할 수 있도록 직전 확정 분봉(iloc[-2]) 기저 추출 (Case 73, 85, 93)
-    if isinstance(ewm_state_out, dict):
-        cur_o = float(df["openPrice"].iloc[-1])
-        cur_h = float(df["highPrice"].iloc[-1])
-        cur_l = float(df["lowPrice"].iloc[-1])
-        last_ha_o = float(ha_open.iloc[-1])
-        last_ha_c = float(ha_close.iloc[-1])
-
-        if len(df) >= 2:
-            ewm_state_out["prev_close"] = float(df["closePrice"].iloc[-2])
-            ewm_state_out["prev_avg_gain"] = float(avg_gain.iloc[-2])
-            ewm_state_out["prev_avg_loss"] = float(avg_loss.iloc[-2])
-            ewm_state_out["prev_ha_open"] = float(ha_open.iloc[-2])
-            ewm_state_out["prev_ha_close"] = float(ha_close.iloc[-2])
-        else:
-            ewm_state_out["prev_close"] = float(df["closePrice"].iloc[-1])
-            ewm_state_out["prev_avg_gain"] = float(avg_gain.iloc[-1])
-            ewm_state_out["prev_avg_loss"] = float(avg_loss.iloc[-1])
-            ewm_state_out["prev_ha_open"] = last_ha_o
-            ewm_state_out["prev_ha_close"] = last_ha_c
-
-        ewm_state_out["cur_bar_open"] = cur_o
-        ewm_state_out["cur_bar_high"] = cur_h
-        ewm_state_out["cur_bar_low"] = cur_l
-        ewm_state_out["ha_open"] = last_ha_o
-        ewm_state_out["ha_close"] = last_ha_c
-        ewm_state_out["ha_bull"] = bool(last_ha_c > last_ha_o)
-        ewm_state_out["session_anchor_high"] = float(anchor_high_val)
-        ewm_state_out["recent_60m_high"] = float(recent_60_high)
-        ewm_state_out["ready"] = True
-
-    rs = avg_gain / avg_loss
-    rsi_series = 100.0 - (100.0 / (1.0 + rs))
-    rsi_series = np.where(
-        (avg_loss <= 0.0) & (avg_gain <= 0.0),
-        50.0,
-        np.where(avg_loss <= 0.0, 100.0, rsi_series),
+    breakout_target_p = (
+        round(ref_anchor * (1.0 + REENTRY_BREAKOUT_RISE_PCT / 100.0), 2)
+        if ref_anchor > 0.0
+        else 0.0
     )
-    rsi_series = pd.Series(rsi_series, index=df.index).replace([np.inf, -np.inf], 100.0).fillna(50.0)
 
-    raw_rsi = float(rsi_series.iloc[-1]) if not rsi_series.empty else 0.0
-    rsi_val = max(0.01, min(100.0, raw_rsi)) if not rsi_series.empty else 0.0
+    if lp <= 0.0 or ref_anchor <= 0.0:
+        return {
+            "should_buy": False,
+            "signal_type": "NO_PRICE",
+            "ref_anchor": round(ref_anchor, 4),
+            "quota_ref_price": round(ref_anchor, 4),
+            "chg_from_exit_pct": 0.0,
+            "pullback_target_price": pullback_target_p,
+            "breakout_target_price": breakout_target_p,
+        }
 
-    vwap_val = 0.0
-    if not session_df.empty:
-        tp = (session_df["highPrice"] + session_df["lowPrice"] + session_df["closePrice"]) / 3.0
-        pv = tp * session_df["volume"]
-        cum_vol = session_df["volume"].sum()
-        vwap_val = float(pv.sum() / cum_vol) if cum_vol > 0.0 else 0.0
+    chg_from_exit_pct = ((lp - ref_anchor) / ref_anchor) * 100.0
 
-    return rsi_val, vwap_val
+    if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
+        return {
+            "should_buy": True,
+            "signal_type": "PULLBACK_RELOAD",
+            "ref_anchor": round(ref_anchor, 4),
+            "quota_ref_price": round(ref_anchor, 4),
+            "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+            "pullback_target_price": pullback_target_p,
+            "breakout_target_price": breakout_target_p,
+        }
+
+    if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
+        return {
+            "should_buy": True,
+            "signal_type": "BREAKOUT_RELOAD",
+            "ref_anchor": round(ref_anchor, 4),
+            "quota_ref_price": round(ref_anchor, 4),
+            "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+            "pullback_target_price": pullback_target_p,
+            "breakout_target_price": breakout_target_p,
+        }
+
+    return {
+        "should_buy": False,
+        "signal_type": "HOLD_WAIT_GATE",
+        "ref_anchor": round(ref_anchor, 4),
+        "quota_ref_price": round(ref_anchor, 4),
+        "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+        "pullback_target_price": pullback_target_p,
+        "breakout_target_price": breakout_target_p,
+    }
 
 
-def compute_realtime_tick_rsi(
-    live_price: float, ewm_state: dict, fallback_rsi: float = 0.0, period: int = 14
-) -> float:
+# ---------------------------------------------------------------------------
+# [핵심 4 · MODIFIED Case 71 & Case 72] 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 & 2~7층 통합 이동평균 · 3중 다중 익절 엔진
+# ---------------------------------------------------------------------------
+def vrev_add_quota_lot_and_merge_2tier(
+    queue: Sequence[StratumBucket],
+    buy_qty: int,
+    buy_price: float,
+    actual_spent_usd: Optional[float] = None,
+    lot_type: str = "QUOTA_L1",
+    max_tiers: int = MAX_GRID_TIERS_7,
+) -> List[StratumBucket]:
     """
-    메인 루프(assassin_loop) 전용 O(1) 무부하 실시간 틱 RSI 합성 엔진 (Case 73).
-    직전 확정 분봉(t-1)의 Wilder's EWM 기저 상태에 실시간 현재가(live_price)를 대입하여
-    추가 API 호출 0회로 순간적인 대칭 클라이맥스(매수종목 RSI <= 30.0 & 반대종목 RSI >= 79.9)를 즉시 포착합니다.
+    🎯 3 & 🎯 4 & Case 46 ~ 72 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 멀티 그리드로 작동):
+    신규 정량 매수 체결 시 최대 7개 지층(1층 공격수 + 2~6층 개별 완충층[5개] + 통합 7층 본대[GRID_L7])을 관리하는 핵심 함수:
+    1) 기존 보유 지층이 없을 때(len(existing) == 0):
+       신규 매수분을 단일 1층([new_l1])으로 생성한다.
+    2) 🚨 Case 59, Case 71 & Case 72 (상단 2층 ~ 7층 보유 중 1층 공석 상태에서 REENTRY_1FL 독립 1층 재장전):
+       1층이 익절되어 장부에 상단 그리드(not has_active_l1_bucket(existing))만 남아 있을 때,
+       10분 게이트 눌림(-1.0%)/돌파(+1.0%)로 재장전한 실물 1층(lot_type == "REENTRY_1FL")이 체결되면:
+       기존 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7)을 전혀 병합하거나 이동시키지 않고 그대로 유지한 채,
+       맨 앞(index 0)에 신규 1층(new_l1)을 독립 배치하여 [new_l1(REENTRY_1FL), GRID_L2, ..., GRID_Lk] 를 반환한다!
+    3) 🚨 Case 71 & Case 72 (활성 1층 보유 상태에서 4단 와이드 신저가 추매 DIP_1FL / QUOTA_L1 체결 시 2~6층 개별 승격 & 7층 통합 합병):
+       - 신규 매수분은 1층(index 0, DIP_1FL)에 순수 단가로 배치한다.
+       - 기존 지층들(기존 1층 + 기존 2층 ~ k층)은 2층(GRID_L2) ~ 6층(GRID_L6)까지는 병합 없이 한 층씩 위로 개별 승격시킨다!
+       - 기존 지층 수가 이미 7개 이상이어서 총 층수가 7개(max_tiers = 7)를 초과할 때는
+         새 2층 ~ 6층(5개 개별 완충층)은 그대로 보존하고 최상단 6층+7층을 '통합 7층 본대(GRID_L7)'로 가중평균 병합(Case 53 하드 캡핑 적용)한다!
     """
-    if live_price is None or live_price <= 0.0 or not isinstance(ewm_state, dict):
-        return float(fallback_rsi or 0.0)
-
-    if not ewm_state.get("ready", False):
-        return float(fallback_rsi or 0.0)
-
-    prev_close = float(ewm_state.get("prev_close", 0.0))
-    prev_avg_gain = float(ewm_state.get("prev_avg_gain", 0.0))
-    prev_avg_loss = float(ewm_state.get("prev_avg_loss", 0.0))
-
-    if prev_close <= 0.0 or not math.isfinite(prev_avg_gain) or not math.isfinite(prev_avg_loss):
-        return float(fallback_rsi or 0.0)
-
-    alpha = 1.0 / float(period)
-    delta = float(live_price) - prev_close
-    cur_gain = delta if delta > 0.0 else 0.0
-    cur_loss = -delta if delta < 0.0 else 0.0
-
-    live_avg_gain = (1.0 - alpha) * prev_avg_gain + alpha * cur_gain
-    live_avg_loss = (1.0 - alpha) * prev_avg_loss + alpha * cur_loss
-
-    if live_avg_loss <= 0.0:
-        if live_avg_gain <= 0.0:
-            return 50.0
-        return 100.0
-
-    rs = live_avg_gain / live_avg_loss
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-    if not math.isfinite(rsi):
-        return float(fallback_rsi or 50.0)
-
-    return max(0.01, min(100.0, float(rsi)))
-
-
-def compute_realtime_tick_heikin_ashi(
-    live_price: float, ewm_state: dict
-) -> tuple[bool, float, float]:
-    """
-    메인 루프(assassin_loop) 전용 O(1) 무부하 실시간 틱 하이킨 아시(Heikin-Ashi) 1분봉 합성 엔진 (Case 85).
-    직전 확정 분봉(t-1)의 HA_Open·HA_Close 기저 상태와 현재 진행 분봉의 시가·고가·저가에
-    실시간 현재가(live_price)를 대입하여 추가 API 호출 0회로 실시간 양봉 유지 여부(is_ha_bull)를 판별합니다.
-    """
-    if not isinstance(ewm_state, dict) or not ewm_state.get("ready", False):
-        return True, 0.0, 0.0
-
-    if live_price is None or live_price <= 0.0:
-        return (
-            bool(ewm_state.get("ha_bull", True)),
-            float(ewm_state.get("ha_open", 0.0)),
-            float(ewm_state.get("ha_close", 0.0)),
+    q_int = max(1, safe_int(buy_qty, 1))
+    p_val = round(max(0.0001, safe_float(buy_price, 0.01)), 4)
+    spent = (
+        round(
+            max(0.01, safe_float(actual_spent_usd, float(q_int) * p_val)), 4
         )
+        if actual_spent_usd is not None
+        else round(float(q_int) * p_val, 4)
+    )
+    pure_p = round(max(0.0001, spent / float(q_int)), 4)
+    tag = str(lot_type or "QUOTA_L1").upper().strip()
+    if is_upper_grid_tier(tag):
+        tag = "QUOTA_L1"
 
-    p_float = float(live_price)
-    prev_ha_o = float(ewm_state.get("prev_ha_open", p_float))
-    prev_ha_c = float(ewm_state.get("prev_ha_close", p_float))
-    cur_o = float(ewm_state.get("cur_bar_open", p_float)) or p_float
-    cur_h = max(float(ewm_state.get("cur_bar_high", p_float)) or p_float, p_float)
-    cur_l_raw = float(ewm_state.get("cur_bar_low", p_float))
-    cur_l = min(cur_l_raw, p_float) if cur_l_raw > 0.0 else p_float
+    new_l1 = StratumBucket(
+        qty=q_int,
+        book_price=pure_p,
+        book_invested_usd=spent,
+        actual_cost_usd=spent,
+        lot_count=1,
+        lot_type=tag,
+    )
 
-    ewm_state["cur_bar_high"] = cur_h
-    ewm_state["cur_bar_low"] = cur_l
-    if p_float > float(ewm_state.get("session_anchor_high", 0.0)):
-        ewm_state["session_anchor_high"] = p_float
+    existing = [
+        b
+        for b in (queue or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not existing:
+        return [new_l1]
 
-    live_ha_open = (prev_ha_o + prev_ha_c) / 2.0 if (prev_ha_o > 0.0 and prev_ha_c > 0.0) else cur_o
-    live_ha_close = (cur_o + cur_h + cur_l + p_float) / 4.0
-    is_ha_bull = bool(live_ha_close > live_ha_open)
+    eff_max_tiers = max(2, safe_int(max_tiers, MAX_GRID_TIERS_7))
 
-    ewm_state["ha_open"] = live_ha_open
-    ewm_state["ha_close"] = live_ha_close
-    ewm_state["ha_bull"] = is_ha_bull
-    return is_ha_bull, live_ha_open, live_ha_close
-
-
-class MacroDataCache:
-    # MODIFIED: 초과 Case 61, 62, 89, 90, 91, 92, 94 —
-    #           1) [해법 1] CME 18:00 EST 신세션 하드 컷오프 + fast_info 당일 실제 고가(day_high)/저가(day_low) 강제 병합으로
-    #              1·2차 과열 방어선(>=2.0%) 및 3차 동적 임계치 max(nq_entry_amp * 0.5, 0.80%)의 기준인 NQ=F 당일 진폭을 100% 정확히 산출
-    #           2) [해법 2 방법 A & Case 92, 94] 3차 역행 안전망의 진입 기준가·실시간 비교가(get_stage3_reference_price) 및
-    #              10분/3분 변화율은 토스 Open API QQQ 0.0초 실시간 시세로 산출 (보유 중 1.5초 프로빙, 폴백 NQ=F)
-    # 튜플 구조: (curr_val, high_val, low_val, updated_ts, nq_vel_10m, nq_vel_3m)
-    _nq_cache_data = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    _nq_session_id = ""
-    _nq_vel_source = "NQ선물"
-    _qqq_curr_price = 0.0
-    _qqq_price_ts = 0.0
-    _nq_cache_lock = asyncio.Lock()
-
-    @classmethod
-    def _is_refresh_needed(cls, now_ts: float, last_ts: float) -> bool:
-        if last_ts <= 0.0:
-            return True
-        return (now_ts - last_ts) > 15.0
-
-    @classmethod
-    async def _fetch_qqq_velocity_async(cls, now_est: datetime) -> tuple[bool, float, float, float]:
-        """토스 Open API(GlobalThrottle.active_client)를 통해 QQQ 0.0초 실시간 현재가 및 10분/3분 변화율을 산출합니다 (초과 Case 91, 92)."""
-        client = getattr(GlobalThrottle, "active_client", None)
-        if client is None or not hasattr(client, "get_qqq_realtime_snapshot"):
-            return False, 0.0, 0.0, 0.0
-        try:
-            q_price, q_candles = await asyncio.wait_for(
-                client.get_qqq_realtime_snapshot(count=25), timeout=3.5
-            )
-            if not q_candles:
-                return False, 0.0, 0.0, float(q_price or 0.0)
-            return await asyncio.to_thread(
-                _compute_qqq_realtime_velocity_sync, q_price, q_candles, now_est
-            )
-        except Exception as e:
-            print(f"🚨 [QQQ 실시간 변화율 산출 방어] {e}", flush=True)
-            return False, 0.0, 0.0, 0.0
-
-    @classmethod
-    async def _refresh_cache_if_needed(cls, force_refresh: bool = False):
-        async with cls._nq_cache_lock:
-            now = time.time()
-            now_est = datetime.now(EST_TZ)
-            is_cme_open, nq_session_start_est = get_cme_session_window_est(now_est)
-            cur_sess_id = nq_session_start_est.strftime("%Y-%m-%d_%H%M")
-
-            # 초과 Case 90 — 18:00 EST CME 선물 신세션 롤오버 감지 시 이전 세션(금요일/전일) 캐시 즉시 0점 소각
-            session_rolled = (cls._nq_session_id != cur_sess_id)
-            if session_rolled:
-                cls._nq_session_id = cur_sess_id
-                cls._nq_cache_data = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-                cls._qqq_curr_price = 0.0
-                cls._qqq_price_ts = 0.0
-
-            need_refresh = force_refresh or session_rolled or cls._is_refresh_needed(now, cls._nq_cache_data[3])
-            if not need_refresh:
-                return
-
-            def _fetch_nq():
-                tkr = yf.Ticker("NQ=F")
-                fast_last_p = 0.0
-                fast_day_high = 0.0
-                fast_day_low = 0.0
-                try:
-                    fi = getattr(tkr, "fast_info", None)
-                    if fi is not None:
-                        raw_lp = fi.get("lastPrice") if hasattr(fi, "get") else getattr(fi, "last_price", 0.0)
-                        raw_dh = fi.get("dayHigh") if hasattr(fi, "get") else getattr(fi, "day_high", 0.0)
-                        raw_dl = fi.get("dayLow") if hasattr(fi, "get") else getattr(fi, "day_low", 0.0)
-                        if raw_lp is not None and float(raw_lp) > 0.0:
-                            fast_last_p = float(raw_lp)
-                        if raw_dh is not None and float(raw_dh) > 0.0:
-                            fast_day_high = float(raw_dh)
-                        if raw_dl is not None and float(raw_dl) > 0.0:
-                            fast_day_low = float(raw_dl)
-                except Exception:
-                    pass
-
-                df = None
-                try:
-                    df = tkr.history(period="2d", interval="1m", prepost=True)
-                except Exception:
-                    df = None
-
-                if df is None or df.empty:
-                    df = tkr.history(period="5d", interval="1m", prepost=True)
-
-                if df is None or df.empty:
-                    if fast_last_p > 0.0:
-                        h_init = max(fast_last_p, fast_day_high) if fast_day_high > 0.0 else fast_last_p
-                        l_init = min(fast_last_p, fast_day_low) if fast_day_low > 0.0 else fast_last_p
-                        return fast_last_p, h_init, l_init, 0.0, 0.0
-                    return 0.0, 0.0, 0.0, 0.0, 0.0
-
-                df.index = pd.to_datetime(df.index, utc=True).tz_convert(EST_TZ)
-                df = df[~df.index.duplicated(keep="last")]
-                df.sort_index(ascending=True, inplace=True)
-
-                for col in ["Open", "High", "Low", "Close"]:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
-
-                df = df[df["Close"] > 0.0].copy()
-                if df.empty:
-                    if fast_last_p > 0.0:
-                        return fast_last_p, fast_last_p, fast_last_p, 0.0, 0.0
-                    return 0.0, 0.0, 0.0, 0.0, 0.0
-
-                if "Open" in df.columns:
-                    df["Open"] = np.where(df["Open"] > 0.0, df["Open"], df["Close"])
-                else:
-                    df["Open"] = df["Close"]
-
-                # 직전 구세션(금요일/전일) 고가·저가 추출 (18:00 EST 직후 fast_info 미갱신 여부 대조용)
-                df_before = df[df.index < nq_session_start_est]
-                prev_sess_h, prev_sess_l = 0.0, 0.0
-                if not df_before.empty:
-                    td_prev = df_before.index.to_series().diff()
-                    gaps_prev = td_prev[td_prev >= pd.Timedelta(minutes=45)]
-                    df_prev_sess = df_before[df_before.index >= gaps_prev.index[-1]] if not gaps_prev.empty else df_before
-                    if not df_prev_sess.empty:
-                        prev_sess_h = float(df_prev_sess["High"].max())
-                        prev_sess_l = float(df_prev_sess["Low"].min())
-
-                # 초과 Case 62 & Case 90 — 현재 활성 CME 선물 세션 시작 시각(18:00:00 EST) 이전의 전일/금요일 캔들 100% 절삭
-                df_session = df[df.index >= nq_session_start_est].copy()
-
-                # fast_info의 day_high/day_low가 구세션(금요일) 값 그대로인지 판별하여 신세션 값일 때만 병합 허용
-                is_fast_hl_stale = (
-                    prev_sess_h > 0.0
-                    and prev_sess_l > 0.0
-                    and abs(fast_day_high - prev_sess_h) < 0.01
-                    and abs(fast_day_low - prev_sess_l) < 0.01
-                )
-
-                if df_session.empty:
-                    if is_cme_open:
-                        seed_p = fast_last_p if fast_last_p > 0.0 else float(df["Close"].iloc[-1])
-                        h_seed, l_seed = seed_p, seed_p
-                        if not is_fast_hl_stale and seed_p > 0.0:
-                            if fast_day_high > 0.0 and abs(fast_day_high - seed_p) / seed_p < 0.10:
-                                h_seed = max(h_seed, fast_day_high)
-                            if fast_day_low > 0.0 and abs(fast_day_low - seed_p) / seed_p < 0.10:
-                                l_seed = min(l_seed, fast_day_low)
-                        return seed_p, h_seed, l_seed, 0.0, 0.0
-                    else:
-                        time_diffs = df.index.to_series().diff()
-                        gaps = time_diffs[time_diffs >= pd.Timedelta(minutes=45)]
-                        if not gaps.empty:
-                            df_session = df[df.index >= gaps.index[-1]].copy()
-                        else:
-                            df_session = df.copy()
-
-                if df_session.empty:
-                    return 0.0, 0.0, 0.0, 0.0, 0.0
-
-                # 세션 내부에 45분 이상 추가 휴장 갭이 존재하는 경우 최신 구간만 분리 (Case 62)
-                time_diffs_inner = df_session.index.to_series().diff()
-                gaps_inner = time_diffs_inner[time_diffs_inner >= pd.Timedelta(minutes=45)]
-                if not gaps_inner.empty:
-                    df_session = df_session[df_session.index >= gaps_inner.index[-1]].copy()
-
-                curr_val = float(df_session["Close"].iloc[-1])
-                high_val = float(df_session["High"].max())
-                low_val = float(df_session["Low"].min())
-
-                # 초과 Case 91 [해법 1] — CME 개장 중 fast_info의 최신가(last_price) 및
-                # 거래소 집계 당일 실제 고가(day_high)·저가(day_low)를 강제 병합하여
-                # 개장 첫 틱 밑꼬리 저가(예: 29,226.00) 누락으로 인한 진폭 왜곡을 100% 원천 소각!
-                if is_cme_open and curr_val > 0.0:
-                    if fast_last_p > 0.0 and abs(fast_last_p - curr_val) / curr_val < 0.05:
-                        curr_val = fast_last_p
-                        high_val = max(high_val, fast_last_p)
-                        low_val = min(low_val, fast_last_p) if low_val > 0.0 else fast_last_p
-
-                    if not is_fast_hl_stale:
-                        if fast_day_high > 0.0 and abs(fast_day_high - curr_val) / curr_val < 0.12:
-                            high_val = max(high_val, fast_day_high)
-                        if fast_day_low > 0.0 and abs(fast_day_low - curr_val) / curr_val < 0.12:
-                            low_val = min(low_val, fast_day_low) if low_val > 0.0 else fast_day_low
-
-                # NQ=F 자체 10분 변화율 및 3분 단기 변화율 (QQQ 미개장 시간대 폴백용)
-                first_open = float(df_session["Open"].iloc[0]) or float(df_session["Close"].iloc[0])
-                ref_10m = float(df_session["Close"].iloc[-11]) if len(df_session) >= 11 else first_open
-                ref_3m = float(df_session["Close"].iloc[-4]) if len(df_session) >= 4 else first_open
-
-                vel_10m = ((curr_val - ref_10m) / ref_10m * 100.0) if ref_10m > 0.0 else 0.0
-                vel_3m = ((curr_val - ref_3m) / ref_3m * 100.0) if ref_3m > 0.0 else 0.0
-                return curr_val, high_val, low_val, vel_10m, vel_3m
-
-            try:
-                nq_task = asyncio.wait_for(asyncio.to_thread(_fetch_nq), timeout=5.0)
-                qqq_task = cls._fetch_qqq_velocity_async(now_est)
-                (c, h, l, nq_v10, nq_v3), (qqq_ok, q_v10, q_v3, q_curr) = await asyncio.gather(
-                    nq_task, qqq_task
-                )
-
-                # 초과 Case 91 & Case 92 — 토스 Open API QQQ 0.0초 실시간 변화율 및 현재가 캐시 동기화
-                if qqq_ok:
-                    final_v10, final_v3 = q_v10, q_v3
-                    cls._nq_vel_source = "QQQ실시간"
-                    if q_curr > 0.0:
-                        cls._qqq_curr_price = float(q_curr)
-                        cls._qqq_price_ts = now
-                else:
-                    final_v10, final_v3 = nq_v10, nq_v3
-                    cls._nq_vel_source = "NQ선물"
-
-                if l > 0.0:
-                    cls._nq_cache_data = (c, h, l, now, final_v10, final_v3)
-                else:
-                    prev = cls._nq_cache_data
-                    cls._nq_cache_data = (prev[0], prev[1], prev[2], now, final_v10, final_v3)
-            except Exception as e:
-                prev = cls._nq_cache_data
-                cls._nq_cache_data = (prev[0], prev[1], prev[2], now, prev[4], prev[5])
-                print(f"🚨 [NQ=F/QQQ 캐시 갱신 방어] {e}", flush=True)
-
-    @classmethod
-    async def get_cached_nq_data(cls, force_refresh: bool = False) -> tuple[float, float, float]:
-        """
-        1·2차 과열 방어선(>=2.0%) 및 3차 역행 안전망의 진입 임계치 공식 max(nq_entry_amp * 0.5, 0.80%)의 기준인
-        나스닥 100 선물지수(NQ=F)의 (curr, high, low)를 반환합니다 (초과 Case 61, 62, 91, 92, 94).
-        """
-        await cls._refresh_cache_if_needed(force_refresh=force_refresh)
-        return cls._nq_cache_data[0], cls._nq_cache_data[1], cls._nq_cache_data[2]
-
-    @classmethod
-    async def get_stage3_reference_price(
-        cls, force_refresh: bool = False, realtime_probing: bool = False
-    ) -> tuple[float, str]:
-        """
-        초과 Case 92 & Case 94 — 나스닥 100 선물(NQ=F) 진폭으로 산출된 3차 진입 임계치 max(nq_entry_amp * 0.5, 0.80%)를
-        10분 지연 없이 시차 0.0초로 적용하기 위한 토스 Open API QQQ 실시간 현재가 반환 헬퍼.
-        - 포지션 보유 중(realtime_probing=True)에는 1.5초 주기로 토스 QQQ 실시간 현재가를 직접 프로빙합니다.
-        - 평시 대기 중(realtime_probing=False)에는 15.0초 캐시를 사용하며, QQQ 미수신 시간대(18:00~18:59 EST 등)에만 NQ=F로 폴백합니다.
-        """
-        now_est = datetime.now(EST_TZ)
-        wk = now_est.weekday()
-        est_hm = now_est.hour * 100 + now_est.minute
-        is_etf_closed_window = (
-            (wk == 4 and est_hm >= 1700)
-            or (wk == 5)
-            or (wk == 6 and est_hm < 1900)
-            or (1700 <= est_hm < 1900)
+    # 🚨 Case 59, Case 71 & Case 72: 상단 그리드(2층 ~ 7층)만 보유 중(1층 공석) REENTRY_1FL 유입 시 상단 비병합 독립 1층 배치!
+    if not has_active_l1_bucket(existing) and tag == "REENTRY_1FL":
+        preserved_uppers = relabel_upper_grid_tiers(
+            existing, max_tiers=eff_max_tiers
         )
+        return [new_l1] + preserved_uppers
 
-        if not is_etf_closed_window:
-            now_ts = time.time()
-            ttl = 1.5 if realtime_probing else 15.0
-            if force_refresh or cls._qqq_curr_price <= 0.0 or (now_ts - cls._qqq_price_ts) >= ttl:
-                client = getattr(GlobalThrottle, "active_client", None)
-                if client is not None and hasattr(client, "get_current_price"):
-                    try:
-                        q_p = await asyncio.wait_for(client.get_current_price("QQQ"), timeout=2.5)
-                        if q_p is not None and float(q_p) > 0.0:
-                            cls._qqq_curr_price = float(q_p)
-                            cls._qqq_price_ts = now_ts
-                    except Exception:
-                        pass
-            if cls._qqq_curr_price > 0.0:
-                return float(cls._qqq_curr_price), "QQQ실시간"
+    # 활성 1층 보유 중 신저가 추매(DIP_1FL 등) 유입 시: 기존 1층 ~ k층을 2층 ~ 6층 개별 승격 & 7층 통합 합병
+    if eff_max_tiers <= 2:
+        old_total_qty = sum(b.qty for b in existing)
+        old_actual_cost = round(sum(b.actual_cost_usd for b in existing), 4)
+        old_lot_cnt = sum(max(1, b.lot_count) for b in existing)
+        old_overall_avg = (
+            sum(float(b.qty) * b.book_price for b in existing)
+            / float(old_total_qty)
+        )
+        raw_upper_p = old_actual_cost / float(old_total_qty)
+        capped_upper_p = round(min(raw_upper_p, old_overall_avg), 4)
+        merged_l2 = StratumBucket(
+            qty=old_total_qty,
+            book_price=capped_upper_p,
+            book_invested_usd=old_actual_cost,
+            actual_cost_usd=old_actual_cost,
+            lot_count=old_lot_cnt,
+            lot_type="GRID_L2",
+        )
+        return [new_l1, merged_l2]
 
-        nq_c, _, _ = await cls.get_cached_nq_data(force_refresh=force_refresh)
-        return float(nq_c), "NQ선물"
+    shifted_uppers = relabel_upper_grid_tiers(
+        existing, max_tiers=eff_max_tiers
+    )
+    return [new_l1] + shifted_uppers
 
-    @classmethod
-    async def get_cached_nq_velocity(cls, force_refresh: bool = False) -> tuple[float, float]:
-        """최근 10분 변화율(nq_vel_10m)과 3분 변화율(nq_vel_3m)을 반환합니다 (초과 Case 89, 91)."""
-        await cls._refresh_cache_if_needed(force_refresh=force_refresh)
-        return float(cls._nq_cache_data[4]), float(cls._nq_cache_data[5])
 
-    @classmethod
-    def get_cached_nq_velocity_source(cls) -> str:
-        """현재 단기 변화율 산출에 사용 중인 실시간 데이터 소스('QQQ실시간' 또는 'NQ선물')를 반환합니다 (초과 Case 91)."""
-        return str(cls._nq_vel_source or "NQ선물")
+def compute_upper_2_to_12_moving_avg(
+    buckets: Sequence[StratumBucket],
+    rise_upper_pct: float = 1.00,
+) -> Dict[str, Any]:
+    """
+    🚨 MODIFIED [Case 71 & Case 72 상단 2층 ~ 7층 통합 이동평균법(수량 가중평균) 단가 및 목표가 산출기]:
+    (타 모듈 AST 임포트 호환을 위해 함수명 compute_upper_2_to_12_moving_avg 를 유지하며 compute_upper_2_to_7_moving_avg 별칭 동시 제공)
+    - 활성 1층(has_active_l1_bucket == True)이 존재하면 buckets[1:] (2층 ~ 7층)을 상단 그리드로 집계하고,
+    - 1층이 익절되어 공석(has_active_l1_bucket == False)이면 buckets[0:] 전체를 상단 그리드(2층 ~ 7층)로 집계한다.
+    - 상단 2층 ~ 7층의 통합 이동평균 단가(upper_wma_price = sum(actual_cost_usd) / sum(qty))와
+      +1.00% 일괄 익절 목표가(upper_wma_target_price), 그리고 상단 개별 층 중 가장 낮은 단가 층의
+      +1.00% 개별 익절 목표가(min_indiv_upper_target_price)를 함께 산출하여 반환한다.
+    """
+    valid = [
+        b
+        for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    active_l1 = has_active_l1_bucket(valid)
+    upper_list = valid[1:] if active_l1 else valid[:]
 
-    @classmethod
-    async def is_nq_velocity_favorable_surge(
-        cls, symbol: str, surge_threshold: float = 0.20, force_refresh: bool = False
-    ) -> tuple[bool, float, float]:
-        """
-        보유 종목(SOXS 또는 SOXL) 기준으로 나스닥 100(토스 QQQ 0.0초 실시간 우선, 폴백 NQ=F)이
-        유리한 방향으로 ±surge_threshold(기본 0.20%) 이상 급등 또는 급락 중인지 판별하여
-        하이킨 아시 음봉 바이패스(🚀 NQ_VEL_BYPASS) 여부를 반환합니다 (초과 Case 89, 91).
-        """
-        vel_10m, vel_3m = await cls.get_cached_nq_velocity(force_refresh=force_refresh)
-        th = abs(float(surge_threshold or 0.20))
-        if symbol == "SOXS":
-            is_surge = (min(vel_10m, vel_3m) <= -th)
-        elif symbol == "SOXL":
-            is_surge = (max(vel_10m, vel_3m) >= th)
+    if not upper_list:
+        return {
+            "has_active_l1": active_l1,
+            "upper_tier_count": 0,
+            "upper_qty": 0,
+            "upper_lots": 0,
+            "upper_actual_cost_usd": 0.0,
+            "upper_wma_price": 0.0,
+            "upper_wma_target_price": 0.0,
+            "min_indiv_upper_price": 0.0,
+            "min_indiv_upper_target_price": 0.0,
+            "upper_buckets": [],
+        }
+
+    u_qty = sum(b.qty for b in upper_list)
+    u_lots = sum(max(1, b.lot_count) for b in upper_list)
+    u_cost = round(sum(b.actual_cost_usd for b in upper_list), 4)
+    wma_p = round(u_cost / float(u_qty), 4) if u_qty > 0 else 0.0
+    wma_target_p = (
+        round(
+            math.ceil(
+                (wma_p * (1.0 + rise_upper_pct / 100.0) - 1e-9) * 100.0
+            )
+            / 100.0,
+            2,
+        )
+        if wma_p > 0.0
+        else 0.0
+    )
+
+    min_indiv_p = min(b.book_price for b in upper_list)
+    min_indiv_target_p = round(
+        math.ceil(
+            (min_indiv_p * (1.0 + rise_upper_pct / 100.0) - 1e-9) * 100.0
+        )
+        / 100.0,
+        2,
+    )
+
+    return {
+        "has_active_l1": active_l1,
+        "upper_tier_count": len(upper_list),
+        "upper_qty": u_qty,
+        "upper_lots": u_lots,
+        "upper_actual_cost_usd": u_cost,
+        "upper_wma_price": wma_p,
+        "upper_wma_target_price": wma_target_p,
+        "min_indiv_upper_price": round(min_indiv_p, 4),
+        "min_indiv_upper_target_price": min_indiv_target_p,
+        "upper_buckets": upper_list,
+    }
+
+
+compute_upper_2_to_7_moving_avg = compute_upper_2_to_12_moving_avg
+
+
+def evaluate_multi_grid_sell_targets(
+    buckets: Sequence[StratumBucket],
+    live_price: float,
+    rise_l1_pct: float = 1.50,
+    rise_upper_pct: float = 1.00,
+) -> Dict[str, Any]:
+    """
+    🚨 [Case 71 & Case 72 : 60초 타임쉴드 주기 3중 다중 익절 스나이퍼 매도 판정기]:
+    매수 후 60.0초 및 보유 중 매 60.0초 타임쉴드가 해제된 시점에 실시간 현재가(live_price)로
+    아래 3가지 매도 조건을 동시에 스캔하여 조건이 충족된 모든 지층 인덱스를 반환한다:
+    1) [조건 ① : 활성 1층(buckets[0]) 개별 +1.50% 이상 도래]
+       has_active_l1 == True 이고 live_price >= ceil(buckets[0].book_price * 1.015 * 100) / 100 이면
+       인덱스 0 (1층)을 매도 목록에 추가!
+    2) [조건 ② : 상단 2층 ~ 7층 통합 이동평균(wma_2_to_7) +1.00% 이상 도래]
+       상단 그리드(2층 ~ 7층)가 존재하고 live_price >= ceil(wma_2_to_7 * 1.010 * 100) / 100 이면
+       상단 2층 ~ 7층 전 지층 인덱스를 일괄 매도 목록에 추가!
+       (이때 활성 1층도 본전 이상 live_price >= round(buckets[0].book_price, 2) 이면 인덱스 0 도 포함하여 전량 동시 졸업!)
+    3) [조건 ③ : 상단 2층 ~ 6층 개별 완충층 및 통합 7층 본대 +1.00% 이상 도래]
+       상단 2층 ~ 7층 통합 이동평균이 아직 +1.00% 에 도달하지 않았더라도,
+       상단 개별 층 buckets[k] 중 live_price >= ceil(buckets[k].book_price * 1.010 * 100) / 100 에 도달한
+       모든 개별 층 인덱스 k 를 즉시 매도 목록에 추가!
+    """
+    valid = [
+        b
+        for b in (buckets or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    lp = safe_float(live_price, 0.0)
+    if not valid or lp <= 0.0:
+        return {
+            "should_sell": False,
+            "sold_indices": [],
+            "sell_qty": 0,
+            "min_floor_price": 0.0,
+            "reason_tag": "NONE",
+            "hit_l1": False,
+            "hit_indiv_grid": False,
+            "hit_wma_grad": False,
+        }
+
+    active_l1 = has_active_l1_bucket(valid)
+    sold_idx_set: Set[int] = set()
+    floor_candidates: List[float] = []
+    hit_l1 = False
+    hit_indiv_grid = False
+    hit_wma_grad = False
+
+    # ① 활성 1층(index 0) +1.50% 개별 익절 판정
+    if active_l1:
+        b1 = valid[0]
+        min_l1_target_p = (
+            math.ceil(
+                (b1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9) * 100.0
+            )
+            / 100.0
+        )
+        if lp >= min_l1_target_p:
+            sold_idx_set.add(0)
+            floor_candidates.append(min_l1_target_p)
+            hit_l1 = True
+        upper_start_idx = 1
+    else:
+        upper_start_idx = 0
+
+    # ② & ③ 상단 2층 ~ 7층 통합 이동평균(+1.00%) 및 개별 그리드(+1.00%) 판정
+    if len(valid) > upper_start_idx:
+        wma_info = compute_upper_2_to_12_moving_avg(
+            valid, rise_upper_pct=rise_upper_pct
+        )
+        wma_target_p = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
+
+        if wma_target_p > 0.0 and lp >= wma_target_p:
+            for k in range(upper_start_idx, len(valid)):
+                sold_idx_set.add(k)
+            floor_candidates.append(wma_target_p)
+            hit_wma_grad = True
+            if active_l1 and lp >= round(valid[0].book_price, 2):
+                sold_idx_set.add(0)
+                floor_candidates.append(round(valid[0].book_price, 2))
         else:
-            is_surge = False
-        return bool(is_surge), vel_10m, vel_3m
-
-    @classmethod
-    async def get_nq_sniper_signal(
-        cls, force_refresh: bool = False
-    ) -> tuple[str, float, str, float, float, float]:
-        await cls._refresh_cache_if_needed(force_refresh=force_refresh)
-        c, h, l = cls._nq_cache_data[0], cls._nq_cache_data[1], cls._nq_cache_data[2]
-        return ("DUAL80", float(cls._nq_cache_data[4]), f"{c:.2f}", c, h, l)
-
-
-class AssassinLedger:
-    # 양방향 대칭 클라이맥스 듀얼 스나이퍼 화이트리스트 락온 (Case 09, 54)
-    ALLOWED_SYMBOLS = ("SOXS", "SOXL")
-    # 단일 '하이킨 아시 + 고점 트레일링(HA_HYB_1.0 × 🚀 NQ_VEL_BYPASS)' 상수로 100% 단일화 (Case 68, 85, 89)
-    DEFAULT_TARGET_PROFIT_RATE = 1.00
-    ALLOWED_TARGET_RATES = (1.00,)
-    TRAIL_ARM_PROFIT_RATE = 1.00          # +1.00% 도달 시 하이킨 아시 트레일링 점화(Arming)
-    TRAIL_FLOOR_LOCK_RATE = 1.00          # 트레일링 점화 즉시 최소 +1.00% 익절 보존선 하드 락온
-    TRAIL_DROP_CALLBACK_PCT = 0.30        # 최고가(Peak) 대비 -0.30% 콜백 발생 시 즉시 익절 스윕
-    TRAIL_SAFETY_CAP_RATE = 5.00          # 매수 체결 직후 거래소에 선장전하는 상단 안전 캡 (+5.00% LIMIT)
-    NQ_VELOCITY_SURGE_PCT = 0.20          # QQQ/NQ 10분/3분 변화율 ±0.20% 이상 급등락 시 HA음봉 바이패스 임계치 (Case 89, 91)
-    MIN_STAGE3_QQQ_ADVERSE_PCT = MIN_STAGE3_QQQ_ADVERSE_PCT  # 3차 안전망 최소 실시간 QQQ 역행 하한선 0.80% (Case 94)
-    AMP_BUFFER_ACTIVATE_NQ_PCT = AMP_BUFFER_ACTIVATE_NQ_PCT  # 데이장 09:00 KST 1분 한정 역산 버퍼 가동 기준 (Case 93)
-    AMP_BUFFER_LEVERAGE_MULT = AMP_BUFFER_LEVERAGE_MULT      # 진폭 × 3.0배 레버리지 기대 하락폭 역산 배수 (Case 93)
-    AMP_BUFFER_REBOUND_PCT = AMP_BUFFER_REBOUND_PCT          # 최저점 대비 +0.30% 양봉 반등 시 모의 진입 (Case 93)
-    ROUND_TRIP_COMM_PCT = 0.14
-    ONE_WAY_COMM_RATE = 0.0007
-    MIN_BUDGET_FLOOR = 10.0
-
-    @classmethod
-    def _validate_symbol(cls, symbol: str) -> str:
-        sym = str(symbol).strip().upper()
-        if sym not in cls.ALLOWED_SYMBOLS:
-            raise ValueError(f"🚨 [Case 09 위반] 허용되지 않은 제3종목 접근 영구 차단: {sym}")
-        return sym
-
-    @classmethod
-    def _get_file_path(cls, symbol: str) -> str:
-        sym = cls._validate_symbol(symbol)
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), f"AssassinLedger_{sym}.json")
-
-    # 단일 하이킨 아시 트레일링 모드 락온에 따라 점화 기준 수익률 1.00% 단일 반환 (Case 68)
-    @classmethod
-    def normalize_target_rate(cls, rate_val=None) -> float:
-        return 1.00
-
-    # 최소 익절 보존선(+1.00%)에서 왕복 협의 수수료(0.14%)를 공제한 최소 보장 순수익률 (+0.86%) 반환
-    @classmethod
-    def get_net_compound_rate(cls, target_profit_rate: float = 1.00) -> float:
-        return round(cls.TRAIL_FLOOR_LOCK_RATE - cls.ROUND_TRIP_COMM_PCT, 2)
-
-    @classmethod
-    async def get_state(
-        cls, symbol: str
-    ) -> tuple[float, float, float, str, bool, bool, float, str, str, float, float, float]:
-        filepath = cls._get_file_path(symbol)
-        async with GlobalThrottle.get_file_lock(filepath):
-            def _read():
-                if not os.path.exists(filepath):
-                    return (
-                        0.0, 100.0, cls.DEFAULT_TARGET_PROFIT_RATE, "", False, True, 0.0, "", "", 0.0, 0.0, 0.0,
+            for k in range(upper_start_idx, len(valid)):
+                bk = valid[k]
+                bk_target_p = (
+                    math.ceil(
+                        (bk.book_price * (1.0 + rise_upper_pct / 100.0) - 1e-9)
+                        * 100.0
                     )
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        if not isinstance(data, dict):
-                            data = {}
-                        raw_rate = cls.normalize_target_rate(
-                            data.get("target_profit_rate", cls.DEFAULT_TARGET_PROFIT_RATE)
-                        )
-                        return (
-                            float(data.get("last_buy_price", 0.0)),
-                            float(data.get("budget", 100.0)),
-                            raw_rate,
-                            str(data.get("last_session_id", "")),
-                            bool(data.get("is_session_done", False)),
-                            bool(data.get("is_active", True)),
-                            float(data.get("target_sell_price", 0.0)),
-                            str(data.get("sell_order_id", "")),
-                            str(data.get("entry_session", "")),
-                            float(data.get("entry_time", 0.0)),
-                            float(data.get("nq_entry_price", 0.0)),
-                            float(data.get("nq_entry_amp", 0.0)),
-                        )
-                except Exception:
-                    return (
-                        0.0, 100.0, cls.DEFAULT_TARGET_PROFIT_RATE, "", False, True, 0.0, "", "", 0.0, 0.0, 0.0,
-                    )
-            return await asyncio.to_thread(_read)
-
-    @classmethod
-    async def get_buy_order_id(cls, symbol: str) -> str:
-        filepath = cls._get_file_path(symbol)
-        async with GlobalThrottle.get_file_lock(filepath):
-            def _read():
-                if not os.path.exists(filepath):
-                    return ""
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        return str(data.get("buy_order_id", "")) if isinstance(data, dict) else ""
-                except Exception:
-                    return ""
-            return await asyncio.to_thread(_read)
-
-    @classmethod
-    async def get_entry_trend(cls, symbol: str) -> str:
-        filepath = cls._get_file_path(symbol)
-        async with GlobalThrottle.get_file_lock(filepath):
-            def _read():
-                if not os.path.exists(filepath):
-                    return ""
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        return str(data.get("entry_trend", "")) if isinstance(data, dict) else ""
-                except Exception:
-                    return ""
-            return await asyncio.to_thread(_read)
-
-    # 03:58 ~ 04:07 EST 듀얼 1주 휩소 노출 작전 전용 목표 매도가 조회
-    @classmethod
-    async def get_whipsaw_target_price(cls, symbol: str) -> float:
-        filepath = cls._get_file_path(symbol)
-        async with GlobalThrottle.get_file_lock(filepath):
-            def _read():
-                if not os.path.exists(filepath):
-                    return 0.0
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        if not isinstance(data, dict):
-                            return 0.0
-                        return float(data.get("whipsaw_target_price", 0.0))
-                except Exception:
-                    return 0.0
-            return await asyncio.to_thread(_read)
-
-    # 복리 모드(is_compound) 활성화 상태 조회 (기본값 True)
-    @classmethod
-    async def get_is_compound(cls, symbol: str) -> bool:
-        filepath = cls._get_file_path(symbol)
-        async with GlobalThrottle.get_file_lock(filepath):
-            def _read():
-                if not os.path.exists(filepath):
-                    return True
-                try:
-                    with open(filepath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        if not isinstance(data, dict):
-                            return True
-                        return bool(data.get("is_compound", True))
-                except Exception:
-                    return True
-            return await asyncio.to_thread(_read)
-
-    # Case 76: 하이킨 아시 트레일링 익절(+1.00% ~ +5.00%+) / 손절 / 수동개입 / 1주휩소 작전 모두
-    #          실제 발생한 순수익금((실제매도가 - 실제매수가) * 실제체결수량 - 왕복수수료 0.14%)을 기반으로 통합 복리 시드(budget) 정밀 갱신
-    @classmethod
-    def calc_compound_next_budget(
-        cls,
-        current_budget: float,
-        is_take_profit: bool,
-        entry_price: float = 0.0,
-        exit_price: float = 0.0,
-        filled_qty: float = 0.0,
-        target_profit_rate: float = 1.00,
-    ) -> tuple[float, float, float]:
-        base_budget = float(current_budget) if (current_budget and math.isfinite(current_budget)) else 100.0
-        if base_budget < cls.MIN_BUDGET_FLOOR:
-            base_budget = cls.MIN_BUDGET_FLOOR
-
-        # 1순위 (핵심): 실제 체결 단가(entry_price, exit_price)와 실제 체결 수량(filled_qty)이 확인된 경우
-        if entry_price > 0.0 and exit_price > 0.0 and filled_qty > 0.0:
-            invested_usd = float(entry_price) * float(filled_qty)
-            returned_usd = float(exit_price) * float(filled_qty)
-            gross_pnl_usd = returned_usd - invested_usd
-            comm_usd = (invested_usd + returned_usd) * cls.ONE_WAY_COMM_RATE
-            net_delta_usd = round(gross_pnl_usd - comm_usd, 2)
-            new_budget = round(max(cls.MIN_BUDGET_FLOOR, base_budget + net_delta_usd), 2)
-            return new_budget, net_delta_usd, round(comm_usd, 2)
-
-        # 2순위: 체결 단가(entry_price, exit_price)만 확보되고 수량이 누락된 경우 시드 기준 추정 수량(최소 1주)으로 실수익 역산
-        if entry_price > 0.0 and exit_price > 0.0:
-            est_qty = max(1, math.floor(base_budget / float(entry_price)))
-            invested_usd = float(entry_price) * est_qty
-            returned_usd = float(exit_price) * est_qty
-            gross_pnl_usd = returned_usd - invested_usd
-            comm_usd = (invested_usd + returned_usd) * cls.ONE_WAY_COMM_RATE
-            net_delta_usd = round(gross_pnl_usd - comm_usd, 2)
-            new_budget = round(max(cls.MIN_BUDGET_FLOOR, base_budget + net_delta_usd), 2)
-            return new_budget, net_delta_usd, round(comm_usd, 2)
-
-        # 3순위 폴백: API 체결 내역 인덱싱이 완전히 지연된 경우 최소 보존 익절률(+1.00%, 순+0.86%)/수수료 기준 정산
-        if is_take_profit:
-            net_comp_rate = cls.get_net_compound_rate(target_profit_rate)
-            net_delta_usd = round(base_budget * (net_comp_rate / 100.0), 2)
-            comm_usd = round(base_budget * (cls.ONE_WAY_COMM_RATE * 2.0), 2)
-            new_budget = round(max(cls.MIN_BUDGET_FLOOR, base_budget + net_delta_usd), 2)
-            return new_budget, net_delta_usd, comm_usd
-
-        comm_usd = round(base_budget * (cls.ONE_WAY_COMM_RATE * 2.0), 2)
-        net_delta_usd = -comm_usd
-        new_budget = round(max(cls.MIN_BUDGET_FLOOR, base_budget + net_delta_usd), 2)
-        return new_budget, net_delta_usd, comm_usd
-
-    @classmethod
-    async def save_state(
-        cls,
-        symbol: str,
-        price: float = None,
-        budget: float = None,
-        target_profit_rate: float = None,
-        last_session_id: str = None,
-        is_session_done: bool = None,
-        is_active: bool = None,
-        target_sell_price: float = None,
-        buy_order_id: str = None,
-        sell_order_id: str = None,
-        entry_session: str = None,
-        entry_time: float = None,
-        nq_entry_price: float = None,
-        nq_entry_amp: float = None,
-        entry_trend: str = None,
-        is_compound: bool = None,
-        whipsaw_target_price: float = None,
-    ):
-        filepath = cls._get_file_path(symbol)
-        async with GlobalThrottle.get_file_lock(filepath):
-            def _write():
-                data = {}
-                if os.path.exists(filepath):
-                    try:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            loaded = json.load(f)
-                            if isinstance(loaded, dict):
-                                data = loaded
-                    except Exception:
-                        pass
-
-                data["target_profit_rate"] = cls.DEFAULT_TARGET_PROFIT_RATE
-
-                if "is_compound" not in data:
-                    data["is_compound"] = True
-
-                if price is not None:
-                    data["last_buy_price"] = price
-                if budget is not None:
-                    data["budget"] = round(float(budget), 2)
-                if last_session_id is not None:
-                    data["last_session_id"] = last_session_id
-                if is_session_done is not None:
-                    data["is_session_done"] = is_session_done
-                if is_active is not None:
-                    data["is_active"] = is_active
-                if target_sell_price is not None:
-                    data["target_sell_price"] = target_sell_price
-                if buy_order_id is not None:
-                    data["buy_order_id"] = buy_order_id
-                if sell_order_id is not None:
-                    data["sell_order_id"] = sell_order_id
-                if entry_session is not None:
-                    data["entry_session"] = entry_session
-                if entry_time is not None:
-                    data["entry_time"] = entry_time
-                if nq_entry_price is not None:
-                    data["nq_entry_price"] = nq_entry_price
-                if nq_entry_amp is not None:
-                    data["nq_entry_amp"] = nq_entry_amp
-                if entry_trend is not None:
-                    data["entry_trend"] = entry_trend
-                if is_compound is not None:
-                    data["is_compound"] = bool(is_compound)
-                if whipsaw_target_price is not None:
-                    data["whipsaw_target_price"] = float(whipsaw_target_price)
-
-                for obsolete_key in [
-                    "pre_first_flag", "force_downgrade", "force_downgrade_0_6", "is_stage_3",
-                    "cond_order_id", "session_mode", "profit_mode",
-                ]:
-                    data.pop(obsolete_key, None)
-
-                tmp_path = f"{filepath}.tmp.{os.getpid()}"
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False)
-                os.replace(tmp_path, filepath)
-
-            await asyncio.to_thread(_write)
-
-    # 통합 시드 풀(Unified Seed Pool) 및 전술 제어반 공통 설정(시드, 복리여부, 마스터전원) 양쪽 원장 동시 동기화 (Case 76)
-    @classmethod
-    async def sync_global_settings(
-        cls,
-        budget: float = None,
-        target_profit_rate: float = None,
-        is_compound: bool = None,
-        is_active: bool = None,
-    ):
-        for sym in cls.ALLOWED_SYMBOLS:
-            await cls.save_state(
-                sym,
-                budget=budget,
-                target_profit_rate=cls.DEFAULT_TARGET_PROFIT_RATE,
-                is_compound=is_compound,
-                is_active=is_active,
-            )
-
-    # MODIFIED: 매크로 1·2·3차 방어선 작동 시 SOXS와 SOXL 양쪽 장부 동시 잠금하되,
-    #           현재 수동 보유 중(entry_session == "MANUAL")인 종목과
-    #           03:58 ~ 04:06 EST 진행 중인 1주 휩소 작전(entry_session == "WHIPSAW_1SH") 종목은
-    #           표식과 목표가(whipsaw_target_price), 미체결 buy_order_id를 보존하며,
-    #           04:07 EST 이후에는 미체결 buy_order_id 잔재를 즉시 ""로 소각하여 무한 루프를 원천 차단 (Case 50, 82, 94, 95, 96)
-    @classmethod
-    async def lock_all_symbols_macro(cls, last_session_id: str = None, force_all: bool = False):
-        now_est = datetime.now(EST_TZ)
-        est_hm = now_est.hour * 100 + now_est.minute
-        for sym in cls.ALLOWED_SYMBOLS:
-            st = await cls.get_state(sym)
-            buy_id = await cls.get_buy_order_id(sym)
-            cur_es = str(st[8] or "")
-
-            is_active_manual_hold = (
-                cur_es == "MANUAL"
-                and (float(st[0] or 0.0) > 0.0 or float(st[6] or 0.0) > 0.0 or bool(st[7]))
-            )
-            is_whipsaw_holding = (
-                float(st[0] or 0.0) > 0.0
-                or float(st[6] or 0.0) > 0.0
-                or bool(st[7])
-            )
-            is_active_whipsaw_1sh = (
-                cur_es == "WHIPSAW_1SH"
-                and (
-                    (358 <= est_hm <= 406)
-                    or is_whipsaw_holding
+                    / 100.0
                 )
+                if lp >= bk_target_p:
+                    sold_idx_set.add(k)
+                    floor_candidates.append(bk_target_p)
+                    hit_indiv_grid = True
+
+    if not sold_idx_set:
+        return {
+            "should_sell": False,
+            "sold_indices": [],
+            "sell_qty": 0,
+            "min_floor_price": 0.0,
+            "reason_tag": "NONE",
+            "hit_l1": False,
+            "hit_indiv_grid": False,
+            "hit_wma_grad": False,
+        }
+
+    sorted_indices = sorted(sold_idx_set)
+    sell_qty = sum(valid[idx].qty for idx in sorted_indices)
+    min_floor_p = max(floor_candidates) if floor_candidates else round(lp, 2)
+
+    if len(sorted_indices) == len(valid):
+        reason_tag = (
+            "SELL_ALL_GRAD"
+            if hit_wma_grad or len(valid) > 1
+            else "SELL_L1_ONLY"
+        )
+    elif hit_wma_grad:
+        reason_tag = "SELL_WMA_UPPER"
+    elif hit_l1 and hit_indiv_grid:
+        reason_tag = "SELL_L1_AND_GRID"
+    elif hit_indiv_grid:
+        reason_tag = "SELL_GRID_INDIV"
+    else:
+        reason_tag = "SELL_L1_ONLY"
+
+    return {
+        "should_sell": True,
+        "sold_indices": sorted_indices,
+        "sell_qty": sell_qty,
+        "min_floor_price": round(min_floor_p, 2),
+        "reason_tag": reason_tag,
+        "hit_l1": hit_l1,
+        "hit_indiv_grid": hit_indiv_grid,
+        "hit_wma_grad": hit_wma_grad,
+    }
+
+
+def vrev_reanchor_single_tier_quota(
+    queue: Sequence[StratumBucket],
+    net_realized_cash_profit: float,
+    max_allowed_total_discount_usd: Optional[float] = None,
+    enable_reanchor: bool = False,
+) -> Tuple[List[StratumBucket], float]:
+    """
+    하위 호환 심볼 유지용 함수:
+    챔피언(🔥 03_7G_PURE_10_01 · Case 71, Case 72)에서는 리앵커링 원가 차감을 수행하지 않으므로
+    기본값(enable_reanchor=False) 호출 시 원가를 100% 그대로 보존하고 (existing, 0.0)을 반환한다.
+    """
+    existing = [
+        b
+        for b in (queue or [])
+        if isinstance(b, StratumBucket) and b.qty > 0
+    ]
+    if not enable_reanchor or len(existing) != 1:
+        return existing, 0.0
+
+    rem = existing[0]
+    net_profit = safe_float(net_realized_cash_profit, 0.0)
+    if net_profit <= 0.0 or rem.qty <= 0:
+        return existing, 0.0
+
+    credit_usd = max(0.0, net_profit * REANCHOR_NET_BUFFER_MULT)
+    old_book_p = rem.book_price
+    min_floor_inv = 0.01 * float(rem.qty)
+    if (
+        max_allowed_total_discount_usd is not None
+        and safe_float(max_allowed_total_discount_usd, -1.0) >= 0.0
+    ):
+        allowed_disc = max(0.0, safe_float(max_allowed_total_discount_usd, 0.0))
+        min_floor_inv = max(
+            min_floor_inv, round(rem.actual_cost_usd - allowed_disc, 4)
+        )
+
+    new_book_inv = round(
+        max(min_floor_inv, rem.book_invested_usd - credit_usd), 4
+    )
+    new_book_p = round(
+        min(old_book_p, max(0.01, new_book_inv / float(rem.qty))), 4
+    )
+    price_drop = round(max(0.0, old_book_p - new_book_p), 4)
+    updated_bucket = StratumBucket(
+        qty=rem.qty,
+        book_price=new_book_p,
+        book_invested_usd=round(new_book_p * float(rem.qty), 4),
+        actual_cost_usd=rem.actual_cost_usd,
+        lot_count=rem.lot_count,
+        lot_type=rem.lot_type,
+    )
+    return [updated_bucket], price_drop
+
+
+def calc_sell_realized_pnl(
+    sold_qty: int,
+    sell_exec_price: float,
+    sold_actual_cost_usd: float,
+) -> Dict[str, float]:
+    """
+    매도 체결 수량(sold_qty), 실제 체결 단가(sell_exec_price), 매도 지층들의 실제 매수 원금 합계(sold_actual_cost_usd)를
+    기반으로 왕복 수수료(0.14%) 차감 후 세후 실현 손익을 정밀 산출한다.
+    """
+    q_int = max(0, safe_int(sold_qty, 0))
+    exec_p = max(0.0, safe_float(sell_exec_price, 0.0))
+    actual_cost = max(0.0, safe_float(sold_actual_cost_usd, 0.0))
+    if q_int <= 0 or exec_p <= 0.0:
+        return {
+            "proceeds_usd": 0.0,
+            "actual_cost_usd": actual_cost,
+            "gross_pnl_usd": 0.0,
+            "fee_usd": 0.0,
+            "net_pnl_usd": 0.0,
+            "net_rate_pct": 0.0,
+        }
+
+    proceeds = round(float(q_int) * exec_p, 4)
+    gross_pnl = round(proceeds - actual_cost, 4)
+    fee_usd = round(
+        ((actual_cost + proceeds) * 0.5) * (ROUND_TRIP_FEE_RATE_PCT / 100.0), 4
+    )
+    net_pnl = round(gross_pnl - fee_usd, 4)
+    net_rate_pct = (
+        round((net_pnl / actual_cost) * 100.0, 4) if actual_cost > 0.0 else 0.0
+    )
+    return {
+        "proceeds_usd": proceeds,
+        "actual_cost_usd": actual_cost,
+        "gross_pnl_usd": gross_pnl,
+        "fee_usd": fee_usd,
+        "net_pnl_usd": net_pnl,
+        "net_rate_pct": net_rate_pct,
+    }
+
+
+# ---------------------------------------------------------------------------
+# [핵심 5] 포트폴리오 · 1~7층 골디락스 멀티 그리드 · 2~7층 통합 이동평균 · 정적 기억저가 통합 요약기
+# ---------------------------------------------------------------------------
+def summarize_stratum_portfolio(
+    state_dict: Dict[str, Any],
+    live_price: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    🎯 1 ~ 🎯 5 & Case 59, 60, 67, 69, 71, 72:
+    원장 상태(state_dict)와 현재가(live_price)를 받아:
+    - 1층(활성 공격수) 및 상단 2층 ~ 6층 개별 완충층 · 통합 7층 본대(GRID_L2 ~ GRID_L7) 현황
+    - 상단 2층 ~ 7층 통합 이동평균 단가(upper_wma_price) 및 +1.00% 일괄 익절 목표가(l2_target_price / upper_wma_target_price)
+    - 상단 2층 ~ 7층 중 최저 단가 개별 층(min_indiv_upper_price) 및 +1.00% 개별 익절 목표가(min_indiv_upper_target_price)
+    - 상단 그리드 단독 보유(1층 공석, is_l2_only_anti_bloat) 시 직전 익절가 대비 눌림(-1.0%)/돌파(+1.0%) 타점
+    - 활성 1층 보유 중 정적 기억 사이클 최저 매수가(cycle_min_buy_price) 기준 4단 와이드 신저가 매수 트리거 가격
+    - Case 67 min(budget_cap_qty, anchor_quota_qty) 캡핑 정량 및 회계 항등식 기반 무리셋 연속 복리 자산 요약을 반환한다.
+    """
+    st = state_dict if isinstance(state_dict, dict) else {}
+    raw_buckets = buckets_from_dicts(st.get("buckets", []))
+    buckets = enforce_true_breakeven_floor_on_buckets(raw_buckets)
+
+    init_seed = max(
+        100.0, safe_float(st.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
+    )
+    cum_realized = round(
+        safe_float(st.get("cumulative_realized_net_usd"), 0.0), 4
+    )
+
+    actual_invested = round(sum(b.actual_cost_usd for b in buckets), 4)
+    book_invested = round(sum(b.book_invested_usd for b in buckets), 4)
+
+    expected_free_cash = round(
+        max(0.0, (init_seed + cum_realized) - actual_invested), 4
+    )
+    free_cash = safe_float(st.get("free_cash_usd"), expected_free_cash)
+    if abs(free_cash - expected_free_cash) > 0.05:
+        free_cash = expected_free_cash
+
+    held_shares = sum(b.qty for b in buckets)
+    held_lots = sum(max(1, b.lot_count) for b in buckets)
+    held_tiers = len(buckets)
+    lp = safe_float(live_price, 0.0)
+    if lp <= 0.0 and buckets:
+        lp = buckets[0].actual_avg_price
+
+    actual_avg_p = (
+        round(actual_invested / float(held_shares), 4)
+        if held_shares > 0
+        else 0.0
+    )
+    book_avg_p = (
+        round(book_invested / float(held_shares), 4)
+        if held_shares > 0
+        else 0.0
+    )
+
+    threshold_mode = str(st.get("threshold_mode") or "WIDE_RUNWAY").upper()
+    portion_mode = str(st.get("portion_mode") or "COMP_08PCT").upper()
+    drop_buy_pct, rise_l1_pct, rise_l2_pct = get_golden8_prog_thresholds(
+        held_lots=max(1, held_lots), threshold_mode=threshold_mode
+    )
+
+    active_l1 = has_active_l1_bucket(buckets)
+    # 1층이 익절되어 공석이고 상단 2층 ~ 7층 그리드만 보유 중인 상태
+    is_l2_only = bool(len(buckets) > 0 and not active_l1)
+
+    wma_info = compute_upper_2_to_12_moving_avg(
+        buckets, rise_upper_pct=rise_l2_pct
+    )
+    upper_tier_count = safe_int(wma_info.get("upper_tier_count"), 0)
+    upper_qty = safe_int(wma_info.get("upper_qty"), 0)
+    upper_lots = safe_int(wma_info.get("upper_lots"), 0)
+    upper_wma_price = safe_float(wma_info.get("upper_wma_price"), 0.0)
+    upper_wma_target_price = safe_float(
+        wma_info.get("upper_wma_target_price"), 0.0
+    )
+    min_indiv_upper_price = safe_float(
+        wma_info.get("min_indiv_upper_price"), 0.0
+    )
+    min_indiv_upper_target_price = safe_float(
+        wma_info.get("min_indiv_upper_target_price"), 0.0
+    )
+
+    l1_target_price = 0.0
+    l2_target_price = upper_wma_target_price
+    l1_gain_pct = 0.0
+    l2_gain_pct = 0.0
+    min_indiv_upper_gain_pct = 0.0
+
+    if active_l1 and buckets:
+        b1 = buckets[0]
+        l1_target_price = round(
+            math.ceil(
+                (b1.book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9) * 100.0
+            )
+            / 100.0,
+            2,
+        )
+        if lp > 0.0 and b1.book_price > 0.0:
+            l1_gain_pct = round(
+                ((lp - b1.book_price) / b1.book_price) * 100.0, 2
             )
 
-            if is_active_whipsaw_1sh:
-                kwargs = {"is_session_done": True}
-                if not (358 <= est_hm <= 406) and buy_id:
-                    kwargs["buy_order_id"] = ""
-            elif is_active_manual_hold:
-                kwargs = {
-                    "buy_order_id": "",
-                    "is_session_done": True,
-                    "entry_session": "MANUAL",
-                    "whipsaw_target_price": 0.0,
-                }
-            else:
-                kwargs = {
-                    "buy_order_id": "",
-                    "is_session_done": True,
-                    "entry_session": "CANCELED_MACRO",
-                    "whipsaw_target_price": 0.0,
-                }
+    if upper_wma_price > 0.0 and lp > 0.0:
+        l2_gain_pct = round(
+            ((lp - upper_wma_price) / upper_wma_price) * 100.0, 2
+        )
+    if min_indiv_upper_price > 0.0 and lp > 0.0:
+        min_indiv_upper_gain_pct = round(
+            ((lp - min_indiv_upper_price) / min_indiv_upper_price) * 100.0, 2
+        )
 
-            if last_session_id is not None:
-                kwargs["last_session_id"] = last_session_id
-            await cls.save_state(sym, **kwargs)
+    anchor_p = safe_float(st.get("anchor_price"), 0.0)
+    cycle_min_p = safe_float(st.get("cycle_min_buy_price"), 0.0)
+    ratchet_p = safe_float(st.get("ratchet_anchor_price"), anchor_p)
 
-    # 프리장 골든타임 내 익절 완료 또는 04:07 휩소 정리 완료 시 양쪽 장부 동시 무한 재출동 락 해제하되,
-    # 당일 NQ=F 진폭이 이미 2.0% 이상인 과열 장세라면 자동 스나이퍼 재해금을 차단하고 CANCELED_MACRO 복원 (Case 52, 66, 80, 84, 95)
-    @classmethod
-    async def unlock_all_symbols_for_reentry(cls):
-        nq_h = float(MacroDataCache._nq_cache_data[1] or 0.0)
-        nq_l = float(MacroDataCache._nq_cache_data[2] or 0.0)
-        nq_amp = ((nq_h - nq_l) / nq_l * 100.0) if nq_l > 0.0 else 0.0
-        if nq_amp >= 2.0:
-            await cls.lock_all_symbols_macro(force_all=False)
-            return
+    reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
+        live_price=lp,
+        anchor_price=anchor_p,
+        l2_book_price=upper_wma_price,
+    )
+    reentry_ref_anchor = safe_float(reentry_sig.get("ref_anchor"), anchor_p)
+    reentry_pullback_price = safe_float(
+        reentry_sig.get("pullback_target_price"), 0.0
+    )
+    reentry_breakout_price = safe_float(
+        reentry_sig.get("breakout_target_price"), 0.0
+    )
+    chg_from_reentry_anchor_pct = safe_float(
+        reentry_sig.get("chg_from_exit_pct"), 0.0
+    )
 
-        for sym in cls.ALLOWED_SYMBOLS:
-            st = await cls.get_state(sym)
-            if st[8] != "CANCELED_MACRO":
-                await cls.save_state(sym, is_session_done=False, whipsaw_target_price=0.0)
+    # 🚨 Case 60 & Case 72: 활성 1층 보유 중 추가 매수(DIP_1FL) 기준가는 반드시 정적 기억 최저 매수가(cycle_min_buy_price)!
+    if buckets:
+        candidates = [
+            p
+            for p in (buckets[0].book_price, anchor_p, cycle_min_p)
+            if p > 0.0
+        ]
+        active_buy_anchor = (
+            min(candidates) if candidates else buckets[0].book_price
+        )
+    else:
+        active_buy_anchor = lp if lp > 0.0 else max(anchor_p, 1.0)
 
-    @classmethod
-    async def reset_all_ledgers(cls):
-        for sym in cls.ALLOWED_SYMBOLS:
-            await cls.save_state(
-                sym, price=0.0, target_sell_price=0.0, buy_order_id="", sell_order_id="",
-                is_session_done=False, entry_session="", entry_time=0.0,
-                nq_entry_price=0.0, nq_entry_amp=0.0, entry_trend="",
-                whipsaw_target_price=0.0,
-            )
+    trigger_buy_price = (
+        round(active_buy_anchor * (1.0 + drop_buy_pct / 100.0), 2)
+        if active_buy_anchor > 0.0
+        else 0.0
+    )
+
+    if is_l2_only:
+        ref_buy_anchor = (
+            reentry_ref_anchor
+            if reentry_ref_anchor > 0.0
+            else active_buy_anchor
+        )
+        chg_from_buy_anchor_pct = chg_from_reentry_anchor_pct
+    else:
+        ref_buy_anchor = active_buy_anchor
+        chg_from_buy_anchor_pct = (
+            round(((lp - active_buy_anchor) / active_buy_anchor) * 100.0, 2)
+            if (lp > 0.0 and active_buy_anchor > 0.0)
+            else 0.0
+        )
+
+    cost_equity = free_cash + actual_invested
+    if len(buckets) == 0:
+        ref_for_quota = lp if lp > 0.0 else max(anchor_p, 1.0)
+    elif is_l2_only:
+        ref_for_quota = (
+            reentry_ref_anchor
+            if reentry_ref_anchor > 0.0
+            else (lp if lp > 0.0 else active_buy_anchor)
+        )
+    else:
+        ref_for_quota = active_buy_anchor
+
+    anchor_quota_qty, next_portion_budget = compute_golden8_quota_qty(
+        anchor_price=max(0.01, ref_for_quota),
+        current_total_equity=cost_equity,
+        initial_seed_usd=init_seed,
+        portion_mode=portion_mode,
+        exec_price=None,
+    )
+    eff_exec_for_cap = lp if lp > 0.0 else max(0.01, ref_for_quota)
+    budget_cap_qty = max(
+        1, int(math.floor((next_portion_budget + 1e-9) / eff_exec_for_cap))
+    )
+    next_target_qty = min(budget_cap_qty, anchor_quota_qty)
+
+    market_eval_usd = (
+        round(float(held_shares) * lp, 4)
+        if held_shares > 0 and lp > 0.0
+        else 0.0
+    )
+    unrealized_pnl_usd = (
+        round(market_eval_usd - actual_invested, 4)
+        if held_shares > 0 and lp > 0.0
+        else 0.0
+    )
+    unrealized_rate_pct = (
+        round((unrealized_pnl_usd / actual_invested) * 100.0, 2)
+        if actual_invested > 0.0
+        else 0.0
+    )
+
+    realized_equity_usd = round(max(0.0, init_seed + cum_realized), 4)
+    realized_roi_pct = round((cum_realized / init_seed) * 100.0, 2)
+    total_mark_equity_usd = round(free_cash + market_eval_usd, 4)
+    total_net_pnl_usd = round(cum_realized + unrealized_pnl_usd, 4)
+    total_roi_pct = round((total_net_pnl_usd / init_seed) * 100.0, 2)
+
+    reanchor_cnt = safe_int(st.get("reanchor_cnt"), 0)
+    cum_reanchor_drop = round(
+        safe_float(st.get("cumulative_reanchor_drop_usd"), 0.0), 4
+    )
+    indiv_grid_sell_cnt = safe_int(st.get("indiv_grid_sell_cnt"), 0)
+    wma_grad_sell_cnt = safe_int(st.get("wma_grad_sell_cnt"), 0)
+
+    # MODIFIED: 🛡️ 시드보호 패스는 당일 프리장 ~ 정규장(04:07 ~ 16:00 EST) 일일 주기 카운터(daily_seed_protect_pass_cnt)로 바인딩!
+    daily_seed_protect_pass_cnt = safe_int(
+        st.get("daily_seed_protect_pass_cnt"), 0
+    )
+    total_seed_protect_pass_cnt = safe_int(
+        st.get("seed_protect_pass_cnt"), 0
+    )
+    seed_protect_pass_cnt = daily_seed_protect_pass_cnt
+
+    extra_13plus_buy_events = safe_int(st.get("extra_13plus_buy_events"), 0)
+    cum_leftover_saved = round(
+        safe_float(st.get("cumulative_leftover_saved_usd"), 0.0), 4
+    )
+
+    return {
+        "buckets": buckets,
+        "has_active_l1": active_l1,
+        "held_shares": held_shares,
+        "held_lots": held_lots,
+        "held_tiers": held_tiers,
+        "upper_tier_count": upper_tier_count,
+        "upper_qty": upper_qty,
+        "upper_lots": upper_lots,
+        "upper_wma_price": upper_wma_price,
+        "upper_wma_target_price": upper_wma_target_price,
+        "min_indiv_upper_price": min_indiv_upper_price,
+        "min_indiv_upper_target_price": min_indiv_upper_target_price,
+        "min_indiv_upper_gain_pct": min_indiv_upper_gain_pct,
+        "is_l2_only_anti_bloat": is_l2_only,
+        "initial_seed_usd": init_seed,
+        "free_cash_usd": free_cash,
+        "actual_invested_usd": actual_invested,
+        "book_invested_usd": book_invested,
+        "actual_avg_price": actual_avg_p,
+        "book_avg_price": book_avg_p,
+        "cycle_reanchor_credit_usd": 0.0,
+        "market_eval_usd": market_eval_usd,
+        "unrealized_pnl_usd": unrealized_pnl_usd,
+        "unrealized_rate_pct": unrealized_rate_pct,
+        "cumulative_realized_net_usd": cum_realized,
+        "realized_equity_usd": realized_equity_usd,
+        "realized_roi_pct": realized_roi_pct,
+        "total_mark_equity_usd": total_mark_equity_usd,
+        "mark_equity_usd": total_mark_equity_usd,
+        "total_net_pnl_usd": total_net_pnl_usd,
+        "total_roi_pct": total_roi_pct,
+        "mark_roi_pct": total_roi_pct,
+        "drop_buy_pct": drop_buy_pct,
+        "rise_sell_l1_pct": rise_l1_pct,
+        "rise_sell_l2_pct": rise_l2_pct,
+        "l1_target_price": l1_target_price,
+        "l2_target_price": l2_target_price,
+        "l1_gain_pct": l1_gain_pct,
+        "l2_gain_pct": l2_gain_pct,
+        "active_buy_anchor": round(active_buy_anchor, 4),
+        "ref_buy_anchor": round(ref_buy_anchor, 4),
+        "chg_from_buy_anchor_pct": chg_from_buy_anchor_pct,
+        "cycle_min_buy_price": round(
+            cycle_min_p if cycle_min_p > 0.0 else active_buy_anchor, 4
+        ),
+        "ratchet_anchor_price": round(ratchet_p, 4),
+        "trigger_buy_price": trigger_buy_price,
+        "reentry_ref_anchor": round(reentry_ref_anchor, 4),
+        "reentry_pullback_price": reentry_pullback_price,
+        "reentry_breakout_price": reentry_breakout_price,
+        "chg_from_reentry_anchor_pct": chg_from_reentry_anchor_pct,
+        "next_target_qty": next_target_qty,
+        "anchor_quota_qty": anchor_quota_qty,
+        "budget_cap_qty": budget_cap_qty,
+        "next_portion_budget": next_portion_budget,
+        "indiv_grid_sell_cnt": indiv_grid_sell_cnt,
+        "wma_grad_sell_cnt": wma_grad_sell_cnt,
+        "reanchor_cnt": reanchor_cnt,
+        "cumulative_reanchor_drop_usd": cum_reanchor_drop,
+        "seed_protect_pass_cnt": seed_protect_pass_cnt,
+        "daily_seed_protect_pass_cnt": daily_seed_protect_pass_cnt,
+        "total_seed_protect_pass_cnt": total_seed_protect_pass_cnt,
+        "extra_13plus_buy_events": extra_13plus_buy_events,
+        "cumulative_leftover_saved_usd": cum_leftover_saved,
+    }
+
+
+# ---------------------------------------------------------------------------
+# [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 72 & 1~7층 순수 멀티 그리드 전수 검증)
+# ---------------------------------------------------------------------------
+def run_quant_engine_tdd() -> bool:
+    """
+    기동 직전 8% 황금정량 산출, Case 67 min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑,
+    4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%),
+    1층 ~ 6층 개별 완충층 보존 및 8회차 최상단(6층+7층 ➔ 통합 7층 GRID_L7) 병합(Case 72),
+    1층(+1.50%) / 2~7층 개별(+1.00%) / 2~7층 통합 이동평균(+1.00%) 3중 다중 익절 판정(Case 71, 72),
+    상단 그리드 단독 보유(1층 공석) 시 눌림/돌파 독립 1층 재장전(Case 59), 정적 기억저가 잠금(Case 60, 72) 및
+    당일 시드보호 패스(daily_seed_protect_pass_cnt) 바인딩을 전수 검증한다.
+    """
+    # 1) 8% 황금정량 및 Case 67 min(budget_cap_qty, anchor_quota_qty) 캡핑 검증
+    q_dip, bud_c67 = compute_golden8_quota_qty(
+        82.39, 19155.74, 19000.0, "COMP_08PCT", exec_price=79.52
+    )
+    q_brk, _ = compute_golden8_quota_qty(
+        82.39, 19155.74, 19000.0, "COMP_08PCT", exec_price=86.00
+    )
+    assert q_dip == 18 and q_brk == 17 and (q_brk * 86.00) <= bud_c67, (
+        f"TDD 실패(Case 67): q_dip={q_dip}, q_brk={q_brk}"
+    )
+
+    # 2) 4단 와이드 활주로 단차 검증
+    d1, s1, s2 = get_golden8_prog_thresholds(1, "WIDE_RUNWAY")
+    d5, _, _ = get_golden8_prog_thresholds(5, "WIDE_RUNWAY")
+    d9, _, _ = get_golden8_prog_thresholds(9, "WIDE_RUNWAY")
+    d11, _, _ = get_golden8_prog_thresholds(11, "WIDE_RUNWAY")
+    assert (
+        d1 == -1.00
+        and d5 == -2.00
+        and d9 == -3.50
+        and d11 == -5.50
+        and s1 == 1.50
+        and s2 == 1.00
+    ), "TDD 실패: 4단 와이드 단차 불일치"
+
+    # 3) 🚨 Case 72: 1층 ~ 6층 개별 완충층 적재 및 8회차 유입 시 최상단(6층+7층 ➔ 통합 7층 GRID_L7) 병합 검증
+    grid_q: List[StratumBucket] = []
+    for step in range(8):
+        p_step = round(100.0 - float(step), 2)
+        tag_step = "REENTRY_1FL" if step == 0 else "DIP_1FL"
+        grid_q = vrev_add_quota_lot_and_merge_2tier(
+            grid_q, 10, p_step, round(10.0 * p_step, 4), tag_step
+        )
+        assert len(grid_q) == min(MAX_GRID_TIERS_7, step + 1), (
+            f"TDD 실패(Case 72 그리드 층수): step={step}, len={len(grid_q)}"
+        )
+
+    assert (
+        len(grid_q) == 7
+        and has_active_l1_bucket(grid_q)
+        and grid_q[0].book_price == 93.0
+        and grid_q[-1].lot_type == "GRID_L7"
+        and grid_q[-1].lot_count == 2
+        and abs(grid_q[-1].book_price - 99.50) < 1e-4
+    ), f"TDD 실패(Case 72): 8회차 시 최상단 통합 7층 병합 불일치 {grid_q[-1]}"
+
+    # 4) 🚨 Case 71 & Case 72: 3중 다중 익절 판정(① 1층 +1.5% / ② 2~7층 개별 +1.0% / ③ 2~7층 이동평균 +1.0%) 검증
+    test_grid = [
+        StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
+        StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
+        StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
+        StratumBucket(10, 90.0, 900.0, 900.0, 1, "GRID_L4"),
+    ]
+    res_part = evaluate_multi_grid_sell_targets(test_grid, live_price=81.90)
+    assert (
+        res_part["should_sell"]
+        and res_part["sold_indices"] == [0, 1]
+        and res_part["sell_qty"] == 20
+        and res_part["hit_l1"]
+        and res_part["hit_indiv_grid"]
+    ), f"TDD 실패(Case 71/72 부분 다중익절): {res_part}"
+
+    # 1층과 2층이 팔린 후 남은 [GRID_L3($85), GRID_L4($90)] -> relabel_upper_grid_tiers 호출 시 [GRID_L2($85), GRID_L3($90)] (1층 공석!)
+    rem_uppers = relabel_upper_grid_tiers(test_grid[2:])
+    assert len(rem_uppers) == 2 and not has_active_l1_bucket(rem_uppers), (
+        "TDD 실패(Case 71/72): 1층 익절 후 1층 공석(상단 그리드만 보유) 상태 판별 오류"
+    )
+
+    # 1층 공석 상태에서 눌림목($80.50)으로 REENTRY_1FL 재장전 시 상단 [GRID_L2, GRID_L3] 비병합 독립 1층 배치!
+    reloaded_grid = vrev_add_quota_lot_and_merge_2tier(
+        rem_uppers, 10, 80.50, 805.0, "REENTRY_1FL"
+    )
+    assert (
+        len(reloaded_grid) == 3
+        and has_active_l1_bucket(reloaded_grid)
+        and reloaded_grid[0].book_price == 80.50
+        and reloaded_grid[1].book_price == 85.00
+        and reloaded_grid[2].book_price == 90.00
+    ), "TDD 실패(Case 59/72): 1층 공석 재장전 시 상단 그리드 비병합 배치 오류"
+
+    # 상단 2~3층 이동평균 = ($850 + $900) / 20주 = $87.50 -> +1.0% 목표가 = $88.38
+    # 현재가 $88.50 도달 시 1층($80.50) + 2~3층($87.50) 전량 30주 동시 졸업!
+    res_grad = evaluate_multi_grid_sell_targets(reloaded_grid, live_price=88.50)
+    assert (
+        res_grad["should_sell"]
+        and res_grad["sold_indices"] == [0, 1, 2]
+        and res_grad["sell_qty"] == 30
+        and res_grad["hit_wma_grad"]
+    ), f"TDD 실패(Case 71/72 2~7층 이동평균 일괄졸업): {res_grad}"
+
+    # 5) Case 60 & Case 72 정적 기억 최저가($80.00) 잠금 및 당일 시드보호 패스 바인딩 검증
+    mock_st = {
+        "buckets": buckets_to_dicts(reloaded_grid),
+        "initial_seed_usd": 10000.0,
+        "anchor_price": 80.50,
+        "cycle_min_buy_price": 80.00,
+        "cumulative_realized_net_usd": 25.0,
+        "seed_protect_pass_cnt": 120,
+        "daily_seed_protect_pass_cnt": 7,
+    }
+    sum_info = summarize_stratum_portfolio(mock_st, live_price=81.00)
+    assert abs(sum_info["active_buy_anchor"] - 80.00) < 1e-4, (
+        "TDD 실패(Case 60/72): 정적 기억 최저가 잠금 풀림"
+    )
+    assert (
+        sum_info["held_tiers"] == 3
+        and sum_info["upper_tier_count"] == 2
+        and abs(sum_info["upper_wma_price"] - 87.50) < 1e-4
+        and sum_info["seed_protect_pass_cnt"] == 7
+    ), "TDD 실패(Case 72): 상단 2~7층 이동평균 또는 당일 시드패스 요약 오류"
+
+    logger.info(
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 🔥 03_7G_PURE_10_01 (1~6층 개별 완충층 + 통합 7층 본대 · 2~7층 통합이평 3중 익절 · 정적 저가 잠금 Case 59~72) 검증 완료"
+    )
+    return True
