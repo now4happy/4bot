@@ -346,3 +346,15 @@ class TossApiClient:
             headers=self._get_headers(requires_account=True),
             json_data=payload,
         )
+
+
+    async def get_all_holdings(self, symbol: str='') -> list:
+        """해당 종목의 보유 수량(qty), 평단가(avg_price), 수익률(profit_rate) 조회"""
+        if not self.account_seq:
+            await self.fetch_account_seq()
+        sym = str(symbol).strip().upper()
+        data = await self._request('GET', '/api/v1/holdings', headers=self._get_headers(requires_account=True))
+        result = data.get('result') if isinstance(data, dict) else None
+        if not isinstance(result, dict) or not isinstance(result.get('items'), list):
+            raise ValueError('Unexpected holdings response')
+        return result['items']
