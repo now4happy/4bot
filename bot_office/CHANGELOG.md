@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.15 · 2026-10-25 10:08 (KST)
+- 파일: fanding_trade.py, gemini_usage.py, office_briefing.py, office_secretary.py
+- 내용: 팬딩 이미지 수정 1차25일
+- 브랜치: staging
+
 ## v1.0.14 · 2026-10-24 13:43 (KST)
 - 파일: sniper_keep_addbuy.py, sniper_upstream.py
 - 내용: Delete bot_office/sniper_keep_addbuy.py
