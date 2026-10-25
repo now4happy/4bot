@@ -3,7 +3,7 @@
 - 읽기 전용: 주문·설정 변경 없음. 잔고 조회만 합니다.
 - 시장분석실 점수 / 오늘 필요한 달러·원화 / 봇 상태 / 결재·리스크 현황을 사무실 비서 텔레그램으로 보냅니다.
 """
-import base64, hashlib, hmac, html, json, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
+import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -61,10 +61,20 @@ def money(v, cur):
     return f"${v:,.2f}" if cur == "USD" else f"{v:,.0f}원"
 
 
+def balance_value(value):
+    """Missing/malformed API values are unavailable, never zero."""
+    if value is None or isinstance(value, bool) or not str(value).strip():
+        raise ValueError("잔액 값 누락")
+    result = float(str(value).replace(",", ""))
+    if not math.isfinite(result):
+        raise ValueError("잔액 값 오류")
+    return result
+
+
 # ------------------------------------------------------------------ 토스 (읽기 전용)
 class Toss:
-    def __init__(self):
-        env = read_env(TOSS_DIR / ".env")
+    def __init__(self, directory=None):
+        env = read_env((directory or TOSS_DIR) / ".env")
         self.cid, self.sec = env.get("TOSS_CLIENT_ID", ""), env.get("TOSS_CLIENT_SECRET", "")
         self.token = self.acc = None
 
@@ -81,11 +91,13 @@ class Toss:
                 accs = (http("GET", f"{TOSS_API}/api/v1/accounts", h).get("result") or [])
                 pick = [a for a in accs if isinstance(a, dict) and a.get("accountType") == "BROKERAGE"] or [a for a in accs if isinstance(a, dict)]
                 self.acc = pick[0].get("accountSeq") if pick else None
+            if self.acc is None:
+                raise RuntimeError("토스 조회 계좌 없음")
             h["X-Tossinvest-Account"] = str(self.acc)
         return http("GET", f"{TOSS_API}{path}", h).get("result")
 
     def buying_power(self, cur):
-        return float((self._get(f"/api/v1/buying-power?currency={cur}") or {}).get("cashBuyingPower") or 0.0)
+        return balance_value((self._get(f"/api/v1/buying-power?currency={cur}") or {}).get("cashBuyingPower"))
 
     def holding(self, sym):
         items = (self._get(f"/api/v1/holdings?symbol={urllib.parse.quote(sym)}") or {}).get("items") or []
@@ -104,12 +116,111 @@ def bithumb_accounts():
     body = b64(json.dumps({"access_key": ak, "nonce": str(uuid.uuid4()), "timestamp": round(time.time() * 1000)}, separators=(",", ":")).encode())
     sig = b64(hmac.new(sk.encode(), head + b"." + body, hashlib.sha256).digest())
     res = http("GET", f"{BITHUMB_API}/v1/accounts", {"Authorization": "Bearer " + (head + b"." + body + b"." + sig).decode()})
-    return {a["currency"]: a for a in res if isinstance(a, dict) and "currency" in a} if isinstance(res, list) else {}
+    if not isinstance(res, list):
+        raise RuntimeError("빗썸 잔액 응답 오류")
+    return {a["currency"]: a for a in res if isinstance(a, dict) and "currency" in a}
 
 
 def bithumb_price(coin):
     res = http("GET", f"{BITHUMB_API}/v1/ticker?markets=KRW-{coin}")
     return float(res[0]["trade_price"]) if isinstance(res, list) and res else 0.0
+
+
+# ------------------------------------------------------------------ 한국투자: 기존 봇 토큰으로 GET 조회만
+def kis_balances():
+    result = {"KRW": None, "USD": None}
+    try:
+        env = read_env(Path(os.environ.get("BRIEF_KIS_ENV", str(HOME / ".env"))))
+        key, secret, cano = (os.environ.get(k) or env.get(k, "") for k in ("APP_KEY", "APP_SECRET", "CANO"))
+        product = os.environ.get("ACNT_PRDT_CD") or env.get("ACNT_PRDT_CD", "01")
+        if not key or not secret or not cano or not cano.isdigit() or len(cano) != 8:
+            return result
+        # No token issuance, refresh, deletion, or changes to the trading bot.
+        token_path = Path(os.environ.get("BRIEF_KIS_TOKEN", str(HOME / "data" / f"token_{cano}.dat")))
+        token = load(token_path, {}).get("token")
+        if not token:
+            return result
+        headers = {"authorization": "Bearer " + token, "appkey": key, "appsecret": secret,
+                   "content-type": "application/json; charset=utf-8", "custtype": "P"}
+        common = {"CANO": cano, "ACNT_PRDT_CD": product}
+        requests = [
+            ("KRW", "TTTC8434R", "/uapi/domestic-stock/v1/trading/inquire-balance",
+             dict(common, AFHR_FLPR_YN="N", OFL_YN="", INQR_DVSN="01", UNPR_DVSN="01",
+                  FUND_STTL_ICLD_YN="N", FNCG_AMT_AUTO_RDPT_YN="N", PRCS_DVSN="00",
+                  CTX_AREA_FK100="", CTX_AREA_NK100="")),
+            ("USD", "CTRP6504R", "/uapi/overseas-stock/v1/trading/inquire-present-balance",
+             dict(common, WCRC_FRCR_DVSN_CD="02", NATN_CD="840", TR_MKET_CD="00", INQR_DVSN_CD="00")),
+        ]
+        for currency, tr_id, path, params in requests:
+            try:
+                response = http("GET", "https://openapi.koreainvestment.com:9443" + path
+                                + "?" + urllib.parse.urlencode(params), dict(headers, tr_id=tr_id))
+                if response.get("rt_cd") != "0":
+                    continue
+                rows = response.get("output2")
+                rows = [rows] if isinstance(rows, dict) else rows
+                if not isinstance(rows, list):
+                    continue
+                if currency == "USD":
+                    # Select by currency, never assume the first row is USD or sum currencies.
+                    rows = [row for row in rows if isinstance(row, dict) and row.get("crcy_cd") == "USD"]
+                if len(rows) != 1 or not isinstance(rows[0], dict):
+                    continue
+                field = "dnca_tot_amt" if currency == "KRW" else "frcr_dncl_amt_2"
+                result[currency] = balance_value(rows[0].get(field))
+            except Exception:
+                # Isolate KRW/USD failures and never expose authenticated URLs or keys.
+                continue
+    except Exception:
+        pass
+    return result
+
+
+def balance_lines(kis, usd, krw_toss, krw_b):
+    def amount(value, currency):
+        return money(value, currency) if value is not None else "조회 불가"
+    return ["💰 <b>통합 잔액 · 계좌별 조회</b>",
+            f"▫️ 한국투자 예수금: {amount(kis.get('KRW'), 'KRW')} / {amount(kis.get('USD'), 'USD')}",
+            f"▫️ 토스 3번 조회 계좌 · 현금 주문가능금액: {amount(krw_toss, 'KRW')} / {amount(usd, 'USD')}",
+            f"▫️ 빗썸 사용가능 원화: {amount(krw_b, 'KRW')}",
+            "▫️ RP 미포함",
+            "▫️ 조회 항목 기준이 달라 합산하지 않음 · 부족액은 해당 계좌에서 보충"]
+
+
+def sniper_balance_lines(toss):
+    """Check identity before reporting 2/3 as one account; never sum duplicated cash."""
+    other = Toss(SNIPER_DIR)
+    if not other.cid or not other.sec:
+        return ["▫️ 토스 2번: 조회 인증 설정 확인 필요"]
+    if other.cid == toss.cid and other.sec == toss.sec:
+        return ["▫️ 토스 2·3번 같은 조회 인증 사용 · 위 계좌 금액 중복표시 생략"]
+    values = {}
+    for currency in ("KRW", "USD"):
+        try:
+            values[currency] = money(other.buying_power(currency), currency)
+        except Exception:
+            values[currency] = "조회 불가"
+    if other.acc is not None and toss.acc is not None and str(other.acc) == str(toss.acc):
+        return ["▫️ 토스 2·3번 동일 계좌 확인 · 위 계좌 금액 중복표시 생략"]
+    return [f"▫️ 토스 2번 조회 계좌 · 현금 주문가능금액: {values['KRW']} / {values['USD']}"]
+
+
+def section_balances(now=None):
+    now = now or datetime.now(timezone.utc)
+    toss = Toss()
+    amounts = {}
+    for currency in ("USD", "KRW"):
+        try:
+            amounts[currency] = toss.buying_power(currency)
+        except Exception:
+            amounts[currency] = None
+    try:
+        krw_b = balance_value(bithumb_accounts().get("KRW", {}).get("balance"))
+    except Exception:
+        krw_b = None
+    return (f"🏢 <b>잔액 조회</b> · {now.astimezone(KST).strftime('%m/%d %H:%M')} KST\n"
+            + "\n".join(balance_lines(kis_balances(), amounts["USD"], amounts["KRW"], krw_b)
+                         + sniper_balance_lines(toss)))
 
 
 # ------------------------------------------------------------------ 다음 매매 세션 날짜
@@ -207,7 +318,7 @@ def section_money(now):
     except Exception as e:
         usd, toss_err = None, toss_err or str(e)[:80]
     try:
-        krw_toss = toss.buying_power("KRW") if kr_need > 0 else None
+        krw_toss = toss.buying_power("KRW")
     except Exception as e:
         krw_toss, toss_err = None, toss_err or str(e)[:80]
 
@@ -271,7 +382,10 @@ def section_money(now):
                 half = bal > 0 and avg > 0 and cur > 0 and (cur / avg - 1) * 100 >= 1.0
             amt = max(5000, int(base / 2) if half else base)
             b_need += amt; b_det.append(f"{coin} {amt:,.0f}원{'(½)' if half else ''}")
-    krw_b = float((accs or {}).get("KRW", {}).get("balance") or 0) if accs is not None else None
+    try:
+        krw_b = balance_value((accs or {}).get("KRW", {}).get("balance"))
+    except (TypeError, ValueError):
+        krw_b = None
     when = "오늘" if b_day == now_kst.date() else "내일"
     lines.append(f"▫️ 4번 빗썸 {when} {buy_h:02d}:00: {b_need:,.0f}원" + (f" [{', '.join(b_det)}]" if b_det else " (예정 없음)")
                  + (f" / 빗썸 원화 {krw_b:,.0f}원" if krw_b is not None else f" / 잔고 조회 실패"))
@@ -280,7 +394,8 @@ def section_money(now):
     errs = [e for e in (toss_err and f"토스 {toss_err}", berr and f"빗썸 {berr}") if e]
     if errs:
         lines.append("▫️ ⚠️ 조회 오류: " + html.escape(" / ".join(errs)))
-    return lines, tips
+    summary = balance_lines(kis_balances(), usd, krw_toss, krw_b) + sniper_balance_lines(toss)
+    return summary + [""] + lines, tips
 
 
 def section_bots():
@@ -411,23 +526,70 @@ def build(now=None):
     return "\n".join(out)
 
 
+def message_chunks(text, limit=3500):
+    """Keep complete formatted lines; exceptionally long lines become escaped text."""
+    def length(value):
+        return len(value.encode("utf-16-le")) // 2
+    lines = []
+    for line in text.splitlines():
+        if length(line) <= limit:
+            lines.append(line)
+            continue
+        from html.parser import HTMLParser
+        class Plain(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.parts = []
+            def handle_data(self, data):
+                self.parts.append(data)
+        parser = Plain()
+        parser.feed(line)
+        fragment = ""
+        size = 0
+        for char in "".join(parser.parts):
+            escaped = html.escape(char)
+            width = length(escaped)
+            if size + width > limit:
+                lines.append(fragment)
+                fragment, size = "", 0
+            fragment += escaped
+            size += width
+        if fragment:
+            lines.append(fragment)
+    chunks, current = [], ""
+    for line in lines:
+        candidate = current + "\n" + line if current else line
+        if length(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def send(text):
     cfg = load(TELEGRAM_CFG, {})
     token, chat = cfg.get("token"), cfg.get("chat_id")
     if not token or not chat:
         print(text); print("\n(사무실 비서 텔레그램 설정이 없어 화면에만 출력)"); return False
-    payload = {"chat_id": chat, "text": text[:3900], "parse_mode": "HTML", "disable_web_page_preview": True}
+    payload = {"chat_id": chat, "parse_mode": "HTML", "disable_web_page_preview": True}
     url = OFFICE_URL.read_text().strip() if OFFICE_URL.exists() else ""
     if url.startswith("https://"):
         payload["reply_markup"] = {"inline_keyboard": [[{"text": "🏢 사무실 열기", "url": url}]]}
     try:
-        return http("POST", f"{TELEGRAM_API}/bot{token}/sendMessage", {"Content-Type": "application/json"}, json.dumps(payload).encode()).get("ok", False)
+        for chunk in message_chunks(text):
+            payload["text"] = chunk
+            if not http("POST", f"{TELEGRAM_API}/bot{token}/sendMessage", {"Content-Type": "application/json"}, json.dumps(payload).encode()).get("ok", False):
+                return False
+        return True
     except Exception as e:
         print("텔레그램 전송 실패:", e); return False
 
 
 if __name__ == "__main__":
-    text = build()
+    text = section_balances() if "--balances" in sys.argv else build()
     if "--print" in sys.argv:
         print(text)
     else:

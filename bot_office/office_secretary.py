@@ -43,6 +43,7 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "▫️ <b>고칠 내용을 평소 말투로</b> 보내세요. 예) <i>4번 봇 잔액 부족 알림을 1시간에 한 번만 보내줘</i>\n"
         "   → 어느 봇인지 확인 → 사무실이 고칠 파일을 스스로 찾아 수정안 작성 → 결재 요청이 오면 버튼으로 승인\n"
         "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
+        "▫️ <b>/잔액</b> : 한국투자·토스·빗썸 잔액 통합 조회\n"
         "▫️ <b>현황</b> : 결재 대기·진행 중인 안건 보기\n"
         "▫️ <b>/가격표</b> : 최근 팬딩 가격표·주문 상태 · <b>/배수</b> 6 : 배수 변경 · <b>/자동</b> : 자동주문 켜기/끄기\n"
         "▫️ 큰 기능 추가나 매매 로직 변경은 Claude에게 요청하면 시뮬레이션까지 해서 결재함에 올려 드립니다.")
@@ -247,6 +248,9 @@ def handle_message(tg, st, msg):
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?"):
         tg.send(HELP); return
+    if low in ("/잔액", "잔액", "/balances"):
+        tg.send("💰 계좌별 잔액을 조회하고 있어요…")
+        subprocess.Popen([sys.executable, BRIEFING, "--balances"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return
     if low in ("/brief", "브리핑", "/briefing"):
         tg.send("🗞 브리핑을 준비하고 있어요…")
         subprocess.Popen([sys.executable, BRIEFING], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return
