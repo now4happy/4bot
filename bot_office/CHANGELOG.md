@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.18 · 2026-10-25 11:44 (KST)
+- 파일: gemini_usage.py, office_secretary.py, price_watch.py
+- 내용: 가격비교 등록
+- 브랜치: staging
+
 ## v1.0.17 · 2026-10-25 11:02 (KST)
 - 파일: office_briefing.py, office_secretary.py, price_watch.py
 - 내용: 가격 알림
