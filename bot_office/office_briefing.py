@@ -593,4 +593,11 @@ if __name__ == "__main__":
     if "--print" in sys.argv:
         print(text)
     else:
-        print("전송 결과:", send(text))
+        sent = send(text)
+        print("전송 결과:", sent)
+        if sent and "--balances" not in sys.argv and 8 <= datetime.now(KST).hour < 12:
+            try:
+                import price_watch
+                price_watch.launch()
+            except Exception as error:
+                print("가격 추적 시작 실패:", type(error).__name__)

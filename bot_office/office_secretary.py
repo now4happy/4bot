@@ -44,6 +44,7 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "   → 어느 봇인지 확인 → 사무실이 고칠 파일을 스스로 찾아 수정안 작성 → 결재 요청이 오면 버튼으로 승인\n"
         "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
         "▫️ <b>/잔액</b> : 한국투자·토스·빗썸 잔액 통합 조회\n"
+        "▫️ <b>/가격도움말</b> : 한국 제품 가격 등록·조회·변동 알림\n"
         "▫️ <b>현황</b> : 결재 대기·진행 중인 안건 보기\n"
         "▫️ <b>/가격표</b> : 최근 팬딩 가격표·주문 상태 · <b>/배수</b> 6 : 배수 변경 · <b>/자동</b> : 자동주문 켜기/끄기\n"
         "▫️ 큰 기능 추가나 매매 로직 변경은 Claude에게 요청하면 시뮬레이션까지 해서 결재함에 올려 드립니다.")
@@ -239,6 +240,10 @@ def handle_message(tg, st, msg):
     text = (msg.get("text") or "").strip()
     if not text:
         return
+    if text.split()[0] in ("/가격등록", "/가격목록", "/가격중지", "/가격재개", "/가격확인", "/가격도움말"):
+        import price_watch
+        if price_watch.handle(tg, text):
+            return
     if text.split()[0] in ("/제미나이잔액", "/제미나이단가"):
         import gemini_usage
         if gemini_usage.handle(tg, text):
