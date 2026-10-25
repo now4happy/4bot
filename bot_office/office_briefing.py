@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""사무실 비서 정기 브리핑 (매일 07:00 · 19:00 KST, systemd timer)
+"""사무실 비서 정기 브리핑 (평일 09:00 · 16:30 KST, systemd timer)
 - 읽기 전용: 주문·설정 변경 없음. 잔고 조회만 합니다.
 - 시장분석실 점수 / 오늘 필요한 달러·원화 / 봇 상태 / 결재·리스크 현황을 사무실 비서 텔레그램으로 보냅니다.
 """
@@ -588,16 +588,95 @@ def send(text):
         print("텔레그램 전송 실패:", e); return False
 
 
-if __name__ == "__main__":
-    text = section_balances() if "--balances" in sys.argv else build()
-    if "--print" in sys.argv:
-        print(text)
-    else:
+
+# Official NYSE full-day calendar, reviewed 2026-10-25. Early closes are open.
+# https://www.nyse.com/trade/hours-calendars
+US_CLOSED = {
+    2026: "01-01 01-19 02-16 04-03 05-25 06-19 07-03 09-07 11-26 12-25",
+    2027: "01-01 01-18 02-15 03-26 05-31 06-18 07-05 09-06 11-25 12-24",
+    2028: "01-17 02-21 04-14 05-29 06-19 07-04 09-04 11-23 12-25",
+}
+
+
+def korean_session(day):
+    """Read existing KIS token only. Never infer open from missing data."""
+    try:
+        env = read_env(Path(os.environ.get("BRIEF_KIS_ENV", str(HOME / ".env"))))
+        key, secret, cano = (os.environ.get(k) or env.get(k, "") for k in ("APP_KEY", "APP_SECRET", "CANO"))
+        if not key or not secret or not cano.isdigit() or len(cano) != 8:
+            return None
+        token = load(Path(os.environ.get("BRIEF_KIS_TOKEN", str(HOME / "data" / f"token_{cano}.dat"))), {}).get("token")
+        if not token:
+            return None
+        params = {"BASS_DT": day.strftime("%Y%m%d"), "CTX_AREA_FK": "", "CTX_AREA_NK": ""}
+        result = http("GET", "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/chk-holiday?" + urllib.parse.urlencode(params),
+                      {"authorization": "Bearer " + token, "appkey": key, "appsecret": secret,
+                       "tr_id": "CTCA0903R", "custtype": "P"})
+        if result.get("rt_cd") != "0":
+            return None
+        rows = result.get("output", [])
+        rows = [rows] if isinstance(rows, dict) else rows
+        matches = [r for r in rows if isinstance(r, dict) and r.get("bass_dt") == params["BASS_DT"]]
+        if len(matches) == 1 and matches[0].get("opnd_yn") in ("Y", "N"):
+            return matches[0]["opnd_yn"] == "Y"
+    except Exception:
+        pass
+    return None
+
+
+def scheduled_run(now=None):
+    """Scheduled delivery only; manual balances and preview remain available."""
+    import fcntl
+    now = (now or datetime.now(KST)).astimezone(KST)
+    day = now.date()
+    if day.weekday() >= 5:
+        print("주말 정기 브리핑 생략 (KST)")
+        return
+    folder = R / "var/lib/bot-office/briefing-calendar"
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / "lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        path = folder / "state.json"
+        cache = load(path, {})
+        if cache.get("date") != day.isoformat():
+            # Cache even a failed query: KIS asks for at most one daily lookup.
+            cache = {"date": day.isoformat(), "kr": korean_session(day), "notice_sent": False}
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(cache), encoding="utf-8")
+            tmp.replace(path)
+        kr = cache.get("kr")
+        # Same calendar date as KST: the US session opening tonight, not NY's previous day.
+        us = None if day.year not in US_CLOSED else day.strftime("%m-%d") not in US_CLOSED[day.year].split()
+        lines = ["📅 <b>주식시장 일정 · " + day.isoformat() + "</b>"]
+        lines += ["▫️ 한국장: " + ("휴장" if kr is False else "정규장 예정" if kr is True else "일정 확인 불가 (한국투자 조회)"),
+                  "▫️ 미국장: " + ("휴장" if us is False else "정규장 예정" if us is True else "일정 확인 불가 (달력 갱신 필요)"),
+                  "▫️ 미국장은 오늘 밤 시작할 미국 현지 같은 날짜의 정규장 기준",
+                  "▫️ 정규장 일정 안내 · 거래봇/빗썸 실행 조건은 변경하지 않음"]
+        if (kr is not True or us is not True) and not cache.get("notice_sent"):
+            if send("\n".join(lines)):
+                cache["notice_sent"] = True
+                tmp = path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(cache), encoding="utf-8")
+                tmp.replace(path)
+        if kr is False and us is False:
+            print("양 시장 휴장: 일반 브리핑 생략")
+            return
+        text = "\n".join(lines[:3]) + "\n\n" + build()
         sent = send(text)
         print("전송 결과:", sent)
-        if sent and "--balances" not in sys.argv and 8 <= datetime.now(KST).hour < 12:
+        if sent and 8 <= now.hour < 12:
             try:
                 import price_watch
                 price_watch.launch()
             except Exception as error:
                 print("가격 추적 시작 실패:", type(error).__name__)
+
+
+if __name__ == "__main__":
+    if "--balances" in sys.argv:
+        text = section_balances()
+        print(text) if "--print" in sys.argv else send(text)
+    elif "--print" in sys.argv:
+        print(build())
+    else:
+        scheduled_run()
