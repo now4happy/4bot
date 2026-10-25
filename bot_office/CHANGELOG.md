@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.22 · 2026-10-25 22:25 (KST)
+- 파일: bot_updater.py, deployment_control.py
+- 내용: 업데이트중 거래괸련
+- 브랜치: staging
+
 ## v1.0.21 · 2026-10-25 20:43 (KST)
 - 파일: gbuts_watch.py
 - 내용: Update API response handling in gbuts_watch.py
