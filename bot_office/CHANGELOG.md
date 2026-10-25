@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.16 · 2026-10-25 10:19 (KST)
+- 파일: office_briefing.py, office_secretary.py
+- 내용: 잔액 조회
+- 브랜치: staging
+
 ## v1.0.15 · 2026-10-25 10:08 (KST)
 - 파일: fanding_trade.py, gemini_usage.py, office_briefing.py, office_secretary.py
 - 내용: 팬딩 이미지 수정 1차25일
