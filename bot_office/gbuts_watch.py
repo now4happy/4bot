@@ -51,12 +51,18 @@ def fetch_items():
         with urllib.request.urlopen(req, timeout=15) as response:
             data = json.loads(response.read().decode("utf-8"))
             if data.get("success") and "response" in data:
-                return data["response"].get("items", [])
+                res = data["response"]
+                # API가 리스트로 줄 때와 딕셔너리로 줄 때 모두 대응하도록 수정
+                if isinstance(res, list):
+                    return res
+                elif isinstance(res, dict):
+                    return res.get("items", [])
     except Exception as e:
         print(f"[gbuts] Fetch error: {e}")
     return []
 
 def is_target_item(item):
+    if not isinstance(item, dict): return False
     title = item.get("title", {}).get("ko", "").lower()
     keywords = ["claude", "클로드", "supergrok", "슈퍼그록", "슈퍼 그록", "grok", "그록"]
     if not any(k in title for k in keywords):
