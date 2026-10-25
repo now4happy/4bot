@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.20 · 2026-10-25 20:24 (KST)
+- 파일: gbuts_watch.py, test_gbuts_watch.py
+- 내용: Implement Gbuts public product monitoring feature
+- 브랜치: staging
+
 ## v1.0.19 · 2026-10-25 14:47 (KST)
 - 파일: office_briefing.py
 - 내용: 주말 브리핑 중지·휴장 알림 코드
