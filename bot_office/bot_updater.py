@@ -28,6 +28,8 @@ try:   # 2번 스나이퍼 원작 업데이트 + 💧물타기 자동 합치기 
 except Exception as _e:
     SU = None
     print("sniper_upstream 불러오기 실패:", _e, flush=True)
+
+import deployment_control as DC
  
  
 def sh(*a, timeout=120):
@@ -120,7 +122,9 @@ def classify(files):
  
  
 # ---------------------------------------------------------------- 매매 중인지 확인
-def busy_reason(unit):
+def busy_reason(unit, pause_verified=False):
+    if pause_verified:
+        return ""
     now_k, now_e = datetime.now(KST), datetime.now(ET)
     k, e = now_k.hour * 100 + now_k.minute, now_e.hour * 100 + now_e.minute
     if unit == "toss_sniper.service":
@@ -188,6 +192,12 @@ def offer(st, br, sha):
     rows = [[{"text": "🔍 바뀐 내용 보기", "callback_data": f"df:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]]
     if not bad:
         rows.insert(0, [{"text": "✅ 업데이트", "callback_data": f"up:{key}"}])
+    if not bad and any(units.get(unit) for unit in DC.UNITS.values()):
+        rows.append([{'text':'⏸ 이번 업데이트 대상 전체 중지 대기','callback_data':'pa:'+key},
+                     {'text':'▶️ 이번 대상 거래 재개','callback_data':'ra:'+key}])
+    for number, unit in DC.UNITS.items():
+        if units.get(unit):
+            rows.append([{ "text": "⏸ " + NAMES[unit] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + number}])
     say(f"📦 <b>[업데이트 비서] 새 수정이 올라왔어요</b>\n▫️ 대상: {esc(bots)}\n▫️ 브랜치: <code>{esc(br)}</code>\n"
         f"▫️ 파일: {esc(', '.join(files[:8]))}{' 외' if len(files) > 8 else ''}\n▫️ 내용:\n{esc(log[:600])}{warn}\n\n"
         "✅를 누르면 매매 중인지 확인 → 적용 → 재시작 확인(실패 시 자동 복구) → 버전 기록 → GitHub main 업로드까지 진행합니다.", rows)
@@ -282,10 +292,33 @@ def apply(st, key):
     _, added = git("diff", f"HEAD...{sha}")
     if SECRET_RE.search("\n".join(l for l in added.splitlines() if l.startswith("+"))):
         return say("⛔ 바뀐 내용에 비밀키로 보이는 값이 있어 적용하지 않았습니다. GitHub에서 그 내용을 지우고 키는 새로 발급해 주세요.")
-    busy = [f"{NAMES.get(u, u)}: {r}" for u in units if (r := busy_reason(u))]
+    pause_verified = set()
+    for unit in units:
+        root = targets().get(unit)
+        if unit in DC.UNITS.values() and DC.state_path(root).exists():
+            try:
+                state = DC.read(DC.state_path(root))
+            except Exception:
+                return say("⛔ 중지 상태 파일을 확인할 수 없습니다. 적용하지 않았습니다.")
+            if state.get('phase') == 'paused':
+                transport = 'kis_api_client.py' if unit == DC.UNITS['1'] else 'b_core.py' if unit == DC.UNITS['4'] else 'toss_api.py'
+                relative = os.path.relpath(root, REPO)
+                marker = 'with gate():' if unit == DC.UNITS['4'] else '@__import__("deployment_gate").transport'
+                rc, source = git('show', sha + ':' + relative + '/' + transport)
+                rc_gate, gate_source = git('show', sha + ':' + relative + '/deployment_gate.py')
+                if rc or rc_gate or marker not in source or 'VERSION = 1' not in gate_source:
+                    return say('⛔ 업데이트 코드에 신규 주문 차단 연결이 없습니다. 차단 부품을 보존한 수정본이 필요합니다.')
+            if state.get('phase') not in ('running','waiting','paused'):
+                return say('⛔ 일시중지 상태 값이 잘못돼 적용하지 않았습니다.')
+            if state.get('phase') in ('waiting','paused'):
+                if not DC.ready(sys.modules[__name__],unit):
+                    return say("⏳ " + NAMES[unit] + " 보유/미체결 또는 실행 차단 확인 대기 중입니다. 적용하지 않았습니다.", DC.resume_rows(unit))
+                pause_verified.add(unit)
+    busy = [f"{NAMES.get(u, u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
     if busy:
         return say("⏸ <b>지금은 적용하지 않았습니다</b>\n▫️ " + "\n▫️ ".join(esc(b) for b in busy) + "\n▫️ 나중에 같은 알림의 ✅를 다시 눌러 주세요.",
-                   [[{"text": "✅ 다시 시도", "callback_data": f"up:{key}"}]])
+                   [[{"text": "✅ 다시 시도", "callback_data": f"up:{key}"}]] +
+                   [[{"text": "⏸ " + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units])
     if git("status", "--porcelain", "--untracked-files=no")[1].strip() or git("diff", "--cached", "--name-only")[1].strip():
         return say("⛔ 서버에 저장 안 된 변경이 있어 멈췄습니다. Claude나 Gemini에게 확인을 요청해 주세요.")
     _, old_head = git("rev-parse", "HEAD")
@@ -348,6 +381,10 @@ def apply(st, key):
     say(f"🎉 <b>업데이트 완료</b>\n▫️ {esc(done)}\n"
         f"▫️ 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
         + ("\n▫️ 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
+    for unit in units:
+        root = targets().get(unit)
+        if unit in DC.UNITS.values() and DC.state_path(root).exists() and DC.read(DC.state_path(root)).get('phase') == 'paused':
+            say("⏸ " + NAMES[unit] + " 업데이트용 차단은 유지 중입니다. 준비되면 재개하세요.", DC.resume_rows(unit))
     if self_update:
         st["self_pending"] = {"since": time.time()}
         save(STATE, st)
@@ -374,7 +411,47 @@ def handle(st, upd):
             return
         tg("answerCallbackQuery", callback_query_id=cb["id"])
         act, _, key = (cb.get("data") or "").partition(":")
-        if act == "up":
+        if act == "pa":
+            offer_data = st.get('offers',{}).get(key)
+            if not offer_data:
+                return say('⚠️ 최신 업데이트 알림에서 다시 눌러 주세요.')
+            git('fetch','-q','origin')
+            rc, sha = git('rev-parse','origin/'+offer_data['branch'])
+            if rc or sha != offer_data['sha']:
+                return say('⚠️ 브랜치가 바뀌었습니다. 새 알림에서 눌러 주세요.')
+            _, files = git('diff','--name-only','HEAD...'+sha)
+            units,bad = classify(files.splitlines())
+            if bad:
+                return say('⛔ 허용되지 않은 파일이 있어 중지를 요청하지 않았습니다.')
+            for unit in DC.UNITS.values():
+                if units.get(unit):
+                    DC.request(sys.modules[__name__],unit,key)
+        elif act == 'ra':
+            for unit, root in targets().items():
+                if unit not in DC.UNITS.values() or not DC.state_path(root).exists():
+                    continue
+                state = DC.read(DC.state_path(root))
+                if state.get('offer_key') == key and state.get('phase') in ('waiting','paused'):
+                    DC.resume(sys.modules[__name__],unit)
+        elif act == "ps":
+            offer_key, _, number = key.partition(":")
+            unit = DC.UNITS.get(number)
+            offer_data = st.get("offers", {}).get(offer_key)
+            if not unit or not offer_data:
+                return say("⚠️ 최신 업데이트 알림에서 다시 눌러 주세요.")
+            git("fetch", "-q", "origin")
+            rc, sha = git("rev-parse", "origin/" + offer_data['branch'])
+            if rc or sha != offer_data['sha']:
+                return say("⚠️ 브랜치가 바뀌었습니다. 업데이트 확인 후 새 버튼을 눌러 주세요.")
+            _, files = git("diff", "--name-only", "HEAD..." + sha)
+            units, bad = classify(files.splitlines())
+            if bad or not units.get(unit):
+                return say("⛔ 해당 업데이트 대상 봇만 중지할 수 있습니다.")
+            DC.request(sys.modules[__name__], unit, offer_key)
+        elif act == "rs":
+            if key in DC.UNITS:
+                DC.resume(sys.modules[__name__], DC.UNITS[key])
+        elif act == "up":
             apply(st, key)
         elif act == "df":
             show_diff(st, key)
@@ -387,6 +464,21 @@ def handle(st, upd):
         if txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
             say("🔄 원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
+        elif txt in ("거래 상태", "일시중지 상태", "/pause_status"):
+            found = False
+            for unit, root in targets().items():
+                if unit not in DC.UNITS.values() or not DC.state_path(root).exists():
+                    continue
+                try:
+                    state = DC.read(DC.state_path(root))
+                except Exception:
+                    say("⚠️ " + NAMES[unit] + " 중지 상태 파일 확인 필요")
+                    continue
+                if state.get('phase') in ('waiting', 'paused'):
+                    found = True
+                    say("⏸ " + NAMES[unit] + ": " + ('일시중지' if state['phase']=='paused' else '잔고 0 대기') + "\n" + esc(state.get('reason','확인 중')), DC.resume_rows(unit))
+            if not found:
+                say("✅ 업데이트용 일시중지/대기 중인 봇이 없습니다.")
         elif txt in ("업데이트", "업데이트 확인", "/update"):
             say("🔄 GitHub를 확인합니다…"); before = len(st.get("offers", {}))
             scan(st, force=True)
@@ -398,6 +490,7 @@ def main():
     st = load(STATE, {})
     if git("rev-parse", "-q", "--verify", "refs/remotes/origin/staging")[0]:
         git("push", "-q", "origin", "HEAD:staging")   # 처음 한 번: staging 브랜치 만들기
+    DC.monitor(sys.modules[__name__])
     last = 0.0
     offset = st.get("offset")
     while True:
