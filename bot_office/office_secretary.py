@@ -238,6 +238,10 @@ def handle_message(tg, st, msg):
     text = (msg.get("text") or "").strip()
     if not text:
         return
+    if text.split()[0] in ("/제미나이잔액", "/제미나이단가"):
+        import gemini_usage
+        if gemini_usage.handle(tg, text):
+            return
     if fanding_trade and fanding_trade.secretary_message(tg, text):
         return
     low = text.lower()

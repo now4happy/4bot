@@ -78,7 +78,7 @@ DEFAULTS = {
     "missing_alert_kst": "11:00",  # 이 시각까지 가격표가 안 오면 알림
     "gemini_model": "gemini-3.8-flash",
     "gemini_fallback": "",                   # Gemini 예비 모델 (비우면 기본 모델로 재시도 → 그래도 안 되면 DeepSeek)
-    "vision_order": ["deepseek", "gemini"],  # 이미지 판독 AI 순서 (앞에서 안 되면 다음)
+    "vision_order": ["gemini", "deepseek"],  # 이미지 판독 AI 순서 (앞에서 안 되면 다음)
     "deepseek_model": "deepseek-flash",
     "upload_token": "",
 }
@@ -309,6 +309,11 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
         try:
             with urllib.request.urlopen(req, timeout=90) as r:
                 d = json.load(r)
+            try:
+                import gemini_usage
+                gemini_usage.record(d, model)
+            except Exception as usage_error:
+                print("Gemini usage record failed:", type(usage_error).__name__, flush=True)
             break
         except urllib.error.HTTPError as e:
             last = e
@@ -393,12 +398,14 @@ PROVIDERS = {"gemini": _gemini, "deepseek": _deepseek}
 
 def vision(img_bytes, prompt, schema, max_tokens=2048, avoid=""):
     """그날 되는 AI 로 이미지 판독. 실패하면 다음 AI 로 넘어가고, 성공한 AI 를 오늘 먼저 쓰도록 기억"""
-    order = [p for p in cfg().get("vision_order", ["deepseek", "gemini"]) if p in PROVIDERS]
+    order = [p for p in cfg().get("vision_order", ["gemini", "deepseek"]) if p in PROVIDERS]
     today = now_kst().date().isoformat()
     st = load(STATE, {})
     best = (st.get("vision_today") or {})
     if best.get("date") == today and best.get("provider") in order:
         order.remove(best["provider"]); order.insert(0, best["provider"])
+    if "gemini" in order:
+        order.remove("gemini"); order.insert(0, "gemini")
     if avoid in order and len(order) > 1:          # 교차 확인: 방금 쓴 AI 는 맨 뒤로
         order.remove(avoid); order.append(avoid)
     errors = []

@@ -398,6 +398,11 @@ def build(now=None):
             l, t = fn(); out += l + [""]; tips += t
         except Exception as e:
             out += [f"⚠️ {html.escape(str(e)[:120])}", ""]
+    try:
+        import gemini_usage
+        out += [gemini_usage.report(), ""]
+    except Exception:
+        out += ["💳 Gemini 판독 사용 기록 조회 실패", ""]
     if score is not None and score < 40:
         tips.append("시장 점수 '주의' 구간 → 스나이퍼 최대 매수 횟수를 줄이는 것도 고려")
     out.append("📝 <b>오늘 할 일</b>")
