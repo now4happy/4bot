@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.21 · 2026-10-25 20:43 (KST)
+- 파일: gbuts_watch.py
+- 내용: Update API response handling in gbuts_watch.py
+- 브랜치: staging
+
 ## v1.0.20 · 2026-10-25 20:24 (KST)
 - 파일: gbuts_watch.py, test_gbuts_watch.py
 - 내용: Implement Gbuts public product monitoring feature
