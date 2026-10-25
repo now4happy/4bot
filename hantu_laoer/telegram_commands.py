@@ -762,7 +762,9 @@ class TelegramCommands:
         
         success, msg = await updater.pull_latest_code()
         safe_msg = html.escape(str(msg)) 
-        if success:
+        if success and not getattr(updater, 'changed', True):
+            await self._safe_edit(status_msg, f"✅ <b>[최신 버전]</b> {safe_msg}", parse_mode='HTML')
+        elif success:
             await self._safe_edit(status_msg, f"✅ <b>[동기화 완료]</b> {safe_msg}\n\n🔄 시스템 데몬(pipiosbot)을 OS 단에서 재가동합니다. 다운타임 후 봇이 다시 깨어납니다.", parse_mode='HTML')
             await updater.restart_daemon()
         else:

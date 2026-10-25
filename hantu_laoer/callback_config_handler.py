@@ -83,7 +83,13 @@ class CallbackConfigHandler:
                 try:
                     success, msg = await updater.pull_latest_code()
                     safe_msg = html.escape(str(msg)) 
-                    if success:
+                    if success and not getattr(updater, 'changed', True):
+                        try: 
+                            await asyncio.wait_for(query.edit_message_text(f"✅ <b>[최신 버전]</b> {safe_msg}", parse_mode='HTML'), timeout=10.0)
+                        except telegram.error.BadRequest as e:
+                            if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
+                        except Exception: pass
+                    elif success:
                         try: 
                             await asyncio.wait_for(query.edit_message_text(f"✅ <b>[업데이트 완료]</b> {safe_msg}\n\n🔄 시스템 데몬(pipiosbot)을 OS 단에서 재가동합니다. 다운타임 후 봇이 다시 깨어납니다.", parse_mode='HTML'), timeout=10.0)
                         except telegram.error.BadRequest as e:
