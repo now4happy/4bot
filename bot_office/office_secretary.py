@@ -240,7 +240,7 @@ def handle_message(tg, st, msg):
     text = (msg.get("text") or "").strip()
     if not text:
         return
-    if text.split()[0] in ("/가격등록", "/가격목록", "/가격중지", "/가격재개", "/가격확인", "/가격도움말"):
+    if text.split()[0] in ("/가격등록", "/가격목록", "/가격중지", "/가격재개", "/가격확인", "/가격도움말", "/가격비교등록", "/가격비교"):
         import price_watch
         if price_watch.handle(tg, text):
             return

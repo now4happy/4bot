@@ -63,7 +63,11 @@ def report():
         if not snap:
             return '\n'.join(lines + ['▫️ 기준 잔액 미등록 · /제미나이잔액 달러금액',
                                       '▫️ 청구계정 실시간 잔액 조회가 아닙니다.'])
-        lines.append(f"▫️ 직접 등록한 기준 잔액 ${snap['usd']:.2f} · {snap['at']}")
+        label = '화면 자료 기준 추정액' if snap.get('screen_as_of') else '직접 등록한 기준 잔액'
+        lines.append(f"▫️ {label} ${snap['usd']:.2f} · {snap['at']}")
+        if snap.get('screen_as_of'):
+            lines.append(f"▫️ {snap['screen_as_of']}까지의 화면 자료로 계산한 기준 추정액 · 실시간 잔액 아님")
+            lines.append('▫️ 화면 집계일 이후 기준 등록 전 사용량은 미반영일 수 있음')
         cost, calls = 0.0, 0
         complete = data['unknown_usage'] == snap['unknown_usage']
         for model, row in data['models'].items():
@@ -98,18 +102,25 @@ def handle(tg, text):
     if command not in ('/제미나이잔액', '/제미나이단가'):
         return False
     try:
-        if command == '/제미나이잔액' and len(parts) == 2:
+        if command == '/제미나이잔액' and len(parts) in (2,3):
             usd = number(parts[1])
+            screen_as_of = None
+            if len(parts) == 3:
+                screen_as_of = datetime.strptime(parts[2], '%Y-%m-%d').date()
+                if screen_as_of > datetime.now(timezone.utc).date():
+                    raise ValueError('화면 집계일은 미래 날짜일 수 없습니다.')
             with state() as data:
                 data['snapshot'] = {'usd': usd, 'models': json.loads(json.dumps(data['models'])),
                                     'unknown_usage': data['unknown_usage'],
                                     'at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
+                if screen_as_of:
+                    data['snapshot']['screen_as_of'] = screen_as_of.isoformat()
         elif command == '/제미나이단가' and len(parts) == 4:
             rates = [number(parts[2]), number(parts[3])]
             with state() as data:
                 data.setdefault('rates', {})[parts[1]] = rates
         elif len(parts) != 1:
-            raise ValueError('사용법: /제미나이잔액 달러금액 또는 /제미나이단가 모델명 입력단가 출력단가')
+            raise ValueError('사용법: /제미나이잔액 달러금액 [화면집계일 YYYY-MM-DD] 또는 /제미나이단가 모델명 입력단가 출력단가')
         tg.send(report())
     except (ValueError, OSError) as exc:
         import html
