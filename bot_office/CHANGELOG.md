@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.28 · 2026-10-26 11:25 (KST)
+- 파일: fanding_trade.py, office_secretary.py
+- 내용: Add files via upload
+- 브랜치: staging
+
 ## v1.0.27 · 2026-10-26 11:12 (KST)
 - 파일: bot_updater.py
 - 내용: 봇 버튼
