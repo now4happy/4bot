@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.7.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.7.1)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -47,7 +47,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -510,7 +510,7 @@ def http_control(h):
             if not 0 < n <= 4096:
                 return h.send(400, {"error": "bad_size"})
             d = json.loads(h.rfile.read(n))
-            stages = {"idle", "connecting", "listing", "images", "uploading", "parsing", "history", "sent", "logged_out", "no_posts", "no_image", "error", "server_error"}
+            stages = {"idle", "connecting", "listing", "images", "uploading", "parsing", "history", "sent", "daily_done", "daily_stopped", "logged_out", "no_posts", "no_image", "error", "server_error"}
             if d.get("stage") not in stages:
                 return h.send(400, {"error": "bad_stage"})
             with bridge_state() as b:
@@ -536,7 +536,7 @@ def diagnosis():
     age = max(0, int(time.time() - pc.get("at", 0))) if pc.get("at") else None
     expected = last_session_date().isoformat()
     sh = st.get("sheets", {}).get(expected)
-    stages = {"idle":"대기", "connecting":"사이트 접속", "listing":"글 목록 탐색", "images":"이미지 다운로드", "uploading":"서버 전송", "parsing":"서버 판독 대기", "history":"과거 자료 수집", "sent":"전송 완료", "logged_out":"로그인 필요", "no_posts":"글 목록 없음", "no_image":"이미지 없음", "error":"PC 수집 오류", "server_error":"서버 연결/전송 오류"}
+    stages = {"idle":"대기", "connecting":"사이트 접속", "listing":"글 목록 탐색", "images":"이미지 다운로드", "uploading":"서버 전송", "parsing":"서버 판독 대기", "history":"과거 자료 수집", "daily_done":"하루 작업 완료·PC 수집기 종료", "daily_stopped":"종료 시각 도달·자료 확인 필요", "sent":"전송 완료", "logged_out":"로그인 필요", "no_posts":"글 목록 없음", "no_image":"이미지 없음", "error":"PC 수집 오류", "server_error":"서버 연결/전송 오류"}
     lines = [f"🩺 팬딩 연결 진단 · v{VERSION}", f"필요 종가일: {expected} (월요일은 금요일 종가, 토요일 게시 가능)",
              "윈도우 연결: " + (f"{age}초 전" if age is not None else "새 수집기 연결 기록 없음"),
              "PC 단계: " + stages.get(pc.get("stage"), "미확인"),
@@ -569,7 +569,7 @@ def recovery_tick(tg):
     active_limit = 900 if pc.get("stage") in ("connecting", "listing", "images", "uploading") else 180
     if not pc.get("at") or time.time() - pc["at"] > active_limit:
         problem = "윈도우 연결 없음: 한국 PC 전원·스케줄러·watch 실행·통신 확인"
-    elif pc.get("stage") in ("logged_out", "no_posts", "no_image", "error", "server_error"):
+    elif pc.get("stage") in ("logged_out", "no_posts", "no_image", "error", "server_error", "daily_stopped"):
         problem = "윈도우 단계 실패: " + pc["stage"] + " · /진단 확인"
     attempt = st.get("vision_last_attempt") or {}
     if missing and attempt.get("date") == now.date().isoformat() and not attempt.get("ok"):
@@ -717,6 +717,60 @@ def run_checks(sheet, mult, market=None):
     return out, auto_ok
 
 
+def account_snapshot(client=None):
+    snap = {"account_at": now_kst().isoformat()}
+    try:
+        if client is None:
+            from meritz_client import Meritz
+            client = Meritz()
+    except Exception:
+        return snap
+    try:
+        hold, sellable, exch, avg = client.holding(cfg()["symbol"])
+        snap.update(holding=hold, sellable=sellable, exch_id=exch, avg=avg)
+    except Exception:
+        pass
+    try:
+        snap["usd_cash"] = client.usd_cash()
+    except Exception:
+        pass
+    return snap
+
+
+def account_lines(sheet, snapshot=None):
+    from decimal import Decimal, InvalidOperation
+    market = (sheet.get("market") or {}) if snapshot is None else snapshot
+    def number(value):
+        try:
+            if value is None or isinstance(value, bool): return None
+            n = Decimal(str(value))
+            return n if n.is_finite() else None
+        except (InvalidOperation, ValueError):
+            return None
+    mult = number(sheet.get("mult"))
+    need = sum((Decimal(str(price)) * qty for side, price, qty in order_lines(sheet) if side == "buy"), Decimal(0))
+    cash = number(market.get("usd_cash"))
+    gap = max(Decimal(0), need - cash) if cash is not None else None
+    lines = ["\n💵 <b>매수 자금 참고</b>",
+             "▫️ 보유 달러(예수금): " + (f"${cash:,.2f}" if cash is not None else "조회 불가"),
+             f"▫️ 표 매수 필요 달러: ${need:,.2f}",
+             "▫️ 환전 필요 달러(부족 추정): " + (f"${gap:,.2f}" if gap is not None else "계산 보류"),
+             "▫️ 표의 매수 총액 기준·수수료 별도·예약/체결 후 추가 환전액 아님"]
+    if market.get("account_at"):
+        lines.append("▫️ 계좌 조회: " + html.escape(str(market["account_at"])))
+    target = number(sheet["parsed"].get("holding_qty"))
+    actual = number(market.get("holding"))
+    lines.append("\n📦 <b>보유 수량 비교</b> (표 기준·계좌 조회 시점)")
+    if target is None or mult is None or actual is None:
+        lines.append("▫️ 차이 계산 보류: 표 보유 개수 또는 계좌 수량 확인 필요")
+    else:
+        expected = target * mult
+        difference = actual - expected
+        lines.append(f"▫️ 표 {target:g}주 × {mult:g} = {expected:g}주 / 실제 {actual:g}주")
+        lines.append("▫️ 차이: " + (f"{difference:+g}주 (실제 보유가 {abs(difference):g}주 {'많음' if difference > 0 else '적음'})" if difference else "0주 (일치)"))
+    return lines
+
+
 def market_snapshot():
     """메리츠에서 시세·잔고. 실패해도 None 대신 부분 정보"""
     c = cfg()
@@ -736,6 +790,11 @@ def market_snapshot():
         snap.update(holding=hold, sellable=sellable, exch_id=exch, avg=avg)
     except Exception as e:
         snap["error"] = (snap.get("error", "") + f" / 잔고: {e}").strip(" /")
+    try:
+        snap["usd_cash"] = m.usd_cash()
+    except Exception:
+        pass
+    snap["account_at"] = now_kst().isoformat()
     return snap
 
 
@@ -779,6 +838,7 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
                  ("자동주문" if sheet["auto_ok"] else "<b>자동주문 안 함</b>(점검 미통과)"))
     else:
         L.append(f"⏰ 마감 {cutoff:%m/%d %H:%M} (자동주문 꺼짐)")
+    L += account_lines(sheet)
     return "\n".join(L)
 
 
@@ -790,7 +850,12 @@ def sheet_rows(sheet):
 def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     tg.clear_buttons(sheet.get("msg_id"))
     img = IMAGES / (sheet.get("img") or "_none_")
-    res = tg.photo(img, sheet_text(sheet, head), sheet_rows(sheet)) if img.is_file() else tg.send(sheet_text(sheet, head), sheet_rows(sheet))
+    text = sheet_text(sheet, head)
+    if img.is_file() and len(text.encode("utf-16-le")) // 2 > 950:
+        tg.photo(img, head)
+        res = tg.send(text, sheet_rows(sheet))
+    else:
+        res = tg.photo(img, text, sheet_rows(sheet)) if img.is_file() else tg.send(text, sheet_rows(sheet))
     sheet["msg_id"] = res.get("message_id")
 
 
@@ -978,6 +1043,7 @@ def submit(tg, sheet, confirm_warn=False):
         rows = [[{"text": "⚠️ 경고 확인하고 주문", "callback_data": f"fd:wy:{sheet['date']}:{sheet['ver']}"}]]
     elif not ok:
         rows = [[{"text": "🔁 실패한 것만 다시", "callback_data": f"fd:re:{sheet['date']}:{sheet['ver']}"}]]
+    L += account_lines(sheet, account_snapshot(m))
     tg.send("\n".join(L), rows)
 
 
@@ -1235,6 +1301,7 @@ def secretary_message(tg_s, text, _reloaded=False):
                   "(이미 접수된 주문은 <b>/재예약</b> 으로 바꿔요)")
         return True
     if low in ("/가격표", "가격표", "/팬딩", "팬딩"):
+        current_account = account_snapshot()
         with locked_state() as st:
             if not st["sheets"]:
                 tg_s.send("아직 받은 가격표가 없어요."); return True
@@ -1242,7 +1309,8 @@ def secretary_message(tg_s, text, _reloaded=False):
             sh = st["sheets"][d]
             label = {"pending": "결정 대기", "approved": "승인됨·접수 대기", "submitting": "접수 중", "submitted": "접수 완료",
                      "partial": "일부 실패", "cancelled": "안 함", "skipped": "자동주문 안 함", "expired": "마감 지남"}
-            tg_s.send(sheet_text(sh, f"📋 <b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
+            view = dict(sh, market=current_account)
+            tg_s.send(sheet_text(view, f"📋 <b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
                       sheet_rows(sh) if sh["status"] == "pending" else None)
         return True
     return False

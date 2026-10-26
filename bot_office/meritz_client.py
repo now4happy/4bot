@@ -8,7 +8,7 @@
 #    {"app_key": "...", "app_secret": "..."}
 #  - 토큰은 만료 전까지 /var/lib/bot-office/fanding/meritz_token.json 에 두고 재사용
 # ==========================================================
-import json, os, time, urllib.error, urllib.parse, urllib.request, uuid
+import json, math, os, time, urllib.error, urllib.parse, urllib.request, uuid
 from pathlib import Path
 
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
@@ -110,6 +110,25 @@ class Meritz:
                 f = lambda k: float(r.get(k) or 0)
                 return int(f("rmnd_dqty")), int(f("seln_able_dqty")), (r.get("ovrs_exch_vndr_idno") or None), f("avrg_unpr")
         return 0, 0, None, None
+
+    def usd_cash(self):
+        """USD cash deposit only; never substitute asset valuation or estimated deposit."""
+        d = self._call("GET", "/accounts/v1/me/overseas/currencies")
+        if d.get("tr_cont") == "1":
+            raise MeritzError("외화잔고 응답이 완전하지 않음")
+        rows = d.get("data")
+        if not isinstance(rows, list):
+            raise MeritzError("외화잔고 형식 확인 필요")
+        usd = [row for row in rows if isinstance(row, dict) and str(row.get("crcd", "")).strip().upper() == "USD"]
+        if len(usd) != 1 or usd[0].get("frcr_amt") in (None, ""):
+            raise MeritzError("USD 예수금 행 없음 또는 중복")
+        try:
+            value = float(str(usd[0]["frcr_amt"]).replace(",", ""))
+        except (ValueError, TypeError):
+            raise MeritzError("USD 예수금 숫자 확인 필요") from None
+        if not math.isfinite(value):
+            raise MeritzError("USD 예수금 숫자 확인 필요")
+        return value
 
     def exchanges(self):
         return self._call("GET", "/reference/v1/overseas/exchanges").get("data") or []

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.4.0)
+# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.5.0)
 #   저장소 위치: bot_office/fanding_fetch_win.py (서버에선 실행하지 않음 · 윈도우가 GitHub 에서 내려받음)
 # 윈도우 PC 전용: 팬딩 가격표 이미지를 가져와 사무실 서버로 보내고 종료
 # 1.1.0: 글 안의 큰 이미지를 모두 보냄 → 서버가 가격표만 골라냄 (이미지 순서가 바뀌어도 OK)
@@ -26,7 +26,7 @@ from datetime import timedelta, timezone
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"      # 팬딩 로그인이 저장되는 전용 브라우저 폴더
@@ -216,7 +216,7 @@ def once(c, upload=True, request=None):
             ctx.close()
 
 
-def watch():
+def watch(stay_open=False):
     # One persistent worker per PC; existing daily task may start another instance safely.
     lock = (HERE / "watch.lock").open("a+b")
     lock.seek(0); lock.write(b"0"); lock.flush(); lock.seek(0)
@@ -230,7 +230,12 @@ def watch():
     except OSError:
         log("대기 프로그램이 이미 실행 중입니다."); lock.close(); return
     completed = set()
-    log("상시 대기 시작: 서버 요청30초 확인 · 사이트는 요청 시 새 접속")
+    start = datetime.now(timezone(timedelta(hours=9)))
+    settings = cfg()
+    stop_h, stop_m = map(int, settings.get("stop_at", "11:30").split(":"))
+    minimum_end = start + timedelta(hours=1)
+    stop = max(start.replace(hour=stop_h, minute=stop_m, second=0, microsecond=0), minimum_end)
+    log("작업 시작: 최소1시간 유지 · 당일 자료 확보·과거 수집 완료 후 자동 종료" if not stay_open else "상시 대기 모드")
     try:
         while True:
             try:
@@ -249,15 +254,36 @@ def watch():
                     # Keep failure visible between heartbeats; do not claim parsing success on upload.
                     c["last_stage"] = result
                     LAST_STAGE["value"] = result
+                reply = control(c, LAST_STAGE["value"])
                 day = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
                 hist = HERE / "backfill_day.txt"
                 if reply.get("ready") and 8 <= datetime.now(timezone(timedelta(hours=9))).hour < 12 and (not hist.exists() or hist.read_text() != day):
                     c["watch_mode"] = True
-                    backfill(c)
+                    try:
+                        backfill(c)
+                    except Exception as exc:
+                        log("과거 수집 실패(오늘 자료는 확보됨):", type(exc).__name__)
                     hist.write_text(day)
                     LAST_STAGE["value"] = "sent"
+                if not stay_open:
+                    final = control(c, LAST_STAGE["value"])
+                    if final.get("ready") and datetime.now(timezone(timedelta(hours=9))) >= minimum_end:
+                        try:
+                            control(c, "daily_done")
+                            post_server(c, note="오늘 필요 자료 확보·PC 수집 작업 완료. 수집기를 자동 종료합니다. 재판독이 필요하면 PC에서 run.bat를 다시 실행하세요.")
+                        except Exception:
+                            log("완료 알림 전송 실패 · 확보된 자료는 서버에서 확인")
+                        log("오늘 작업 완료 · 자동 종료")
+                        return
+                    if datetime.now(timezone(timedelta(hours=9))) >= stop:
+                        control(c, "daily_stopped")
+                        post_server(c, note="오늘 자료 미확보 상태로 종료 시각에 도달했습니다. /진단 확인 후 필요시 PC run.bat를 다시 실행하세요.")
+                        return
             except Exception as exc:
                 log("서버 연결 실패:", type(exc).__name__, "주소·네트워크·서버 업데이트 확인")
+                if not stay_open and datetime.now(timezone(timedelta(hours=9))) >= stop:
+                    log("종료시각 도달 · 서버 연결 실패는 fetch_log.txt 확인")
+                    return
             time.sleep(30)
     finally:
         lock.close()
@@ -336,7 +362,7 @@ if __name__ == "__main__":
     elif cmd == "backfill":   # 과거 글 지금 바로 보내기 (예: py fanding_fetch.py backfill 3)
         backfill(cfg(), int(sys.argv[2]) if len(sys.argv) > 2 else None)
     elif cmd == "watch":
-        watch()
+        watch(stay_open=True)
     elif cmd == "send":       # 지금 바로 1번 보내기 (같은 그림이어도 다시 보냄)
         LAST.unlink(missing_ok=True)
         print("결과:", *once(cfg()))
