@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V2)
-# V3 (2026-10-26): 하단 메인 메뉴 4개(조회·가격·비용·수정 요청·도움말)+하단 하위 메뉴, 팬딩 메뉴·명령 제거(팬딩은 5번 봇에서)
-# V2 (2026-10-23): 팬딩 가격표 주문 버튼(fd:)·/배수·/자동·/가격표 연결 (fanding_trade.py)
+# FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# V4 (2026-10-26): 비서봇에서 팬딩 모듈 import 및 팬딩 콜백 제거. 팬딩은 전용 봇에서만 처리.
+# V3 (2026-10-26): 하단 메인 메뉴·하위 메뉴 정리
 # 텔레그램 "사무실 비서" 대화 담당 (항상 실행: bot-office-secretary.service)
 #  - 평소 말투로 보낸 메시지 → 어느 봇인지 확인 → 사무실 수정 요청으로 접수 (고칠 파일은 사무실이 자동으로 찾음)
 #  - 결재 요청 메시지의 [✅ 승인] [❌ 반려] [🔍 바뀐 코드 보기] 버튼 처리 (승인은 확인 한 번 더)
@@ -11,11 +11,6 @@
 # ==========================================================
 import hashlib, html, json, os, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-try:
-    import fanding_trade  # 팬딩 가격표 주문 (없어도 비서는 정상 동작)
-except Exception as _e:
-    fanding_trade = None
-    print("팬딩 연결 안 됨:", _e, flush=True)
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -47,7 +42,6 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "▫️ <b>📊 조회 → 한국투자·토스·메리츠·빗썸</b> : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
         "▫️ <b>/가격도움말</b> : 한국 제품 가격 등록·조회·변동 알림\n"
         "▫️ <b>현황</b> : 결재 대기·진행 중인 안건 보기\n"
-        "▫️ 팬딩 가격표·배수·자동주문은 <b>5번 팬딩 봇</b>에서 하세요.\n"
         "▫️ 큰 기능 추가나 매매 로직 변경은 Claude에게 요청하면 시뮬레이션까지 해서 결재함에 올려 드립니다.")
 
 
@@ -456,12 +450,6 @@ def handle_callback(tg, st, cb):
     if data.startswith("gm:"):
         tg.answer(cb_id)
         gemini_action(tg, st, data[3:])
-        return
-    if data.startswith(("fd:", "fm:")):
-        if fanding_trade:
-            fanding_trade.secretary_callback(tg, cb)
-        else:
-            tg.answer(cb_id, "팬딩 모듈이 꺼져 있어요")
         return
     kind, _, rest = data.partition(":")
     pend = st.setdefault("pending", {})
