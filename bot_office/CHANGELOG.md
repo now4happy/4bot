@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.34 · 2026-10-27 07:40 (KST)
+- 파일: bot_updater.py, update_conflicts.py
+- 내용: 업데이트봇 수정
+- 브랜치: staging
+
 ## v1.0.31 · 2026-10-26 15:45 (KST)
 - 파일: fanding_trade.py, fanding_vr6.py, fanding_vr6_win.py
 - 내용: 팬딩 vr6 추가

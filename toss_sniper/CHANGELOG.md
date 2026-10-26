@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.7 · 2026-10-27 07:40 (KST)
+- 파일: main.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py, tg_ui_plugin.py, toss_api.py
+- 내용: 업데이트봇 수정
+- 브랜치: staging
+
 ## v1.0.6 · 2026-10-24 13:52 (KST)
 - 파일: averaging_merge.py, averaging_plugin.py, candle_recorder.py, defense_plugin.py, main.py, plugin_updater.py, quant_engine.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py, tg_router.py, tg_ui_plugin.py, toss_api.py, whipsaw_plugin.py
 - 내용: Add files via upload
