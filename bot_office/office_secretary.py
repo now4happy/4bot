@@ -92,10 +92,12 @@ class TG:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
 
-    def send(self, text, rows=None, reply_to=None):
+    def send(self, text, rows=None, reply_to=None, keyboard=None):
         p = {"chat_id": self.chat, "text": text[:3900], "parse_mode": "HTML", "disable_web_page_preview": True}
         if rows:
             p["reply_markup"] = {"inline_keyboard": rows}
+        elif keyboard:   # 채팅창 아래에 계속 떠 있는 버튼
+            p["reply_markup"] = {"keyboard": keyboard, "resize_keyboard": True, "is_persistent": True}
         if reply_to:
             p["reply_to_message_id"] = reply_to
         try:
@@ -235,11 +237,104 @@ def status_text():
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------- 버튼 메뉴 (/start 로 하단 버튼이 뜬다)
+# 버튼은 기존 글자 명령과 똑같이 처리된다. 글자를 꼭 입력해야 하는 기능(수정 내용·상품명·금액)은
+# 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안).
+MENU_LABELS = [["🗞 브리핑", "💰 잔액", "📋 현황"], ["📋 팬딩", "🔎 가격 추적", "🤖 Gemini"], ["✍️ 수정 요청", "❓ 도움말"]]
+MENU_KB = [[{"text": t} for t in row] for row in MENU_LABELS]
+MENU_ALIAS = {"🗞 브리핑": "브리핑", "💰 잔액": "/잔액", "📋 현황": "현황", "❓ 도움말": "/help"}
+MENU_SPECIAL = ("📋 팬딩", "🔎 가격 추적", "🤖 Gemini", "✍️ 수정 요청")
+CANCEL_WORDS = ("브리핑", "현황", "상태", "잔액", "도움말", "help", "?")
+PRICE_MENU = [[("📋 목록 보기", "ls"), ("🔄 지금 확인", "ck")], [("📊 비교 보기", "cp"), ("➕ 상품 등록", "rg")],
+              [("🔀 웹·앱 비교 등록", "rc"), ("❓ 도움말", "hp")]]
+GEMINI_MENU = [[("📊 잔액·사용량 보기", "v")], [("💵 잔액 입력", "b"), ("💲 단가 입력", "r")]]
+CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
+AWAIT_PROMPTS = {
+    "price_reg": "➕ <b>상품 등록</b>\n다음 메시지로 보내 주세요 (10분 안):\n<code>상품명 | 도메인(선택) | 연간·월간·일시불(선택)</code>\n예) <i>클로드 Pro 연간 구독</i>",
+    "price_cmp": "🔀 <b>웹·앱 비교 등록</b>\n다음 메시지로 상품명을 보내 주세요 (10분 안). 예) <i>클로드 Pro 연간 구독</i>",
+    "gem_bal": "💵 <b>Gemini 잔액 입력</b>\n다음 메시지로 보내 주세요 (10분 안):\n<code>달러금액 [화면집계일 YYYY-MM-DD]</code>\n예) <i>12.34</i>",
+    "gem_rate": "💲 <b>Gemini 단가 입력</b>\n다음 메시지로 보내 주세요 (10분 안):\n<code>모델명 입력단가 출력단가</code>",
+    "request": "✍️ <b>{who}</b> 수정 요청\n고칠 내용을 평소 말투로 다음 메시지에 적어 주세요 (10분 안).\n예) <i>잔액 부족 알림을 1시간에 한 번만 보내줘</i>"}
+
+
+def menu_inline(spec, prefix):
+    return [[{"text": t, "callback_data": f"{prefix}:{k}"} for t, k in row] for row in spec]
+
+
+def mq_rows():
+    return [[{"text": n, "callback_data": f"mq:{i}"} for i, (_, n, _) in enumerate(BOTS[:2])],
+            [{"text": n, "callback_data": f"mq:{i + 2}"} for i, (_, n, _) in enumerate(BOTS[2:])],
+            [{"text": "🤔 어느 봇인지 내용으로 찾기", "callback_data": "mq:a"}], CANCEL_ROWS[0]]
+
+
+def run_price(tg, command):
+    try:
+        import price_watch
+        price_watch.handle(tg, command)
+    except Exception as e:
+        tg.send("가격 추적을 불러오지 못했어요: " + html.escape(str(e)[:150]))
+
+
+def price_list_rows():
+    try:
+        import price_watch
+        with price_watch.state(write=False) as pdata:
+            items = list(pdata["items"].items())
+    except Exception:
+        return None
+    return [[{"text": f"{'⏸ 중지' if it.get('enabled') else '▶ 재개'} · {str(it.get('name', ''))[:16]}",
+              "callback_data": f"pw:t:{ident}"}] for ident, it in items[:10]] or None
+
+
+def handle_await(tg, st, msg, aw, text):
+    """버튼을 누른 뒤 보낸 다음 메시지를 알맞은 명령으로 처리"""
+    kind = aw.get("kind")
+    if kind == "price_reg":
+        run_price(tg, "/가격등록 " + text)
+    elif kind == "price_cmp":
+        run_price(tg, "/가격비교등록 " + text)
+    elif kind in ("gem_bal", "gem_rate"):
+        import gemini_usage
+        gemini_usage.handle(tg, ("/제미나이잔액 " if kind == "gem_bal" else "/제미나이단가 ") + text)
+    elif kind == "request":
+        if len(text) < 5:
+            st["await"] = dict(aw, at=time.time())
+            tg.send("고칠 내용을 조금 더 자세히 적어 주세요.", CANCEL_ROWS); return
+        pid = uuid.uuid4().hex[:10]
+        unit = aw.get("unit") or detect(text)
+        st.setdefault("pending", {})[pid] = {"text": text[:1500], "unit": unit, "at": time.time()}
+        if unit:
+            tg.send(f"📥 <b>수정 요청으로 접수할까요?</b>\n▫️ 대상: <b>{NAME[unit]}</b>\n▫️ 내용: {html.escape(text[:300])}\n\n"
+                    "고칠 파일은 사무실이 스스로 찾아요.", confirm_rows(pid), reply_to=msg.get("message_id"))
+        else:
+            tg.send(f"📥 <b>어느 봇을 고칠까요?</b>\n▫️ 내용: {html.escape(text[:300])}", bot_rows(pid), reply_to=msg.get("message_id"))
+
+
 # ---------------------------------------------------------- 메인 루프
 def handle_message(tg, st, msg):
     text = (msg.get("text") or "").strip()
     if not text:
         return
+    raw = text
+    text = MENU_ALIAS.get(raw, raw)   # 하단 버튼 글자 → 같은 명령
+    aw = st.get("await")
+    if aw and (time.time() - aw.get("at", 0) > 600 or raw.startswith("/") or raw in MENU_SPECIAL or raw in MENU_ALIAS
+               or raw.lower() in CANCEL_WORDS):
+        st.pop("await", None); aw = None
+    if raw == "📋 팬딩":
+        if fanding_trade:
+            tg.send("📋 <b>팬딩 가격표</b> · 하고 싶은 걸 누르세요", fanding_trade.menu_rows())
+        else:
+            tg.send("팬딩 모듈이 꺼져 있어요.")
+        return
+    if raw == "🔎 가격 추적":
+        tg.send("🔎 <b>가격 추적</b> · 하고 싶은 걸 누르세요", menu_inline(PRICE_MENU, "pw")); return
+    if raw == "🤖 Gemini":
+        tg.send("🤖 <b>Gemini 사용량</b> · 하고 싶은 걸 누르세요", menu_inline(GEMINI_MENU, "gm")); return
+    if raw == "✍️ 수정 요청":
+        tg.send("✍️ <b>어느 봇을 고칠까요?</b>", mq_rows()); return
+    if aw:
+        st.pop("await", None); handle_await(tg, st, msg, aw, text); return
     if text.split()[0] in ("/가격등록", "/가격목록", "/가격중지", "/가격재개", "/가격확인", "/가격도움말", "/가격비교등록", "/가격비교"):
         import price_watch
         if price_watch.handle(tg, text):
@@ -252,7 +347,7 @@ def handle_message(tg, st, msg):
         return
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?"):
-        tg.send(HELP); return
+        tg.send(HELP + "\n▫️ 아래 버튼 메뉴로 모든 기능을 쓸 수 있어요.", keyboard=MENU_KB); return
     if low in ("/잔액", "잔액", "/balances"):
         tg.send("💰 계좌별 잔액을 조회하고 있어요…")
         subprocess.Popen([sys.executable, BRIEFING, "--balances"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return
@@ -278,7 +373,60 @@ def handle_message(tg, st, msg):
 def handle_callback(tg, st, cb):
     data, cb_id = cb.get("data", ""), cb.get("id")
     msg_id = (cb.get("message") or {}).get("message_id")
-    if data.startswith("fd:"):
+    if data == "mn:x":
+        st.pop("await", None); tg.answer(cb_id, "취소했어요"); tg.buttons(msg_id, []); return
+    if data.startswith("mq:"):
+        tg.answer(cb_id)
+        try:
+            unit = None if data[3:] == "a" else BOTS[int(data[3:])][0]
+        except (ValueError, IndexError):
+            return
+        st["await"] = {"kind": "request", "unit": unit, "at": time.time()}
+        tg.buttons(msg_id, [])
+        tg.send(AWAIT_PROMPTS["request"].format(who=NAME[unit] if unit else "어느 봇인지 내용으로 찾는"), CANCEL_ROWS); return
+    if data.startswith("pw:"):
+        tg.answer(cb_id)
+        parts = data.split(":"); key = parts[1]
+        if key == "ls":
+            run_price(tg, "/가격목록")
+            rows = price_list_rows()
+            if rows:
+                tg.send("▫️ 눌러서 중지·재개", rows)
+        elif key == "ck":
+            run_price(tg, "/가격확인")
+        elif key == "cp":
+            run_price(tg, "/가격비교")
+        elif key == "hp":
+            run_price(tg, "/가격도움말")
+        elif key in ("rg", "rc"):
+            kind = "price_reg" if key == "rg" else "price_cmp"
+            st["await"] = {"kind": kind, "at": time.time()}
+            tg.send(AWAIT_PROMPTS[kind], CANCEL_ROWS)
+        elif key == "t" and len(parts) > 2:
+            ident = parts[2]
+            try:
+                import price_watch
+                with price_watch.state(write=False) as pdata:
+                    enabled = bool((pdata["items"].get(ident) or {}).get("enabled"))
+            except Exception:
+                tg.send("가격 추적 상태를 읽지 못했어요."); return
+            run_price(tg, ("/가격중지 " if enabled else "/가격재개 ") + ident)
+            rows = price_list_rows()
+            if rows:
+                tg.send("▫️ 현재 상태", rows)
+        return
+    if data.startswith("gm:"):
+        tg.answer(cb_id)
+        key = data[3:]
+        if key == "v":
+            import gemini_usage
+            gemini_usage.handle(tg, "/제미나이잔액")
+        elif key in ("b", "r"):
+            kind = "gem_bal" if key == "b" else "gem_rate"
+            st["await"] = {"kind": kind, "at": time.time()}
+            tg.send(AWAIT_PROMPTS[kind], CANCEL_ROWS)
+        return
+    if data.startswith(("fd:", "fm:")):
         if fanding_trade:
             fanding_trade.secretary_callback(tg, cb)
         else:

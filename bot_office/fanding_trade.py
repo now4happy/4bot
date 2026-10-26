@@ -20,6 +20,7 @@
 # 1.6.1: /재예약 때 메리츠 앱에서 이미 직접 취소한 예약은 건너뜀(살아 있는 예약 목록 확인) · /재예약강제 추가
 # 1.6.2: 금요일 가격표는 월요일 아침에 받아도 됨 → '가격표 안 옴' 알림을 토요일이 아닌 월요일에 확인
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
+# 1.7.2: 하단 버튼 메뉴(/start)·배수/자동주문/발주시간 선택 버튼 — 기존 명령과 같은 기능을 버튼으로 (7번 비서의 팬딩 메뉴 공용)
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -47,7 +48,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -201,10 +202,12 @@ class TG:
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.load(r).get("result", {})
 
-    def send(self, text, rows=None):
+    def send(self, text, rows=None, keyboard=None):
         p = {"chat_id": self.chat, "text": text[:3900], "parse_mode": "HTML", "disable_web_page_preview": True}
         if rows:
             p["reply_markup"] = {"inline_keyboard": rows}
+        elif keyboard:   # 채팅창 아래에 계속 떠 있는 버튼
+            p["reply_markup"] = {"keyboard": keyboard, "resize_keyboard": True, "is_persistent": True}
         try:
             return self._post("sendMessage", p)
         except Exception as e:
@@ -1158,6 +1161,54 @@ HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <
              "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
              "▫️ <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기")
 
+# ---------------------------------------------------------- 버튼 메뉴 (5번 하단 버튼 · 7번 팬딩 메뉴 공용)
+# 버튼은 기존 명령 글자와 똑같이 처리된다(새 기능이 아니라 같은 기능을 버튼으로 누르는 것).
+MENU_ITEMS = [("pr", "📋 가격표", "/가격표"), ("mt", "📐 배수", "/배수"), ("au", "🤖 자동주문", "/자동"),
+              ("rt", "⏱ 발주시간", "/발주시간"), ("rr", "🔁 재예약", "/재예약"), ("rs", "🔄 재판독", "/재판독"),
+              ("dg", "🩺 진단", "/진단"), ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"),
+              ("rf", "⚠️ 재예약 강제", "/재예약강제"), ("hp", "❓ 도움말", "/help")]
+MENU_ALIAS = {label: cmd for _, label, cmd in MENU_ITEMS}
+MENU_CMD = {key: cmd for key, _, cmd in MENU_ITEMS}
+
+
+def menu_keyboard():
+    labels = [label for _, label, _ in MENU_ITEMS]
+    return [[{"text": t} for t in labels[i:i + 3]] for i in range(0, len(labels), 3)]
+
+
+def menu_rows():
+    return [[{"text": label, "callback_data": f"fm:{key}"} for key, label, _ in MENU_ITEMS[i:i + 2]]
+            for i in range(0, len(MENU_ITEMS), 2)]
+
+
+def mult_rows(cur):
+    cb = lambda n: {"text": f"×{n}", "callback_data": f"fm:mt:{n}"}
+    return [[{"text": "➖ 1", "callback_data": f"fm:mt:{max(1, cur - 1)}"}, {"text": f"현재 ×{cur}", "callback_data": "fm:noop"},
+             {"text": "➕ 1", "callback_data": f"fm:mt:{min(50, cur + 1)}"}],
+            [cb(n) for n in (1, 2, 3, 4, 5)], [cb(n) for n in (6, 7, 8, 10, 12)]]
+
+
+def auto_rows(on):
+    return [[{"text": ("✅ " if on else "") + "🟢 켜기", "callback_data": "fm:au:1"},
+             {"text": ("" if on else "✅ ") + "🔴 끄기", "callback_data": "fm:au:0"}]]
+
+
+def rt_rows(cur):
+    btn = lambda k: {"text": ("✅ " if str(k) == str(cur) else "") + RESERVE_NAMES[str(k)], "callback_data": f"fm:rt:{k}"}
+    return [[btn(0), btn(3)], [btn(2), btn(1)]]
+
+
+def menu_text(tg_s, t):
+    """버튼이 가리키는 명령 하나를 명령 글자와 똑같이 처리. 처리했으면 True"""
+    if t in ("/판독", "판독"):
+        tg_s.send(vision_status()); return True
+    if t in ("/과거", "과거"):
+        st = load(STATE, {})
+        tg_s.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)"); return True
+    if t in ("/help", "도움말"):
+        tg_s.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT); return True
+    return secretary_message(tg_s, t)
+
 
 def poll_own_bot(tg):
     """팬딩 전용 봇의 버튼·명령 처리 (이 봇은 이 프로그램만 받으므로 충돌 없음)"""
@@ -1179,8 +1230,10 @@ def poll_own_bot(tg):
                 if str((m.get("chat") or {}).get("id")) != tg.chat:
                     continue
                 t = (m.get("text") or "").strip()
-                if t.lower() in ("/start", "/help", "도움말", "?"):
-                    tg.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT)
+                t = MENU_ALIAS.get(t, t)   # 하단 버튼 글자 → 같은 명령
+                if t.lower() in ("/start", "/help", "도움말", "?", "메뉴", "/menu"):
+                    tg.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT + "\n\n▫️ 아래 버튼으로도 모든 기능을 쓸 수 있어요.",
+                            keyboard=menu_keyboard())
                 elif t in ("/판독", "판독"):
                     tg.send(vision_status())
                 elif t in ("/재판독", "재판독", "/판독요청"):
@@ -1239,7 +1292,8 @@ def secretary_message(tg_s, text, _reloaded=False):
     if m:
         with locked_state() as st:
             if not m.group(1):
-                tg_s.send(f"📐 지금 배수는 <b>×{st['multiplier']}</b> 예요. 바꾸려면 예) <code>/배수 6</code>"); return True
+                tg_s.send(f"📐 지금 배수는 <b>×{st['multiplier']}</b> 예요. 아래 버튼으로 바꾸세요. (글자로는 <code>/배수 6</code>)",
+                          mult_rows(st['multiplier'])); return True
             n = int(m.group(1))
             if not 1 <= n <= 50:
                 tg_s.send("배수는 1~50 사이로 적어 주세요."); return True
@@ -1253,7 +1307,7 @@ def secretary_message(tg_s, text, _reloaded=False):
                 tg_s.send(msg + "\n대기 중인 오늘 가격표에도 바로 적용했어요. 새 알림의 버튼으로 결정해 주세요.")
                 send_sheet_alert(TG(), sh, "📋 <b>배수 바뀐 가격표</b>")
             else:
-                tg_s.send(msg + "\n다음 가격표부터 적용돼요.")
+                tg_s.send(msg + "\n다음 가격표부터 적용돼요.", mult_rows(n))
         return True
     if low in ("/자동", "자동", "/자동켜기", "/자동끄기") or low.startswith("/자동 "):
         c = load(CFG, {})
@@ -1263,9 +1317,10 @@ def secretary_message(tg_s, text, _reloaded=False):
             c["auto_order"] = False
         else:
             tg_s.send(f"🤖 자동주문은 지금 <b>{'켜짐' if cfg()['auto_order'] else '꺼짐'}</b>.\n"
-                      "<code>/자동켜기</code> 또는 <code>/자동끄기</code>"); return True
+                      "아래 버튼으로 바꾸세요. (글자로는 <code>/자동켜기</code> · <code>/자동끄기</code>)",
+                      auto_rows(cfg()['auto_order'])); return True
         save(CFG, c)
-        tg_s.send(f"🤖 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b>"); return True
+        tg_s.send(f"🤖 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b>", auto_rows(c['auto_order'])); return True
     if low in ("/재예약강제", "재예약강제"):
         with locked_state() as st:
             sh = st["sheets"].get(sorted(st["sheets"])[-1]) if st["sheets"] else None
@@ -1298,7 +1353,7 @@ def secretary_message(tg_s, text, _reloaded=False):
         cur = str(cfg().get("reserve_time", "2"))
         tg_s.send(f"⏱ 예약 발주 시간: <b>{RESERVE_NAMES[cur]}</b>\n바꾸기: <code>/발주시간 2</code> 장마감 30분 전 · "
                   "<code>/발주시간 1</code> 장마감 10분 전 · <code>/발주시간 0</code> 장개시 · <code>/발주시간 3</code> 장개시 30분 후\n"
-                  "(이미 접수된 주문은 <b>/재예약</b> 으로 바꿔요)")
+                  "(이미 접수된 주문은 <b>/재예약</b> 으로 바꿔요)", rt_rows(cur))
         return True
     if low in ("/가격표", "가격표", "/팬딩", "팬딩"):
         current_account = account_snapshot()
@@ -1321,6 +1376,18 @@ def secretary_callback(tg_s, cb, _reloaded=False):
     if mod:
         return mod.secretary_callback(tg_s, cb, True)
     data = cb.get("data", "")
+    if data.startswith("fm:"):   # 메뉴 버튼: 같은 이름의 명령 글자를 보낸 것과 똑같이 처리
+        parts = data.split(":")
+        key, arg = parts[1], (parts[2] if len(parts) > 2 else "")
+        tg_s.answer(cb.get("id"))
+        if key == "noop":
+            return True
+        cmd = {"mt": f"/배수 {arg}" if arg.isdigit() else "/배수",
+               "au": {"1": "/자동켜기", "0": "/자동끄기"}.get(arg, "/자동"),
+               "rt": f"/발주시간 {arg}" if arg in ("0", "1", "2", "3") else "/발주시간"}.get(key, MENU_CMD.get(key))
+        if cmd:
+            menu_text(tg_s, cmd)
+        return True
     if not data.startswith("fd:"):
         return False
     _, kind, rest = data.split(":", 2)
