@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.30 · 2026-10-26 13:36 (KST)
+- 파일: office_briefing.py, office_secretary.py
+- 내용: 브리핑 개선
+- 브랜치: staging
+
 ## v1.0.29 · 2026-10-26 13:07 (KST)
 - 파일: office_briefing.py, office_secretary.py
 - 내용: 봇 ui 개선
