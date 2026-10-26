@@ -30,6 +30,11 @@ except Exception as _e:
     print("sniper_upstream 불러오기 실패:", _e, flush=True)
 
 import deployment_control as DC
+try:
+    import update_conflicts as UC
+except ImportError:
+    UC = None
+
  
  
 def sh(*a, timeout=120):
@@ -192,6 +197,8 @@ def offer(st, br, sha):
     bots = ", ".join(NAMES.get(u, u) for u, fs in units.items() if fs) or "봇 코드 없음(문서만)"
     warn = ("\n⛔ <b>허용되지 않은 파일</b>: " + esc(", ".join(bad[:5])) + " → 이 업데이트는 적용할 수 없습니다") if bad else ""
     rows = [[{"text": "🔍 바뀐 내용 보기", "callback_data": f"df:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]]
+    if UC:
+        rows.append([{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}])
     if not bad:
         rows.insert(0, [{"text": "✅ 업데이트", "callback_data": f"up:{key}"}])
     if not bad and any(units.get(unit) for unit in DC.UNITS.values()):
@@ -328,7 +335,8 @@ def apply(st, key):
     rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
     if rc:
         git("merge", "--abort")
-        return say("⛔ 지금 서버 코드와 겹치는 부분이 있어 합치지 못했습니다(충돌). Gemini에게 '최신 main 기준으로 다시 올려 줘'라고 요청해 주세요.\n" + esc(out[-300:]))
+        return say("⛔ 서버 코드와 업데이트 브랜치가 충돌해 적용하지 않았습니다. 이미 처리한 이전 변경만 선택해 정리한 뒤 새 알림으로 승인하세요.",
+                   [[{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}]] if UC else None)
     bad_py = [f for fs in units.values() for f in fs if f.endswith(".py") and os.path.exists(os.path.join(REPO, f)) and sh(sys.executable, "-m", "py_compile", os.path.join(REPO, f))[0]]
     if bad_py:
         git("reset", "-q", "--hard", old_head)
@@ -336,9 +344,9 @@ def apply(st, key):
     vers = bump_versions([u for u in units if u != OFFICE_UNIT], old_head)
     office_files = units.get(OFFICE_UNIT, [])
     saved = office_deploy(office_files) if office_files else []
-    self_update = any(os.path.basename(f) == SELF_FILE for f in office_files)
+    self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py") for f in office_files)
     restart = [u for u in units if u != OFFICE_UNIT]
-    if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py") for f in office_files):
+    if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py") for f in office_files):
         restart.append(OFFICE_UNIT)   # 비서 화면·브리핑 등이 바뀌면 사무실 서비스 다시 시작
     failed = []
     for u in restart:
@@ -406,9 +414,10 @@ def show_diff(st, key):
  
 # ---------------------------------------------------------------- 하단 버튼 메뉴 (/start 로 뜸)
 # 버튼은 기존 글자 명령과 똑같이 처리된다. 승인·코드 보기·무시·일시중지·재개는 업데이트 알림 안의 버튼으로 이미 처리한다.
-MENU_ALIAS = {"🔄 업데이트 확인": "업데이트 확인", "⏸ 거래 상태": "거래 상태", "🔎 원작 확인": "원작 확인", "❓ 도움말": "/help"}
+MENU_ALIAS = {"🔄 업데이트 확인": "업데이트 확인", "⏸ 거래 상태": "거래 상태", "🔎 원작 확인": "원작 확인", "❓ 도움말": "/help", "🧹 충돌 정리": "충돌 정리"}
 HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
              "▫️ <b>🔄 업데이트 확인</b> : GitHub에 올라온 수정 확인 → 새 알림의 버튼(✅ 적용 · 🔍 코드 보기 · 🗑 무시)\n"
+             "▫️ <b>🧹 충돌 정리</b> : 이전 변경 파일 선택 → 확인 → 원래 브랜치를 백업 후 정리 → 별도 업데이트 승인\n"
              "▫️ <b>⏸ 거래 상태</b> : 업데이트용 일시중지·대기 중인 봇 보기 → ▶ 재개 버튼\n"
              "▫️ <b>🔎 원작 확인</b> : 2번 스나이퍼 원작 새 버전 확인 (연결돼 있을 때만)\n"
              "▫️ 일시중지·재개·승인은 업데이트 알림 아래 버튼으로 진행합니다.")
@@ -416,6 +425,8 @@ HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
 
 def menu_keyboard():
     rows = [["🔄 업데이트 확인", "⏸ 거래 상태"], ["🔎 원작 확인", "❓ 도움말"] if SU else ["❓ 도움말"]]
+    if UC:
+        rows.insert(1, ["🧹 충돌 정리"])
     return [[{"text": t} for t in r] for r in rows]
 
 
@@ -428,7 +439,11 @@ def handle(st, upd):
             return
         tg("answerCallbackQuery", callback_query_id=cb["id"])
         act, _, key = (cb.get("data") or "").partition(":")
-        if act == "pa":
+        if act == "cp" and UC:
+            return UC.preview(sys.modules[__name__], st, key)
+        elif act in ("ct", "cc", "cr", "cx") and UC:
+            return UC.handle(sys.modules[__name__], st, act, key)
+        elif act == "pa":
             offer_data = st.get('offers',{}).get(key)
             if not offer_data:
                 return say('⚠️ 최신 업데이트 알림에서 다시 눌러 주세요.')
@@ -481,6 +496,13 @@ def handle(st, upd):
         txt = MENU_ALIAS.get(txt, txt)   # 하단 버튼 글자 → 같은 명령
         if txt in ("/start", "/help", "도움말", "메뉴", "/menu", "?"):
             say(HELP_TEXT, keyboard=menu_keyboard())
+        elif txt in ("충돌 정리", "/conflicts") and UC:
+            offers = st.get('offers', {})
+            if not offers:
+                return say('정리할 알림이 없습니다. 업데이트 확인을 먼저 눌러 주세요.')
+            rows = [[{'text': '🧹 ' + o['branch'], 'callback_data': 'cp:' + k}]
+                    for k, o in offers.items()]
+            return say('정리할 업데이트 브랜치를 선택하세요. 아직 파일은 변경하지 않습니다.', rows)
         elif txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
             say("🔄 원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
