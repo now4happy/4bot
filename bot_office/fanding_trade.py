@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.3)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.7.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -47,7 +47,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.6.3"
+VERSION = "1.7.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -465,6 +465,124 @@ def vision(img_bytes, prompt, schema, max_tokens=2048, avoid=""):
     raise RuntimeError("판독 AI 모두 실패 · " + " / ".join(errors))
 
 
+BRIDGE = HOME / "windows-control.json"
+BRIDGE_LOCK = HOME / ".windows-control.lock"
+
+
+@contextmanager
+def bridge_state():
+    HOME.mkdir(parents=True, exist_ok=True)
+    fd = os.open(BRIDGE_LOCK, os.O_CREAT | os.O_RDWR, 0o660)
+    try:
+        parent = HOME.stat()
+        try:
+            os.fchown(fd, parent.st_uid, parent.st_gid)
+            os.fchmod(fd, 0o660)
+        except PermissionError:
+            pass
+        with os.fdopen(fd, "a") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            st = load(BRIDGE, {})
+            yield st
+            save(BRIDGE, st, 0o660)
+    finally:
+        pass
+
+
+def request_scan(reason="manual"):
+    now = time.time()
+    expected = last_session_date().isoformat()
+    with bridge_state() as b:
+        req = b.get("request") or {}
+        if now - req.get("at", 0) < 300:
+            return "최근 요청이 대기/처리 중입니다. /진단 으로 확인하세요."
+        b["request"] = {"id": uuid.uuid4().hex, "at": now, "expected": expected, "reason": reason}
+    return f"윈도우 PC에 사이트 재접속·최신 자료 재판독 요청을 등록했습니다.\n필요 종가일: {expected} (게시일과 다름)\nPC 대기 프로그램 실행 중이면 약30초 내 확인합니다."
+
+
+def http_control(h):
+    token = cfg().get("upload_token") or ""
+    if len(token) < 20 or not hmac.compare_digest(h.headers.get("X-Fanding-Token", "").encode(), token.encode()):
+        return h.send(403, {"error": "bad_token"})
+    try:
+        if h.command == "POST":
+            n = int(h.headers.get("Content-Length", "0"))
+            if not 0 < n <= 4096:
+                return h.send(400, {"error": "bad_size"})
+            d = json.loads(h.rfile.read(n))
+            stages = {"idle", "connecting", "listing", "images", "uploading", "parsing", "history", "sent", "logged_out", "no_posts", "no_image", "error", "server_error"}
+            if d.get("stage") not in stages:
+                return h.send(400, {"error": "bad_stage"})
+            with bridge_state() as b:
+                b["pc"] = {"at": time.time(), "stage": d["stage"], "version": str(d.get("version", ""))[:20],
+                           "request_id": str(d.get("request_id", ""))[:32]}
+        with bridge_state() as b:
+            req = b.get("request") or {}
+            active = req if time.time() - req.get("at", 0) <= 1800 else None
+        expected = last_session_date().isoformat()
+        sheet = load(STATE, {}).get("sheets", {}).get(expected) or {}
+        ready = bool(sheet and (sheet.get("reads_agree") or sheet.get("status") in ("submitted", "partial", "submitting")))
+        return h.send(200, {"ok": True, "request": active, "expected": expected,
+                            "ready": ready, "pending_images": len(list(INBOX.glob("*.img")))})
+    except (ValueError, TypeError):
+        return h.send(400, {"error": "bad_json"})
+    except OSError:
+        return h.send(500, {"error": "control_storage_failed"})
+
+
+def diagnosis():
+    b, st = load(BRIDGE, {}), load(STATE, {})
+    pc = b.get("pc") or {}
+    age = max(0, int(time.time() - pc.get("at", 0))) if pc.get("at") else None
+    expected = last_session_date().isoformat()
+    sh = st.get("sheets", {}).get(expected)
+    stages = {"idle":"대기", "connecting":"사이트 접속", "listing":"글 목록 탐색", "images":"이미지 다운로드", "uploading":"서버 전송", "parsing":"서버 판독 대기", "history":"과거 자료 수집", "sent":"전송 완료", "logged_out":"로그인 필요", "no_posts":"글 목록 없음", "no_image":"이미지 없음", "error":"PC 수집 오류", "server_error":"서버 연결/전송 오류"}
+    lines = [f"🩺 팬딩 연결 진단 · v{VERSION}", f"필요 종가일: {expected} (월요일은 금요일 종가, 토요일 게시 가능)",
+             "윈도우 연결: " + (f"{age}초 전" if age is not None else "새 수집기 연결 기록 없음"),
+             "PC 단계: " + stages.get(pc.get("stage"), "미확인"),
+             "당일분 가격표: " + (str(sh.get("status")) if sh else "미확보"),
+             f"수신함 대기: {len(list(INBOX.glob('*.img')))}장",
+             "최근 서버 수신: " + str((b.get("last_received") or {}).get("at", "미확인"))]
+    if age is None or age > 180:
+        lines.append("확인 위치: 한국 PC 전원·작업 스케줄러·watch 실행·사무실 주소/통신")
+    lines.append("재접속 요청: /재판독 · 서버는 PC 전원을 켜거나 로그인을 대신할 수 없습니다.")
+    return "\n".join(lines)
+
+
+def recovery_tick(tg):
+    now = now_kst()
+    auto_window = now.weekday() < 5 and 8 <= now.hour < 12
+    latest_request = load(BRIDGE, {}).get("request") or {}
+    manual = latest_request.get("reason") == "manual" and time.time() - latest_request.get("at", 0) < 1800
+    if not auto_window and not manual:
+        return
+    expected = last_session_date(now).isoformat()
+    st = load(STATE, {})
+    sheet = st.get("sheets", {}).get(expected)
+    missing = not sheet or (sheet.get("status") == "pending" and sheet.get("reads_agree") is False)
+    b = load(BRIDGE, {})
+    pc = b.get("pc") or {}
+    req = b.get("request") or {}
+    if auto_window and missing and time.time() - req.get("at", 0) >= 1800:
+        request_scan("missing")
+    problem = None
+    active_limit = 900 if pc.get("stage") in ("connecting", "listing", "images", "uploading") else 180
+    if not pc.get("at") or time.time() - pc["at"] > active_limit:
+        problem = "윈도우 연결 없음: 한국 PC 전원·스케줄러·watch 실행·통신 확인"
+    elif pc.get("stage") in ("logged_out", "no_posts", "no_image", "error", "server_error"):
+        problem = "윈도우 단계 실패: " + pc["stage"] + " · /진단 확인"
+    attempt = st.get("vision_last_attempt") or {}
+    if missing and attempt.get("date") == now.date().isoformat() and not attempt.get("ok"):
+        problem = "서버 AI 판독 실패: /판독 에서 제공자별 오류 확인"
+    if (missing or manual) and problem:
+        key = now.date().isoformat() + ":" + problem
+        with bridge_state() as control:
+            if control.get("alert_key") == key:
+                return
+            control["alert_key"] = key
+        tg.send("⚠️ <b>팬딩 자료 누락 진단</b>\n" + html.escape(problem) + "\n필요 종가일: " + expected + "\n재접속·재수집 요청은 자동 등록됩니다. /재판독 으로도 요청 가능")
+
+
 def vision_status():
     st = load(STATE, {})
     today = now_kst().date().isoformat()
@@ -694,6 +812,8 @@ def process_inbox(tg):
         except Exception as e:
             n = int(meta.get("tries", 0)) + 1
             print(f"가격표 처리 오류({n}번째):", type(e).__name__, e, flush=True)
+            if n == 1 and meta.get("mode") != "history":
+                tg.send("⚠️ <b>팬딩 서버 판독 단계 실패</b>\n이미지 수신은 완료됐지만 AI 처리 실패. 2분 뒤 재시도합니다. /판독 · /진단 확인")
             if n < 5:                                 # 2분 뒤 다시 (Gemini 일시 장애 대비)
                 meta.update(tries=n, retry_at=time.time() + 120, last_error=str(e)[:200])
                 mf.write_text(json.dumps(meta, ensure_ascii=False))
@@ -738,7 +858,9 @@ def batch_done(tg, meta, kind):
         b["kinds"].append(kind)
         if b["done"] >= b["n"]:
             st["batches"].pop(bid, None)
-            if not any(k in ("sheet", "sheet_dup", "error") for k in b["kinds"]):
+            if "wrong_date" in b["kinds"] and not any(k in ("sheet", "sheet_dup") for k in b["kinds"]):
+                tg.send("⚠️ 최근 글 판독 완료: 필요한 종가일의 가격표를 아직 찾지 못했습니다. /진단 확인 · 다음 자동 재접속에서 재확인합니다.")
+            elif not any(k in ("sheet", "sheet_dup", "error") for k in b["kinds"]):
                 tg.send(f"❓ <b>팬딩 글에서 가격표를 못 찾았어요</b>\n이미지 {b['n']}장을 확인했지만 모두 가격표가 아니었어요."
                         f"\n글: {html.escape(meta.get('post', ''))[:200]}\n가격표가 다른 글에 올라왔는지 확인해 주세요.")
         for k in [k for k, v in st["batches"].items() if time.time() - v.get("at", 0) > 86400]:
@@ -749,9 +871,12 @@ def handle_image(tg, data, sha, meta):
     """돌려주는 값: sheet(새 가격표) / sheet_dup(이미 받은 가격표) / other(가격표 아님)"""
     with locked_state() as st:
         known = st.setdefault("kinds2", {})
-        if sha in st.get("seen", []) or known.get(sha) == "sheet":
+        recorded = next((sh for sh in st["sheets"].values() if sh.get("sha") == sha), None)
+        retry_incomplete = bool(meta.get("request_id") and recorded and recorded.get("status") == "pending"
+                                and recorded.get("reads_agree") is False)
+        if (sha in st.get("seen", []) or known.get(sha) == "sheet") and not retry_incomplete:
             print("이미 받은 가격표 → 무시", flush=True); return "sheet_dup"
-        if known.get(sha) == "other":
+        if known.get(sha) == "other" and not meta.get("request_id"):
             return "other"
     market = market_snapshot()
     flag, first, why = read_and_judge(data)
@@ -763,6 +888,10 @@ def handle_image(tg, data, sha, meta):
             st["kinds2"][sha] = "other"
             st["kinds2"] = dict(list(st["kinds2"].items())[-500:])
         return "other"
+    expected = meta.get("expected")
+    if expected and first.get("close_date") != expected:
+        tg.send("ℹ️ 재수집 이미지 종가일 불일치: " + html.escape(str(first.get("close_date"))) + " / 필요 " + html.escape(expected) + " · 주문에 사용하지 않음")
+        return "wrong_date"
     try:
         second = gemini_read(data, PROMPTS[1], avoid=first_ai)
         print(f"교차 확인: 1차 {first_ai} · 2차 {LAST_PROVIDER['name']}", flush=True)
@@ -943,6 +1072,7 @@ def loop():
     while True:
         try:
             process_inbox(tg)
+            recovery_tick(tg)
             tick(tg)
         except Exception as e:
             print("루프 오류:", type(e).__name__, e, flush=True)
@@ -957,6 +1087,7 @@ def loop():
 
 HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
              "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황\n"
+             "▫️ <b>/재판독</b> PC 사이트 재접속·최신 자료 요청 · <b>/진단</b> 단계별 상태\n"
              "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
              "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
              "▫️ <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기")
@@ -986,6 +1117,10 @@ def poll_own_bot(tg):
                     tg.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT)
                 elif t in ("/판독", "판독"):
                     tg.send(vision_status())
+                elif t in ("/재판독", "재판독", "/판독요청"):
+                    tg.send(request_scan())
+                elif t in ("/진단", "진단"):
+                    tg.send(diagnosis())
                 elif t in ("/과거", "과거"):
                     st = load(STATE, {})
                     tg.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")
@@ -1030,6 +1165,10 @@ def secretary_message(tg_s, text, _reloaded=False):
         return mod.secretary_message(tg_s, text, True)
     t = text.strip()
     low = t.lower()
+    if t in ("/재판독", "재판독", "/판독요청"):
+        tg_s.send(request_scan()); return True
+    if t in ("/진단", "진단"):
+        tg_s.send(diagnosis()); return True
     m = re.fullmatch(r"(?:/배수|배수|/mult)\s*(\d+)?", t)
     if m:
         with locked_state() as st:
@@ -1226,11 +1365,15 @@ def http_upload(h):
     meta = {"post": h.headers.get("X-Fanding-Post", "")[:300], "at": now_kst().isoformat(),
             "batch": re.sub(r"[^0-9a-f]", "", h.headers.get("X-Fanding-Batch", ""))[:16],
             "idx": h.headers.get("X-Fanding-Index", ""), "count": h.headers.get("X-Fanding-Count", ""),
-            "mode": "history" if h.headers.get("X-Fanding-Mode") == "history" else "live"}
+            "mode": "history" if h.headers.get("X-Fanding-Mode") == "history" else "live",
+            "request_id": re.sub(r"[^0-9a-f]", "", h.headers.get("X-Fanding-Request", ""))[:32],
+            "expected": h.headers.get("X-Fanding-Expected", "")[:10]}
     try:
         INBOX.mkdir(parents=True, exist_ok=True)
         (INBOX / f"{name}.json").write_text(json.dumps(meta, ensure_ascii=False))
         (INBOX / f"{name}.img").write_bytes(data)
+        with bridge_state() as b:
+            b["last_received"] = {"at": now_kst().isoformat(), "mode": meta["mode"]}
     except OSError as e:
         return h.send(500, {"error": "save_failed", "detail": str(e)[:200]})
     return h.send(200, {"ok": True})

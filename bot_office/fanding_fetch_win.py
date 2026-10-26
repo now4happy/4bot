@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.3.0)
+# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.4.0)
 #   저장소 위치: bot_office/fanding_fetch_win.py (서버에선 실행하지 않음 · 윈도우가 GitHub 에서 내려받음)
 # 윈도우 PC 전용: 팬딩 가격표 이미지를 가져와 사무실 서버로 보내고 종료
 # 1.1.0: 글 안의 큰 이미지를 모두 보냄 → 서버가 가격표만 골라냄 (이미지 순서가 바뀌어도 OK)
 # 1.2.0: 시리즈 목록 끝까지 내려 모든 글을 모은 뒤 글 번호가 가장 큰 것(= 가장 최근 글)을 고름
-# 1.3.0: 매일 실행 끝에 과거 글 10개씩 천천히(글마다 20~40초 쉬며) 보내 매매 규칙 분석용 기록 쌓기
+# 1.4.0: 매일 실행 끝에 과거 글 10개씩 천천히(글마다 20~40초 쉬며) 보내 매매 규칙 분석용 기록 쌓기
 #
 #  준비 (한 번만)
 #    py -m pip install playwright
@@ -22,10 +22,11 @@
 #     "retry_min": 5, "headless": true}
 # ==========================================================
 import hashlib, json, random, re, sys, time, urllib.parse, urllib.request
+from datetime import timedelta, timezone
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"      # 팬딩 로그인이 저장되는 전용 브라우저 폴더
@@ -45,7 +46,7 @@ def cfg():
     return c
 
 
-def post_server(c, data=b"", note="", post="", batch="", idx=0, count=0, mode="live"):
+def post_server(c, data=b"", note="", post="", batch="", idx=0, count=0, mode="live", request=None):
     url = c["office_url"].rstrip("/") + "/api/fanding/upload"
     h = {"X-Fanding-Token": c["upload_token"], "Content-Type": "application/octet-stream"}
     if note:
@@ -54,6 +55,9 @@ def post_server(c, data=b"", note="", post="", batch="", idx=0, count=0, mode="l
         h["X-Fanding-Post"] = urllib.parse.quote(post, safe=":/@?=&%")
     if batch:
         h.update({"X-Fanding-Batch": batch, "X-Fanding-Index": str(idx), "X-Fanding-Count": str(count)})
+    if request:
+        h["X-Fanding-Request"] = request["id"]
+        h["X-Fanding-Expected"] = request["expected"]
     if mode == "history":
         h["X-Fanding-Mode"] = "history"
     req = urllib.request.Request(url, data=data or b"-", headers=h, method="POST")
@@ -118,7 +122,7 @@ def looks_logged_out(page):
     return ("로그인하고" in t or "익명의 팬" in t) and "로그아웃" not in t
 
 
-def grab_images(page, post_url, limit=8):
+def grab_images(page, post_url, limit=16):
     """글 안의 큰 이미지를 위에서부터 모두 가져옴 (가격표 판별은 서버가 함)"""
     page.goto(post_url, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(5000)
@@ -150,46 +154,116 @@ def grab_images(page, post_url, limit=8):
     return out, imgs
 
 
-def once(c, upload=True):
+def control(c, stage="idle", request_id=""):
+    data = json.dumps({"stage":stage, "request_id":request_id, "version":VERSION}).encode()
+    req = urllib.request.Request(c["office_url"].rstrip("/") + "/api/fanding/control", data=data,
+                                 headers={"X-Fanding-Token":c["upload_token"], "Content-Type":"application/json"})
+    with urllib.request.urlopen(req, timeout=30) as reply:
+        return json.load(reply)
+
+
+def once(c, upload=True, request=None):
     from playwright.sync_api import sync_playwright
+    def stage(name):
+        if upload and request:
+            control(c, name, request["id"])
+    stage("connecting")
     with sync_playwright() as p:
         ctx = browser(p, c["headless"])
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
+            stage("listing")
             posts = latest_post_url(page, c["series_url"])
             if looks_logged_out(page):
                 return "logged_out", None
             if not posts:
-                DEBUG.mkdir(exist_ok=True)
-                page.screenshot(path=str(DEBUG / "series.png"), full_page=True)
-                (DEBUG / "series.html").write_text(page.content(), encoding="utf-8")
                 return "no_posts", None
-            log("찾은 글:", posts[:3])
-            images, imgs = grab_images(page, posts[0])
-            if not images:
-                DEBUG.mkdir(exist_ok=True)
-                page.screenshot(path=str(DEBUG / "post.png"), full_page=True)
-                (DEBUG / "post_imgs.json").write_text(json.dumps(imgs, ensure_ascii=False, indent=1), encoding="utf-8")
-                return "no_image", None
-            sha = hashlib.sha256(b"".join(hashlib.sha256(d).digest() for d in images)).hexdigest()
-            if not upload:
-                folder = HERE / "test_images"
-                folder.mkdir(exist_ok=True)
-                for old in folder.glob("*.jpg"):
-                    old.unlink()
-                for i, d in enumerate(images, 1):
-                    (folder / f"image_{i}.jpg").write_bytes(d)
-                return "test_ok", f"{len(images)}장 → {folder}"
-            if LAST.exists() and LAST.read_text().strip() == sha:
-                return "same_as_last", None
-            for i, d in enumerate(images, 1):
-                res = post_server(c, d, post=posts[0], batch=sha[:16], idx=i, count=len(images))
-                if not res.get("ok"):
-                    return "server_error", str(res)
-            LAST.write_text(sha)
-            return "sent", f"{len(images)}장 · {posts[0]}"
+            # Publication date is not the price sheet's close date: Saturday can be Monday's material.
+            candidates = posts[:max(1, min(5, int(c.get("recent_posts", 3))))]
+            total = 0
+            for post in candidates:
+                stage("images")
+                images, _ = grab_images(page, post)
+                if looks_logged_out(page):
+                    return "logged_out", None
+                if not images:
+                    continue
+                if not upload:
+                    folder = HERE / "test_images"; folder.mkdir(exist_ok=True)
+                    for i, image in enumerate(images, 1):
+                        (folder / f"post_{total}_image_{i}.jpg").write_bytes(image)
+                else:
+                    stage("uploading")
+                    sha = hashlib.sha256((post + (request or {}).get("id", "")).encode()).hexdigest()
+                    for i, image in enumerate(images, 1):
+                        reply = post_server(c, image, post=post, batch=sha[:16], idx=i, count=len(images), request=request)
+                        if not reply.get("ok"):
+                            return "server_error", None
+                total += len(images)
+                if upload and request:
+                    # Wait for server acknowledgement before sending older posts; reduce paid AI calls.
+                    for _ in range(60):
+                        ack = control(c, "parsing", request["id"])
+                        if ack.get("ready"):
+                            return "sent", f"필요 종가일 자료 확보 · {total}장 전송"
+                        if not ack.get("pending_images"):
+                            break
+                        time.sleep(30)
+                    else:
+                        return "server_error", "서버 판독 대기30분 초과"
+            return ("sent" if upload else "test_ok", f"{total}장 / 최근 {len(candidates)}개 글") if total else ("no_image", None)
         finally:
             ctx.close()
+
+
+def watch():
+    # One persistent worker per PC; existing daily task may start another instance safely.
+    lock = (HERE / "watch.lock").open("a+b")
+    lock.seek(0); lock.write(b"0"); lock.flush(); lock.seek(0)
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log("대기 프로그램이 이미 실행 중입니다."); lock.close(); return
+    completed = set()
+    log("상시 대기 시작: 서버 요청30초 확인 · 사이트는 요청 시 새 접속")
+    try:
+        while True:
+            try:
+                c = cfg()
+                reply = control(c, LAST_STAGE["value"])
+                request = reply.get("request")
+                if request and request["id"] not in completed:
+                    try:
+                        result, info = once(c, request=request)
+                    except Exception as exc:
+                        result, info = "error", type(exc).__name__
+                    control(c, result, request["id"])
+                    completed.add(request["id"])
+                    if len(completed) > 100: completed = {request["id"]}
+                    log("수집 결과:", result, info or "")
+                    # Keep failure visible between heartbeats; do not claim parsing success on upload.
+                    c["last_stage"] = result
+                    LAST_STAGE["value"] = result
+                day = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+                hist = HERE / "backfill_day.txt"
+                if reply.get("ready") and 8 <= datetime.now(timezone(timedelta(hours=9))).hour < 12 and (not hist.exists() or hist.read_text() != day):
+                    c["watch_mode"] = True
+                    backfill(c)
+                    hist.write_text(day)
+                    LAST_STAGE["value"] = "sent"
+            except Exception as exc:
+                log("서버 연결 실패:", type(exc).__name__, "주소·네트워크·서버 업데이트 확인")
+            time.sleep(30)
+    finally:
+        lock.close()
+
+
+LAST_STAGE = {"value":"idle"}
 
 
 def backfill(c, n=None):
@@ -204,11 +278,13 @@ def backfill(c, n=None):
         ctx = browser(p, c["headless"])
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
+            if c.get("watch_mode"): control(c, "history")
             posts = latest_post_url(page, c["series_url"])
             if looks_logged_out(page) or not posts:
                 log("과거 수집: 로그인 풀림 또는 글 목록 없음 → 건너뜀"); return
             todo = [u for u in posts[1:] if u not in done][:n]
             for u in todo:
+                if c.get("watch_mode"): control(c, "history")
                 time.sleep(random.uniform(20, 40))        # 사람이 보듯 천천히
                 try:
                     images, _ = grab_images(page, u)
@@ -244,39 +320,7 @@ def cmd_login():
 
 
 def cmd_run():
-    c = cfg()
-    stop = datetime.now().replace(hour=int(c["stop_at"][:2]), minute=int(c["stop_at"][3:5]), second=0)
-    warned = False
-    while True:
-        try:
-            r, info = once(c)
-        except Exception as e:
-            r, info = "error", f"{type(e).__name__}: {e}"
-        log("결과:", r, info or "")
-        if r == "sent":
-            break
-        if r == "logged_out" and not warned:
-            warned = True
-            try:
-                post_server(c, note="팬딩 로그인이 풀렸어요. PC에서 'py fanding_fetch.py login' 을 다시 해 주세요.")
-            except Exception as e:
-                log("서버 알림 실패:", e)
-        if datetime.now() >= stop:
-            msg = {"same_as_last": "새 가격표 글이 아직 없어요 (마지막 보낸 것과 같음)",
-                   "no_posts": "시리즈 글 목록을 못 찾았어요 (debug 폴더 확인)",
-                   "no_image": "글 안에서 가격표 이미지를 못 찾았어요 (debug 폴더 확인)"}.get(r, f"가져오기 실패: {r} {info or ''}")
-            try:
-                post_server(c, note=f"{c['stop_at']}까지 시도했지만 실패 · {msg}")
-            except Exception as e:
-                log("서버 알림 실패:", e)
-            if r == "logged_out":
-                return
-            break
-        time.sleep(int(c["retry_min"]) * 60)
-    try:
-        backfill(c)          # 오늘 가격표 다음에 과거 글 10개
-    except Exception as e:
-        log("과거 수집 오류:", e)
+    watch()
 
 
 if __name__ == "__main__":
@@ -291,6 +335,8 @@ if __name__ == "__main__":
             print("test_images 폴더의 사진들 중에 가격표가 들어 있는지 확인하세요. (순서는 상관없어요)")
     elif cmd == "backfill":   # 과거 글 지금 바로 보내기 (예: py fanding_fetch.py backfill 3)
         backfill(cfg(), int(sys.argv[2]) if len(sys.argv) > 2 else None)
+    elif cmd == "watch":
+        watch()
     elif cmd == "send":       # 지금 바로 1번 보내기 (같은 그림이어도 다시 보냄)
         LAST.unlink(missing_ok=True)
         print("결과:", *once(cfg()))
