@@ -44,7 +44,7 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "▫️ <b>고칠 내용을 평소 말투로</b> 보내세요. 예) <i>4번 봇 잔액 부족 알림을 1시간에 한 번만 보내줘</i>\n"
         "   → 어느 봇인지 확인 → 사무실이 고칠 파일을 스스로 찾아 수정안 작성 → 결재 요청이 오면 버튼으로 승인\n"
         "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
-        "▫️ <b>/잔액</b> : 한국투자·토스·빗썸 잔액 통합 조회\n"
+        "▫️ <b>📊 조회 → 한국투자·토스·메리츠</b> : 계좌별 잔액 (글자 명령 /잔액 은 전체)\n"
         "▫️ <b>/가격도움말</b> : 한국 제품 가격 등록·조회·변동 알림\n"
         "▫️ <b>현황</b> : 결재 대기·진행 중인 안건 보기\n"
         "▫️ 팬딩 가격표·배수·자동주문은 <b>5번 팬딩 봇</b>에서 하세요.\n"
@@ -244,18 +244,19 @@ def status_text():
 HOME = "🏠 메인 메뉴"
 MAIN_LABELS = [["📊 조회", "💲 가격·비용"], ["✍️ 수정 요청", "❓ 도움말"]]
 SUB_LABELS = {
-    "view": [["🗞 브리핑", "💰 잔액", "📋 현황"], [HOME]],
+    "view": [["🗞 브리핑", "📋 현황"], ["🏦 한국투자", "🔷 토스", "🏛 메리츠"], ["🧾 전체 잔액", HOME]],
     "price": [["🔎 가격 목록", "🔄 가격 확인", "📊 가격 비교"], ["➕ 가격 등록", "🔀 웹·앱 비교 등록"],
               ["🤖 Gemini 사용량", "💵 Gemini 잔액 입력", "💲 Gemini 단가 입력"], [HOME]],
     "mq": [["🔧 " + n for _, n, _ in BOTS[:2]], ["🔧 " + n for _, n, _ in BOTS[2:]], ["🤔 내용으로 찾기", HOME]],
 }
 MENU_KB = [[{"text": t} for t in row] for row in MAIN_LABELS]
 SUB_KB = {k: [[{"text": t} for t in row] for row in v] for k, v in SUB_LABELS.items()}
-MENU_ALIAS = {"🗞 브리핑": "브리핑", "💰 잔액": "/잔액", "📋 현황": "현황", "❓ 도움말": "/help"}
+MENU_ALIAS = {"🗞 브리핑": "브리핑", "📋 현황": "현황", "❓ 도움말": "/help"}
+BAL_ACTIONS = {"🏦 한국투자": "kis", "🔷 토스": "toss", "🏛 메리츠": "meritz", "🧾 전체 잔액": "all"}
 PRICE_ACTIONS = {"🔎 가격 목록": "ls", "🔄 가격 확인": "ck", "📊 가격 비교": "cp", "➕ 가격 등록": "rg", "🔀 웹·앱 비교 등록": "rc"}
 GEMINI_ACTIONS = {"🤖 Gemini 사용량": "v", "💵 Gemini 잔액 입력": "b", "💲 Gemini 단가 입력": "r"}
 MQ_LABELS = {"🔧 " + n: i for i, (_, n, _) in enumerate(BOTS)}
-MENU_SPECIAL = tuple(["📊 조회", "💲 가격·비용", "✍️ 수정 요청", HOME, "🤔 내용으로 찾기"] + list(PRICE_ACTIONS) + list(GEMINI_ACTIONS) + list(MQ_LABELS))
+MENU_SPECIAL = tuple(["📊 조회", "💲 가격·비용", "✍️ 수정 요청", HOME, "🤔 내용으로 찾기"] + list(BAL_ACTIONS) + list(PRICE_ACTIONS) + list(GEMINI_ACTIONS) + list(MQ_LABELS))
 CANCEL_WORDS = ("브리핑", "현황", "상태", "잔액", "도움말", "help", "?")
 CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
 AWAIT_PROMPTS = {
@@ -373,6 +374,9 @@ def handle_message(tg, st, msg):
         tg.send("💲 <b>가격·비용</b> · 아래 버튼을 눌러 주세요", keyboard=SUB_KB["price"]); return
     if raw == "✍️ 수정 요청":
         tg.send("✍️ <b>어느 봇을 고칠까요?</b> · 아래에서 골라 주세요", keyboard=SUB_KB["mq"]); return
+    if raw in BAL_ACTIONS:
+        tg.send(f"💰 {raw} 잔액을 조회하고 있어요…")
+        subprocess.Popen([sys.executable, BRIEFING, "--balances", BAL_ACTIONS[raw]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return
     if raw in PRICE_ACTIONS:
         price_action(tg, st, PRICE_ACTIONS[raw]); return
     if raw in GEMINI_ACTIONS:
