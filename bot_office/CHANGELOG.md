@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.26 · 2026-10-26 10:47 (KST)
+- 파일: pixel_office.html, pixel_office.py, server.py
+- 내용: 사무실 구조 변경
+- 브랜치: staging
+
 ## v1.0.25 · 2026-10-26 10:36 (KST)
 - 파일: fanding_fetch_win.py, fanding_trade.py, meritz_client.py
 - 내용: 팬딩 달러 표기
