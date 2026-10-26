@@ -25,6 +25,9 @@ UNITS = [("1번 한투 라오어", "han4384tubot.service"), ("2번 토스 스나
          ("5번 팬딩", "bot-office-fanding.service")]
 
 
+SEP = "━━━━━━━━━━━━━━━"   # 항목 구분선
+
+
 def load(p, default):
     try:
         return json.loads(Path(p).read_text(encoding="utf-8"))
@@ -181,20 +184,20 @@ def balance_lines(kis, usd, krw_toss, krw_b):
     def amount(value, currency):
         return money(value, currency) if value is not None else "조회 불가"
     return ["💰 <b>통합 잔액 · 계좌별 조회</b>",
-            f"▫️ 한국투자 예수금: {amount(kis.get('KRW'), 'KRW')} / {amount(kis.get('USD'), 'USD')}",
-            f"▫️ 토스 3번 조회 계좌 · 현금 주문가능금액: {amount(krw_toss, 'KRW')} / {amount(usd, 'USD')}",
-            f"▫️ 빗썸 사용가능 원화: {amount(krw_b, 'KRW')}",
-            "▫️ RP 미포함",
-            "▫️ 조회 항목 기준이 달라 합산하지 않음 · 부족액은 해당 계좌에서 보충"]
+            f"🏦 한국투자 예수금: {amount(kis.get('KRW'), 'KRW')} / {amount(kis.get('USD'), 'USD')}",
+            f"🔷 토스 3번 조회 계좌 · 현금 주문가능금액: {amount(krw_toss, 'KRW')} / {amount(usd, 'USD')}",
+            f"🪙 빗썸 사용가능 원화: {amount(krw_b, 'KRW')}",
+            "ℹ️ RP 미포함",
+            "⚖️ 조회 항목 기준이 달라 합산하지 않음 · 부족액은 해당 계좌에서 보충"]
 
 
 def sniper_balance_lines(toss):
     """Check identity before reporting 2/3 as one account; never sum duplicated cash."""
     other = Toss(SNIPER_DIR)
     if not other.cid or not other.sec:
-        return ["▫️ 토스 2번: 조회 인증 설정 확인 필요"]
+        return ["🎯 토스 2번: 조회 인증 설정 확인 필요"]
     if other.cid == toss.cid and other.sec == toss.sec:
-        return ["▫️ 토스 2·3번 같은 조회 인증 사용 · 위 계좌 금액 중복표시 생략"]
+        return ["🎯 토스 2·3번 같은 조회 인증 사용 · 위 계좌 금액 중복표시 생략"]
     values = {}
     for currency in ("KRW", "USD"):
         try:
@@ -202,8 +205,8 @@ def sniper_balance_lines(toss):
         except Exception:
             values[currency] = "조회 불가"
     if other.acc is not None and toss.acc is not None and str(other.acc) == str(toss.acc):
-        return ["▫️ 토스 2·3번 동일 계좌 확인 · 위 계좌 금액 중복표시 생략"]
-    return [f"▫️ 토스 2번 조회 계좌 · 현금 주문가능금액: {values['KRW']} / {values['USD']}"]
+        return ["🎯 토스 2·3번 동일 계좌 확인 · 위 계좌 금액 중복표시 생략"]
+    return [f"🎯 토스 2번 조회 계좌 · 현금 주문가능금액: {values['KRW']} / {values['USD']}"]
 
 
 def section_balances(now=None):
@@ -220,7 +223,7 @@ def section_balances(now=None):
     except Exception:
         krw_b = None
     return (f"🏢 <b>잔액 조회</b> · {now.astimezone(KST).strftime('%m/%d %H:%M')} KST\n"
-            + "\n".join(balance_lines(kis_balances(), amounts["USD"], amounts["KRW"], krw_b)
+            + "\n" + SEP + "\n" + "\n".join(balance_lines(kis_balances(), amounts["USD"], amounts["KRW"], krw_b)
                          + sniper_balance_lines(toss)))
 
 
@@ -254,7 +257,7 @@ def section_market():
     if len(hist) >= 2:
         d = float(hist[-1]["total"]) - float(hist[-2]["total"])
         diff = f" (직전 대비 {d:+.1f})" if abs(d) >= 0.05 else " (직전과 같음)"
-    lines = ["📊 <b>시장분석실</b>", f"▫️ 종합 <b>{total:.1f}점</b> / 100 {tag}{diff}", f"▫️ {parts}"]
+    lines = ["📊 <b>시장분석실</b>", f"📈 종합 <b>{total:.1f}점</b> / 100 {tag}{diff}", f"🧮 {parts}"]
     try:
         age = datetime.now(timezone.utc) - datetime.fromisoformat(m["updated_at"])
         if age > timedelta(days=3):
@@ -325,31 +328,31 @@ def section_money(now):
 
     need_min, need_max = sn_min + us_need, sn_max + us_need
     lines.append("💵 <b>토스 달러 (미국장)</b>")
-    lines.append(f"▫️ 2번 스나이퍼 {pre_day.strftime('%m/%d')} 프리장: {sn_desc}")
-    lines.append(f"▫️ 3번 적립 {us_day.strftime('%m/%d')} 미국장: ${us_need:,.2f}" + (f" [{', '.join(us_det)}]" if us_det else " (예정 없음)"))
-    lines.append(f"▫️ 필요 합계: 1회만 사면 <b>${need_min:,.2f}</b> · 최대로 사면 <b>${need_max:,.2f}</b>")
+    lines.append(f"🎯 2번 스나이퍼 {pre_day.strftime('%m/%d')} 프리장: {sn_desc}")
+    lines.append(f"🔁 3번 적립 {us_day.strftime('%m/%d')} 미국장: ${us_need:,.2f}" + (f" [{', '.join(us_det)}]" if us_det else " (예정 없음)"))
+    lines.append(f"🧾 필요 합계: 1회만 사면 <b>${need_min:,.2f}</b> · 최대로 사면 <b>${need_max:,.2f}</b>")
     if usd is None:
-        lines.append("▫️ 보유 달러: 조회 실패")
+        lines.append("💵 보유 달러: 조회 실패")
     else:
-        lines.append(f"▫️ 보유 달러: ${usd:,.2f}")
+        lines.append(f"💵 보유 달러: ${usd:,.2f}")
         if usd < need_min:
-            lines.append(f"▫️ 🚨 <b>${need_min - usd:,.2f} 부족</b> (1회 매수도 모자람)")
+            lines.append(f"🚨 <b>${need_min - usd:,.2f} 부족</b> (1회 매수도 모자람)")
             tips.append(f"환전 필요: 최소 ${need_min - usd:,.0f} · 최대 매수까지 ${need_max - usd:,.0f}")
         elif usd < need_max:
-            lines.append(f"▫️ ⚠️ 최대 매수까지 <b>${need_max - usd:,.2f} 부족</b> (1회 매수는 충분)")
+            lines.append(f"⚠️ 최대 매수까지 <b>${need_max - usd:,.2f} 부족</b> (1회 매수는 충분)")
             tips.append(f"스나이퍼 추가 매수까지 하려면 ${need_max - usd:,.0f} 환전 권장")
         else:
-            lines.append("▫️ ✅ 최대로 사도 충분")
+            lines.append("✅ 최대로 사도 충분")
 
     lines.append("")
     lines.append("🇰🇷 <b>원화</b>")
     if kr_need > 0:
         bal = f" / 토스 원화 {krw_toss:,.0f}원" if krw_toss is not None else ""
-        lines.append(f"▫️ 3번 적립 {kr_day.strftime('%m/%d')} 11:00 국내장: {kr_need:,.0f}원 [{', '.join(kr_det)}]{bal}")
+        lines.append(f"🔁 3번 적립 {kr_day.strftime('%m/%d')} 11:00 국내장: {kr_need:,.0f}원 [{', '.join(kr_det)}]{bal}")
         if krw_toss is not None and krw_toss < kr_need:
             tips.append(f"토스 원화 {kr_need - krw_toss:,.0f}원 부족 (국내 적립)")
     else:
-        lines.append(f"▫️ 3번 적립 국내장: 예정 없음")
+        lines.append("🔁 3번 적립 국내장: 예정 없음")
 
     # 4번 빗썸: 오늘(또는 내일) 19:00 정기매수
     bcfg = load(BITHUMB_DIR / "bot_config.json", {})
@@ -388,13 +391,15 @@ def section_money(now):
     except (TypeError, ValueError):
         krw_b = None
     when = "오늘" if b_day == now_kst.date() else "내일"
-    lines.append(f"▫️ 4번 빗썸 {when} {buy_h:02d}:00: {b_need:,.0f}원" + (f" [{', '.join(b_det)}]" if b_det else " (예정 없음)")
+    lines.append("")
+    lines.append("🪙 <b>빗썸 (원화)</b>")
+    lines.append(f"🔁 4번 빗썸 {when} {buy_h:02d}:00: {b_need:,.0f}원" + (f" [{', '.join(b_det)}]" if b_det else " (예정 없음)")
                  + (f" / 빗썸 원화 {krw_b:,.0f}원" if krw_b is not None else f" / 잔고 조회 실패"))
     if krw_b is not None and krw_b < b_need:
         tips.append(f"빗썸 원화 {b_need - krw_b:,.0f}원 입금 필요 ({when} {buy_h:02d}:00 전)")
     errs = [e for e in (toss_err and f"토스 {toss_err}", berr and f"빗썸 {berr}") if e]
     if errs:
-        lines.append("▫️ ⚠️ 조회 오류: " + html.escape(" / ".join(errs)))
+        lines.append("⚠️ 조회 오류: " + html.escape(" / ".join(errs)))
     summary = balance_lines(kis_balances(), usd, krw_toss, krw_b) + sniper_balance_lines(toss)
     return summary + [""] + lines, tips
 
@@ -411,11 +416,11 @@ def section_bots():
         if st != "active":
             tips.append(f"{name} 봇 상태 확인 필요 ({st})")
     for start in range(0, len(row), 2):
-        lines.append("▫️ " + " · ".join(row[start:start + 2]))
+        lines.append("🤖 " + " · ".join(row[start:start + 2]))
     led = load(SNIPER_DIR / "AssassinLedger_SOXS.json", {})
     if float(led.get("last_buy_price") or 0) > 0:
         tgt = float(led.get("target_sell_price") or 0)
-        lines.append(f"▫️ 스나이퍼 SOXS 보유 중 · 평단 ${float(led['last_buy_price']):,.2f}" + (f" → 익절 ${tgt:,.2f}" if tgt else "")
+        lines.append(f"🎯 스나이퍼 SOXS 보유 중 · 평단 ${float(led['last_buy_price']):,.2f}" + (f" → 익절 ${tgt:,.2f}" if tgt else "")
                      + f" · {int(led.get('buy_count') or 0)}회 매수")
     return lines, tips
 
@@ -425,7 +430,7 @@ def section_office():
     cases = (load(CASES, {}).get("cases") or {}).values()
     cnt = lambda *st: sum(1 for c in cases if isinstance(c, dict) and c.get("stage") in st)
     wait, fail, found = cnt("awaiting_approval"), cnt("apply_failed", "push_failed"), cnt("found", "drafting", "draft_failed", "verify_failed", "manual")
-    lines.append(f"▫️ 결재 대기 {wait}건 · 확인 필요 {found}건 · 실패 {fail}건")
+    lines.append(f"📝 결재 대기 {wait}건 · 확인 필요 {found}건 · 실패 {fail}건")
     if wait:
         tips.append(f"결재 대기 {wait}건 → 사무실 결재함 확인")
     if fail:
@@ -434,7 +439,7 @@ def section_office():
     reps = [r for r in (rep.get("reports") or []) if isinstance(r, dict)]
     crit = [r for r in reps if r.get("level") == "critical"]
     warn = [r for r in reps if r.get("level") == "warning"]
-    lines.append(f"▫️ 리스크실: 확인 필요 {len(crit)} · 주의 {len(warn)}"
+    lines.append(f"🛡 리스크실: 확인 필요 {len(crit)} · 주의 {len(warn)}"
                  + (" · " + html.escape(str((crit or warn)[0].get("title", ""))[:40]) if (crit or warn) else ""))
     for r in crit[:2]:
         tips.append("리스크: " + str(r.get("title", ""))[:50])
@@ -464,32 +469,45 @@ def section_server_care():
             status = "최근 실행 성공"
         else:
             status = "최근 실행 실패 · 확인 필요"
-        lines.append("• 관리 결과: " + status)
+        lines.append("🧰 관리 결과: " + status)
         if started:
-            lines.append("• 실행 시각: " + html.escape(started))
+            lines.append("⏰ 실행 시각: " + html.escape(started))
     except Exception:
-        lines.append("• 관리 결과: 조회 실패")
+        lines.append("🧰 관리 결과: 조회 실패")
 
     disk = shutil.disk_usage("/")
     lines.append(
-        f"• 현재 디스크: {disk.used/disk.total:.0%} 사용"
+        f"💾 현재 디스크: {disk.used/disk.total:.0%} 사용"
         f" · 여유 {disk.free/1024**3:.2f}GB")
     mem = {}
     for row in Path("/proc/meminfo").read_text().splitlines():
         key, value = row.split(":", 1)
         mem[key] = int(value.split()[0])
     lines.append(
-        f"• 현재 가용 메모리: {mem['MemAvailable']/1024:.0f}MB"
+        f"🧠 현재 가용 메모리: {mem['MemAvailable']/1024:.0f}MB"
         f" · 스왑 사용 {(mem['SwapTotal']-mem['SwapFree'])/1024:.0f}MB")
     try:
         r = subprocess.run(
             ["systemctl", "--failed", "--no-legend", "--plain", "--no-pager"],
             capture_output=True, text=True, timeout=5, check=True)
         count = len([x for x in r.stdout.splitlines() if x.strip()])
-        lines.append(f"• 실패한 서비스: {count}개")
+        lines.append(f"🚨 실패한 서비스: {count}개")
     except Exception:
-        lines.append("• 실패한 서비스: 조회 실패")
+        lines.append("🚨 실패한 서비스: 조회 실패")
     return lines
+
+def with_separators(lines):
+    """섹션 사이 빈 줄을 구분선으로 바꾼다(연속/처음/끝 구분선 제거)."""
+    out = []
+    for line in lines:
+        line = SEP if line == "" else line
+        if line == SEP and (not out or out[-1] == SEP):
+            continue
+        out.append(line)
+    while out and out[-1] == SEP:
+        out.pop()
+    return "\n".join(out)
+
 
 def build(now=None):
     now = now or datetime.now(timezone.utc)
@@ -522,9 +540,9 @@ def build(now=None):
     if score is not None and score < 40:
         tips.append("시장 점수 '주의' 구간 → 스나이퍼 최대 매수 횟수를 줄이는 것도 고려")
     out.append("📝 <b>오늘 할 일</b>")
-    out += [f"▫️ {html.escape(t)}" for t in tips] if tips else ["▫️ 특별히 챙길 일 없음 ✅"]
-    out.append("\n<i>읽기 전용 브리핑 · 주문/설정은 바꾸지 않습니다</i>")
-    return "\n".join(out)
+    out += [f"👉 {html.escape(t)}" for t in tips] if tips else ["✅ 특별히 챙길 일 없음"]
+    out += ["", "<i>🔒 읽기 전용 브리핑 · 주문/설정은 바꾸지 않습니다</i>"]
+    return with_separators(out)
 
 
 def message_chunks(text, limit=3500):
@@ -649,8 +667,8 @@ def scheduled_run(now=None):
         # Same calendar date as KST: the US session opening tonight, not NY's previous day.
         us = None if day.year not in US_CLOSED else day.strftime("%m-%d") not in US_CLOSED[day.year].split()
         lines = ["📅 <b>주식시장 일정 · " + day.isoformat() + "</b>"]
-        lines += ["▫️ 한국장: " + ("휴장" if kr is False else "정규장 예정" if kr is True else "일정 확인 불가 (한국투자 조회)"),
-                  "▫️ 미국장: " + ("휴장" if us is False else "정규장 예정" if us is True else "일정 확인 불가 (달력 갱신 필요)"),
+        lines += ["🇰🇷 한국장: " + ("휴장" if kr is False else "정규장 예정" if kr is True else "일정 확인 불가 (한국투자 조회)"),
+                  "🇺🇸 미국장: " + ("휴장" if us is False else "정규장 예정" if us is True else "일정 확인 불가 (달력 갱신 필요)"),
                   "▫️ 미국장은 오늘 밤 시작할 미국 현지 같은 날짜의 정규장 기준",
                   "▫️ 정규장 일정 안내 · 거래봇/빗썸 실행 조건은 변경하지 않음"]
         if (kr is not True or us is not True) and not cache.get("notice_sent"):
@@ -662,7 +680,7 @@ def scheduled_run(now=None):
         if kr is False and us is False:
             print("양 시장 휴장: 일반 브리핑 생략")
             return
-        text = "\n".join(lines[:3]) + "\n\n" + build()
+        text = "\n".join(lines[:3]) + "\n" + SEP + "\n" + build()
         sent = send(text)
         print("전송 결과:", sent)
         if sent and 8 <= now.hour < 12:
