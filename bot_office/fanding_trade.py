@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.2)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.6.3)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -47,7 +47,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -287,6 +287,29 @@ CLASSIFY_PROMPT = ("이 이미지가 미국주식 매매 '가격표'인지 판�
                    "안내문·공지·차트·광고·설명 이미지는 가격표가 아닙니다.")
 
 
+def _vision_json(text, schema):
+    """Only accept a complete final JSON object with the required fields."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError):
+        raise RuntimeError("최종 JSON이 비었거나 불완전함") from None
+    if not isinstance(value, dict) or any(k not in value for k in schema.get("required", [])):
+        raise RuntimeError("최종 JSON 필수 항목 누락")
+    return value
+
+
+def _vision_error(exc):
+    # Never expose provider response bodies, credentials or input image data.
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code} (모델·키·권한·한도 확인)"
+    if isinstance(exc, (TimeoutError, OSError)):
+        return "연결 오류 또는 시간 초과"
+    return str(exc)[:120] if isinstance(exc, RuntimeError) else type(exc).__name__
+
+
 def _gemini(img_bytes, prompt, schema, max_tokens=2048):
     g = load(GEMINI_CFG, {})
     key = g.get("api_key")
@@ -297,12 +320,17 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
         "contents": [{"parts": [{"inline_data": {"mime_type": mime, "data": base64.b64encode(img_bytes).decode()}},
                                 {"text": prompt}]}],
         "generationConfig": {"temperature": 0, "responseMimeType": "application/json",
-                             "responseSchema": schema, "maxOutputTokens": max_tokens},
+                             "responseSchema": schema, "maxOutputTokens": max(max_tokens, 8192)},
     }
     c = cfg()
     tries = [c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"], c.get("gemini_fallback") or c["gemini_model"]]
     last = None
     for i, model in enumerate(tries):
+        gc = payload["generationConfig"]
+        if model.startswith("gemini-3"):
+            gc["thinkingConfig"] = {"thinkingLevel": "low"}
+        else:
+            gc.pop("thinkingConfig", None)
         req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                                      data=json.dumps(payload).encode(), method="POST",
                                      headers={"Content-Type": "application/json", "x-goog-api-key": key})
@@ -314,7 +342,21 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
                 gemini_usage.record(d, model)
             except Exception as usage_error:
                 print("Gemini usage record failed:", type(usage_error).__name__, flush=True)
-            break
+            cand = (d.get("candidates") or [{}])[0]
+            finish = cand.get("finishReason", "UNKNOWN")
+            if finish not in ("STOP",):
+                raise RuntimeError(f"Gemini 판독 중단 ({finish})")
+            text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
+            try:
+                return _vision_json(text, schema)
+            except RuntimeError:
+                raise RuntimeError("Gemini 최종 JSON이 비었거나 불완전함") from None
+        except RuntimeError as e:
+            last = e
+            if "MAX_TOKENS" in str(e):
+                gc["maxOutputTokens"] = min(16384, gc["maxOutputTokens"] * 2)
+            elif "JSON" not in str(e):
+                raise
         except urllib.error.HTTPError as e:
             last = e
             if e.code == 429:
@@ -326,10 +368,7 @@ def _gemini(img_bytes, prompt, schema, max_tokens=2048):
         print(f"Gemini 바쁨({type(last).__name__}) → {[5, 15, 0][i]}초 뒤 다시 ({model})", flush=True)
         time.sleep([5, 15, 0][i])
     else:
-        raise RuntimeError(f"Gemini 응답 없음: {last}")
-    cand = (d.get("candidates") or [{}])[0]
-    text = "".join(p.get("text", "") for p in cand.get("content", {}).get("parts", []) if not p.get("thought"))
-    return json.loads(text)
+        raise RuntimeError("Gemini 응답 실패: " + _vision_error(last))
 
 
 def _env_key(name):
@@ -372,25 +411,22 @@ def _deepseek(img_bytes, prompt, schema, max_tokens=2048, _again=False):
         except urllib.error.HTTPError as e:
             last = e
             if e.code not in (429, 500, 502, 503, 504):
-                raise RuntimeError(f"DeepSeek 오류 HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
+                raise RuntimeError(f"DeepSeek 오류 HTTP {e.code}")
         except (TimeoutError, OSError) as e:
             last = e
         time.sleep([5, 15, 0][i])
     else:
         raise RuntimeError(f"DeepSeek 응답 없음: {last}")
     msg = (d.get("choices") or [{}])[0].get("message") or {}
-    out = (msg.get("content") or "") + "\n" + (msg.get("reasoning_content") or "")
-    for m in [msg.get("content") or "", out]:
-        hit = re.search(r"\{.*\}", m, re.S)
-        if hit:
-            try:
-                return json.loads(hit.group(0))
-            except ValueError:
-                pass
-    if not _again:   # 형식이 어긋났으면 더 엄격하게 한 번 더
-        print("DeepSeek 답 형식 어긋남 → 다시 요청:", (msg.get("content") or "")[:150].replace("\n", " "), flush=True)
-        return _deepseek(img_bytes, prompt, schema, max_tokens, _again=True)
-    raise RuntimeError("DeepSeek 응답에서 JSON 을 못 찾음: " + (msg.get("content") or "(빈 답)")[:80])
+    finish = (d.get("choices") or [{}])[0].get("finish_reason")
+    try:
+        if finish != "stop":
+            raise RuntimeError("DeepSeek 판독 중단")
+        return _vision_json(msg.get("content") or "", schema)
+    except RuntimeError:
+        if not _again:
+            return _deepseek(img_bytes, prompt, schema, max_tokens, _again=True)
+        raise RuntimeError("DeepSeek 최종 JSON이 비었거나 불완전함 (추론 내용은 주문값으로 사용 안 함)") from None
 
 
 PROVIDERS = {"gemini": _gemini, "deepseek": _deepseek}
@@ -413,15 +449,42 @@ def vision(img_bytes, prompt, schema, max_tokens=2048, avoid=""):
         try:
             r = PROVIDERS[prov](img_bytes, prompt, schema, max_tokens)
         except Exception as e:
-            errors.append(f"{prov}: {str(e)[:120]}")
+            errors.append(f"{prov}: {_vision_error(e)}")
             print("판독 AI 실패 →", prov, e, flush=True)
             continue
-        if not avoid and (best.get("date") != today or best.get("provider") != prov):
+        with locked_state() as s2:
+            s2["vision_last_attempt"] = {"date": today, "at": now_kst().isoformat(), "ok": True,
+                                         "provider": prov, "errors": errors}
+        if not avoid:
             with locked_state() as s2:
                 s2["vision_today"] = {"date": today, "provider": prov, "errors": errors}
         LAST_PROVIDER["name"] = prov
         return r
+    with locked_state() as s2:
+        s2["vision_last_attempt"] = {"date": today, "at": now_kst().isoformat(), "ok": False, "errors": errors}
     raise RuntimeError("판독 AI 모두 실패 · " + " / ".join(errors))
+
+
+def vision_status():
+    st = load(STATE, {})
+    today = now_kst().date().isoformat()
+    v, attempt = st.get("vision_today") or {}, st.get("vision_last_attempt") or {}
+    names = {"gemini": "Gemini", "deepseek": "DeepSeek"}
+    lines = [f"🔎 팬딩 판독 상태 · v{VERSION}"]
+    if v.get("date") == today:
+        lines.append("오늘 1차 판독 성공: " + names.get(v.get("provider"), "확인 필요"))
+    else:
+        lines.append("오늘 1차 판독 성공 기록 없음 (이미지 미수신·중복·실패 가능)")
+    if attempt.get("date") == today:
+        lines.append("최근 시도: " + str(attempt.get("at", "")) + (" · 성공" if attempt.get("ok") else " · 실패"))
+        if attempt.get("errors"):
+            lines.append("최근 시도 오류: " + html.escape(" / ".join(attempt["errors"])))
+    elif v.get("date"):
+        lines.append("마지막 1차 성공일: " + html.escape(str(v["date"])))
+    pending = list(INBOX.glob("*.img"))
+    lines.append(f"수신함 대기: {len(pending)}장")
+    lines.append("기본 순서: " + " → ".join(names.get(p, p) for p in cfg()["vision_order"]))
+    return "\n".join(lines)
 
 
 def read_and_judge(img_bytes):
@@ -922,13 +985,7 @@ def poll_own_bot(tg):
                 if t.lower() in ("/start", "/help", "도움말", "?"):
                     tg.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT)
                 elif t in ("/판독", "판독"):
-                    v = load(STATE, {}).get("vision_today") or {}
-                    names = {"gemini": "Gemini", "deepseek": "DeepSeek"}
-                    msg = (f"🔎 오늘 판독 AI: <b>{names.get(v.get('provider'), '아직 사용 안 함')}</b>"
-                           if v.get("date") == now_kst().date().isoformat() else "🔎 오늘은 아직 판독한 이미지가 없어요")
-                    if v.get("errors"):
-                        msg += "\n앞 순서 AI 실패: " + html.escape(" / ".join(v["errors"]))[:300]
-                    tg.send(msg + f"\n순서: {' → '.join(names.get(p, p) for p in cfg()['vision_order'])}")
+                    tg.send(vision_status())
                 elif t in ("/과거", "과거"):
                     st = load(STATE, {})
                     tg.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")

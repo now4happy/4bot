@@ -21,7 +21,8 @@ BITHUMB_API = os.environ.get("BRIEF_BITHUMB_API", "https://api.bithumb.com")
 TELEGRAM_API = os.environ.get("BRIEF_TELEGRAM_API", "https://api.telegram.org")
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 UNITS = [("1번 한투 라오어", "han4384tubot.service"), ("2번 토스 스나이퍼", "toss_sniper.service"),
-         ("3번 토스 적립", "toss_dca.service"), ("4번 빗썸 적립", "bithumb_bot.service")]
+         ("3번 토스 적립", "toss_dca.service"), ("4번 빗썸 적립", "bithumb_bot.service"),
+         ("5번 팬딩", "bot-office-fanding.service")]
 
 
 def load(p, default):
@@ -409,8 +410,8 @@ def section_bots():
         row.append(f"{'🟢' if st == 'active' else '🔴'} {name}")
         if st != "active":
             tips.append(f"{name} 봇 상태 확인 필요 ({st})")
-    lines.append("▫️ " + " · ".join(row[:2]))
-    lines.append("▫️ " + " · ".join(row[2:]))
+    for start in range(0, len(row), 2):
+        lines.append("▫️ " + " · ".join(row[start:start + 2]))
     led = load(SNIPER_DIR / "AssassinLedger_SOXS.json", {})
     if float(led.get("last_buy_price") or 0) > 0:
         tgt = float(led.get("target_sell_price") or 0)
