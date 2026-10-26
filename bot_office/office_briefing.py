@@ -228,47 +228,50 @@ def sniper_balance_lines(toss):
 
 
 def meritz_lines():
-    # 메리츠 예수금(USD) 조회는 meritz_client.py 확인 후 연결한다(추측으로 호출하지 않음).
-    return ["🏛 메리츠 예수금(USD): 조회 연결 대기 · meritz_client.py 확인 필요"]
+    # 메리츠 API 연결 코드는 meritz_client.py 원본 확인 전에는 추측하지 않는다.
+    return ["🏛 메리츠 | USD 조회 연결 필요 · KRW 조회 연결 필요"]
 
 
 def toss_account_lines():
-    toss, out, err = Toss(), {}, ""
-    for cur in ("KRW", "USD"):
+    toss = Toss()
+    values = {}
+    for cur in ("USD", "KRW"):
         try:
-            out[cur] = money(toss.buying_power(cur), cur)
-        except Exception as e:
-            out[cur], err = "조회 불가", err or str(e)[:90]
-    lines = [f"🔷 토스 현금 주문가능금액: {out['KRW']} / {out['USD']}"]
-    if err:
-        lines.append("⚠️ 토스 조회 오류: " + html.escape(err))
-    return lines + [x.replace("토스 2번 조회 계좌", "토스 추가 인증 계좌").replace("토스 2·3번", "토스 추가 인증")
-                    for x in sniper_balance_lines(toss)]
+            values[cur] = money(toss.buying_power(cur), cur)
+        except Exception:
+            values[cur] = "조회 불가"
+    return [f"🔷 토스 | USD {values['USD']} · KRW {values['KRW']}"]
 
 
 def section_balances(now=None, which="all"):
-    now = now or datetime.now(timezone.utc)
+    """계좌별 현금 잔액만 표시. 시간·주문 필요액·추가 안내는 출력하지 않는다."""
     names = {"kis": "한국투자", "toss": "토스", "meritz": "메리츠", "bithumb": "빗썸", "all": "전체"}
     which = which if which in names else "all"
-    head = f"🏢 <b>잔액 조회 · {names[which]}</b> · {now.astimezone(KST).strftime('%m/%d %H:%M')} KST"
-    blocks = []
-    if which in ("kis", "all"):
-        kis = kis_balances()
-        amt = lambda v, c: money(v, c) if v is not None else "조회 불가"
-        blocks.append([f"🏦 한국투자 예수금: {amt(kis.get('KRW'), 'KRW')} / {amt(kis.get('USD'), 'USD')}"])
+    out = ["💰 <b>통합 잔액</b>" if which == "all" else f"💰 <b>잔액 · {names[which]}</b>"]
+
     if which in ("toss", "all"):
-        blocks.append(toss_account_lines())
+        out.extend(toss_account_lines())
+
     if which in ("meritz", "all"):
-        blocks.append(meritz_lines())
+        out.extend(meritz_lines())
+
+    if which in ("kis", "all"):
+        try:
+            kis = kis_balances()
+        except Exception:
+            kis = {"KRW": None, "USD": None}
+        usd = money(kis.get("USD"), "USD") if kis.get("USD") is not None else "조회 불가"
+        krw = money(kis.get("KRW"), "KRW") if kis.get("KRW") is not None else "조회 불가"
+        out.append(f"🏦 한국투자 | USD {usd} · KRW {krw}")
+
     if which in ("bithumb", "all"):
         try:
-            blocks.append([f"🪙 빗썸 사용가능 원화: {money(balance_value(bithumb_accounts().get('KRW', {}).get('balance')), 'KRW')}", "ℹ️ RP 미포함"])
-        except Exception as e:
-            blocks.append(["🪙 빗썸 사용가능 원화: 조회 불가", "⚠️ 빗썸 조회 오류: " + html.escape(str(e)[:90])])
-    out = [head]
-    for block in blocks:
-        out += [SEP] + block
-    out += [SEP, "⚖️ 계좌마다 조회 기준이 달라 합산하지 않음 · 부족액은 해당 계좌에서 보충"]
+            krw = money(balance_value(bithumb_accounts().get("KRW", {}).get("balance")), "KRW")
+        except Exception:
+            krw = "조회 불가"
+        # 빗썸 현금 계정은 KRW 기준이며 USD 현금 잔액은 제공하지 않는다.
+        out.append(f"🪙 빗썸 | USD — · KRW {krw}")
+
     return "\n".join(out)
 
 
@@ -510,25 +513,25 @@ def section_money(now):
 
 
 def section_bots():
-    lines, tips = ["🤖 <b>봇 상태</b>"], []
-    row = []
+    """이상이 있는 봇만 표시한다. 모두 정상이면 섹션을 생략한다."""
+    problems = []
     for name, unit in UNITS:
         try:
-            st = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5).stdout.strip() or "확인 불가"
+            result = subprocess.run(
+                ["systemctl", "is-active", unit],
+                capture_output=True, text=True, timeout=5
+            )
+            status = result.stdout.strip() or "확인 불가"
+            if result.returncode != 0 and status == "active":
+                status = "확인 불가"
         except Exception:
-            st = "확인 불가"
-        row.append(f"{'🟢' if st == 'active' else '🔴'} {name}")
-        if st != "active":
-            tips.append(f"{name} 봇 상태 확인 필요 ({st})")
-    for start in range(0, len(row), 2):
-        lines.append("🤖 " + " · ".join(row[start:start + 2]))
-    _, led = sniper_ledger()
-    buckets = led.get("buckets") if isinstance(led.get("buckets"), list) else []
-    if buckets:
-        first = buckets[0] if isinstance(buckets[0], dict) else {}
-        p1 = num(first.get("book_price"))
-        lines.append(f"🎯 스나이퍼 SOXL 보유 {len(buckets)}개층" + (f" · 1층 단가 ${p1:,.2f}" if p1 > 0 else ""))
-    return lines, tips
+            status = "확인 불가"
+        if status != "active":
+            problems.append(f"🔴 {name} · {html.escape(status)}")
+
+    if not problems:
+        return [], []
+    return ["⚠️ <b>이상 봇</b>"] + problems, [line for line in problems]
 
 
 def section_office():
@@ -616,39 +619,15 @@ def with_separators(lines):
 
 
 def build(now=None):
-    now = now or datetime.now(timezone.utc)
-    kst = now.astimezone(KST)
-    title = "🌅 아침 브리핑" if kst.hour < 12 else "🌙 저녁 브리핑"
-    out = [f"🏢 <b>[사무실 비서] {title}</b> · {kst.strftime('%m/%d (%a) %H:%M')} KST", ""]
-    if kst.hour < 12:
-        try:
-            out += section_server_care() + ['']
-        except Exception:
-            out += ['🛠 서버 상태 조회 실패', '']
-    tips = []
-    m_lines, score = section_market()
-    out += m_lines + [""]
-    for fn in (section_money, ):
-        try:
-            l, t = fn(now); out += l + [""]; tips += t
-        except Exception as e:
-            out += [f"💵 자금 계산 실패: {html.escape(str(e)[:120])}", ""]
-    for fn in (section_bots,):
-        try:
-            l, t = fn(); out += l + [""]; tips += t
-        except Exception as e:
-            out += [f"⚠️ {html.escape(str(e)[:120])}", ""]
+    """간결 브리핑: 계좌별 USD/KRW 잔액과 이상 봇만 표시한다."""
+    out = section_balances().splitlines()
     try:
-        import gemini_usage
-        report = gemini_usage.report()
-        gsig = hashlib.sha256(str(report).encode("utf-8")).hexdigest()
-        if load(SEEN, {}).get("gemini") == gsig:
-            out += ["💳 Gemini 판독 기록 · 변동 없음", ""]
-        else:
-            _NEW_SEEN["gemini"] = gsig
-            out += [report, ""]
+        bot_lines, _ = section_bots()
+        if bot_lines:
+            out.append("")
+            out.extend(bot_lines)
     except Exception:
-        out += ["💳 Gemini 판독 기록 조회 실패", ""]
+        out.extend(["", "⚠️ <b>봇 상태</b>", "🔴 상태 조회 실패"])
     return with_separators(out)
 
 
