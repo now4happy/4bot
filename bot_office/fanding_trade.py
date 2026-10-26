@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.7.1)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -21,6 +21,8 @@
 # 1.6.2: 금요일 가격표는 월요일 아침에 받아도 됨 → '가격표 안 옴' 알림을 토요일이 아닌 월요일에 확인
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 1.7.2: 하단 버튼 메뉴(/start)·배수/자동주문/발주시간 선택 버튼 — 기존 명령과 같은 기능을 버튼으로 (7번 비서의 팬딩 메뉴 공용)
+# 1.8.0: 5번 봇 메뉴를 [🅿 P 메뉴](기존 가격표 매매 11버튼) · [🅥 VR6 메뉴](fanding_vr6.py, TQQQ 2주 1회 표 수신)로 분리
+#        · 윈도우 업로드에 X-Fanding-Kind: vr6* 경로 추가(기존 P 업로드·판독·주문 흐름은 그대로)
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -48,7 +50,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.7.2"
+VERSION = "1.8.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -865,12 +867,19 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
 # ---------------------------------------------------------- 새 가격표 처리
 def process_inbox(tg):
     INBOX.mkdir(parents=True, exist_ok=True)
+    try:   # VR6 자료는 따로 처리 (오류가 나도 P 가격표 처리는 계속)
+        import fanding_vr6
+        fanding_vr6.process_inbox(tg)
+    except Exception as e:
+        print("VR6 수신 처리 오류:", type(e).__name__, e, flush=True)
     for f in sorted(INBOX.glob("*.note")):
         tg.send("🖥 <b>윈도우 PC (팬딩)</b>\n" + html.escape(f.read_text(encoding="utf-8", errors="replace")[:300]))
         f.unlink(missing_ok=True)
     for f in sorted(INBOX.glob("*.img")):
         mf = f.with_suffix(".json")
         meta = load(mf, {})
+        if meta.get("kind") == "vr6":
+            continue                                  # VR6 이미지는 fanding_vr6 가 처리 (P 판독 대상 아님)
         if meta.get("retry_at", 0) > time.time():
             continue                                  # 잠시 뒤 다시 시도할 이미지
         data = f.read_bytes()
@@ -1145,6 +1154,11 @@ def loop():
             tick(tg)
         except Exception as e:
             print("루프 오류:", type(e).__name__, e, flush=True)
+        try:
+            import fanding_vr6
+            fanding_vr6.tick(tg)
+        except Exception as e:
+            print("VR6 점검 오류:", type(e).__name__, e, flush=True)
         if tg.own:
             poll_own_bot(tg)          # 약 15초 동안 버튼·명령 기다림
         else:
@@ -1171,9 +1185,34 @@ MENU_ALIAS = {label: cmd for _, label, cmd in MENU_ITEMS}
 MENU_CMD = {key: cmd for key, _, cmd in MENU_ITEMS}
 
 
+P_LABEL, VR6_LABEL, HOME_LABEL, ALL_HELP_LABEL = "🅿 P 메뉴", "🅥 VR6 메뉴", "🏠 메인 메뉴", "❓ 전체 도움말"
+
+
+def main_keyboard():
+    """/start 로 뜨는 첫 화면: P(기존 가격표 매매) / VR6(2주 1회)"""
+    return [[{"text": P_LABEL}, {"text": VR6_LABEL}], [{"text": ALL_HELP_LABEL}]]
+
+
 def menu_keyboard():
+    """P 메뉴: 기존 11개 버튼 + 메인으로"""
     labels = [label for _, label, _ in MENU_ITEMS]
-    return [[{"text": t} for t in labels[i:i + 3]] for i in range(0, len(labels), 3)]
+    return [[{"text": t} for t in labels[i:i + 3]] for i in range(0, len(labels), 3)] + [[{"text": HOME_LABEL}]]
+
+
+def main_menu_text():
+    return ("📋 <b>팬딩 봇</b>\n🅿 <b>P 메뉴</b> — 기존 가격표 자동 매매 (SOXL, 매일 가격표)\n"
+            "🅥 <b>VR6 메뉴</b> — VR6기 (TQQQ, 2주에 한 번 표 수신)\n아래 버튼에서 골라 주세요.")
+
+
+def _vr6_text(tg, t):
+    """VR6 메뉴 글자·명령 처리. 오류가 나도 P 흐름은 계속"""
+    try:
+        import fanding_vr6
+        return fanding_vr6.handle_text(tg, t)
+    except Exception as e:
+        print("VR6 명령 오류:", type(e).__name__, e, flush=True)
+        tg.send("⚠️ VR6 처리 중 오류가 났어요. /vr6진단 으로 확인해 주세요.")
+        return True
 
 
 def menu_rows():
@@ -1231,8 +1270,13 @@ def poll_own_bot(tg):
                     continue
                 t = (m.get("text") or "").strip()
                 t = MENU_ALIAS.get(t, t)   # 하단 버튼 글자 → 같은 명령
-                if t.lower() in ("/start", "/help", "도움말", "?", "메뉴", "/menu"):
-                    tg.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT + "\n\n▫️ 아래 버튼으로도 모든 기능을 쓸 수 있어요.",
+                if t.lower() in ("/start", "?", "메뉴", "/menu") or t in (HOME_LABEL, ALL_HELP_LABEL):
+                    tg.send(main_menu_text(), keyboard=main_keyboard())
+                elif t == P_LABEL or t.lower() == "/p":
+                    tg.send("🅿 <b>P 메뉴</b> — 기존 가격표 자동 매매\n" + HELP_TEXT + "\n\n▫️ 아래 버튼으로도 모든 기능을 쓸 수 있어요.",
+                            keyboard=menu_keyboard())
+                elif t.lower() in ("/help", "도움말"):
+                    tg.send("📋 <b>팬딩 봇 사용법 (P)</b>\n" + HELP_TEXT + "\n\n▫️ VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
                             keyboard=menu_keyboard())
                 elif t in ("/판독", "판독"):
                     tg.send(vision_status())
@@ -1243,22 +1287,34 @@ def poll_own_bot(tg):
                 elif t in ("/과거", "과거"):
                     st = load(STATE, {})
                     tg.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")
+                elif _vr6_text(tg, t):
+                    pass
                 elif not secretary_message(tg, t):
-                    tg.send("모르는 명령이에요. <b>도움말</b> 을 보내 보세요.")
+                    tg.send("모르는 명령이에요. <b>/start</b> 로 메뉴를 열어 보세요.")
         except Exception as e:
             print("버튼·명령 처리 오류:", type(e).__name__, e, flush=True)
     if ups:
         save(HOME / "tg_offset.json", off)
 
 
-_LOADED_MTIME = os.path.getmtime(os.path.abspath(__file__))
+_VR6_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fanding_vr6.py")
+
+
+def _mtimes():
+    out = []
+    for f in (os.path.abspath(__file__), _VR6_FILE):
+        try:
+            out.append(os.path.getmtime(f))
+        except OSError:
+            out.append(0)
+    return out
+
+
+_LOADED_MTIME = _mtimes()
 
 
 def _file_changed():
-    try:
-        return os.path.getmtime(os.path.abspath(__file__)) != _LOADED_MTIME
-    except OSError:
-        return False
+    return _mtimes() != _LOADED_MTIME
 
 
 def _reload_if_changed():
@@ -1376,6 +1432,14 @@ def secretary_callback(tg_s, cb, _reloaded=False):
     if mod:
         return mod.secretary_callback(tg_s, cb, True)
     data = cb.get("data", "")
+    if data.startswith("vm:"):   # VR6 메뉴 안의 선택 버튼(배수·일정)
+        try:
+            import fanding_vr6
+            return fanding_vr6.callback(tg_s, cb)
+        except Exception as e:
+            print("VR6 버튼 오류:", type(e).__name__, e, flush=True)
+            tg_s.answer(cb.get("id"), "VR6 처리 오류")
+            return True
     if data.startswith("fm:"):   # 메뉴 버튼: 같은 이름의 명령 글자를 보낸 것과 똑같이 처리
         parts = data.split(":")
         key, arg = parts[1], (parts[2] if len(parts) > 2 else "")
@@ -1472,6 +1536,12 @@ def http_upload(h):
     given = h.headers.get("X-Fanding-Token", "")
     if len(token) < 20 or not hmac.compare_digest(given.encode(), token.encode()):
         return h.send(403, {"error": "bad_token"})
+    if h.headers.get("X-Fanding-Kind", "").startswith("vr6"):   # VR6 는 따로 처리 (P 업로드와 섞지 않음)
+        try:
+            import fanding_vr6
+        except Exception as e:
+            return h.send(500, {"error": "vr6_module", "detail": f"{type(e).__name__}"[:80]})
+        return fanding_vr6.http_upload(h)
     try:
         n = int(h.headers.get("Content-Length", "0"))
     except ValueError:
