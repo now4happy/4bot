@@ -17,6 +17,7 @@
 - 미배포 로컬 수정: 8471027/973f6e3/b3c12b0. GitHub에 있는 커밋으로 가정하지 않는다.
 - 다음: docs/handoff/06_updater.md의 설치 절과 코드 ZIP 확보 → 실제 업로드/승인 여부만 확인.
 - 코드 ZIP: update_pause_controller_20261025.zip / update_pause_bot_hooks_20261025.zip.
+- 5·6·7번 텔레그램 하단 버튼 메뉴(/start, 모든 기능 버튼화): fanding_trade.py 1.7.2·office_secretary.py·bot_updater.py 작성/가짜 텔레그램 시험 완료, 서버 적용 미확인. 6번은 업데이트 비서 자체 변경. 적용 후 5·7번에 /start 1회. 상세 10_fanding·05_office·06_updater.
 - Claude 결제 비교는 한국 귀국 후 재개. Gemini 기준액/단가 명령은 응답 확인, 설치 후 판독 기록은 마지막 확인0회.
 
 ## 필요한 문서만 선택
@@ -31,6 +32,7 @@
 | 업데이트·일시중지·재개 | docs/handoff/06_updater.md |
 | 서버·서비스·시간 | docs/handoff/07_server.md |
 | Gemini 판독·비용 | docs/handoff/08_gemini.md |
+| 팬딩 자동주문·5번 버튼 메뉴 | docs/handoff/10_fanding.md (신규, 미업로드) |
 | 가격·지역 비교·Gbuts | docs/handoff/09_prices.md |
 
 ## 읽기·갱신 방법
