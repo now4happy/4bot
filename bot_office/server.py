@@ -116,6 +116,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith('/room'): return _room_proxy(self)
         route=self.path.split('?',1)[0]
+        if route=='/api/fanding/control':
+            import fanding_trade
+            return fanding_trade.http_control(self)
         if route=='/healthz': return self.send(200,{'ok':True})
         if route=='/login': return self.send(200,(ROOT/'login.html').read_bytes(),'text/html; charset=utf-8')
         if not self.session():
@@ -193,6 +196,9 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in ('https://'+self.headers.get('Host',''),'http://'+self.headers.get('Host','')):
             return self.send(403,{'error':'origin_rejected'})
         route=self.path
+        if route.split('?',1)[0]=='/api/fanding/control':
+            import fanding_trade
+            return fanding_trade.http_control(self)
         if route=='/api/fanding/upload':  # FANDING_UPLOAD_V1: 윈도우 PC가 가격표 이미지를 올리는 곳 (전용 암호 필요)
             import fanding_trade
             return fanding_trade.http_upload(self)

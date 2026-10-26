@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.5.0)
+# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.5.1)
 #   저장소 위치: bot_office/fanding_fetch_win.py (서버에선 실행하지 않음 · 윈도우가 GitHub 에서 내려받음)
 # 윈도우 PC 전용: 팬딩 가격표 이미지를 가져와 사무실 서버로 보내고 종료
 # 1.1.0: 글 안의 큰 이미지를 모두 보냄 → 서버가 가격표만 골라냄 (이미지 순서가 바뀌어도 OK)
@@ -21,12 +21,12 @@
 #     "series_url": "https://fanding.kr/@laofus/series/1933/", "stop_at": "11:30",
 #     "retry_min": 5, "headless": true}
 # ==========================================================
-import hashlib, json, random, re, sys, time, urllib.parse, urllib.request
+import hashlib, json, random, re, sys, time, urllib.parse, urllib.request, urllib.error
 from datetime import timedelta, timezone
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"      # 팬딩 로그인이 저장되는 전용 브라우저 폴더
@@ -155,11 +155,22 @@ def grab_images(page, post_url, limit=16):
 
 
 def control(c, stage="idle", request_id=""):
-    data = json.dumps({"stage":stage, "request_id":request_id, "version":VERSION}).encode()
+    data = json.dumps({"stage":stage, "request_id":request_id, "version":VERSION,
+                       "mode": "watch" if WORKER_MODE["stay_open"] else "run",
+                       "run_path": str(Path(__file__).resolve()), "want_scan": True}).encode()
     req = urllib.request.Request(c["office_url"].rstrip("/") + "/api/fanding/control", data=data,
                                  headers={"X-Fanding-Token":c["upload_token"], "Content-Type":"application/json"})
-    with urllib.request.urlopen(req, timeout=30) as reply:
-        return json.load(reply)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as reply:
+            result = json.load(reply)
+    except urllib.error.HTTPError as exc:
+        hints = {404: "서버 /api/fanding/control 연결 누락: server.py 수정본 적용 필요",
+                 401: "서버가 control 요청에 로그인 요구: control 경로 연결 확인",
+                 403: "업로드 토큰 불일치 또는 서버 접근 설정 확인"}
+        raise RuntimeError(hints.get(exc.code, "서버 control HTTP " + str(exc.code))) from None
+    if not isinstance(result, dict) or not result.get("ok"):
+        raise RuntimeError("서버 control 응답 형식 오류")
+    return result
 
 
 def once(c, upload=True, request=None):
@@ -211,6 +222,9 @@ def once(c, upload=True, request=None):
                         time.sleep(30)
                     else:
                         return "server_error", "서버 판독 대기30분 초과"
+            if total and upload and request:
+                # Upload success alone is not proof that the expected sheet was read.
+                return "parsing", f"{total}장 전송 · 필요 종가일 판독 미확인, 재확인 예정"
             return ("sent" if upload else "test_ok", f"{total}장 / 최근 {len(candidates)}개 글") if total else ("no_image", None)
         finally:
             ctx.close()
@@ -230,6 +244,8 @@ def watch(stay_open=False):
     except OSError:
         log("대기 프로그램이 이미 실행 중입니다."); lock.close(); return
     completed = set()
+    attempts = {}
+    WORKER_MODE["stay_open"] = stay_open
     start = datetime.now(timezone(timedelta(hours=9)))
     settings = cfg()
     stop_h, stop_m = map(int, settings.get("stop_at", "11:30").split(":"))
@@ -242,14 +258,22 @@ def watch(stay_open=False):
                 c = cfg()
                 reply = control(c, LAST_STAGE["value"])
                 request = reply.get("request")
-                if request and request["id"] not in completed:
+                retry_sec = max(60, int(c.get("retry_min", 5)) * 60)
+                if (request and not reply.get("ready") and not reply.get("pending_images")
+                        and request["id"] not in completed
+                        and time.monotonic() - attempts.get(request["id"], -1e12) >= retry_sec):
                     try:
                         result, info = once(c, request=request)
                     except Exception as exc:
                         result, info = "error", type(exc).__name__
-                    control(c, result, request["id"])
-                    completed.add(request["id"])
-                    if len(completed) > 100: completed = {request["id"]}
+                    attempts[request["id"]] = time.monotonic()
+                    ack = control(c, result, request["id"])
+                    if ack.get("ready"):
+                        completed.add(request["id"])
+                    if len(completed) > 100:
+                        completed = {request["id"]}
+                    if len(attempts) > 100:
+                        attempts = {request["id"]: attempts[request["id"]]}
                     log("수집 결과:", result, info or "")
                     # Keep failure visible between heartbeats; do not claim parsing success on upload.
                     c["last_stage"] = result
@@ -280,7 +304,8 @@ def watch(stay_open=False):
                         post_server(c, note="오늘 자료 미확보 상태로 종료 시각에 도달했습니다. /진단 확인 후 필요시 PC run.bat를 다시 실행하세요.")
                         return
             except Exception as exc:
-                log("서버 연결 실패:", type(exc).__name__, "주소·네트워크·서버 업데이트 확인")
+                detail = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+                log("서버 연결 실패:", detail, "주소·네트워크·서버 업데이트 확인")
                 if not stay_open and datetime.now(timezone(timedelta(hours=9))) >= stop:
                     log("종료시각 도달 · 서버 연결 실패는 fetch_log.txt 확인")
                     return
@@ -290,6 +315,7 @@ def watch(stay_open=False):
 
 
 LAST_STAGE = {"value":"idle"}
+WORKER_MODE = {"stay_open": False}
 
 
 def backfill(c, n=None):

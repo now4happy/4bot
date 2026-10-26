@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.1)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -50,7 +50,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -505,30 +505,52 @@ def request_scan(reason="manual"):
     return f"윈도우 PC에 사이트 재접속·최신 자료 재판독 요청을 등록했습니다.\n필요 종가일: {expected} (게시일과 다름)\nPC 대기 프로그램 실행 중이면 약30초 내 확인합니다."
 
 
+def sheet_ready(sheet):
+    return bool(sheet and (sheet.get("reads_agree") or sheet.get("status") in
+                          ("submitted", "partial", "submitting")))
+
+
+def pending_live_images():
+    """P 수집은 VR6/과거 자료의 판독 대기 때문에 막지 않는다."""
+    return sum(1 for image in INBOX.glob("*.img")
+               if (lambda meta: meta.get("kind") != "vr6" and meta.get("mode") != "history")(
+                   load(image.with_suffix(".json"), {})))
+
+
 def http_control(h):
     token = cfg().get("upload_token") or ""
     if len(token) < 20 or not hmac.compare_digest(h.headers.get("X-Fanding-Token", "").encode(), token.encode()):
         return h.send(403, {"error": "bad_token"})
     try:
+        expected = last_session_date().isoformat()
+        ready = sheet_ready(load(STATE, {}).get("sheets", {}).get(expected))
         if h.command == "POST":
             n = int(h.headers.get("Content-Length", "0"))
             if not 0 < n <= 4096:
                 return h.send(400, {"error": "bad_size"})
             d = json.loads(h.rfile.read(n))
             stages = {"idle", "connecting", "listing", "images", "uploading", "parsing", "history", "sent", "daily_done", "daily_stopped", "logged_out", "no_posts", "no_image", "error", "server_error"}
-            if d.get("stage") not in stages:
+            if not isinstance(d, dict) or d.get("stage") not in stages:
                 return h.send(400, {"error": "bad_stage"})
             with bridge_state() as b:
                 b["pc"] = {"at": time.time(), "stage": d["stage"], "version": str(d.get("version", ""))[:20],
-                           "request_id": str(d.get("request_id", ""))[:32]}
+                           "request_id": str(d.get("request_id", ""))[:32],
+                           "mode": str(d.get("mode", ""))[:10],
+                           "run_path": str(d.get("run_path", ""))[:240]}
+                req = b.get("request") or {}
+                # A PC started after the morning request expired must not idle forever.
+                if (d.get("want_scan") is True and not ready
+                        and (req.get("expected") != expected or time.time() - req.get("at", 0) > 1800)):
+                    b["request"] = {"id": uuid.uuid4().hex, "at": time.time(),
+                                    "expected": expected, "reason": "pc_start"}
         with bridge_state() as b:
             req = b.get("request") or {}
             active = req if time.time() - req.get("at", 0) <= 1800 else None
         expected = last_session_date().isoformat()
         sheet = load(STATE, {}).get("sheets", {}).get(expected) or {}
-        ready = bool(sheet and (sheet.get("reads_agree") or sheet.get("status") in ("submitted", "partial", "submitting")))
+        ready = sheet_ready(sheet)
         return h.send(200, {"ok": True, "request": active, "expected": expected,
-                            "ready": ready, "pending_images": len(list(INBOX.glob("*.img")))})
+                            "ready": ready, "pending_images": pending_live_images()})
     except (ValueError, TypeError):
         return h.send(400, {"error": "bad_json"})
     except OSError:
@@ -545,11 +567,15 @@ def diagnosis():
     lines = [f"🩺 팬딩 연결 진단 · v{VERSION}", f"필요 종가일: {expected} (월요일은 금요일 종가, 토요일 게시 가능)",
              "윈도우 연결: " + (f"{age}초 전" if age is not None else "새 수집기 연결 기록 없음"),
              "PC 단계: " + stages.get(pc.get("stage"), "미확인"),
+             "PC 수집기 버전: " + str(pc.get("version") or "미확인"),
+             "PC 실행 파일: " + str(pc.get("run_path") or "미확인(구버전 또는 미연결)"),
              "당일분 가격표: " + (str(sh.get("status")) if sh else "미확보"),
              f"수신함 대기: {len(list(INBOX.glob('*.img')))}장",
              "최근 서버 수신: " + str((b.get("last_received") or {}).get("at", "미확인"))]
     if age is None or age > 180:
-        lines.append("확인 위치: 한국 PC 전원·작업 스케줄러·watch 실행·사무실 주소/통신")
+        lines.append("확인 위치: 한국 PC 전원·작업 스케줄러·run.bat·서버 control 경로/통신")
+        if age is None:
+            lines.append("연결 기록이 없으면 구형 수집기 또는 /api/fanding/control 미연결 가능. PC 꺼짐으로 단정할 수 없습니다.")
     lines.append("재접속 요청: /재판독 · 서버는 PC 전원을 켜거나 로그인을 대신할 수 없습니다.")
     return "\n".join(lines)
 
@@ -564,16 +590,16 @@ def recovery_tick(tg):
     expected = last_session_date(now).isoformat()
     st = load(STATE, {})
     sheet = st.get("sheets", {}).get(expected)
-    missing = not sheet or (sheet.get("status") == "pending" and sheet.get("reads_agree") is False)
+    missing = not sheet_ready(sheet)
     b = load(BRIDGE, {})
     pc = b.get("pc") or {}
     req = b.get("request") or {}
     if auto_window and missing and time.time() - req.get("at", 0) >= 1800:
         request_scan("missing")
     problem = None
-    active_limit = 900 if pc.get("stage") in ("connecting", "listing", "images", "uploading") else 180
+    active_limit = 900 if pc.get("stage") in ("connecting", "listing", "images", "uploading", "history", "parsing") else 180
     if not pc.get("at") or time.time() - pc["at"] > active_limit:
-        problem = "윈도우 연결 없음: 한국 PC 전원·스케줄러·watch 실행·통신 확인"
+        problem = "PC 연결 확인 안 됨: run.bat·스케줄러·서버 control 경로/통신 확인 (PC 전원 꺼짐으로 단정하지 않음)"
     elif pc.get("stage") in ("logged_out", "no_posts", "no_image", "error", "server_error", "daily_stopped"):
         problem = "윈도우 단계 실패: " + pc["stage"] + " · /진단 확인"
     attempt = st.get("vision_last_attempt") or {}
