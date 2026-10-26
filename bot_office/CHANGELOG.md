@@ -1,15 +1,5 @@
 # 5번 사무실 비서 변경 기록
 
-## v1.0.33 · 2026-10-26 16:12 (KST)
-- 파일: office_secretary.py
-- 내용: 비서 봇 팬딩 메뉴 제거
-- 브랜치: staging
-
-## v1.0.32 · 2026-10-26 16:07 (KST)
-- 파일: office_briefing.py, office_secretary.py
-- 내용: 비서봇 심플하게
-- 브랜치: staging
-
 ## v1.0.31 · 2026-10-26 15:45 (KST)
 - 파일: fanding_trade.py, fanding_vr6.py, fanding_vr6_win.py
 - 내용: 팬딩 vr6 추가
