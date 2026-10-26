@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 04:07 ~ 16:00 EST 오버나이트 7층 골디락스 멀티 그리드 지층관리 스나이퍼
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 데이마켓 + 04:07 ~ 16:00 ET 7층 골디락스 멀티 그리드 지층관리 스나이퍼
 메인 오케스트레이터 · TossApiClient 폴리필(close 포함) · 내장형 사용자 중심 초슬림 텔레그램 롱폴링/관제탑 컨트롤러 통합 코어 모듈 (Step 02 / 02)
 - 최종 확정 챔피언 (🔥 03_7G_PURE_10_01 / 01_7L_STATIC_CYCLE_MIN · Case 71 & Case 72) 100% 결속:
   1) 8%(12.5분할) 황금비율 정액 기반 정량제 & min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑(Case 67) &
@@ -915,7 +915,7 @@ def _check_weekend_nyse_closed_dynamic(now_est: datetime) -> bool:
         return True
     if wd == 5:
         return True
-    if wd == 6 and hm < 1800:
+    if wd == 6 and hm < 2000:
         return True
     return False
 
@@ -1149,7 +1149,8 @@ async def _compute_candle_metrics_dynamic(
                 dt_now=now_est,
             )
             if isinstance(res, dict) and (
-                safe_float(res.get("premarket_vwap"), 0.0) > 0.0
+                safe_float(res.get("day_vwap"), 0.0) > 0.0
+                or safe_float(res.get("premarket_vwap"), 0.0) > 0.0
                 or safe_float(res.get("regular_vwap"), 0.0) > 0.0
             ):
                 return refresh_metrics_with_live_tick(
@@ -1787,7 +1788,9 @@ class _AdaptiveTelegramBridge:
             "🔹 04:07 ~ 09:29: 🔫 프리장 ",
             "🔹 09:30 ~ 16:00: 🔥 정규장 ",
             "🔹 16:00 ~ 16:59: 🌙 일일 결산",
-            "🔹 17:00 ~ 03:59: 🧹 일일 GC · 장외 대기",
+            "🔹 17:00 ~ 19:59 ET: 🧹 일일 GC · 대기",
+            "🔹 20:00 ~ 익일03:59 ET: ☀️ 데이마켓 매수·매도",
+            "   한국 낮: 서머타임 09:00~17:00 / 겨울 10:00~18:00",
             "──────────────",
             "📡 /avwap : 실시간 스나이퍼 레이더",
             "📜 /sync : 지층 지시서",
@@ -2696,7 +2699,7 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
         now_est = datetime.now(EST_TZ)
         hm = now_est.hour * 100 + now_est.minute
         in_market = bool(
-            (400 <= hm <= 1605)
+            (is_active_trading_window(hm) or 400 <= hm <= 406 or 1601 <= hm <= 1605)
             and not _check_weekend_nyse_closed_dynamic(now_est)
         )
         sleep_sec = 5.0 if in_market else 20.0

@@ -37,6 +37,7 @@ from quant_engine import (
 )
 from quant_indicators_plugin import (
     is_active_trading_window,
+    is_weekend_nyse_closed,
     refresh_metrics_with_live_tick,
 )
 from toss_api import (
@@ -1045,7 +1046,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             now_est=dt_now,
         )
 
-    if not is_active_trading_window(hm):
+    if not is_active_trading_window(hm) or is_weekend_nyse_closed(dt_now):
         return {
             "status": "OUTSIDE_TRADING_WINDOW",
             "did_sell_or_ratchet": False,

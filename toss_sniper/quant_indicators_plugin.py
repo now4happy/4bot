@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_indicators_plugin.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 04:07 ~ 16:00 EST 오버나이트 지층관리 스나이퍼
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 데이마켓 + 04:07 ~ 16:00 ET 지층관리 스나이퍼
 시계열 100% 벡터화 지표 엔진 및 10분 고정 매수 게이트 버킷 산출 코어 모듈 (Step 01 / 04)
 - 제4헌법 & Case 01: 모든 시계열 및 세션 경계 연산은 미국 동부 시간(EST_TZ = ZoneInfo('America/New_York')) 단일 소스 락온
 - Case 36 & Case 64: 04:07 ~ 16:00 EST 구간 10분 고정 매수 게이트(LOCKED_BUY_INTERVAL_MIN = 10) 버킷 산출 및
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -25,6 +25,8 @@ import pandas as pd
 from toss_api import (
     EST_TZ,
     LOCKED_BUY_INTERVAL_MIN,
+    is_sniper_trading_time,
+    is_sniper_weekend_closed,
     TARGET_SYMBOL,
     safe_float,
     safe_int,
@@ -44,28 +46,19 @@ REGULAR_START_MIN_OF_DAY: int = 9 * 60 + 30  # 570 (09:30 EST)
 def is_active_trading_window(hm: int) -> bool:
     """
     🎯 2 & Case 01:
-    프리장 개시(04:07 EST)부터 정규장 마감(16:00 EST)까지가 스나이퍼 액티브 운용 구간이다.
+    데이마켓(20:00~03:59 ET) 및 기존 프리/정규장(04:07~16:00 ET)을 허용한다.
     """
     hm_int = safe_int(hm, 0)
-    return 407 <= hm_int <= 1600
+    return is_sniper_trading_time(hm_int)
 
 
 def is_weekend_nyse_closed(now_est: Optional[datetime] = None) -> bool:
     """
     🚨 Case 01:
-    미국 동부 시간(EST/EDT) 기준 금요일 17:00 EST ~ 일요일 17:59 EST 구간을 주말 휴장으로 판정한다.
+    미국 동부 시간(EST/EDT) 기준 금요일 17:00 ET ~ 일요일 19:59 ET 구간을 주말 휴장으로 판정한다.
     """
     dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    wd = dt.weekday()  # 월=0, 화=1, ..., 금=4, 토=5, 일=6
-    hm = dt.hour * 100 + dt.minute
-
-    if wd == 4 and hm >= 1700:
-        return True
-    if wd == 5:
-        return True
-    if wd == 6 and hm < 1800:
-        return True
-    return False
+    return is_sniper_weekend_closed(dt)
 
 
 def get_market_session_label(now_est: Optional[datetime] = None) -> str:
@@ -76,6 +69,8 @@ def get_market_session_label(now_est: Optional[datetime] = None) -> str:
     if is_weekend_nyse_closed(dt):
         return "🛑 주말휴장"
     hm = dt.hour * 100 + dt.minute
+    if hm >= 2000 or hm < 400:
+        return "☀️ 데이마켓 스나이퍼 가동(20:00~익일03:59 ET)"
     if 400 <= hm <= 406:
         return "🌅 프리장 오프닝 안정화(04:00~04:06)"
     if 407 <= hm <= 929:
@@ -124,6 +119,25 @@ def evaluate_buy_gate_bucket_status(
                 "session_label": get_market_session_label(dt),
             },
         )
+
+    if hm >= 2000 or hm < 400:
+        # 하나의 데이마켓이 ET 자정을 지나도 동일 세션 키와 증가 버킷 유지.
+        trade_day = (dt + timedelta(days=1)).date() if hm >= 2000 else dt.date()
+        session_key = f"{trade_day.isoformat()}:DAY"
+        elapsed = (cur_min_of_day - 20 * 60) % (24 * 60)
+        bucket = elapsed // interval
+        next_min = (20 * 60 + (bucket + 1) * interval) % (24 * 60)
+        next_gate = "04:07 ET" if next_min == 240 else f"{next_min // 60:02d}:{next_min % 60:02d} ET"
+        is_open = (str(last_evaluated_date or "") != session_key
+                   or bucket > safe_int(last_evaluated_bucket_id, -1))
+        return is_open, bucket, session_key, {
+            "is_active_window": True,
+            "mins_from_0407": -1,
+            "bucket_10m": bucket,
+            "is_exact_boundary_min": elapsed % interval == 0,
+            "next_gate_hm_str": next_gate,
+            "session_label": get_market_session_label(dt),
+        }
 
     mins_from_0407 = max(0, cur_min_of_day - GATE_START_MIN_OF_DAY)
     if hm == 1600:
@@ -483,6 +497,13 @@ def compute_soxl_quant_metrics_1m(
         df_pre = df_today[(df_today["hm"] >= 400) & (df_today["hm"] <= 929)]
         df_reg = df_today[(df_today["hm"] >= 930) & (df_today["hm"] <= 1600)]
 
+        day_start = dt_now.replace(hour=20, minute=0, second=0, microsecond=0)
+        if dt_now.hour < 20:
+            day_start -= timedelta(days=1)
+        df_daymarket = df[(df["dt_est"] >= day_start)
+                          & (df["dt_est"] <= dt_now)
+                          & ((df["hm"] >= 2000) | (df["hm"] < 400))]
+        daymarket_stats = _calc_session_vwap_and_bands(df_daymarket, ma5_amp)
         pre_stats = _calc_session_vwap_and_bands(df_pre, ma5_amp)
         reg_stats = _calc_session_vwap_and_bands(df_reg, ma5_amp)
         all_stats = _calc_session_vwap_and_bands(df_today, ma5_amp)
@@ -496,6 +517,11 @@ def compute_soxl_quant_metrics_1m(
                 else all_stats["vwap"]
             )
         )
+
+        if dt_now.hour >= 20 or dt_now.hour < 4:
+            # 주간거래 중 전일 정규장 VWAP을 현재 세션 값으로 사용하지 않는다.
+            active_vwap = daymarket_stats["vwap"]
+            all_stats = daymarket_stats
 
         out = dict(default_out)
         out.update(ha_rsi_info)

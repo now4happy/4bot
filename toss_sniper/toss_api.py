@@ -51,6 +51,18 @@ logger = logging.getLogger("toss_sniper.toss_api")
 EST_TZ = ZoneInfo("America/New_York")
 KST_TZ = ZoneInfo("Asia/Seoul")
 
+def is_sniper_trading_time(hm: int) -> bool:
+    """ET 데이마켓 20:00~03:59 + 기존 04:07~16:00. 애프터장은 유지."""
+    return 0 <= hm <= 359 or 407 <= hm <= 1600 or 2000 <= hm <= 2359
+
+
+def is_sniper_weekend_closed(now_est: datetime) -> bool:
+    dt = now_est.astimezone(EST_TZ)
+    wd = dt.weekday()
+    hm = dt.hour * 100 + dt.minute
+    return (wd == 4 and hm >= 1700) or wd == 5 or (wd == 6 and hm < 2000)
+
+
 TARGET_SYMBOL: str = "SOXL"
 REAL_ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
 ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
@@ -1088,8 +1100,8 @@ class SoxlStratumLedger:
             daily_reanchor_cnt=0,
             daily_leftover_saved_usd=0.0,
             daily_realized_net_usd=0.0,
-            last_evaluated_buy_bucket_id=-1,
-            last_evaluated_date=str(logical_date),
+            # 매수 게이트는 자체 날짜/세션 키로 전환한다. ET 자정에
+            # 진행 중인 데이마켓 버킷까지 초기화하면 같은 버킷을 재평가한다.
         )
 
 
@@ -1952,14 +1964,15 @@ class TossApiClient:
         if clean_side not in ("BUY", "SELL"):
             raise ValueError(f"유효하지 않은 주문 방향: {clean_side}")
 
-        if enforce_daymarket_block and clean_side == "BUY":
+        # 매도도 동일 세션을 검문한다. 기존 인자는 호출 호환성을 위해 유지.
+        if enforce_daymarket_block or clean_side == "SELL":
             now_est = datetime.now(EST_TZ)
             hm = now_est.hour * 100 + now_est.minute
-            if not (407 <= hm <= 1600):
+            if not is_sniper_trading_time(hm) or is_sniper_weekend_closed(now_est):
                 raise _NonRetryableApiError(
                     422,
                     "outside-active-window",
-                    f"04:07 ~ 16:00 EST 외 매수 차단 (현재 {hm:04d} EST)",
+                    f"데이마켓/기존 운용시간 외 주문 차단 (현재 {hm:04d} ET)",
                 )
 
         qty_int = max(1, safe_int(quantity, 1))
