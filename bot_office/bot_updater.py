@@ -84,10 +84,12 @@ def tg(method, **params):
         return {}
  
  
-def say(text, rows=None):
+def say(text, rows=None, keyboard=None):
     p = {"chat_id": CFG.get("chat_id"), "text": text[:3900], "parse_mode": "HTML", "disable_web_page_preview": True}
     if rows:
         p["reply_markup"] = {"inline_keyboard": rows}
+    elif keyboard:   # 채팅창 아래에 계속 떠 있는 버튼
+        p["reply_markup"] = {"keyboard": keyboard, "resize_keyboard": True, "is_persistent": True}
     return tg("sendMessage", **p)
  
  
@@ -402,6 +404,21 @@ def show_diff(st, key):
         [[{"text": "✅ 업데이트", "callback_data": f"up:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]])
  
  
+# ---------------------------------------------------------------- 하단 버튼 메뉴 (/start 로 뜸)
+# 버튼은 기존 글자 명령과 똑같이 처리된다. 승인·코드 보기·무시·일시중지·재개는 업데이트 알림 안의 버튼으로 이미 처리한다.
+MENU_ALIAS = {"🔄 업데이트 확인": "업데이트 확인", "⏸ 거래 상태": "거래 상태", "🔎 원작 확인": "원작 확인", "❓ 도움말": "/help"}
+HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
+             "▫️ <b>🔄 업데이트 확인</b> : GitHub에 올라온 수정 확인 → 새 알림의 버튼(✅ 적용 · 🔍 코드 보기 · 🗑 무시)\n"
+             "▫️ <b>⏸ 거래 상태</b> : 업데이트용 일시중지·대기 중인 봇 보기 → ▶ 재개 버튼\n"
+             "▫️ <b>🔎 원작 확인</b> : 2번 스나이퍼 원작 새 버전 확인 (연결돼 있을 때만)\n"
+             "▫️ 일시중지·재개·승인은 업데이트 알림 아래 버튼으로 진행합니다.")
+
+
+def menu_keyboard():
+    rows = [["🔄 업데이트 확인", "⏸ 거래 상태"], ["🔎 원작 확인", "❓ 도움말"] if SU else ["❓ 도움말"]]
+    return [[{"text": t} for t in r] for r in rows]
+
+
 # ---------------------------------------------------------------- 텔레그램 버튼 받기
 def handle(st, upd):
     cb = upd.get("callback_query")
@@ -461,7 +478,10 @@ def handle(st, upd):
             {"um": SU.merge, "ud": SU.show, "ui": SU.ignore}[act](sys.modules[__name__], st, key)
     elif msg and str(msg.get("chat", {}).get("id")) == str(CFG.get("chat_id")):
         txt = (msg.get("text") or "").strip()
-        if txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
+        txt = MENU_ALIAS.get(txt, txt)   # 하단 버튼 글자 → 같은 명령
+        if txt in ("/start", "/help", "도움말", "메뉴", "/menu", "?"):
+            say(HELP_TEXT, keyboard=menu_keyboard())
+        elif txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
             say("🔄 원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
         elif txt in ("거래 상태", "일시중지 상태", "/pause_status"):
@@ -510,7 +530,7 @@ def main():
         if not r.get("ok"):
             time.sleep(10); continue
         if st.pop("self_pending", None):
-            save(STATE, st); say("✅ 업데이트 비서 새 버전 정상 작동 확인")
+            save(STATE, st); say("✅ 업데이트 비서 새 버전 정상 작동 확인", keyboard=menu_keyboard())
         for upd in r.get("result", []):
             offset = upd["update_id"] + 1; st["offset"] = offset
             try:
