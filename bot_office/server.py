@@ -116,16 +116,24 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith('/room'): return _room_proxy(self)
         route=self.path.split('?',1)[0]
-        if route=='/api/fanding/control':
-            import fanding_trade
-            return fanding_trade.http_control(self)
         if route=='/healthz': return self.send(200,{'ok':True})
         if route=='/login': return self.send(200,(ROOT/'login.html').read_bytes(),'text/html; charset=utf-8')
         if not self.session():
             if route=='/':
                 self.send_response(303);self.send_header('Location','/login');self.send_header('Content-Length','0');self.end_headers();return
             return self.send(401,{'error':'login_required'})
-        if route=='/': return self.send(200,(ROOT/'index.html').read_bytes(),'text/html; charset=utf-8')
+        if route in ('/', '/pixel-office'): return self.send(200,(ROOT/'pixel_office.html').read_bytes(),'text/html; charset=utf-8')
+        if route=='/operations': return self.send(200,(ROOT/'index.html').read_bytes(),'text/html; charset=utf-8')
+        if route=='/api/pixel-office':
+            import pixel_office
+            from urllib.parse import parse_qs, urlsplit
+            job_id=parse_qs(urlsplit(self.path).query).get('id',[None])[0]
+            try:
+                return self.send(200,pixel_office.state(job_id))
+            except ValueError:
+                return self.send(404,{'error':'업무를 찾을 수 없습니다.'})
+            except Exception:
+                return self.send(500,{'error':'업무 기록을 읽을 수 없습니다.'})
         if route=='/api/market-manual':
             import market_manual
             return self.send(200,market_manual.read())
@@ -185,9 +193,6 @@ class Handler(BaseHTTPRequestHandler):
         if origin and origin not in ('https://'+self.headers.get('Host',''),'http://'+self.headers.get('Host','')):
             return self.send(403,{'error':'origin_rejected'})
         route=self.path
-        if route=='/api/fanding/control':
-            import fanding_trade
-            return fanding_trade.http_control(self)
         if route=='/api/fanding/upload':  # FANDING_UPLOAD_V1: 윈도우 PC가 가격표 이미지를 올리는 곳 (전용 암호 필요)
             import fanding_trade
             return fanding_trade.http_upload(self)
@@ -197,6 +202,18 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK: SESSIONS.pop(c['office_session'].value,None)
             except (KeyError,ValueError): pass
             return self.send(200,{'ok':True},cookie='office_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'+('; Secure' if self.secure() else ''))
+        if route=='/api/pixel-office':
+            if not self.session(): return self.send(401,{'error':'login_required'})
+            if self.headers.get('X-Bot-Office')!='pixel-office': return self.send(403,{'error':'invalid_request'})
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if not 0<n<=16000: raise ValueError('요청 크기를 확인해 주세요.')
+                import pixel_office
+                return self.send(200,pixel_office.command(json.loads(self.rfile.read(n))))
+            except ValueError as error:
+                return self.send(400,{'error':str(error)[:240]})
+            except Exception:
+                return self.send(500,{'error':'업무 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.'})
         if route=='/api/market-manual':
             if not self.session(): return self.send(401,{'error':'login_required'})
             if self.headers.get('X-Bot-Office')!='market-manual': return self.send(403,{'error':'invalid_request'})
