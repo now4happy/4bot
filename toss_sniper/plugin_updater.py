@@ -20,6 +20,9 @@
   2) git reset --hard 실행 직전 해당 폴더 내 모든 원장(*ledger*.json, ledger_backups/*.json)과 환경설정(.env*, *config*.json)을
      메모리 및 백업 금고에 스냅샷 보존하고, git reset --hard 직후 0.001초 내에 즉시 원자적 원상 복원하여
      장외 자동 업데이트로 인한 어제 기록 초기화 및 타 폴더 원장 덮어쓰기 사고를 물리적으로 영구 봉쇄!
+- [사용자 추가 · 2번 v1.0.9 · 2026-10-28] 이 폴더가 더 큰 저장소(4bot) 안의 한 폴더로 운영 중이면
+  git fetch/reset 을 하지 않고 검증만 한다 (git reset --hard 가 저장소 전체 = 다른 봇 코드까지 되돌리는 것 방지).
+  4bot 에서는 새 코드는 6. Update 승인으로만 적용. 원작자 단독 폴더(저장소 = 이 폴더)에서는 원래 동작 그대로.
 """
 
 from __future__ import annotations
@@ -601,6 +604,15 @@ def _execute_git_pull_and_preflight_sync(
     protected_snapshots = _snapshot_protected_local_files_sync(target_dir)
 
     try:
+        # [사용자 추가 · 2번 v1.0.9] 4bot 같은 큰 저장소 안이면 git 은 건드리지 않고 검증만 (위 머리말 참고)
+        rc_top, top_dir, _ = _run_cmd_sync(
+            ["git", "rev-parse", "--show-toplevel"], cwd=target_dir, timeout_sec=8.0
+        )
+        if rc_top == 0 and top_dir and os.path.realpath(top_dir.strip()) != os.path.realpath(target_dir):
+            _restore_protected_local_files_sync(target_dir, protected_snapshots)
+            ok_local, msg_local = verify_all_modules_compile(target_dir)
+            return ok_local, f"자동 git 업데이트 안 함 (4bot 저장소는 6. Update 승인으로만 적용) · {msg_local}", False
+
         rc_h, prev_hash, _ = _run_cmd_sync(
             ["git", "rev-parse", "HEAD"], cwd=target_dir, timeout_sec=10.0
         )
