@@ -43,6 +43,11 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+try:  # [🔗토스 토큰 공유 HOOK] 2번·3번·브리핑이 같은 토큰을 같이 씀 (없으면 원작 그대로)
+    import toss_token_share as _TTS
+except Exception:
+    _TTS = None
+
 logger = logging.getLogger("toss_sniper.toss_api")
 
 # ---------------------------------------------------------------------------
@@ -1263,18 +1268,34 @@ class TossApiClient:
                 "Accept": "application/json",
             }
 
-            status_code, payload = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_http_sync,
-                    "POST",
-                    url,
-                    headers,
-                    form_data,
-                    "AUTH",
-                    10.0,
-                ),
-                timeout=12.0,
-            )
+            # [🔗토스 토큰 공유 HOOK] 다른 봇이 받아 둔 토큰이 있으면 그대로 쓰고, 없을 때만 1번 발급
+            _sh = None
+            if _TTS is not None:
+                try:
+                    _sh = await asyncio.wait_for(asyncio.to_thread(
+                        _TTS.try_acquire, self.base_url, self.client_id, self.client_secret,
+                        bool(force_refresh or self._access_token), self._access_token, "2번 스나이퍼"), timeout=15.0)
+                except Exception:
+                    _sh = None
+            if _sh and _sh[0] == "ok":
+                self._access_token = _sh[1]
+                self._token_expires_mono = time.monotonic() + float(_sh[2])
+                return self._access_token
+            if _sh and _sh[0] == "fail":
+                status_code, payload = _sh[1], _sh[2]
+            else:
+                status_code, payload = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._execute_http_sync,
+                        "POST",
+                        url,
+                        headers,
+                        form_data,
+                        "AUTH",
+                        10.0,
+                    ),
+                    timeout=12.0,
+                )
             if status_code != 200 or not isinstance(payload, dict):
                 err_code = str(payload.get("error") or f"http-{status_code}")
                 err_desc = str(
@@ -1438,7 +1459,8 @@ class TossApiClient:
                 )
 
                 if status_code == 401 and attempt < max_retries:
-                    self._access_token = ""
+                    # [🔗토스 토큰 공유 HOOK] 거절된 토큰을 기억해 두고 갱신 (다른 봇이 이미 새로 받았으면 그걸 사용)
+                    self._token_expires_mono = 0.0
                     last_exc = None
                     continue
 
