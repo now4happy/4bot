@@ -47,7 +47,7 @@ async def build_fx_view(client: TossApiClient):
     d_str = f" [{', '.join(usd_details)}]" if usd_details else ""
     lines = [
         f"💱 [토스 당일 필요 달러 브리핑 ({BOT_VERSION})]", f"▫️ 시장 상태: {'🛑 ' if is_hol else '🟢 '}{hol_reason}", "─────────────────",
-        f"🔫 [1] 토스 스나이퍼 시드: ${sniper_usd:,.2f}", f"📈 [2] 스마트 적립 ({us_cnt}개 미국종목): ${dca_usd_req:,.2f}{d_str}",
+        f"🔫 [1] 토스 스나이퍼 다음 1회분(현 장부): ${sniper_usd:,.2f}", f"📈 [2] 스마트 적립 ({us_cnt}개 미국종목): ${dca_usd_req:,.2f}{d_str}",
     ]
     if kr_cnt > 0: lines.append(f"🇰🇷 [국내주식 {kr_cnt}개 종목 소요액]: {dca_krw_req:,.0f}원")
     lines.extend([

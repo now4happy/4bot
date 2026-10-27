@@ -34,17 +34,32 @@ def check_holiday():
     return False, "정상 개장일 (시스템 대기 중)"
 
 def get_sniper_seed() -> float:
+    """2번 스나이퍼(인피니트 스노우볼, SOXL) 현 장부 기준 다음 1회 매수에 필요한 달러.
+    1회분 = 코어자산 × 8% (코어자산 = max(기준시드, 가용현금 + 보유 원가)), 가용현금보다 많으면 가용현금까지.
+    장부를 못 찾거나 가동 OFF 면 0 (예전처럼 아무 숫자나 추측하지 않음)."""
+    best = None
+    for p in glob.glob(os.path.join(SNIPER_DIR, "soxl_stratum_ledger*.json")):
+        try:
+            mt = os.path.getmtime(p)
+            if best is None or mt > best[0]:
+                best = (mt, p)
+        except OSError:
+            pass
+    if not best:
+        return 0.0
     try:
-        for pat in ["*.json", "data/*.json", "state/*.json"]:
-            for p in glob.glob(os.path.join(SNIPER_DIR, pat)):
-                try:
-                    with open(p, "r", encoding="utf-8") as f: d = json.load(f)
-                    if isinstance(d, dict):
-                        for k, v in d.items():
-                            if any(w in k.lower() for w in ["seed", "amount", "budget", "usd", "soxs"]) and isinstance(v, (int, float)) and 10 <= v <= 50000: return float(v)
-                except: pass
-    except: pass
-    return 105.00
+        with open(best[1], "r", encoding="utf-8") as f:
+            d = json.load(f)
+        st = d.get("SOXL", d) if isinstance(d, dict) else {}
+        if not isinstance(st, dict) or st.get("is_active") is False:
+            return 0.0
+        num = lambda v: float(v) if isinstance(v, (int, float)) else float(str(v or 0).replace(",", "") or 0)
+        seed, free = num(st.get("initial_seed_usd")), num(st.get("free_cash_usd"))
+        invested = sum(num(b.get("actual_cost_usd")) for b in (st.get("buckets") or []) if isinstance(b, dict))
+        portion = max(seed, free + invested) * 0.08
+        return round(max(0.0, min(portion, free)), 2)
+    except Exception:
+        return 0.0
 
 async def ensure_cycle_fields():
     cfg = await DcaConfigManager.load()

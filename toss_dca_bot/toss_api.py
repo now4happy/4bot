@@ -11,6 +11,11 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+try:  # [🔗토스 토큰 공유 HOOK] 2번·3번·브리핑이 같은 토큰을 같이 씀 (없으면 예전 그대로)
+    import toss_token_share as _TTS
+except Exception:
+    _TTS = None
+
 KST_TZ = ZoneInfo("Asia/Seoul")
 EST_TZ = ZoneInfo("America/New_York")
 
@@ -62,6 +67,19 @@ class TossApiClient:
             await self._do_authenticate()
 
     async def _do_authenticate(self):
+        # [🔗토스 토큰 공유 HOOK] 다른 봇이 받아 둔 토큰을 먼저 사용, 401 로 거절된 토큰일 때만 새로 발급
+        if _TTS is not None:
+            try:
+                sh = await asyncio.wait_for(asyncio.to_thread(
+                    _TTS.try_acquire, self.base_url, self.client_id, self.client_secret,
+                    bool(self.token), self.token or "", "3번 토스 적립"), timeout=15.0)
+            except Exception:
+                sh = None
+            if sh and sh[0] == "ok":
+                self.token = sh[1]
+                return
+            if sh and sh[0] == "fail":
+                raise Exception(f"Auth HTTP {sh[1]}: {html.escape(str(sh[2])[:200])}")
         url = f"{self.base_url}/oauth2/token"
         payload = {
             "grant_type": "client_credentials",
