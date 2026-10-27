@@ -173,6 +173,7 @@ def scan(st, force=False):
         return
     st["fetch_err"] = ""
     rc, refs = git("for-each-ref", "--format=%(refname:short) %(objectname)", "refs/remotes/origin")
+    live = {}   # 지금 GitHub에 실제로 있고 아직 반영 안 된 브랜치 → 최신 SHA
     for line in refs.splitlines():
         ref, sha = line.split()
         br = ref.split("/", 1)[1] if "/" in ref else ref
@@ -180,11 +181,55 @@ def scan(st, force=False):
             continue
         if git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue   # 이미 반영된 브랜치
+        live[br] = sha
         seen = st.setdefault("seen", {})
         if seen.get(br) == sha and not force:
             continue
         seen[br] = sha
         offer(st, br, sha)
+    prune(st, live)
+
+
+def prune(st, live):
+    """지난 알림 정리: 브랜치가 지워졌거나 새 커밋으로 바뀐(또는 이미 반영된) 알림·정리화면을 지운다.
+    예전 알림 버튼을 누르면 '최신 업데이트 알림에서 다시 눌러 주세요'로 안내된다. 지운 개수 반환."""
+    offers = st.setdefault("offers", {})
+    removed = 0
+    for k, o in list(offers.items()):
+        if live.get(o.get("branch")) != o.get("sha"):
+            offers.pop(k, None); removed += 1
+    # 같은 브랜치·같은 SHA 알림이 여러 개면 가장 최근 것 하나만 남김
+    keep = {}
+    for k, o in sorted(offers.items(), key=lambda kv: kv[1].get("at", 0)):
+        if o["branch"] in keep:
+            offers.pop(keep[o["branch"]], None); removed += 1
+        keep[o["branch"]] = k
+    for br in list(st.get("seen", {})):
+        if br not in live:
+            st["seen"].pop(br, None)
+    plans = st.get("conflict_plans", {})
+    for t, pl in list(plans.items()):
+        if pl.get("offer_key") not in offers:
+            plans.pop(t, None)
+    return removed
+
+
+def live_branches():
+    """GitHub에 지금 있고 아직 main에 반영 안 된 브랜치 → 최신 SHA. 확인 실패 시 None."""
+    rc, out = git("fetch", "-q", "--prune", "origin")
+    if rc:
+        return None
+    _, refs = git("for-each-ref", "--format=%(refname:short) %(objectname)", "refs/remotes/origin")
+    live = {}
+    for line in refs.splitlines():
+        ref, sha = line.split()
+        br = ref.split("/", 1)[1] if "/" in ref else ref
+        if br in ("main", "HEAD") or ref == "origin":
+            continue
+        if git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
+            continue
+        live[br] = sha
+    return live
  
  
 def offer(st, br, sha):
@@ -497,12 +542,22 @@ def handle(st, upd):
         if txt in ("/start", "/help", "도움말", "메뉴", "/menu", "?"):
             say(HELP_TEXT, keyboard=menu_keyboard())
         elif txt in ("충돌 정리", "/conflicts") and UC:
-            offers = st.get('offers', {})
+            live = live_branches()
+            if live is None:
+                return say('⚠️ GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요. (아무것도 지우지 않았습니다)')
+            removed = prune(st, live)
+            offers = st.setdefault('offers', {})
+            missing = [b for b in live if b not in {o['branch'] for o in offers.values()}]
+            if missing:   # 최신 알림이 지워졌거나 없던 브랜치는 새 알림을 다시 만든다
+                for b in missing:
+                    st.setdefault('seen', {})[b] = live[b]
+                    offer(st, b, live[b])
+            head = ('🗑 반영 안 된 지난 알림 ' + str(removed) + '개를 지웠습니다.\n') if removed else ''
             if not offers:
-                return say('정리할 알림이 없습니다. 업데이트 확인을 먼저 눌러 주세요.')
-            rows = [[{'text': '🧹 ' + o['branch'], 'callback_data': 'cp:' + k}]
+                return say(head + '✅ 정리할 업데이트가 없습니다. (GitHub에 대기 중인 수정 없음)')
+            rows = [[{'text': '🧹 ' + o['branch'] + ' (' + o['sha'][:7] + ')', 'callback_data': 'cp:' + k}]
                     for k, o in offers.items()]
-            return say('정리할 업데이트 브랜치를 선택하세요. 아직 파일은 변경하지 않습니다.', rows)
+            return say(head + '현재 대기 중인 업데이트입니다. 정리할 브랜치를 선택하세요. 아직 파일은 변경하지 않습니다.', rows)
         elif txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
             say("🔄 원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
