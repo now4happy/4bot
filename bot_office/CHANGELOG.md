@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.40 · 2026-10-27 17:31 (KST)
+- 파일: bot_updater.py, office_briefing.py, toss_token_share.py
+- 내용: Add files via upload
+- 브랜치: staging
+
 ## v1.0.39 · 2026-10-27 17:22 (KST)
 - 파일: bot_updater.py
 - 내용: 업데이트 시간
