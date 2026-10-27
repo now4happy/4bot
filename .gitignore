@@ -50,6 +50,14 @@
 !/fanding_windows/*.py
 !/fanding_windows/*.bat
 !/fanding_windows/config.example.json
+# 문서: docs 아래 md 와 보관 자료, 자동 상태 파일
+!/docs/
+/docs/**
+!/docs/**/
+!/docs/**/*.md
+!/docs/archive/**
+!/STATUS.md
+
 # 허용 범위 안이라도 항상 제외
 .env
 .env.*
