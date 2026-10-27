@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.41 · 2026-10-27 22:00 (KST)
+- 파일: office_briefing.py, office_secretary.py
+- 내용: 메리츠 잔액 표시
+- 브랜치: staging
+
 ## v1.0.40 · 2026-10-27 17:31 (KST)
 - 파일: bot_updater.py, office_briefing.py, toss_token_share.py
 - 내용: Add files via upload
