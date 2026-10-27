@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.8 · 2026-10-27 13:05 (KST)
+- 파일: toss_api.py, toss_token_share.py
+- 내용: 토큰 하나로
+- 브랜치: staging
+
 ## v1.0.7 · 2026-10-27 07:40 (KST)
 - 파일: main.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py, tg_ui_plugin.py, toss_api.py
 - 내용: 업데이트봇 수정
