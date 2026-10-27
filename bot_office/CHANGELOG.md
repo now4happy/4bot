@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.37 · 2026-10-27 12:28 (KST)
+- 파일: fanding_trade.py
+- 내용: 알림 시간 9시로
+- 브랜치: staging
+
 ## v1.0.36 · 2026-10-27 11:44 (KST)
 - 파일: office_briefing.py, office_secretary.py
 - 내용: 프리핑 파일 누락 재업
