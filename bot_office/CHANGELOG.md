@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.43 · 2026-10-28 06:14 (KST)
+- 파일: bot_updater.py
+- 내용: 비서봇 오류 패치
+- 브랜치: staging
+
 ## v1.0.42 · 2026-10-27 22:17 (KST)
 - 파일: office_briefing.py
 - 내용: Add files via upload
