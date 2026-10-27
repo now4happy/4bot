@@ -199,6 +199,9 @@ class Handler(BaseHTTPRequestHandler):
         if route.split('?',1)[0]=='/api/fanding/control':
             import fanding_trade
             return fanding_trade.http_control(self)
+        if route.split('?',1)[0]=='/api/pc-monitor':
+            import pc_monitor
+            return pc_monitor.receive(self)
         if route=='/api/fanding/upload':  # FANDING_UPLOAD_V1: 윈도우 PC가 가격표 이미지를 올리는 곳 (전용 암호 필요)
             import fanding_trade
             return fanding_trade.http_upload(self)

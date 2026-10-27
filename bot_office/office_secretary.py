@@ -41,6 +41,7 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
         "▫️ <b>📊 조회 → 한국투자·토스·메리츠·빗썸</b> : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
         "▫️ <b>/가격도움말</b> : 한국 제품 가격 등록·조회·변동 알림\n"
+        "▫️ <b>📊 조회 → 🖥 PC 상태</b> : 한국 PC 연결·매직스플릿 실행 확인\n"
         "▫️ <b>현황</b> : 결재 대기·진행 중인 안건 보기\n"
         "▫️ 큰 기능 추가나 매매 로직 변경은 Claude에게 요청하면 시뮬레이션까지 해서 결재함에 올려 드립니다.")
 
@@ -238,14 +239,14 @@ def status_text():
 HOME = "🏠 메인 메뉴"
 MAIN_LABELS = [["📊 조회", "💲 가격·비용"], ["✍️ 수정 요청", "❓ 도움말"]]
 SUB_LABELS = {
-    "view": [["🗞 브리핑", "📋 현황"], ["🏦 한국투자", "🔷 토스"], ["🏛 메리츠", "🪙 빗썸"], ["🧾 전체 잔액", HOME]],
+    "view": [["🗞 브리핑", "📋 현황"], ["🖥 PC 상태"], ["🏦 한국투자", "🔷 토스"], ["🏛 메리츠", "🪙 빗썸"], ["🧾 전체 잔액", HOME]],
     "price": [["🔎 가격 목록", "🔄 가격 확인", "📊 가격 비교"], ["➕ 가격 등록", "🔀 웹·앱 비교 등록"],
               ["🤖 Gemini 사용량", "💵 Gemini 잔액 입력", "💲 Gemini 단가 입력"], [HOME]],
     "mq": [["🔧 " + n for _, n, _ in BOTS[:2]], ["🔧 " + n for _, n, _ in BOTS[2:]], ["🤔 내용으로 찾기", HOME]],
 }
 MENU_KB = [[{"text": t} for t in row] for row in MAIN_LABELS]
 SUB_KB = {k: [[{"text": t} for t in row] for row in v] for k, v in SUB_LABELS.items()}
-MENU_ALIAS = {"🗞 브리핑": "브리핑", "📋 현황": "현황", "❓ 도움말": "/help"}
+MENU_ALIAS = {"🗞 브리핑": "브리핑", "📋 현황": "현황", "❓ 도움말": "/help", "🖥 PC 상태": "/pc_status"}
 BAL_ACTIONS = {"🏦 한국투자": "kis", "🔷 토스": "toss", "🏛 메리츠": "meritz", "🪙 빗썸": "bithumb", "🧾 전체 잔액": "all"}
 PRICE_ACTIONS = {"🔎 가격 목록": "ls", "🔄 가격 확인": "ck", "📊 가격 비교": "cp", "➕ 가격 등록": "rg", "🔀 웹·앱 비교 등록": "rc"}
 GEMINI_ACTIONS = {"🤖 Gemini 사용량": "v", "💵 Gemini 잔액 입력": "b", "💲 Gemini 단가 입력": "r"}
@@ -356,6 +357,9 @@ def handle_message(tg, st, msg):
         return
     raw = text
     text = MENU_ALIAS.get(raw, raw)   # 하단 버튼 글자 → 같은 명령
+    if text in ("/pc_status", "/PC상태", "PC 상태", "PC상태"):
+        import pc_monitor
+        tg.send(pc_monitor.status_text()); return
     aw = st.get("await")
     if aw and (time.time() - aw.get("at", 0) > 600 or raw.startswith("/") or raw in MENU_SPECIAL or raw in MENU_ALIAS
                or raw.lower() in CANCEL_WORDS):
@@ -531,6 +535,11 @@ def main():
     offset = st.get("offset")
     print("사무실 비서 대화 담당 시작", flush=True)
     while True:
+        try:
+            import pc_monitor
+            pc_monitor.tick(tg)
+        except Exception as e:
+            print("PC 감시 확인 오류:", type(e).__name__, flush=True)
         try:
             q = {"timeout": 30, "allowed_updates": json.dumps(["message", "callback_query"])}
             if offset:
