@@ -5,8 +5,10 @@
 #  · 적용: 보유·매매시간 확인 → 병합 → 문법 검사 → 해당 봇만 재시작 → 실패 시 원래 코드로 자동 복구 → 버전 기록 → main 업로드
 #  · v2.1 (2026-10-28): 사무실에 새로 추가되는 파일은 server.py 와 같은 주인·그룹·권한으로 복사 (있던 파일은 원래 권한 유지)
 #  · v2.2 (2026-10-28): 되돌림 감지 — 올라온 파일이 최근 14일 안의 다른 수정을 지우거나 버전이 더 낮으면 알림에 경고
+#  · v2.3 (2026-10-28): 저장소 맨 위 STATUS.md 자동 작성 — 업데이트 적용 때마다 + 하루 1번(06:10 KST, 대기 중인 업로드 없을 때)
+#                       봇별 버전·서비스 상태·최근 적용·대기 업데이트. 사람·AI 는 읽기만 (손으로 고치지 않음)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
-import json, os, pwd, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request
+import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
  
@@ -334,6 +336,144 @@ def offer(st, br, sha):
         "✅를 누르면 매매 중인지 확인 → 적용 → 재시작 확인(실패 시 자동 복구) → 버전 기록 → GitHub main 업로드까지 진행합니다.", rows)
  
  
+# ---------------------------------------------------------------- STATUS.md (자동 현재 상태)
+STATUS_FILE = "STATUS.md"
+EXTRA_UNITS = {SECRETARY_UNIT: "7번 비서(브리핑·PC감시)", FANDING_UNIT: "5번 팬딩 가격표", "bot-office-tunnel.service": "사무실 터널",
+               SELF_UNIT: "6번 업데이트 비서"}
+_CL_RE = re.compile(r"^## (\S+) · ([\d-]+ [\d:]+) \(KST\)\n((?:- .*\n?)*)", re.M)
+
+
+def _changelog(root, n=3):
+    """봇 폴더 CHANGELOG.md 의 최근 n건 → [(버전, 시각, 파일, 내용)]"""
+    try:
+        text = open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8").read()
+    except OSError:
+        return []
+    out = []
+    for m in _CL_RE.finditer(text):
+        info = dict(re.findall(r"^- ([^:]+): (.*)$", m.group(3), re.M))
+        out.append((m.group(1), m.group(2), info.get("파일", ""), info.get("내용", "")))
+        if len(out) >= n:
+            break
+    return out
+
+
+def _svc(unit):
+    _, out = sh(SYSTEMCTL, "show", unit, "-p", "ActiveState", "-p", "ActiveEnterTimestamp", "--value")
+    lines = (out.splitlines() + ["", ""])[:2]
+    state, since = lines[0].strip(), lines[1].strip()
+    m = re.search(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (\w+)", since)
+    if m:
+        try:
+            dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+            dt = dt.replace(tzinfo=timezone.utc) if m.group(2) == "UTC" else dt.replace(tzinfo=KST if m.group(2) == "KST" else None)
+            since = dt.astimezone(KST).strftime("%m-%d %H:%M") if dt.tzinfo else dt.strftime("%m-%d %H:%M")
+        except ValueError:
+            since = m.group(1)[5:16]
+    mark = "🟢 실행 중" if state == "active" else ("⚪ 꺼짐" if state == "inactive" else f"🔴 {state or '확인 불가'}")
+    return mark, since
+
+
+def _cell(s):
+    return str(s).replace("|", "/").replace("\n", " ").strip()
+
+
+def build_status(reason):
+    now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+    roots = targets()
+    L = ["# STATUS — 서버가 자동으로 쓰는 현재 상태", "",
+         "> ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).",
+         "> 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.", "",
+         f"- 갱신: {now} (KST) · 계기: {_cell(reason)}", ""]
+    L += ["## 봇별 현재 상태", "", "| 봇 | 서비스 | 상태 | 버전 | 마지막 적용 | 내용 |", "|---|---|---|---|---|---|"]
+    recent = []
+    for u, name in NAMES.items():
+        mark, since = _svc(u)
+        cl = _changelog(roots.get(u, ""), 10) if roots.get(u) else []
+        ver, when, _, what = cl[0] if cl else ("-", "-", "", "-")
+        L.append(f"| {name} | `{u.replace('.service', '')}` | {mark}{' (' + since + ' KST부터)' if since and mark.startswith('🟢') else ''} | {ver} | {when} | {_cell(what)[:60]} |")
+        recent += [(w, name, v, f, t) for v, w, f, t in cl]
+    L += ["", "## 사무실 상시 서비스", ""]
+    for u, name in EXTRA_UNITS.items():
+        mark, since = _svc(u)
+        L.append(f"- {name} `{u.replace('.service', '')}`: {mark}{' (' + since + ' KST부터)' if since and mark.startswith('🟢') else ''}")
+    _, failed = sh(SYSTEMCTL, "list-units", "--failed", "--plain", "--no-legend", "--no-pager")
+    failed = [ln.split()[0] for ln in failed.splitlines() if ln.split()]
+    L.append(f"- 실패 상태로 남은 서비스·타이머: {', '.join('`' + f + '`' for f in failed) if failed else '없음'}")
+    try:
+        du = shutil.disk_usage(REPO)
+        L.append(f"- 디스크 사용: {du.used / du.total * 100:.0f}% (남은 {du.free / 1e9:.1f}GB)")
+    except OSError:
+        pass
+    L += ["", "## 최근 적용 10건", ""]
+    for w, name, v, f, t in sorted(recent, reverse=True)[:10]:
+        L.append(f"- {w} · {name} {v} · {_cell(f)[:60]} · {_cell(t)[:60]}")
+    L += ["", "## 대기 중인 업로드 (아직 승인 안 됨)", ""]
+    _, refs = git("for-each-ref", "--format=%(refname:short) %(objectname)", "refs/remotes/origin")
+    pend = []
+    for line in refs.splitlines():
+        ref, sha = (line.split() + [""])[:2]
+        br = ref.split("/", 1)[1] if "/" in ref else ref
+        if not sha or br in ("main", "HEAD") or ref == "origin" or git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
+            continue
+        _, fs = git("diff", "--name-only", f"HEAD...{sha}")
+        fs = [x for x in fs.splitlines() if x.strip()]
+        pend.append(f"- `{br}`: {', '.join(fs[:6])}{' 외' if len(fs) > 6 else ''}")
+    L += pend or ["- 없음"]
+    L += ["", "## AI·사람 작업 순서 (요약)", "",
+          "1. 이 파일과 START.md 를 먼저 읽는다. 위 표가 서버의 실제 상태다 (다른 문서의 '현재 상태'보다 우선).",
+          "2. 고칠 파일은 **main 의 최신본**을 받아서 고친다 (기억·예전 대화의 파일로 고치지 않는다).",
+          "3. 고친 파일은 staging 에 올리고 6. Update 에서 승인한다. 예전 파일로 덮어쓰면 승인 알림에 🚨 경고가 뜬다.",
+          "4. 작업 기록은 docs/log/날짜_AI이름_작업.md 새 파일로 남긴다 (공용 문서를 여럿이 고치지 않는다).", ""]
+    return "\n".join(L)
+
+
+def write_status(reason):
+    """STATUS.md 를 쓰고, '갱신' 줄 말고 실제 내용이 바뀌었으면 True"""
+    path = os.path.join(REPO, STATUS_FILE)
+    new = build_status(reason)
+    strip = lambda t: re.sub(r"^- 갱신: .*$", "", t, flags=re.M)
+    try:
+        old = open(path, encoding="utf-8").read()
+    except OSError:
+        old = ""
+    if strip(old) == strip(new):
+        return False
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new)
+    try:
+        os.chown(path, OWNER.pw_uid, OWNER.pw_gid)
+    except OSError:
+        pass
+    return True
+
+
+def status_daily(st, force=False):
+    """하루 1번(06:10 KST 이후) STATUS.md 갱신 → main·staging 업로드. 대기 중인 업로드가 있으면 다음 날로 (staging 을 건드리지 않음)"""
+    now = datetime.now(KST)
+    today = now.strftime("%Y-%m-%d")
+    if not force and (now.hour * 100 + now.minute < 610 or st.get("status_day") == today):
+        return None
+    st["status_day"] = today
+    if git("status", "--porcelain", "--untracked-files=no")[1].strip():
+        return "서버에 저장 안 된 변경이 있어 건너뜀"
+    _, head = git("rev-parse", "HEAD")
+    rc_m, main = git("rev-parse", "origin/main")
+    rc_s, stg = git("rev-parse", "origin/staging")
+    if rc_m or main != head:
+        return "서버와 GitHub main 이 달라 건너뜀"
+    if rc_s == 0 and stg != head:
+        return "staging 에 대기 중인 업로드가 있어 건너뜀"
+    if not write_status("매일 점검" if not force else "수동 기록"):
+        return "바뀐 내용 없음"
+    git("add", "-f", "--", STATUS_FILE)
+    git("commit", "-qm", "상태 기록: STATUS.md")
+    rc, out = git("push", "-q", "origin", "HEAD:main", "HEAD:staging")
+    if rc:
+        return "GitHub 업로드 실패: " + out[-120:]
+    return "STATUS.md 갱신·업로드 완료"
+
+
 # ---------------------------------------------------------------- 적용
 def _office_perm(existing):
     """복사할 파일의 주인·그룹·권한. 있던 파일은 그대로 유지, 새 파일은 server.py 와 똑같이 맞춤
@@ -520,8 +660,13 @@ def apply(st, key):
     if units:   # 적용 전 작업 폴더가 깨끗했으므로, 바뀐 건 이번 수정·버전 올림·CHANGELOG 뿐
         git("add", "-u", "--", *{os.path.relpath(roots[u], REPO) for u in units})
         git("add", "-f", "--", *{os.path.join(os.path.relpath(roots[u], REPO), "CHANGELOG.md") for u in units})
+    try:   # 현재 상태 파일도 같은 기록에 함께 (실패해도 업데이트는 계속)
+        if write_status(f"업데이트 적용 ({br}: {msgs.splitlines()[0] if msgs else ''})"):
+            git("add", "-f", "--", STATUS_FILE)
+    except Exception as e:
+        print("STATUS.md 작성 실패:", type(e).__name__, e, flush=True)
     if git("diff", "--cached", "--name-only")[1].strip():
-        git("commit", "-qm", "버전 기록: " + ", ".join(tags))
+        git("commit", "-qm", ("버전 기록: " + ", ".join(tags)) if tags else "상태 기록: STATUS.md")
     for t in tags:
         git("tag", t)
     rc, out = git("push", "-q", "origin", "HEAD:main", *tags)
@@ -562,6 +707,7 @@ HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
              "▫️ <b>🧹 충돌 정리</b> : 이전 변경 파일 선택 → 확인 → 원래 브랜치를 백업 후 정리 → 별도 업데이트 승인\n"
              "▫️ <b>⏸ 거래 상태</b> : 업데이트용 일시중지·대기 중인 봇 보기 → ▶ 재개 버튼\n"
              "▫️ <b>🔎 원작 확인</b> : 2번 스나이퍼 원작 새 버전 확인 (연결돼 있을 때만)\n"
+             "▫️ <b>상태 기록</b> (글자로) : 저장소 STATUS.md 를 지금 갱신 (평소엔 적용 때·매일 06:10 자동)\n"
              "▫️ 일시중지·재개·승인은 업데이트 알림 아래 버튼으로 진행합니다.")
 
 
@@ -655,6 +801,8 @@ def handle(st, upd):
             rows = [[{'text': '🧹 ' + o['branch'] + ' (' + o['sha'][:7] + ')', 'callback_data': 'cp:' + k}]
                     for k, o in offers.items()]
             return say(head + '현재 대기 중인 업데이트입니다. 정리할 브랜치를 선택하세요. 아직 파일은 변경하지 않습니다.', rows)
+        elif txt in ("상태 기록", "상태기록", "/status"):
+            say("📝 STATUS.md: " + esc(status_daily(st, force=True) or "확인 안 함"))
         elif txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
             say("🔄 원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
@@ -694,6 +842,12 @@ def main():
                 scan(st)
             except Exception as e:
                 print("확인 오류:", e, flush=True)
+            try:
+                r = status_daily(st)
+                if r:
+                    print("STATUS.md:", r, flush=True)
+            except Exception as e:
+                print("STATUS.md 오류:", type(e).__name__, e, flush=True)
             if SU:
                 try:
                     SU.check(sys.modules[__name__], st)   # 하루 1번(09:02 KST) 원작 스나이퍼 새 버전 확인
