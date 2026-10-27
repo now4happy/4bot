@@ -10,6 +10,7 @@
 #                       · 버전 표기 통일: 이 파일의 변경 기록도 텔레그램·CHANGELOG 와 같은 '사무실 vX.Y.Z' 번호를 씀
 #  · 사무실 v1.0.47 (2026-10-28): 버전 자동 기입 — 올린 파일에 'vNEXT' 라고 적어 두면 승인 때 정해진 실제 번호(예: v1.0.48)로 바꿔 기록
 #                       (승인 순서에 따라 번호가 밀려도 파일 머리말·CHANGELOG·텔레그램 번호가 항상 같음)
+#  · 사무실 vNEXT (2026-10-28): office_url.py(사무실 주소 관리)가 바뀌면 7번 비서도 재시작
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -23,7 +24,7 @@ OFFICE_DIR = os.environ.get("U_OFFICE", "/opt/bot-office")
 OFFICE_UNIT, SELF_UNIT, SELF_FILE = "bot-office.service", "bot-updater.service", "bot_updater.py"
 # 사무실 폴더(/opt/bot-office)에서 따로 도는 상시 서비스 — 그 파일이 바뀌면 이 서비스도 다시 시작해야 새 코드가 반영됨
 SECRETARY_UNIT, FANDING_UNIT = "bot-office-secretary.service", "bot-office-fanding.service"
-OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_briefing.py", "price_watch.py", "gemini_usage.py", "meritz_client.py", "fanding_trade.py", "toss_token_share.py", "pc_monitor.py"),
+OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_briefing.py", "price_watch.py", "gemini_usage.py", "meritz_client.py", "fanding_trade.py", "toss_token_share.py", "pc_monitor.py", "office_url.py"),
                 FANDING_UNIT: ("fanding_trade.py", "fanding_vr6.py", "meritz_client.py", "gemini_usage.py")}
 OFFICE_EXT = (".py", ".html", ".css", ".js")
 SYSTEMCTL = os.environ.get("U_SYSTEMCTL", "systemctl")
