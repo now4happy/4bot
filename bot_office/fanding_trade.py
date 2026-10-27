@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.3)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.4)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -26,6 +26,8 @@
 # 1.8.3 (사무실 v1.0.47): ① 접수 일부 실패(partial) → 마감 전까지 10분 간격 최대 3번 자동 재시도
 #        (재시도 전 메리츠 '살아 있는 예약' 수를 확인해 이미 접수된 게 있을 수 있으면 자동 재시도 안 함 → 중복주문 방지 ·
 #         증권사 경고는 계속 버튼 확인) ② 가격표 미도착 조기 알림 09:40(KST) — 한국 PC 연결·수집 단계와 함께, [🔄 재판독] 버튼
+# 1.8.4: 팬딩 자료 누락 진단 — 진단은 바로 하고 최신만 저장, 텔레그램 메시지는 한국시간 09:00에 발송
+#        · 09:00 전에 해결되면 메시지 없음 · 같은 문제가 계속되면 다음 날 09:00에도 다시 발송 (v3)
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -53,7 +55,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.8.3"
+VERSION = "1.8.4"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -83,6 +85,8 @@ DEFAULTS = {
     "auto_before_min": 10,
     "missing_alert_kst": "11:00",  # 이 시각까지 가격표가 안 오면 알림
     "missing_early_kst": "09:40",  # 조기 알림 (PC 연결·수집 단계 함께)
+    "pc_on_kst": "07:50",        # 하남 PC 평일 켜짐 시각 (한국시간, 참고용)
+    "diag_send_kst": "09:00",  # 자동 진단 메시지 발송 시각 (한국시간)
     "auto_retry_max": 3,           # 접수 일부 실패 자동 재시도 횟수 (0 이면 끔)
     "auto_retry_min": 10,          # 자동 재시도 간격(분)
     "gemini_model": "gemini-3.8-flash",
@@ -611,13 +615,28 @@ def recovery_tick(tg):
     attempt = st.get("vision_last_attempt") or {}
     if missing and attempt.get("date") == now.date().isoformat() and not attempt.get("ok"):
         problem = "서버 AI 판독 실패: /판독 에서 제공자별 오류 확인"
-    if (missing or manual) and problem:
-        key = now.date().isoformat() + ":" + problem
+    # v3: 진단은 바로 하고 최신만 저장, 메시지는 한국시간 09:00에 발송.
+    # 09:00 전에 해결되면 메시지 없음. 같은 문제가 계속되면 다음 날 09:00에도 다시 발송.
+    # 사용자가 직접 /재판독으로 요청한 경우(manual)는 09:00까지 기다리지 않고 바로 보낸다.
+    if not problem:
         with bridge_state() as control:
-            if control.get("alert_key") == key:
-                return
-            control["alert_key"] = key
-        tg.send("⚠️ <b>팬딩 자료 누락 진단</b>\n" + html.escape(problem) + "\n필요 종가일: " + expected + "\n재접속·재수집 요청은 자동 등록됩니다. /재판독 으로도 요청 가능")
+            control.pop("pending_diag", None)
+        return
+    if not (missing or manual):
+        return
+    send_h, send_m = hm(cfg().get("diag_send_kst", "09:00"))
+    send_today = now.replace(hour=send_h, minute=send_m, second=0, microsecond=0)
+    with bridge_state() as control:
+        control["pending_diag"] = {"problem": problem, "expected": expected}
+        if not manual and now < send_today:
+            return
+        sent_key = now.date().isoformat() + ":" + problem
+        if control.get("diag_sent_key") == sent_key:
+            return
+        control["diag_sent_key"] = sent_key
+        pending = control.pop("pending_diag", None)
+    if pending:
+        tg.send("⚠️ <b>팬딩 자료 누락 진단</b>\n" + html.escape(pending["problem"]) + "\n필요 종가일: " + pending["expected"] + "\n재접속·재수집 요청은 자동 등록됩니다. /재판독 으로도 요청 가능")
 
 
 def vision_status():
