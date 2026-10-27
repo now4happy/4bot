@@ -3,6 +3,7 @@
 #  · Gemini/Jules/딥시크 등 누가 올려도 main 이 아닌 브랜치면 감지 (main 은 서버가 적용한 결과만 올라가는 곳)
 #  · 1~4번 봇 + 5번 사무실 비서(저장소 bot_office/ → 서버 /opt/bot-office) · 업데이트 비서 자신도 업데이트(실패 시 2분 뒤 자동 복구)
 #  · 적용: 보유·매매시간 확인 → 병합 → 문법 검사 → 해당 봇만 재시작 → 실패 시 원래 코드로 자동 복구 → 버전 기록 → main 업로드
+#  · v2.1 (2026-10-28): 사무실에 새로 추가되는 파일은 server.py 와 같은 주인·그룹·권한으로 복사 (있던 파일은 원래 권한 유지)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
 import json, os, pwd, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -273,6 +274,20 @@ def offer(st, br, sha):
  
  
 # ---------------------------------------------------------------- 적용
+def _office_perm(existing):
+    """복사할 파일의 주인·그룹·권한. 있던 파일은 그대로 유지, 새 파일은 server.py 와 똑같이 맞춤
+    (예전엔 새 파일을 root 전용 640 으로 만들어 웹서버(bot-office 계정)가 못 읽음 → pc_monitor.py 502 오류)"""
+    ref = existing or os.path.join(OFFICE_DIR, "server.py")
+    try:
+        st = os.stat(ref)
+        uid, gid, mode = st.st_uid, st.st_gid, st.st_mode & 0o777
+    except OSError:
+        return 0, 0, 0o644
+    if not existing:
+        mode &= ~0o111                        # 새 파일엔 실행 권한은 빼고
+    return uid, gid, mode | 0o400             # 주인은 항상 읽을 수 있게
+
+
 def office_deploy(files):
     """저장소 bot_office/ 의 바뀐 파일을 서버 /opt/bot-office 로 복사 (덮어쓰기 전 파일은 백업) → 백업 목록 반환"""
     bk_dir = os.path.join(OFFICE_DIR, "_backups", "updater_" + datetime.now(KST).strftime("%Y%m%d_%H%M%S"))
@@ -287,9 +302,9 @@ def office_deploy(files):
                 subprocess.run(["cp", "-p", dst, os.path.join(OFFICE_DIR, "bot_updater.prev.py")], check=True)
         saved.append((dst, os.path.join(bk_dir, name) if existed else None))
         if os.path.exists(src):
-            mode = os.stat(dst).st_mode & 0o777 if existed else 0o640
+            uid, gid, mode = _office_perm(dst if existed else None)
             tmp = dst + ".updtmp"
-            subprocess.run(["cp", src, tmp], check=True); os.chmod(tmp, mode); os.chown(tmp, 0, 0); os.replace(tmp, dst)
+            subprocess.run(["cp", src, tmp], check=True); os.chmod(tmp, mode); os.chown(tmp, uid, gid); os.replace(tmp, dst)
         elif existed:
             os.remove(dst)
     return saved
