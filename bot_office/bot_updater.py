@@ -4,6 +4,7 @@
 #  · 1~4번 봇 + 5번 사무실 비서(저장소 bot_office/ → 서버 /opt/bot-office) · 업데이트 비서 자신도 업데이트(실패 시 2분 뒤 자동 복구)
 #  · 적용: 보유·매매시간 확인 → 병합 → 문법 검사 → 해당 봇만 재시작 → 실패 시 원래 코드로 자동 복구 → 버전 기록 → main 업로드
 #  · v2.1 (2026-10-28): 사무실에 새로 추가되는 파일은 server.py 와 같은 주인·그룹·권한으로 복사 (있던 파일은 원래 권한 유지)
+#  · v2.2 (2026-10-28): 되돌림 감지 — 올라온 파일이 최근 14일 안의 다른 수정을 지우거나 버전이 더 낮으면 알림에 경고
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
 import json, os, pwd, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -247,6 +248,57 @@ def live_branches():
     return live
  
  
+REVERT_DAYS, REVERT_SKIP = 14, ("CHANGELOG.md",)
+_VER_RES = (re.compile(r"""^\s*(?:BOT_|UPDATER_)?VERSION\s*=\s*["']v?(\d+(?:\.\d+)+)""", re.M),
+            re.compile(r"_V(\d+(?:\.\d+)+)\)"))
+
+
+def _ver(text):
+    for rx in _VER_RES:
+        m = rx.search(text or "")
+        if m:
+            return tuple(int(x) for x in m.group(1).split("."))
+    return None
+
+
+def revert_check(sha, files):
+    """되돌림 감지: 이 업로드가 최근 main 수정을 지우는지 · 버전이 더 낮은지. 경고 문장 목록 (확인 실패는 조용히 넘어감)
+    · 업로드 브랜치가 이미 가진 최근 커밋(C)이 추가한 줄이 지금 main 에는 있는데 업로드 파일에는 없으면 → 지워지는 것
+      (브랜치가 C 를 모르면 병합이 C 를 지켜 주거나 충돌로 멈추므로 검사 안 함)"""
+    out = []
+    for f in files[:25]:
+        if os.path.basename(f) in REVERT_SKIP or not f.endswith((".py", ".md", ".html", ".js", ".css", ".json", ".sh")):
+            continue
+        rc_h, head_txt = git("show", f"HEAD:{f}")
+        if rc_h:
+            continue                                   # main 에 없던 새 파일
+        rc_n, new_txt = git("show", f"{sha}:{f}")
+        if rc_n:
+            out.append(f"🗑 <code>{esc(f)}</code> 파일을 지웁니다"); continue
+        hv, nv = _ver(head_txt), _ver(new_txt)
+        if hv and nv and nv < hv:
+            out.append(f"🔻 <code>{esc(f)}</code> 버전이 더 낮아요: 지금 {'.'.join(map(str, hv))} → 올린 것 {'.'.join(map(str, nv))}")
+        new_lines = {l.strip() for l in new_txt.splitlines()}
+        head_lines = {l.strip() for l in head_txt.splitlines()}
+        _, log = git("log", f"--since={REVERT_DAYS}.days", "--no-merges", "-n", "12", "--format=%H\t%ad\t%s",
+                     "--date=format:%m/%d %H:%M", "HEAD", "--", f)
+        for row in log.splitlines():
+            parts = row.split("\t", 2)
+            if len(parts) < 3 or parts[2].startswith("버전 기록"):
+                continue
+            c, when, subj = parts
+            if git("merge-base", "--is-ancestor", c, sha)[0] != 0:
+                continue
+            _, patch = git("show", "--format=", "-U0", c, "--", f)
+            added = {l[1:].strip() for l in patch.splitlines() if l.startswith("+") and not l.startswith("+++")}
+            added = {l for l in added if len(l) >= 8 and l in head_lines}     # 지금도 main 에 살아 있는 의미 있는 줄
+            lost = [l for l in added if l not in new_lines]
+            if added and len(lost) >= max(2, len(added) * 0.3):
+                out.append(f"⚠️ <code>{esc(f)}</code>: {esc(when)} 수정 '<b>{esc(subj[:40])}</b>'의 {len(lost)}/{len(added)}줄이 사라져요"
+                           f"\n    예) <code>{esc(sorted(lost, key=len, reverse=True)[0][:70])}</code>")
+    return out
+
+
 def offer(st, br, sha):
     _, files = git("diff", "--name-only", f"HEAD...{sha}")
     files = [f for f in files.splitlines() if f.strip()]
@@ -256,11 +308,20 @@ def offer(st, br, sha):
     st.setdefault("offers", {})[key] = {"branch": br, "sha": sha, "at": time.time()}
     bots = ", ".join(NAMES.get(u, u) for u, fs in units.items() if fs) or "봇 코드 없음(문서만)"
     warn = ("\n⛔ <b>허용되지 않은 파일</b>: " + esc(", ".join(bad[:5])) + " → 이 업데이트는 적용할 수 없습니다") if bad else ""
+    try:
+        reverts = revert_check(sha, files)
+    except Exception as e:
+        print("되돌림 감지 실패:", type(e).__name__, e, flush=True); reverts = []
+    if reverts:
+        warn += ("\n\n🚨 <b>덮어쓰기 의심</b> (예전 파일을 기준으로 고친 것 같아요)\n" + "\n".join(reverts[:6])
+                 + ("\n…외 " + str(len(reverts) - 6) + "건" if len(reverts) > 6 else "")
+                 + "\n→ 최신 main 파일을 받아 다시 고쳐 올리는 걸 추천해요. 알고 올린 거면 그대로 승인해도 돼요.")
+        st["offers"][key]["reverts"] = len(reverts)
     rows = [[{"text": "🔍 바뀐 내용 보기", "callback_data": f"df:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]]
     if UC:
         rows.append([{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}])
     if not bad:
-        rows.insert(0, [{"text": "✅ 업데이트", "callback_data": f"up:{key}"}])
+        rows.insert(0, [{"text": "⚠️ 알고 있음 · 그래도 업데이트" if reverts else "✅ 업데이트", "callback_data": f"up:{key}"}])
     gated = {u for u in DC.UNITS.values() if units.get(u) and gate_installed(u)}   # 차단 부품이 설치된 봇만 일시중지 버튼
     if not bad and gated:
         rows.append([{'text':'⏸ 이번 업데이트 대상 전체 중지 대기','callback_data':'pa:'+key},
