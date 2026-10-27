@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.49 · 2026-10-28 07:52 (KST)
+- 파일: bot_updater.py, sniper_upstream.py
+- 내용: update: main 기준으로 선택한 이전 변경 정리
+- 브랜치: staging
+
 ## v1.0.48 · 2026-10-28 07:30 (KST)
 - 파일: bot_updater.py, office_secretary.py, office_url.py
 - 내용: 사무실 주소 관리 · PC 감시 복구
