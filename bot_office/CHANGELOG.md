@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.38 · 2026-10-27 16:31 (KST)
+- 파일: office_secretary.py, pc_monitor.py, server.py
+- 내용: Pc와 스플릿 감시
+- 브랜치: staging
+
 ## v1.0.37 · 2026-10-27 12:28 (KST)
 - 파일: fanding_trade.py
 - 내용: 알림 시간 9시로

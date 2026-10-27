@@ -1,5 +1,10 @@
 # 3번 토스 적립 변경 기록
 
+## v4.3.4 · 2026-10-27 16:31 (KST)
+- 파일: t_core.py, t_ui.py, toss_api.py, toss_token_share.py
+- 내용: Pc와 스플릿 감시
+- 브랜치: staging
+
 ## v4.3.3 · 2026-10-24 14:03 (KST)
 - 파일: main.py, t_ui.py
 - 내용: 한국미국 주식 분할
