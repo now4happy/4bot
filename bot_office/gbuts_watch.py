@@ -1,3 +1,6 @@
+# gbuts_watch.py — Gbuts 공개 상품(Claude·SuperGrok) 감시
+# 사무실 v1.0.47 (2026-10-28): 상품 제목이 글자(str)로 오는 경우 AttributeError 로 매번 실패하던 문제 수정
+#   (제목이 {"ko": ...} 든 글자든 모두 처리 · 숫자 칸이 글자로 와도 처리)
 import os
 import json
 import urllib.request
@@ -61,17 +64,32 @@ def fetch_items():
         print(f"[gbuts] Fetch error: {e}")
     return []
 
+def item_title(item):
+    """제목: {"ko": "..."} · {"en": ...} · 그냥 글자 모두 처리"""
+    t = item.get("title") if isinstance(item, dict) else None
+    if isinstance(t, dict):
+        t = t.get("ko") or t.get("en") or next((v for v in t.values() if isinstance(v, str)), "")
+    return str(t or "")
+
+
+def as_num(v, default=0):
+    try:
+        return float(str(v).replace(",", ""))
+    except (TypeError, ValueError):
+        return default
+
+
 def is_target_item(item):
     if not isinstance(item, dict): return False
-    title = item.get("title", {}).get("ko", "").lower()
+    title = item_title(item).lower()
     keywords = ["claude", "클로드", "supergrok", "슈퍼그록", "슈퍼 그록", "grok", "그록"]
     if not any(k in title for k in keywords):
         return False
     
     if item.get("status") != "ON_SALE":
         return False
-    member_count = item.get("memberCount", 0)
-    member_limit = item.get("memberLimit", 0)
+    member_count = as_num(item.get("memberCount", 0))
+    member_limit = as_num(item.get("memberLimit", 0))
     if member_limit > 0 and member_count >= member_limit:
         return False
 
@@ -100,9 +118,9 @@ def run_check():
             continue
 
         seq = str(item.get("seq"))
-        price = item.get("price", 0)
-        end_str = item.get("subscriptionEndsAt", "")
-        member_count = item.get("memberCount", 0)
+        price = as_num(item.get("price", 0))
+        end_str = str(item.get("subscriptionEndsAt") or "")
+        member_count = as_num(item.get("memberCount", 0))
         
         current_info = {
             "price": price,
@@ -111,20 +129,20 @@ def run_check():
         }
 
         if seq not in seen_items:
-            alerts.append(f"🆕 <b>[신규]</b> {item['title']['ko']}\n  가격: {price:,.0f}원 (~{end_str[:10]})")
+            alerts.append(f"🆕 <b>[신규]</b> {item_title(item)}\n  가격: {price:,.0f}원 (~{end_str[:10]})")
             seen_items[seq] = current_info
         else:
             old_info = seen_items[seq]
             changes = []
             if old_info.get("price") != price:
-                changes.append(f"가격: {old_info.get('price', 0):,.0f}원 → {price:,.0f}원")
+                changes.append(f"가격: {as_num(old_info.get('price', 0)):,.0f}원 → {price:,.0f}원")
             if old_info.get("end_date") != end_str:
                 changes.append(f"기간 변경: ~{end_str[:10]}")
             if old_info.get("member_count") != member_count:
-                changes.append(f"인원: {old_info.get('member_count')}명 → {member_count}명")
+                changes.append(f"인원: {as_num(old_info.get('member_count')):.0f}명 → {member_count:.0f}명")
             
             if changes:
-                alerts.append(f"🔄 <b>[정보 변동]</b> {item['title']['ko']}\n  " + "\n  ".join(changes))
+                alerts.append(f"🔄 <b>[정보 변동]</b> {item_title(item)}\n  " + "\n  ".join(changes))
                 seen_items[seq] = current_info
 
     state["seen_items"] = seen_items

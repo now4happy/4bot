@@ -2,11 +2,19 @@
 """사무실 비서 정기 브리핑 (평일 09:00 · 16:30 KST, systemd timer)
 - 읽기 전용: 주문·설정 변경 없음. 잔고 조회만 합니다.
 - 시장분석실 점수 / 오늘 필요한 달러·원화 / 봇 상태 / 결재·리스크 현황을 사무실 비서 텔레그램으로 보냅니다.
+- 사무실 v1.0.47 (2026-10-28): ① 토스 토큰 공유 연결 복구(10/27 다른 업로드로 지워졌던 것) — 2·3번 봇과 같은 토큰 사용
+  ② 스나이퍼 현 장부 {"SOXL": {...}} 읽기 복구 ③ 간결 브리핑에 '토스 달러 확인'(2번 다음 1회분 + 3번 미국 적립 vs 보유 달러)
+  ④ 봇 5개·서버 상태 한 줄 요약 (이상 있으면 기존처럼 상세)
 """
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+try:  # [🔗토스 토큰 공유 HOOK] 2·3번 봇과 같은 토큰 사용 (새로 발급해 봇 토큰을 끊지 않음)
+    import toss_token_share as _TTS
+except Exception:
+    _TTS = None
 
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "home/gieokkim"
@@ -96,11 +104,19 @@ class Toss:
         except RuntimeError as e:
             if "HTTP 401" not in str(e):
                 raise
+            self._bad = self.token or ""   # [🔗토스 토큰 공유 HOOK] 거절된 토큰 기억
             self.token = None
             time.sleep(1)
             return self._get_once(path, account)
 
     def _get_once(self, path, account=True):
+        if not self.token and _TTS is not None:   # [🔗토스 토큰 공유 HOOK]
+            try:
+                sh = _TTS.try_acquire(TOSS_API, self.cid, self.sec, bool(getattr(self, "_bad", "")), getattr(self, "_bad", ""), "브리핑")
+            except Exception:
+                sh = None
+            if sh and sh[0] == "ok":
+                self.token = sh[1]
         if not self.token:
             d = http("POST", f"{TOSS_API}/oauth2/token", {"Content-Type": "application/x-www-form-urlencoded"},
                      urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": self.cid, "client_secret": self.sec}).encode())
@@ -369,6 +385,8 @@ def sniper_ledger():
         files = []
     for f in files:
         data = load(f, {})
+        if isinstance(data, dict) and isinstance(data.get("SOXL"), dict):   # 현 장부 형식 {"SOXL": {...}}
+            data = data["SOXL"]
         if isinstance(data, dict) and ("free_cash_usd" in data or "initial_seed_usd" in data):
             try:
                 mt = f.stat().st_mtime
@@ -389,7 +407,9 @@ def sniper_plan():
     if led.get("is_active") is False:
         return 0.0, 0.0, ["↳ 가동 OFF → 0"]
     seed, free = num(led.get("initial_seed_usd")), num(led.get("free_cash_usd"))
-    invested, injected = num(led.get("actual_invested_usd")), num(led.get("injected_reserve_usd"))
+    invested = num(led.get("actual_invested_usd")) or sum(num(b.get("actual_cost_usd")) for b in (led.get("buckets") or []) if isinstance(b, dict))
+    injected = num(led.get("injected_reserve_usd"))
+    has_reserve = "used_reserve_portions_cnt" in led   # 예비 수혈은 v6.0 장부에만 있음 (현재 v3.0 은 없음)
     left = max(0, 6 - int(num(led.get("used_reserve_portions_cnt"))))
     core = max(seed, free + invested - injected)
     portion = round(core * 0.08, 4)
@@ -402,7 +422,8 @@ def sniper_plan():
         need_min = need_max = 0.0
     else:
         need_min, need_max = min(portion, free), free
-    lines.append(f"↳ 예비 수혈 +{left}회분 가능 (최대 ${left * portion:,.2f} · 토스 계좌에 입금돼 있으면 자동)")
+    if has_reserve:
+        lines.append(f"↳ 예비 수혈 +{left}회분 가능 (최대 ${left * portion:,.2f} · 토스 계좌에 입금돼 있으면 자동)")
     return need_min, need_max, lines
 
 
@@ -546,6 +567,72 @@ def section_money(now):
     return summary + [""] + lines, tips
 
 
+def dca_us_need(toss, now):
+    """3번 적립의 다음 미국 세션 매수 예정 달러 (section_money 와 같은 규칙) → (금액, 상세)"""
+    cfg = load(TOSS_DIR / "dca_config.json", {})
+    day = us_session(now.astimezone(EST)).isoformat()
+    need, det = 0.0, []
+    if not cfg.get("is_master_active", True):
+        return 0.0, det
+    for sym, s in (cfg.get("stocks") or {}).items():
+        if (not isinstance(s, dict) or not s.get("enabled", True) or s.get("s_mode", "buy_1") not in ("buy_1", "buy_2")
+                or s.get("currency") == "KRW" or s.get("last_exec_date") == day):
+            continue
+        base, half = float(s.get("base_amount") or 40.0), False
+        try:
+            q, avg, price = toss.holding(sym)
+            half = q > 0 and avg > 0 and price > 0 and (price / avg - 1) * 100 >= 1.0
+        except Exception:
+            pass
+        amt = base / 2 if half else base
+        need += amt; det.append(f"{sym} ${amt:,.0f}{'(½)' if half else ''}")
+    return need, det
+
+
+def section_dollar_check(now=None):
+    """토스 달러 한 줄 확인: 2번 다음 1회분 + 3번 미국 적립 vs 토스 보유 달러. 부족하면 얼마 환전할지까지"""
+    now = now or datetime.now(timezone.utc)
+    toss = Toss()
+    sn_min, _, _ = sniper_plan()
+    try:
+        us_need, det = dca_us_need(toss, now)
+        usd = toss.buying_power("USD")
+    except Exception as e:
+        return [f"💵 토스 달러 확인: 조회 실패 ({html.escape(type(e).__name__)})"]
+    need = sn_min + us_need
+    parts = f"2번 1회분 ${sn_min:,.2f} + 3번 적립 ${us_need:,.2f}"
+    if usd is None:
+        return [f"💵 토스 달러 확인: 보유 조회 실패 · 필요 ${need:,.2f} ({parts})"]
+    if usd + 0.005 < need:
+        return [f"🚨 <b>토스 달러 ${need - usd:,.2f} 부족</b> — 필요 ${need:,.2f} ({parts}) · 보유 ${usd:,.2f}",
+                "   ↳ 미국장 전에 토스에서 환전해 주세요."]
+    return [f"✅ 토스 달러 충분 — 필요 ${need:,.2f} ({parts}) · 보유 ${usd:,.2f}"]
+
+
+def status_one_line():
+    """봇 5개·서버 한 줄 요약"""
+    ok = 0
+    for _, unit in UNITS:
+        try:
+            ok += subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5).stdout.strip() == "active"
+        except Exception:
+            pass
+    try:
+        import shutil
+        du = shutil.disk_usage("/")
+        disk = f"디스크 {du.used / du.total * 100:.0f}%"
+    except Exception:
+        disk = "디스크 확인 불가"
+    try:
+        out = subprocess.run(["systemctl", "list-units", "--failed", "--plain", "--no-legend", "--no-pager"],
+                             capture_output=True, text=True, timeout=5).stdout
+        failed = len([l for l in out.splitlines() if l.strip()])
+    except Exception:
+        failed = -1
+    fail_txt = "실패 서비스 없음" if failed == 0 else (f"실패 서비스 {failed}개" if failed > 0 else "실패 서비스 확인 불가")
+    return f"{'🤖' if ok == len(UNITS) else '⚠️'} 봇 {ok}/{len(UNITS)} 정상 · {disk} · {fail_txt}"
+
+
 def section_bots():
     """이상이 있는 봇만 표시한다. 모두 정상이면 섹션을 생략한다."""
     problems = []
@@ -656,9 +743,13 @@ def build(now=None):
     """간결 브리핑: 계좌별 USD/KRW 잔액과 이상 봇만 표시한다."""
     out = section_balances().splitlines()
     try:
+        out += [""] + section_dollar_check(now)
+    except Exception:
+        out += ["", "💵 토스 달러 확인: 계산 실패"]
+    try:
+        out += ["", status_one_line()]
         bot_lines, _ = section_bots()
         if bot_lines:
-            out.append("")
             out.extend(bot_lines)
     except Exception:
         out.extend(["", "⚠️ <b>봇 상태</b>", "🔴 상태 조회 실패"])

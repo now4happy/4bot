@@ -5,9 +5,11 @@
 #  · 적용: 보유·매매시간 확인 → 병합 → 문법 검사 → 해당 봇만 재시작 → 실패 시 원래 코드로 자동 복구 → 버전 기록 → main 업로드
 #  · 사무실 v1.0.43 (2026-10-28): 사무실에 새로 추가되는 파일은 server.py 와 같은 주인·그룹·권한으로 복사 (있던 파일은 원래 권한 유지)
 #  · 사무실 v1.0.44 (2026-10-28): 되돌림 감지 — 올라온 파일이 최근 14일 안의 다른 수정을 지우거나 버전이 더 낮으면 알림에 경고
-#  · 사무실 v1.0.45 (2026-10-28): 저장소 맨 위 STATUS.md 자동 작성 — 업데이트 적용 때마다 + 하루 1번(06:10 KST, 대기 중인 업로드 없을 때)
+#  · 사무실 v1.0.46 (2026-10-28): 저장소 맨 위 STATUS.md 자동 작성 — 업데이트 적용 때마다 + 하루 1번(06:10 KST, 대기 중인 업로드 없을 때)
 #                       봇별 버전·서비스 상태·최근 적용·대기 업데이트. 사람·AI 는 읽기만 (손으로 고치지 않음)
 #                       · 버전 표기 통일: 이 파일의 변경 기록도 텔레그램·CHANGELOG 와 같은 '사무실 vX.Y.Z' 번호를 씀
+#  · 사무실 v1.0.47 (2026-10-28): 버전 자동 기입 — 올린 파일에 'vNEXT' 라고 적어 두면 승인 때 정해진 실제 번호(예: v1.0.48)로 바꿔 기록
+#                       (승인 순서에 따라 번호가 밀려도 파일 머리말·CHANGELOG·텔레그램 번호가 항상 같음)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -544,6 +546,24 @@ def bump_versions(units, old_head):
     return out
  
  
+def fill_vnext(files, ver, office=False):
+    """올린 파일 속 'vNEXT' → 이번에 정해진 버전 (저장소 파일 + 사무실이면 /opt/bot-office 복사본도). 실패해도 업데이트는 계속"""
+    for f in files:
+        paths = [os.path.join(REPO, f)] + ([os.path.join(OFFICE_DIR, os.path.basename(f))] if office else [])
+        for p in paths:
+            try:
+                with open(p, encoding="utf-8") as fh:
+                    src = fh.read()
+                if "vNEXT" not in src:
+                    continue
+                st = os.stat(p)
+                with open(p, "w", encoding="utf-8") as fh:
+                    fh.write(re.sub(r"\bvNEXT\b", ver, src))
+                os.chown(p, st.st_uid, st.st_gid)
+            except Exception as e:
+                print("vNEXT 기입 실패:", p, type(e).__name__, flush=True)
+
+
 def next_tag(prefix):
     _, tags = git("tag", "-l", f"{prefix}-v*")
     nums = [tuple(map(int, m.groups())) for t in tags.split() if (m := re.fullmatch(re.escape(prefix) + r"-v(\d+)\.(\d+)\.(\d+)", t))]
@@ -651,6 +671,7 @@ def apply(st, key):
             ver = next_tag(prefix)
         if git("rev-parse", "-q", "--verify", f"refs/tags/{prefix}-{ver}")[0] == 0:
             ver = next_tag(prefix)
+        fill_vnext(units[u], ver, u == OFFICE_UNIT)
         log = os.path.join(roots[u], "CHANGELOG.md"); head = f"# {NAMES.get(u, u)} 변경 기록\n\n"
         old = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
         body = old[len(head):] if old.startswith(head) else old

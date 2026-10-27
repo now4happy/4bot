@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.2)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.3)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -23,6 +23,9 @@
 # 1.7.2: 하단 버튼 메뉴(/start)·배수/자동주문/발주시간 선택 버튼 — 기존 명령과 같은 기능을 버튼으로 (7번 비서의 팬딩 메뉴 공용)
 # 1.8.0: 5번 봇 메뉴를 [🅿 P 메뉴](기존 가격표 매매 11버튼) · [🅥 VR6 메뉴](fanding_vr6.py, TQQQ 2주 1회 표 수신)로 분리
 #        · 윈도우 업로드에 X-Fanding-Kind: vr6* 경로 추가(기존 P 업로드·판독·주문 흐름은 그대로)
+# 1.8.3 (사무실 v1.0.47): ① 접수 일부 실패(partial) → 마감 전까지 10분 간격 최대 3번 자동 재시도
+#        (재시도 전 메리츠 '살아 있는 예약' 수를 확인해 이미 접수된 게 있을 수 있으면 자동 재시도 안 함 → 중복주문 방지 ·
+#         증권사 경고는 계속 버튼 확인) ② 가격표 미도착 조기 알림 09:40(KST) — 한국 PC 연결·수집 단계와 함께, [🔄 재판독] 버튼
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -50,7 +53,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.8.2"
+VERSION = "1.8.3"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -79,6 +82,9 @@ DEFAULTS = {
     "alarm_before_min": 30,
     "auto_before_min": 10,
     "missing_alert_kst": "11:00",  # 이 시각까지 가격표가 안 오면 알림
+    "missing_early_kst": "09:40",  # 조기 알림 (PC 연결·수집 단계 함께)
+    "auto_retry_max": 3,           # 접수 일부 실패 자동 재시도 횟수 (0 이면 끔)
+    "auto_retry_min": 10,          # 자동 재시도 간격(분)
     "gemini_model": "gemini-3.8-flash",
     "gemini_fallback": "",                   # Gemini 예비 모델 (비우면 기본 모델로 재시도 → 그래도 안 되면 DeepSeek)
     "vision_order": ["gemini", "deepseek"],  # 이미지 판독 AI 순서 (앞에서 안 되면 다음)
@@ -1055,6 +1061,59 @@ def handle_image(tg, data, sha, meta):
 
 
 # ---------------------------------------------------------- 주문 접수
+def pc_status_lines():
+    """조기 알림용: 한국 PC 감시(pc-monitor.json) + 팬딩 수집기(bridge) 상태 2줄"""
+    out = []
+    try:
+        pc = (load(HOME / "pc-monitor.json", {}) or {}).get("pc") or {}
+        age = int(time.time() - pc["at"]) if pc.get("at") else None
+        out.append("🖥 한국 PC: " + ("보고 기록 없음 (감시 프로그램 미연결)" if age is None else
+                                    (f"켜져 있음 ({age // 60}분 전 보고)" if age <= 300 else f"⚠️ {age // 60}분째 보고 없음 → 꺼짐·인터넷 끊김 의심")))
+    except Exception:
+        out.append("🖥 한국 PC: 확인 실패")
+    try:
+        b = (load(BRIDGE, {}) or {}).get("pc") or {}
+        age = int(time.time() - b["at"]) if b.get("at") else None
+        out.append("📥 팬딩 수집기: " + ("연결 기록 없음" if age is None else f"{age // 60}분 전 · 단계 {html.escape(str(b.get('stage') or '미확인'))}"))
+    except Exception:
+        out.append("📥 팬딩 수집기: 확인 실패")
+    return "\n".join(out)
+
+
+def auto_retry(tg, sh, c, now):
+    """접수 일부 실패 → 마감 전 자동 재시도 (중복주문 방지 확인 후). 상태를 'retry' 로 바꾸면 아래 접수 단계가 처리"""
+    limit = int(c.get("auto_retry_max", 3) or 0)
+    if limit <= 0 or sh.get("auto_retry", 0) >= limit or any(o.get("warn") for o in sh.get("orders", [])):
+        return
+    if now >= deadlines(sh)[2] - timedelta(minutes=2):
+        return
+    last = sh.get("auto_retry_at")
+    if not last:
+        sh["auto_retry_at"] = now.isoformat(); return          # 처음 본 실패: 간격만큼 기다렸다가
+    if now - datetime.fromisoformat(last) < timedelta(minutes=int(c.get("auto_retry_min", 10))):
+        return
+    sh["auto_retry_at"] = now.isoformat()
+    try:   # 중복 방지: 메리츠에 살아 있는 SOXL 예약 수가 우리가 접수 확인한 수보다 많으면 '실패'가 사실 접수됐을 수 있음
+        from meritz_client import Meritz
+        day = now.strftime("%Y%m%d")
+        rows = Meritz().reserved_active(day, day)
+        sym = str(c.get("symbol", "SOXL")).upper()
+        mine = [r for r in rows if any(str(v).strip().upper() == sym for v in r.values())] or rows
+        if len(mine) > sum(1 for o in sh["orders"] if o.get("no")):
+            sh["auto_retry"] = limit
+            tg.send(f"⚠️ <b>{sh['date']} 자동 재시도 안 함</b>\n실패로 기록된 주문이 메리츠에는 이미 접수됐을 수 있어요 "
+                    f"(살아 있는 예약 {len(mine)}건). 메리츠 앱에서 확인 후 필요하면 [🔁 실패한 것만 다시] 버튼을 눌러 주세요.")
+            return
+    except Exception as e:
+        sh["auto_retry"] = limit
+        tg.send(f"⚠️ <b>{sh['date']} 자동 재시도 안 함</b> — 메리츠 예약 목록 확인 실패({html.escape(type(e).__name__)}). "
+                "앱에서 확인 후 버튼으로 다시 넣어 주세요.")
+        return
+    sh["auto_retry"] = sh.get("auto_retry", 0) + 1
+    sh["status"] = "retry"
+    tg.send(f"🔁 <b>{sh['date']} 실패한 주문 자동 재시도</b> ({sh['auto_retry']}/{limit}) — 결과를 곧 알려 드려요.")
+
+
 def submit(tg, sheet, confirm_warn=False):
     from meritz_client import Meritz, WarnNeeded
     c = cfg()
@@ -1122,6 +1181,8 @@ def tick(tg):
     sub_h, sub_m = hm(c["submit_kst"])
     with locked_state() as st:
         for date, sh in st["sheets"].items():
+            if sh["status"] == "partial":
+                auto_retry(tg, sh, c, now)
             if sh["status"] not in ("pending", "approved", "retry", "retry_warn"):
                 continue
             alarm, auto, cutoff = deadlines(sh)
@@ -1168,6 +1229,13 @@ def tick(tg):
         exp = last_session_date(now)
         key = f"missing:{exp.isoformat()}"
         due = exp + timedelta(days=3 if exp.weekday() == 4 else 1)   # 금요일 가격표는 월요일 아침에 받음
+        ekey = f"missing:early:{exp.isoformat()}"
+        if (exp.isoformat() not in st["sheets"] and now.date() == due and c.get("missing_early_kst")
+                and (now.hour, now.minute) >= hm(c["missing_early_kst"]) and not st.get(ekey) and not st.get(key)):
+            st[ekey] = True
+            tg.send(f"❓ <b>{exp.isoformat()} 가격표가 아직 없어요</b> ({c['missing_early_kst']} 조기 확인)\n"
+                    + pc_status_lines() + "\n휴장일이면 무시하세요. 11:00에 한 번 더 확인해요.",
+                    [[{"text": "🔄 재판독 요청", "callback_data": "fm:rs"}, {"text": "🩺 진단", "callback_data": "fm:dg"}]])
         if (exp.isoformat() not in st["sheets"] and now.date() == due
                 and (now.hour, now.minute) >= hm(c["missing_alert_kst"]) and not st.get(key)):
             st[key] = True
