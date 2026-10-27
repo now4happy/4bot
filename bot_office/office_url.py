@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_url.py   (사무실 vNEXT · 2026-10-28)
+# FILE: /opt/bot-office/office_url.py   (사무실 v1.0.48 · 2026-10-28)
 # 사무실 주소(office_url) 한 곳 관리 — 지금은 임시 터널 주소(trycloudflare), 나중에 고정 도메인으로 쉽게 이동
 #
 #  · 서버 파일 /etc/bot-office/office_url 이 '사무실 주소'의 기준 (브리핑·비서·팬딩 안내가 이 값을 씀)

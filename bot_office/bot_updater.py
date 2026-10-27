@@ -8,9 +8,9 @@
 #  · 사무실 v1.0.46 (2026-10-28): 저장소 맨 위 STATUS.md 자동 작성 — 업데이트 적용 때마다 + 하루 1번(06:10 KST, 대기 중인 업로드 없을 때)
 #                       봇별 버전·서비스 상태·최근 적용·대기 업데이트. 사람·AI 는 읽기만 (손으로 고치지 않음)
 #                       · 버전 표기 통일: 이 파일의 변경 기록도 텔레그램·CHANGELOG 와 같은 '사무실 vX.Y.Z' 번호를 씀
-#  · 사무실 v1.0.47 (2026-10-28): 버전 자동 기입 — 올린 파일에 'vNEXT' 라고 적어 두면 승인 때 정해진 실제 번호(예: v1.0.48)로 바꿔 기록
+#  · 사무실 v1.0.47 (2026-10-28): 버전 자동 기입 — 올린 파일에 'v1.0.48' 라고 적어 두면 승인 때 정해진 실제 번호(예: v1.0.48)로 바꿔 기록
 #                       (승인 순서에 따라 번호가 밀려도 파일 머리말·CHANGELOG·텔레그램 번호가 항상 같음)
-#  · 사무실 vNEXT (2026-10-28): office_url.py(사무실 주소 관리)가 바뀌면 7번 비서도 재시작
+#  · 사무실 v1.0.48 (2026-10-28): office_url.py(사무실 주소 관리)가 바뀌면 7번 비서도 재시작
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -548,21 +548,21 @@ def bump_versions(units, old_head):
  
  
 def fill_vnext(files, ver, office=False):
-    """올린 파일 속 'vNEXT' → 이번에 정해진 버전 (저장소 파일 + 사무실이면 /opt/bot-office 복사본도). 실패해도 업데이트는 계속"""
+    """올린 파일 속 'v1.0.48' → 이번에 정해진 버전 (저장소 파일 + 사무실이면 /opt/bot-office 복사본도). 실패해도 업데이트는 계속"""
     for f in files:
         paths = [os.path.join(REPO, f)] + ([os.path.join(OFFICE_DIR, os.path.basename(f))] if office else [])
         for p in paths:
             try:
                 with open(p, encoding="utf-8") as fh:
                     src = fh.read()
-                if "vNEXT" not in src:
+                if "v1.0.48" not in src:
                     continue
                 st = os.stat(p)
                 with open(p, "w", encoding="utf-8") as fh:
                     fh.write(re.sub(r"\bvNEXT\b", ver, src))
                 os.chown(p, st.st_uid, st.st_gid)
             except Exception as e:
-                print("vNEXT 기입 실패:", p, type(e).__name__, flush=True)
+                print("v1.0.48 기입 실패:", p, type(e).__name__, flush=True)
 
 
 def next_tag(prefix):

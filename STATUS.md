@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-10-28 07:04 (KST) · 계기: 업데이트 적용 (staging: 묶음B)
+- 갱신: 2026-10-28 07:30 (KST) · 계기: 업데이트 적용 (staging: 사무실 주소 관리 · PC 감시 복구)
 
 ## 봇별 현재 상태
 
@@ -13,19 +13,20 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (10-28 06:51 KST부터) | v1.0.9 | 2026-10-28 06:51 | 원작 자동 업데이트 범위 제한 |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (10-27 16:30 KST부터) | v4.3.4 | 2026-10-27 16:31 | Pc와 스플릿 감시 |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (10-22 13:26 KST부터) | v4.0.3 | 2026-10-22 13:26 | 4번 빗썸 봇: 19시 정기매수 완료 알림에 현재 수익률(%) 추가 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-28 07:03 KST부터) | v1.0.47 | 2026-10-28 07:04 | 묶음B |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-28 07:29 KST부터) | v1.0.48 | 2026-10-28 07:30 | 사무실 주소 관리 · PC 감시 복구 |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-28 07:04 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-28 07:29 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (10-28 07:04 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
-- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (10-28 06:33 KST부터)
+- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (10-28 07:04 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
 - 디스크 사용: 72% (남은 2.9GB)
 
 ## 최근 적용 10건
 
+- 2026-10-28 07:30 · 5번 사무실 비서 v1.0.48 · bot_updater.py, office_secretary.py, office_url.py · 사무실 주소 관리 · PC 감시 복구
 - 2026-10-28 07:04 · 5번 사무실 비서 v1.0.47 · bot_updater.py, fanding_trade.py, gbuts_watch.py, office_bri · 묶음B
 - 2026-10-28 06:51 · 2번 토스 스나이퍼 v1.0.9 · plugin_updater.py · 원작 자동 업데이트 범위 제한
 - 2026-10-28 06:33 · 5번 사무실 비서 v1.0.46 · bot_updater.py · STATUS 자동 기록 · 버전 통일
@@ -35,7 +36,6 @@
 - 2026-10-27 22:17 · 5번 사무실 비서 v1.0.42 · office_briefing.py · Add files via upload
 - 2026-10-27 22:00 · 5번 사무실 비서 v1.0.41 · office_briefing.py, office_secretary.py · 메리츠 잔액 표시
 - 2026-10-27 17:31 · 5번 사무실 비서 v1.0.40 · bot_updater.py, office_briefing.py, toss_token_share.py · Add files via upload
-- 2026-10-27 17:22 · 5번 사무실 비서 v1.0.39 · bot_updater.py · 업데이트 시간
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
