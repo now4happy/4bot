@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.1)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.2)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -50,7 +50,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -878,7 +878,20 @@ def sheet_rows(sheet):
     return [[{"text": "✅ 주문", "callback_data": f"fd:ok:{k}"}, {"text": "❌ 이번엔 안 함", "callback_data": f"fd:no:{k}"}]]
 
 
+def sheet_notice_time(sheet):
+    """판독 결과와 주문 버튼은 해당 주문일 한국시간 09:00부터 발송."""
+    day = datetime.strptime(sheet["us_date"], "%Y%m%d")
+    return day.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=KST)
+
+
 def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
+    sheet["notice_not_before"] = sheet_notice_time(sheet).isoformat()
+    sheet["notice_head"] = head
+    if now_kst() < sheet_notice_time(sheet):
+        # 원본 이미지·판독 결과·점검·배수는 기존 state에 저장한다.
+        # tick에서 발송하므로 PC가 작업을 마치거나 서버가 재시작해도 유지된다.
+        sheet["notice_pending"] = True
+        return False
     tg.clear_buttons(sheet.get("msg_id"))
     img = IMAGES / (sheet.get("img") or "_none_")
     text = sheet_text(sheet, head)
@@ -887,7 +900,11 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
         res = tg.send(text, sheet_rows(sheet))
     else:
         res = tg.photo(img, text, sheet_rows(sheet)) if img.is_file() else tg.send(text, sheet_rows(sheet))
-    sheet["msg_id"] = res.get("message_id")
+    sheet["msg_id"] = (res or {}).get("message_id")
+    sheet["notice_pending"] = not bool(sheet["msg_id"])
+    if not sheet["notice_pending"]:
+        sheet["notice_sent_at"] = now_kst().isoformat()
+    return not sheet["notice_pending"]
 
 
 # ---------------------------------------------------------- 새 가격표 처리
@@ -1116,6 +1133,8 @@ def tick(tg):
                 tg.clear_buttons(sh.get("msg_id"))
                 sh["status"] = "expired"
                 continue
+            if sh["status"] == "pending" and sh.get("notice_pending") and now >= sheet_notice_time(sh):
+                send_sheet_alert(tg, sh, sh.get("notice_head") or "📋 <b>팬딩 가격표 도착</b>")
             if sh["status"] == "pending" and c["auto_order"]:
                 if now >= auto:
                     tg.clear_buttons(sh.get("msg_id"))
