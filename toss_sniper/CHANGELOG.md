@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.9 · 2026-10-28 06:51 (KST)
+- 파일: plugin_updater.py
+- 내용: 원작 자동 업데이트 범위 제한
+- 브랜치: staging
+
 ## v1.0.8 · 2026-10-27 13:05 (KST)
 - 파일: toss_api.py, toss_token_share.py
 - 내용: 토큰 하나로
