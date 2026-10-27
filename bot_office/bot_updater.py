@@ -8,10 +8,14 @@
 #  · 사무실 v1.0.46 (2026-10-28): 저장소 맨 위 STATUS.md 자동 작성 — 업데이트 적용 때마다 + 하루 1번(06:10 KST, 대기 중인 업로드 없을 때)
 #                       봇별 버전·서비스 상태·최근 적용·대기 업데이트. 사람·AI 는 읽기만 (손으로 고치지 않음)
 #                       · 버전 표기 통일: 이 파일의 변경 기록도 텔레그램·CHANGELOG 와 같은 '사무실 vX.Y.Z' 번호를 씀
-#  · 사무실 v1.0.47 (2026-10-28): 버전 자동 기입 — 올린 파일에 'v1.0.48' 라고 적어 두면 승인 때 정해진 실제 번호(예: v1.0.48)로 바꿔 기록
+#  · 사무실 v1.0.47 (2026-10-28): 버전 자동 기입 — 올린 파일에 'v'+'NEXT'(붙여 쓴 글자)를 적어 두면 승인 때 정해진 실제 번호(예: v1.0.48)로 바꿔 기록
 #                       (승인 순서에 따라 번호가 밀려도 파일 머리말·CHANGELOG·텔레그램 번호가 항상 같음)
 #  · 사무실 v1.0.48 (2026-10-28): office_url.py(사무실 주소 관리)가 바뀌면 7번 비서도 재시작
-#  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
+#  · 사무실 v1.0.49 (2026-10-28): ① 2번 원작자 새 버전 알림 다시 켬 (sniper_upstream.py · 알림 전용, 자동 합치기 없음)
+#                       ② 버전 자동 기입 고침 — v1.0.48 적용 때 이 파일 속 표시 글자까지 바뀌어 기능이 꺼져 있었음
+#                          (표시 글자를 코드에 직접 쓰지 않고 조립해서 다시는 안 바뀌게)
+#                       ③ sniper_upstream.py 가 바뀌면 업데이트 비서만 재시작 (사무실 서비스는 재시작 안 함)
+#  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -35,9 +39,10 @@ NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service":
          "toss_dca.service": "3번 토스 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 OWNER = pwd.getpwuid(os.stat(REPO).st_uid)
-try:   # 2번 스나이퍼 원작 업데이트 + 💧물타기 자동 합치기 부품 (없어도 비서는 정상 작동)
+try:   # 2번 스나이퍼 원작자 새 버전 알림 부품 (알림 전용 · 없어도 비서는 정상 작동)
     import sniper_upstream as SU
-except Exception:   # 지금은 설치 안 함 (2번은 원작 100% 운영) → 조용히 끔
+except Exception as _e:   # 파일이 없거나 오류면 알림만 끔
+    print("원작 알림 부품 없음:", type(_e).__name__, _e, flush=True)
     SU = None
 
 import deployment_control as DC
@@ -547,22 +552,25 @@ def bump_versions(units, old_head):
     return out
  
  
+VNEXT = "v" + "NEXT"   # 버전 자동 기입 표시 글자 (코드에 붙여 쓰면 적용 때 이 줄까지 바뀌므로 조립)
+
+
 def fill_vnext(files, ver, office=False):
-    """올린 파일 속 'v1.0.48' → 이번에 정해진 버전 (저장소 파일 + 사무실이면 /opt/bot-office 복사본도). 실패해도 업데이트는 계속"""
+    """올린 파일 속 VNEXT 표시 글자 → 이번에 정해진 버전 (저장소 파일 + 사무실이면 /opt/bot-office 복사본도). 실패해도 업데이트는 계속"""
     for f in files:
         paths = [os.path.join(REPO, f)] + ([os.path.join(OFFICE_DIR, os.path.basename(f))] if office else [])
         for p in paths:
             try:
                 with open(p, encoding="utf-8") as fh:
                     src = fh.read()
-                if "v1.0.48" not in src:
+                if VNEXT not in src:
                     continue
                 st = os.stat(p)
                 with open(p, "w", encoding="utf-8") as fh:
-                    fh.write(re.sub(r"\bvNEXT\b", ver, src))
+                    fh.write(re.sub(r"\b" + VNEXT + r"\b", ver, src))
                 os.chown(p, st.st_uid, st.st_gid)
             except Exception as e:
-                print("v1.0.48 기입 실패:", p, type(e).__name__, flush=True)
+                print("버전 자동 기입 실패:", p, type(e).__name__, flush=True)
 
 
 def next_tag(prefix):
@@ -644,9 +652,9 @@ def apply(st, key):
     vers = bump_versions([u for u in units if u != OFFICE_UNIT], old_head)
     office_files = units.get(OFFICE_UNIT, [])
     saved = office_deploy(office_files) if office_files else []
-    self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py") for f in office_files)
+    self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py", "sniper_upstream.py") for f in office_files)
     restart = [u for u in units if u != OFFICE_UNIT]
-    if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py") for f in office_files):
+    if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py", "sniper_upstream.py") for f in office_files):
         restart.append(OFFICE_UNIT)   # 비서 화면·브리핑 등이 바뀌면 사무실 서비스 다시 시작
     names_changed = {os.path.basename(f) for f in office_files}
     for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
@@ -729,7 +737,7 @@ HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
              "▫️ <b>🔄 업데이트 확인</b> : GitHub에 올라온 수정 확인 → 새 알림의 버튼(✅ 적용 · 🔍 코드 보기 · 🗑 무시)\n"
              "▫️ <b>🧹 충돌 정리</b> : 이전 변경 파일 선택 → 확인 → 원래 브랜치를 백업 후 정리 → 별도 업데이트 승인\n"
              "▫️ <b>⏸ 거래 상태</b> : 업데이트용 일시중지·대기 중인 봇 보기 → ▶ 재개 버튼\n"
-             "▫️ <b>🔎 원작 확인</b> : 2번 스나이퍼 원작 새 버전 확인 (연결돼 있을 때만)\n"
+             "▫️ <b>🔎 원작 확인</b> : 2번 스나이퍼 원작자 새 버전 지금 확인 (평소엔 매일 09:02 자동 · 알림 전용)\n"
              "▫️ <b>상태 기록</b> (글자로) : 저장소 STATUS.md 를 지금 갱신 (평소엔 적용 때·매일 06:10 자동)\n"
              "▫️ 일시중지·재개·승인은 업데이트 알림 아래 버튼으로 진행합니다.")
 
