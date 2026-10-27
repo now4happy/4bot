@@ -228,8 +228,8 @@ def sniper_balance_lines(toss):
 
 
 def meritz_lines():
-    """메리츠 해외계좌 외화 예수금 (읽기 전용 · meritz_client.py 사용) [MERITZ_BAL_V2]
-    frcr_amt=예수금, estm_frcr_amt=추정(미결제 포함). 서로 대신 쓰지 않고 둘 다 표시."""
+    """메리츠 해외계좌 외화 예수금 (읽기 전용 · meritz_client.py 사용) [MERITZ_BAL_V3]
+    frcr_amt=예수금, estm_frcr_amt=추정(미결제 포함). 앱 '해외잔고>외화잔고' 대표값이 추정 예수금이라 그것을 주 표시, 예수금은 함께 표시."""
     try:
         here = str(Path(__file__).resolve().parent)
         if here not in sys.path:
@@ -253,11 +253,13 @@ def meritz_lines():
                             est = balance_value(row.get("estm_frcr_amt"))
                         except Exception:
                             est = None
-        usd = money(found["USD"], "USD") if "USD" in found else "조회 불가"
-        krw = money(found["KRW"], "KRW") if "KRW" in found else "—"
-        out = [f"🏛 메리츠 | USD {usd} · KRW {krw}"]
-        if est is not None and abs(est - found.get("USD", est)) >= 0.01:
-            out.append(f"   ↳ 추정 예수금(미결제 포함) USD {money(est, 'USD')}")
+        dep = money(found["USD"], "USD") if "USD" in found else "조회 불가"
+        if est is not None:
+            out = [f"🏛 메리츠 | 추정 예수금 USD {money(est, 'USD')} (앱 기준) · 예수금 {dep}"]
+        else:
+            out = [f"🏛 메리츠 | 예수금 USD {dep} · 추정 예수금 조회 불가"]
+        if "KRW" in found:
+            out.append(f"   ↳ KRW {money(found['KRW'], 'KRW')}")
         return out
     except Exception as e:
         why = html.escape(f"{type(e).__name__}: {e}"[:80])
