@@ -3,10 +3,11 @@
 #  · Gemini/Jules/딥시크 등 누가 올려도 main 이 아닌 브랜치면 감지 (main 은 서버가 적용한 결과만 올라가는 곳)
 #  · 1~4번 봇 + 5번 사무실 비서(저장소 bot_office/ → 서버 /opt/bot-office) · 업데이트 비서 자신도 업데이트(실패 시 2분 뒤 자동 복구)
 #  · 적용: 보유·매매시간 확인 → 병합 → 문법 검사 → 해당 봇만 재시작 → 실패 시 원래 코드로 자동 복구 → 버전 기록 → main 업로드
-#  · v2.1 (2026-10-28): 사무실에 새로 추가되는 파일은 server.py 와 같은 주인·그룹·권한으로 복사 (있던 파일은 원래 권한 유지)
-#  · v2.2 (2026-10-28): 되돌림 감지 — 올라온 파일이 최근 14일 안의 다른 수정을 지우거나 버전이 더 낮으면 알림에 경고
-#  · v2.3 (2026-10-28): 저장소 맨 위 STATUS.md 자동 작성 — 업데이트 적용 때마다 + 하루 1번(06:10 KST, 대기 중인 업로드 없을 때)
+#  · 사무실 v1.0.43 (2026-10-28): 사무실에 새로 추가되는 파일은 server.py 와 같은 주인·그룹·권한으로 복사 (있던 파일은 원래 권한 유지)
+#  · 사무실 v1.0.44 (2026-10-28): 되돌림 감지 — 올라온 파일이 최근 14일 안의 다른 수정을 지우거나 버전이 더 낮으면 알림에 경고
+#  · 사무실 v1.0.45 (2026-10-28): 저장소 맨 위 STATUS.md 자동 작성 — 업데이트 적용 때마다 + 하루 1번(06:10 KST, 대기 중인 업로드 없을 때)
 #                       봇별 버전·서비스 상태·최근 적용·대기 업데이트. 사람·AI 는 읽기만 (손으로 고치지 않음)
+#                       · 버전 표기 통일: 이 파일의 변경 기록도 텔레그램·CHANGELOG 와 같은 '사무실 vX.Y.Z' 번호를 씀
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(아침 브리핑 뒤) 확인 + 💧물타기 자동 합치기 (sniper_upstream.py) · 비서에게 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -858,7 +859,8 @@ def main():
         if not r.get("ok"):
             time.sleep(10); continue
         if st.pop("self_pending", None):
-            save(STATE, st); say("✅ 업데이트 비서 새 버전 정상 작동 확인", keyboard=menu_keyboard())
+            cl = _changelog(os.path.join(REPO, "bot_office"), 1)
+            save(STATE, st); say(f"✅ 업데이트 비서 새 버전{' (사무실 ' + cl[0][0] + ')' if cl else ''} 정상 작동 확인", keyboard=menu_keyboard())
         for upd in r.get("result", []):
             offset = upd["update_id"] + 1; st["offset"] = offset
             try:
