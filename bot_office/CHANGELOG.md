@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.47 · 2026-10-28 07:04 (KST)
+- 파일: bot_updater.py, fanding_trade.py, gbuts_watch.py, office_briefing.py
+- 내용: 묶음B
+- 브랜치: staging
+
 ## v1.0.46 · 2026-10-28 06:33 (KST)
 - 파일: bot_updater.py
 - 내용: STATUS 자동 기록 · 버전 통일
