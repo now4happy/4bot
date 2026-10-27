@@ -14,6 +14,10 @@ TARGETS = os.environ.get("U_TARGETS", "/var/lib/bot-office-deploy/targets.json")
 STATE = os.environ.get("U_STATE", "/var/lib/bot-updater/state.json")
 OFFICE_DIR = os.environ.get("U_OFFICE", "/opt/bot-office")
 OFFICE_UNIT, SELF_UNIT, SELF_FILE = "bot-office.service", "bot-updater.service", "bot_updater.py"
+# 사무실 폴더(/opt/bot-office)에서 따로 도는 상시 서비스 — 그 파일이 바뀌면 이 서비스도 다시 시작해야 새 코드가 반영됨
+SECRETARY_UNIT, FANDING_UNIT = "bot-office-secretary.service", "bot-office-fanding.service"
+OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_briefing.py", "price_watch.py", "gemini_usage.py", "meritz_client.py", "fanding_trade.py", "toss_token_share.py", "pc_monitor.py"),
+                FANDING_UNIT: ("fanding_trade.py", "fanding_vr6.py", "meritz_client.py", "gemini_usage.py")}
 OFFICE_EXT = (".py", ".html", ".css", ".js")
 SYSTEMCTL = os.environ.get("U_SYSTEMCTL", "systemctl")
 TG_API = os.environ.get("U_TG_API", "https://api.telegram.org")
@@ -25,9 +29,8 @@ SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|githu
 OWNER = pwd.getpwuid(os.stat(REPO).st_uid)
 try:   # 2번 스나이퍼 원작 업데이트 + 💧물타기 자동 합치기 부품 (없어도 비서는 정상 작동)
     import sniper_upstream as SU
-except Exception as _e:
+except Exception:   # 지금은 설치 안 함 (2번은 원작 100% 운영) → 조용히 끔
     SU = None
-    print("sniper_upstream 불러오기 실패:", _e, flush=True)
 
 import deployment_control as DC
 try:
@@ -135,21 +138,25 @@ def busy_reason(unit, pause_verified=False):
     now_k, now_e = datetime.now(KST), datetime.now(ET)
     k, e = now_k.hour * 100 + now_k.minute, now_e.hour * 100 + now_e.minute
     if unit == "toss_sniper.service":
+        # 현 장부(인피니트 스노우볼 soxl_stratum_ledger*.json, {"SOXL": {...}}): 매수·매도 주문이 걸려 있으면 보류.
+        # (스노우볼은 원래 보유를 다음 날로 넘기는 전략이라 '보유 중'만으로는 막지 않음 · 재시작하면 장부·잔고로 이어서 관리)
+        import glob
         root = targets().get(unit, "")
-        for sym in ("SOXS", "SOXL"):   # 듀얼 스나이퍼: 두 종목 장부 모두 확인
-            L = load(os.path.join(root, f"AssassinLedger_{sym}.json"), {})
-            b = [x for x in ("sell_order_id",) if L.get(x)] + [x for x in ("last_buy_price", "target_sell_price") if float(L.get(x) or 0) > 0]
-            if L.get("buy_order_id") and not float(L.get("last_buy_price") or 0) > 0 and L.get("entry_session") not in ("", "CANCELED_MACRO"):
-                b.append("buy_order_id")
-            if b:
-                return f"스나이퍼가 {sym} 을 들고 있거나 주문 중 (청산 뒤 다시 눌러 주세요)"
-        A = load(os.path.join(root, "Averaging_state.json"), {})
-        if any(isinstance(v, dict) and v.get("order_id") for v in A.values()):
-            return "스나이퍼 💧물타기 추가 매수 주문 진행 중"
+        for p in glob.glob(os.path.join(root, "soxl_stratum_ledger*.json")):
+            d = load(p, {})
+            L = d.get("SOXL", d) if isinstance(d, dict) else {}
+            if isinstance(L, dict) and (str(L.get("buy_order_id") or "").strip() or str(L.get("sell_order_id") or "").strip()):
+                return "스나이퍼(SOXL) 주문이 걸려 있음 (체결·취소 뒤 다시 눌러 주세요)"
     if unit == "toss_dca.service":
         # 각 시장의 현지 요일을 사용: 한국 토요일 새벽의 미국 금요일 장은 보호.
         kr_busy = now_k.weekday() < 5 and 1050 <= k <= 1510
         us_busy = now_e.weekday() < 5 and 1120 <= e <= 1600
+        # 3번 설정에 켜진 한국/미국 종목이 없으면 그 시장 보호 시간은 건너뜀 (설정을 못 읽으면 예전처럼 보호)
+        cfg = load(os.path.join(targets().get(unit, ""), "dca_config.json"), None)
+        if isinstance(cfg, dict) and isinstance(cfg.get("stocks"), dict):
+            on = [v for v in cfg["stocks"].values() if isinstance(v, dict) and v.get("enabled", True)] if cfg.get("is_master_active", True) else []
+            kr_busy = kr_busy and any(v.get("currency") == "KRW" for v in on)
+            us_busy = us_busy and any(v.get("currency") != "KRW" for v in on)
         if kr_busy or us_busy:
             markets = []
             if kr_busy:
@@ -161,9 +168,16 @@ def busy_reason(unit, pause_verified=False):
         return "4번 봇 19:00 정기 매수 시간"
     if unit == "han4384tubot.service" and 925 <= e <= 1605 and now_e.weekday() < 5:
         return "1번 봇 미국 정규장 시간"
+    if unit == FANDING_UNIT and now_e.weekday() < 5 and 750 <= e <= 835:
+        return "5번 팬딩 예약주문 마감 전후 (08:30 ET 전후)"
     return ""
  
  
+def gate_installed(unit):
+    """업데이트용 신규 주문 차단 부품(deployment_gate.py)이 그 봇 폴더에 있는지"""
+    return os.path.isfile(os.path.join(targets().get(unit, ""), "deployment_gate.py"))
+
+
 # ---------------------------------------------------------------- 새 업데이트 찾기
 def scan(st, force=False):
     rc, out = git("fetch", "-q", "--prune", "origin")
@@ -246,11 +260,12 @@ def offer(st, br, sha):
         rows.append([{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}])
     if not bad:
         rows.insert(0, [{"text": "✅ 업데이트", "callback_data": f"up:{key}"}])
-    if not bad and any(units.get(unit) for unit in DC.UNITS.values()):
+    gated = {u for u in DC.UNITS.values() if units.get(u) and gate_installed(u)}   # 차단 부품이 설치된 봇만 일시중지 버튼
+    if not bad and gated:
         rows.append([{'text':'⏸ 이번 업데이트 대상 전체 중지 대기','callback_data':'pa:'+key},
                      {'text':'▶️ 이번 대상 거래 재개','callback_data':'ra:'+key}])
     for number, unit in DC.UNITS.items():
-        if units.get(unit):
+        if unit in gated:
             rows.append([{ "text": "⏸ " + NAMES[unit] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + number}])
     say(f"📦 <b>[업데이트 비서] 새 수정이 올라왔어요</b>\n▫️ 대상: {esc(bots)}\n▫️ 브랜치: <code>{esc(br)}</code>\n"
         f"▫️ 파일: {esc(', '.join(files[:8]))}{' 외' if len(files) > 8 else ''}\n▫️ 내용:\n{esc(log[:600])}{warn}\n\n"
@@ -369,10 +384,12 @@ def apply(st, key):
                     return say("⏳ " + NAMES[unit] + " 보유/미체결 또는 실행 차단 확인 대기 중입니다. 적용하지 않았습니다.", DC.resume_rows(unit))
                 pause_verified.add(unit)
     busy = [f"{NAMES.get(u, u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
+    if {os.path.basename(f) for f in units.get(OFFICE_UNIT, [])} & set(OFFICE_EXTRA[FANDING_UNIT]) and (r := busy_reason(FANDING_UNIT)):
+        busy.append("5번 팬딩: " + r)
     if busy:
         return say("⏸ <b>지금은 적용하지 않았습니다</b>\n▫️ " + "\n▫️ ".join(esc(b) for b in busy) + "\n▫️ 나중에 같은 알림의 ✅를 다시 눌러 주세요.",
                    [[{"text": "✅ 다시 시도", "callback_data": f"up:{key}"}]] +
-                   [[{"text": "⏸ " + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units])
+                   [[{"text": "⏸ " + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
     if git("status", "--porcelain", "--untracked-files=no")[1].strip() or git("diff", "--cached", "--name-only")[1].strip():
         return say("⛔ 서버에 저장 안 된 변경이 있어 멈췄습니다. Claude나 Gemini에게 확인을 요청해 주세요.")
     _, old_head = git("rev-parse", "HEAD")
@@ -393,6 +410,10 @@ def apply(st, key):
     restart = [u for u in units if u != OFFICE_UNIT]
     if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py") for f in office_files):
         restart.append(OFFICE_UNIT)   # 비서 화면·브리핑 등이 바뀌면 사무실 서비스 다시 시작
+    names_changed = {os.path.basename(f) for f in office_files}
+    for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
+        if names_changed & set(xfiles) and sh(SYSTEMCTL, "is-active", xu)[1].strip() == "active":   # 지금 실행 중인 것만 (비서는 disabled 지만 실행 중)
+            restart.append(xu)
     failed = []
     for u in restart:
         sh(SYSTEMCTL, "restart", u)

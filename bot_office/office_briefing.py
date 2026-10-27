@@ -8,6 +8,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+try:  # [🔗토스 토큰 공유 HOOK]
+    import toss_token_share as _TTS
+except Exception:
+    _TTS = None
+
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "home/gieokkim"
 TOSS_DIR, SNIPER_DIR, BITHUMB_DIR = HOME / "toss_dca_bot", HOME / "toss_sniper", HOME / "bithumb_laoeo_bot"
@@ -96,11 +101,19 @@ class Toss:
         except RuntimeError as e:
             if "HTTP 401" not in str(e):
                 raise
+            self._bad = self.token or ""   # [🔗토스 토큰 공유 HOOK] 거절된 토큰 기억
             self.token = None
             time.sleep(1)
             return self._get_once(path, account)
 
     def _get_once(self, path, account=True):
+        if not self.token and _TTS is not None:   # [🔗토스 토큰 공유 HOOK] 봇들과 같은 토큰 사용 (새로 발급해 봇 토큰을 끊지 않음)
+            try:
+                sh = _TTS.try_acquire(TOSS_API, self.cid, self.sec, bool(getattr(self, "_bad", "")), getattr(self, "_bad", ""), "브리핑")
+            except Exception:
+                sh = None
+            if sh and sh[0] == "ok":
+                self.token = sh[1]
         if not self.token:
             d = http("POST", f"{TOSS_API}/oauth2/token", {"Content-Type": "application/x-www-form-urlencoded"},
                      urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": self.cid, "client_secret": self.sec}).encode())
@@ -358,6 +371,8 @@ def sniper_ledger():
         files = []
     for f in files:
         data = load(f, {})
+        if isinstance(data, dict) and isinstance(data.get("SOXL"), dict):   # 현 장부 형식 {"SOXL": {...}}
+            data = data["SOXL"]
         if isinstance(data, dict) and ("free_cash_usd" in data or "initial_seed_usd" in data):
             try:
                 mt = f.stat().st_mtime
@@ -369,7 +384,7 @@ def sniper_ledger():
 
 
 def sniper_plan():
-    """인피니트 스노우볼 v6.0(SOXL 순수 롱) 기준 필요 달러 → (최소, 최대, 상세 줄).
+    """인피니트 스노우볼(SOXL 순수 롱) 현 장부 soxl_stratum_ledger*.json {"SOXL": {...}} 기준 필요 달러 → (최소, 최대, 상세 줄).
     1회분 = 코어자산의 8%, 코어자산 = max(기준시드, 가용현금+투입원가-예비수혈금). 예비수혈은 최대 +6회분.
     추매는 10분 게이트·신저가 조건이라 하루 횟수 상한이 없어 '최대'는 장부 가용현금 전액으로 본다."""
     _, led = sniper_ledger()
@@ -378,7 +393,9 @@ def sniper_plan():
     if led.get("is_active") is False:
         return 0.0, 0.0, ["↳ 가동 OFF → 0"]
     seed, free = num(led.get("initial_seed_usd")), num(led.get("free_cash_usd"))
-    invested, injected = num(led.get("actual_invested_usd")), num(led.get("injected_reserve_usd"))
+    invested = num(led.get("actual_invested_usd")) or sum(num(b.get("actual_cost_usd")) for b in (led.get("buckets") or []) if isinstance(b, dict))
+    injected = num(led.get("injected_reserve_usd"))
+    has_reserve = "used_reserve_portions_cnt" in led   # 예비 수혈은 v6.0 장부에만 있음 (현재 v3.0 은 없음)
     left = max(0, 6 - int(num(led.get("used_reserve_portions_cnt"))))
     core = max(seed, free + invested - injected)
     portion = round(core * 0.08, 4)
@@ -391,7 +408,8 @@ def sniper_plan():
         need_min = need_max = 0.0
     else:
         need_min, need_max = min(portion, free), free
-    lines.append(f"↳ 예비 수혈 +{left}회분 가능 (최대 ${left * portion:,.2f} · 토스 계좌에 입금돼 있으면 자동)")
+    if has_reserve:
+        lines.append(f"↳ 예비 수혈 +{left}회분 가능 (최대 ${left * portion:,.2f} · 토스 계좌에 입금돼 있으면 자동)")
     return need_min, need_max, lines
 
 
