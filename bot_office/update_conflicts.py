@@ -41,7 +41,15 @@ def snapshot(host, branch, expected=None, main_expected=None):
     if main_expected and main_expected != main:
         raise RepairError('main이 바뀌었습니다. 정리 대상을 다시 확인해 주세요.')
     if head != main:
-        raise RepairError('서버 HEAD와 GitHub main이 다릅니다. 먼저 서버 동기화 상태를 확인해야 합니다.')
+        if host.git('merge-base', '--is-ancestor', head, main)[0] == 0:
+            raise RepairError('GitHub main에 서버를 거치지 않은 수정이 있습니다 (main이 서버보다 앞섬). '
+                              '충돌 정리로는 고치지 않습니다. GitHub에서 main 기준 새 브랜치를 만들어 '
+                              '6. Update 알림으로 먼저 승인하세요.')
+        if host.git('merge-base', '--is-ancestor', main, head)[0] == 0:
+            raise RepairError('서버에 적용된 결과가 아직 GitHub main에 올라가지 않았습니다 (서버가 앞섬). '
+                              '직전 업데이트 완료 알림의 main 업로드 결과를 먼저 확인해야 합니다.')
+        raise RepairError('서버 HEAD와 GitHub main이 서로 다른 수정으로 갈라졌습니다. '
+                          '자동으로 고치지 않습니다. 어떤 수정이 어디에 있는지 먼저 확인해야 합니다.')
     if checked(host, 'status', '--porcelain', '--untracked-files=no'):
         raise RepairError('서버에 미기록 변경 또는 미해결 충돌이 있습니다. 먼저 보존·확인이 필요합니다.')
     for name in ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD'):
