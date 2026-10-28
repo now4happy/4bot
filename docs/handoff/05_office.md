@@ -35,3 +35,10 @@
 - 서버에서 끈 것(유닛 파일은 /var/backups/bot-office-cleanup-<시각>/ 로 이동): ai-room(.service·-reload.path·-reload.service), bot-office-deploy(.timer·.service), bot-office-pipeline(.timer·.service). 자료 폴더(/var/lib/ai-room 등)는 지우지 않음.
 - 남긴 것(켜져 있음): 픽셀 사무실(/pixel-office · pixel_office·office_tasks), 운영 화면(/operations · index.html·office_reviews·market_manual·collect_inventory + bot-office-inventory.timer), 브리핑 타이머, 서버 정리 타이머, backup_office.py(서버에만 있음, 용도 미확인).
 - 정리 버튼 오류 원인: bot-office.service 가 ProtectSystem=strict + ReadWritePaths(fanding, market-manual)라 /var/lib/bot-office/care 에 쓸 수 없었음(OSError) → drop-in `bot-office.service.d/care.conf` 로 ReadWritePaths 추가.
+
+## 15. 픽셀 사무실·운영 화면 삭제 · 수집기 유지 (2026-10-28, 사무실 v1.0.58 예정) — 파일 작성·diff·문법 검사 완료, 서버 적용 미확인
+- 삭제 주소: /pixel-office, /operations, /api/pixel-office, /api/market-manual, /api/reviews, /api/office-export, /api/office-tasks (GET·POST 모두). 상황판 /, /board, /api/board, /api/server-care, /api/status, /api/idea-report는 그대로.
+- 삭제 파일 6개: pixel_office.py, pixel_office.html, index.html, market_manual.py, office_reviews.py, office_tasks.py. 삭제 뒤 남은 파일 중 지운 모듈을 import하는 곳 없음(board.html은 /api/board·/api/server-care만 씀).
+- 유지: collect_inventory.py와 bot-office-inventory 타이머. /api/status의 inventory.json 갱신이 계속됨.
+- 자료: /var/lib/bot-office/pixel-office와 /var/lib/bot-office/market-manual(점수·결재·업무 기록)은 현용 위치에서 백업 폴더로 이동, 나중에 백업 폴더 삭제 시 완전 삭제. 픽셀 자료 삭제와 점수·결재 기록 삭제는 사용자 승인, 수집기 유지는 사용자 지시.
+- 적용: server.py + 이 문서(15절) + 로그를 staging에 올리고, SSH로 자료 이동 뒤 연결로 6개 파일 삭제, 6. Update 마지막 알림 승인. SSH git push는 https 인증 프롬프트에서 멈춘 전례가 있어 이번에는 파일 삭제를 연결로 함.

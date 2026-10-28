@@ -3,6 +3,8 @@
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
 # 사무실 v1.0.57 (2026-10-28): 미팅룸(/room) 연결·옛 결재(/api/deployments)·수정 요청(/api/dev-requests)·업무 흐름(/api/pipeline) 주소 삭제
+# 사무실 vNEXT (2026-10-28): 픽셀 사무실(/pixel-office)·운영 화면(/operations)·시장점수·결재기록·업무 주소 삭제
+#   · 해당 파일(pixel_office·index·market_manual·office_reviews·office_tasks)도 함께 삭제 · 수집기(collect_inventory·inventory 타이머)는 유지
 #   · 해당 파일(ai_room·office_deploy·office_dev·office_pipeline_api 등)도 함께 삭제 · 상황판·픽셀 사무실·운영 화면은 그대로
 # 사무실 v1.0.56 (2026-10-28): 상황판 서버실 '서버 정리 실행' 버튼 → POST /api/server-care
 #   · 웹서버는 관리자 권한이 없으므로 요청 파일(/var/lib/bot-office/care/request)만 씀 → 서버의 bot-server-care-request.path 가 보고 bot-server-care 실행
@@ -105,31 +107,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(303);self.send_header('Location','/login');self.send_header('Content-Length','0');self.end_headers();return
             return self.send(401,{'error':'login_required'})
         if route in ('/', '/board') and (ROOT/'board.html').exists(): return self.send(200,(ROOT/'board.html').read_bytes(),'text/html; charset=utf-8')
-        if route in ('/', '/pixel-office'): return self.send(200,(ROOT/'pixel_office.html').read_bytes(),'text/html; charset=utf-8')
         if route=='/api/board':
             try:
                 import office_board
                 return self.send(200,office_board.board())
             except Exception as error:
                 return self.send(500,{'error':'board_failed','detail':type(error).__name__})
-        if route=='/operations': return self.send(200,(ROOT/'index.html').read_bytes(),'text/html; charset=utf-8')
-        if route=='/api/pixel-office':
-            import pixel_office
-            from urllib.parse import parse_qs, urlsplit
-            job_id=parse_qs(urlsplit(self.path).query).get('id',[None])[0]
-            try:
-                return self.send(200,pixel_office.state(job_id))
-            except ValueError:
-                return self.send(404,{'error':'업무를 찾을 수 없습니다.'})
-            except Exception:
-                return self.send(500,{'error':'업무 기록을 읽을 수 없습니다.'})
-        if route=='/api/market-manual':
-            import market_manual
-            return self.send(200,market_manual.read())
-        # OFFICE_REVIEWS_V1
-        if route=='/api/reviews':
-            import office_reviews
-            return self.send(200,office_reviews.read())
         # IDEA_REPORT_V1
         if route=='/api/idea-report':
             try:
@@ -137,29 +120,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,json.loads(p.read_text()))
             except (OSError,ValueError):
                 return self.send(404,{'error':'report_not_ready'})
-        # OFFICE_EXPORT_V1
-        if route=='/api/office-export':
-            result={
-                'format':'bot-office-records-v1',
-                'exported_at':datetime.now(timezone.utc).isoformat(),
-                'records':{}
-            }
-            files={
-                'market':'/var/lib/bot-office/market-manual/score.json',
-                'reviews':'/var/lib/bot-office/market-manual/reviews.json'
-            }
-            for name,path in files.items():
-                try:
-                    result['records'][name]=json.loads(Path(path).read_text())
-                except FileNotFoundError:
-                    result['records'][name]=None
-                except (OSError,ValueError):
-                    return self.send(500,{'error':'export_failed'})
-            return self.send(200,result)
-        # OFFICE_TASKS_V1
-        if route=='/api/office-tasks':
-            import office_tasks
-            return self.send(200,office_tasks.listing())
         if route=='/api/status': return self.send(200,snapshot())
         self.send(404,{'error':'not_found'})
     def do_POST(self):
@@ -182,60 +142,6 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK: SESSIONS.pop(c['office_session'].value,None)
             except (KeyError,ValueError): pass
             return self.send(200,{'ok':True},cookie='office_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'+('; Secure' if self.secure() else ''))
-        if route=='/api/pixel-office':
-            if not self.session(): return self.send(401,{'error':'login_required'})
-            if self.headers.get('X-Bot-Office')!='pixel-office': return self.send(403,{'error':'invalid_request'})
-            try:
-                n=int(self.headers.get('Content-Length','0'))
-                if not 0<n<=16000: raise ValueError('요청 크기를 확인해 주세요.')
-                import pixel_office
-                return self.send(200,pixel_office.command(json.loads(self.rfile.read(n))))
-            except ValueError as error:
-                return self.send(400,{'error':str(error)[:240]})
-            except Exception:
-                return self.send(500,{'error':'업무 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.'})
-        if route=='/api/market-manual':
-            if not self.session(): return self.send(401,{'error':'login_required'})
-            if self.headers.get('X-Bot-Office')!='market-manual': return self.send(403,{'error':'invalid_request'})
-            try:
-                n=int(self.headers.get('Content-Length','0'))
-                if not 0<n<=16000: raise ValueError()
-                import market_manual
-                result=market_manual.save(json.loads(self.rfile.read(n)))
-            except (ValueError,TypeError,AttributeError,KeyError): return self.send(400,{'error':'invalid_scores'})
-            except OSError: return self.send(500,{'error':'save_failed'})
-            if result is None: return self.send(409,{'error':'changed_elsewhere'})
-            return self.send(200,result)
-        if route=='/api/reviews':
-            if not self.session():
-                return self.send(401,{'error':'login_required'})
-            if self.headers.get('X-Bot-Office')!='reviews':
-                return self.send(403,{'error':'invalid_request'})
-            try:
-                n=int(self.headers.get('Content-Length','0'))
-                if not 0<n<=2048: raise ValueError()
-                import office_reviews
-                result=office_reviews.save(json.loads(self.rfile.read(n)))
-            except (ValueError,TypeError,AttributeError):
-                return self.send(400,{'error':'invalid_review'})
-            except OSError:
-                return self.send(500,{'error':'save_failed'})
-            return self.send(200,result)
-        if route=='/api/office-tasks':
-            if not self.session():
-                return self.send(401,{'error':'login_required'})
-            if self.headers.get('X-Bot-Office')!='tasks':
-                return self.send(403,{'error':'invalid_request'})
-            try:
-                n=int(self.headers.get('Content-Length','0'))
-                if not 0<n<=1024: raise ValueError()
-                import office_tasks
-                result=office_tasks.execute(json.loads(self.rfile.read(n)))
-                return self.send(200,result)
-            except (ValueError,TypeError,AttributeError):
-                return self.send(400,{'error':'invalid_task'})
-            except OSError:
-                return self.send(500,{'error':'storage_failed'})
         if route=='/api/server-care':
             if not self.session(): return self.send(401,{'error':'login_required'})
             if self.headers.get('X-Bot-Office')!='care': return self.send(403,{'error':'invalid_request'})
