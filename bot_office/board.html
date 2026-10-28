@@ -1,0 +1,124 @@
+<!doctype html>
+<!-- 사무실 상황판 · 사무실 vNEXT (2026-10-28) · 보기 전용 (주문·승인은 텔레그램) · 데이터: /api/board -->
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>사무실 상황판</title>
+<style>
+:root{--bg:#f4f3ee;--card:#fffefa;--ink:#1f3530;--muted:#76827c;--line:#dfe0d6;--accent:#2b5446;--ok:#2f8a57;--warn:#c98a1a;--bad:#c4473a;--chip:#eceee4}
+@media (prefers-color-scheme:dark){:root{--bg:#141917;--card:#1c2320;--ink:#e6ece8;--muted:#93a29a;--line:#2c3631;--accent:#8fc9ad;--ok:#5cc28a;--warn:#e3b04f;--bad:#ef7a6c;--chip:#25302b}}
+*{box-sizing:border-box}html,body{margin:0}body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI','Apple SD Gothic Neo','Malgun Gothic',sans-serif;-webkit-text-size-adjust:100%}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:14px 16px 0;border-bottom:1px solid var(--line)}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+h1{font-size:18px;margin:0;letter-spacing:-.4px}.sub{font-size:12px;color:var(--muted)}
+.tools{display:flex;gap:6px}.tools button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:6px 10px;font:inherit;font-size:13px}
+nav{display:flex;gap:4px;overflow-x:auto;margin-top:10px;scrollbar-width:none}nav::-webkit-scrollbar{display:none}
+nav button{flex:none;border:0;background:none;color:var(--muted);font:inherit;font-size:14px;padding:8px 10px 10px;border-bottom:2px solid transparent}
+nav button.on{color:var(--ink);font-weight:700;border-color:var(--accent)}
+main{max-width:760px;margin:0 auto;padding:14px 16px 40px}
+section{display:none}section.on{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:13px 14px;margin-bottom:12px}
+.card h2{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:650}
+.row{display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-top:1px solid var(--line)}.row:first-of-type{border-top:0}
+.dot{flex:none;width:10px;height:10px;border-radius:50%;margin-top:6px;background:var(--muted)}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+.grow{flex:1;min-width:0}.name{font-weight:650}.meta{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.ver{flex:none;font-size:12px;background:var(--chip);border-radius:7px;padding:2px 7px;margin-top:2px}
+.lights{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.light{text-align:center;font-size:11.5px;color:var(--muted)}.light .dot{display:block;width:14px;height:14px;margin:0 auto 4px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px}.kv dt{color:var(--muted)}.kv dd{margin:0;overflow-wrap:anywhere}
+.bar{height:7px;border-radius:5px;background:var(--chip);overflow:hidden;margin:4px 0 10px}.bar i{display:block;height:100%;background:var(--accent)}
+.bar i.warn{background:var(--warn)}.bar i.bad{background:var(--bad)}
+a.link{display:flex;justify-content:space-between;align-items:center;color:var(--ink);text-decoration:none;padding:10px 0;border-top:1px solid var(--line)}a.link:first-of-type{border-top:0}
+.note{font-size:12.5px;color:var(--muted);margin:6px 2px 0}.err{color:var(--bad)}
+ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;overflow-wrap:anywhere}
+</style></head><body>
+<header>
+  <div class="top"><div><h1>사무실 상황판</h1><div class="sub" id="when">불러오는 중…</div></div>
+  <div class="tools"><button id="reload" type="button">새로고침</button><button id="logout" type="button">나가기</button></div></div>
+  <nav id="tabs">
+    <button data-t="home" class="on">상황판</button><button data-t="trade">매매방</button><button data-t="fanding">팬딩방</button>
+    <button data-t="server">서버실</button><button data-t="log">기록실</button><button data-t="more">미팅룸·옛 화면</button>
+  </nav>
+</header>
+<main>
+  <section id="home" class="on">
+    <div class="card"><h2>봇 신호등</h2><div class="lights" id="lights"></div></div>
+    <div class="card"><h2>오늘 할 일</h2><div id="todo"></div></div>
+    <p class="note">보기 전용 화면입니다. 주문·승인·설정 변경은 텔레그램(5·6·7번)에서만 합니다.</p>
+  </section>
+  <section id="trade">
+    <div class="card"><h2>매매 봇 1~4번</h2><div id="tradeList"></div></div>
+    <p class="note">'켜진 시각'은 서비스가 시작된 시각입니다. 실제 주문·체결 결과는 각 봇 텔레그램에서 확인하세요.</p>
+  </section>
+  <section id="fanding">
+    <div class="card"><h2>팬딩 가격표</h2><dl class="kv" id="fdKv"></dl></div>
+    <div class="card"><h2>하남 컴 (PC 감시)</h2><dl class="kv" id="pcKv"></dl></div>
+    <p class="note">자세한 진단·재판독은 팬딩 봇 /진단 · /재판독.</p>
+  </section>
+  <section id="server">
+    <div class="card"><h2>자원</h2><div id="res"></div></div>
+    <div class="card"><h2>사무실 접속 감시</h2><dl class="kv" id="hlKv"></dl></div>
+    <div class="card"><h2>사무실 서비스</h2><div id="officeList"></div></div>
+  </section>
+  <section id="log">
+    <div class="card"><h2>대기 중인 업로드</h2><ul class="plain" id="pending"></ul></div>
+    <div class="card"><h2>최근 적용</h2><ul class="plain" id="recent"></ul></div>
+    <p class="note" id="statusWhen"></p>
+  </section>
+  <section id="more">
+    <div class="card"><h2>바로 가기</h2>
+      <a class="link" href="/room">💬 미팅룸 (AI 협업방)<span>›</span></a>
+      <a class="link" href="/operations">🗂 예전 운영 화면<span>›</span></a>
+      <a class="link" href="/pixel-office">🏢 픽셀 사무실<span>›</span></a>
+    </div>
+  </section>
+</main>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+  function lvl(a){return a==='active'?'ok':(a==='activating'||a==='reloading'?'warn':'bad')}
+  function row(level,name,meta,ver){var r=el('div','row');r.appendChild(el('span','dot '+level));var g=el('div','grow');g.appendChild(el('div','name',name));if(meta)g.appendChild(el('div','meta',meta));r.appendChild(g);if(ver)r.appendChild(el('span','ver',ver));return r}
+  function kv(box,pairs){box.textContent='';pairs.forEach(function(p){box.appendChild(el('dt',null,p[0]));box.appendChild(el('dd',p[2]||null,p[1]))})}
+  function svcMeta(s){var m=[];m.push(s.active==='active'?('켜진 시각 '+(s.since_kst||'?')+' KST'):('상태: '+s.active+(s.sub?' / '+s.sub:'')));if(s.applied)m.push('마지막 적용 '+s.applied);if(s.what)m.push(s.what);return m.join(' · ')}
+  function bar(label,pct,extra){var w=el('div');w.appendChild(el('div','meta',label+' '+(pct==null?'?':pct+'%')+(extra?' · '+extra:'')));var b=el('div','bar');var i=el('i',pct>=90?'bad':pct>=80?'warn':'');i.style.width=Math.min(pct||0,100)+'%';b.appendChild(i);w.appendChild(b);return w}
+  function list(box,items,empty){box.textContent='';if(!items.length){box.appendChild(el('li',null,empty));return}items.forEach(function(t){box.appendChild(el('li',null,t))})}
+  function render(d){
+    $('when').textContent='확인 '+d.observed_kst.slice(5,16)+' KST · 1분마다 갱신';
+    var L=$('lights');L.textContent='';
+    d.services.filter(function(s){return s.room==='trade'||s.unit==='bot-office'}).forEach(function(s){var c=el('div','light');c.appendChild(el('span','dot '+lvl(s.active)));c.appendChild(el('div',null,s.name.split(' ')[0]));L.appendChild(c)});
+    var T=$('todo');T.textContent='';
+    if(!d.todo.length)T.appendChild(row('ok','할 일 없음 — 모두 정상',''));
+    d.todo.forEach(function(t){T.appendChild(row(t.level,t.text,''))});
+    var TL=$('tradeList');TL.textContent='';
+    d.services.filter(function(s){return s.room==='trade'}).forEach(function(s){TL.appendChild(row(lvl(s.active),s.name,svcMeta(s),s.version))});
+    var OL=$('officeList');OL.textContent='';
+    d.services.filter(function(s){return s.room==='office'}).forEach(function(s){OL.appendChild(row(lvl(s.active),s.name,svcMeta(s),s.version))});
+    var f=d.fanding;
+    kv($('fdKv'),f.ok?[['필요 종가일',f.expected],['가격표',f.status,f.ready?null:'err'],['PC 마지막 연결',f.pc_age_min==null?'기록 없음':f.pc_age_min+'분 전'],['PC 단계',f.pc_stage],['수집기 버전',f.pc_version||'미확인']]:[['상태','읽기 실패 ('+(f.error||'?')+')','err']]);
+    var p=d.pc;
+    kv($('pcKv'),p.ok?[['감시 시간',p.hours+(p.watching?' (지금 감시 중)':' (감시 시간 밖)')],['PC 연결',p.age_min==null?'기록 없음':p.age_min+'분 전',(p.watching&&(p.age_min==null||p.age_min>=10))?'err':null],['매직스플릿',p.magic]]:[['상태','읽기 실패 ('+(p.error||'?')+')','err']]);
+    var h=d.health;
+    kv($('hlKv'),h.ok&&h.checked_kst?[['주소 방식',h.mode],['마지막 확인',h.checked_kst+' KST'],['결과',h.healthy?'정상':'실패 '+h.fails+'회째',h.healthy?null:'err'],['내부 / 바깥',(h.inside||'응답없음')+' / '+(h.outside||'응답없음')],['마지막 정상',(h.last_ok_kst||'-')+' KST']]:[['상태','아직 확인 기록 없음 (7번 비서가 5분마다 확인)']]);
+    var s=d.server,R=$('res');R.textContent='';
+    R.appendChild(bar('디스크',s.disk_pct,'남은 '+s.disk_free_gb+'GB'));R.appendChild(bar('메모리',s.mem_pct,'총 '+s.mem_total_mb+'MB'));if(s.swap_pct!=null)R.appendChild(bar('스왑',s.swap_pct));
+    R.appendChild(el('div','meta','1분 평균 부하 '+s.load_1m));
+    list($('pending'),d.pending,'없음');list($('recent'),d.recent,'STATUS 복사본이 아직 없어요 (다음 업데이트 적용 뒤 표시)');
+    $('statusWhen').textContent=d.status_updated?'STATUS 기준: '+d.status_updated:'';
+  }
+  function load(){
+    fetch('/api/board',{credentials:'same-origin',cache:'no-store'}).then(function(r){
+      if(r.status===401){location.href='/login';return null}
+      if(!r.ok)throw new Error('HTTP '+r.status);return r.json()
+    }).then(function(d){if(d)render(d)}).catch(function(e){$('when').textContent='불러오기 실패: '+e.message+' · 새로고침을 눌러 보세요';$('when').className='sub err'});
+  }
+  document.getElementById('tabs').addEventListener('click',function(e){var t=e.target.getAttribute('data-t');if(!t)return;
+    Array.prototype.forEach.call(document.querySelectorAll('nav button'),function(b){b.classList.toggle('on',b===e.target)});
+    Array.prototype.forEach.call(document.querySelectorAll('section'),function(s){s.classList.toggle('on',s.id===t)});
+    try{sessionStorage.setItem('boardTab',t)}catch(_){}});
+  try{var saved=sessionStorage.getItem('boardTab');if(saved){var b=document.querySelector('nav button[data-t="'+saved+'"]');if(b)b.click()}}catch(_){}
+  $('reload').addEventListener('click',load);
+  $('logout').addEventListener('click',function(){fetch('/logout',{method:'POST',credentials:'same-origin'}).finally(function(){location.href='/login'})});
+  load();setInterval(load,60000);
+})();
+</script>
+</body></html>

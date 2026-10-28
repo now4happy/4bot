@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
+# 사무실 vNEXT (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
+#   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
 import base64, hashlib, hmac, json, os, secrets, shutil, subprocess, threading, time
 from collections import deque
 from datetime import datetime, timezone
@@ -125,7 +127,14 @@ class Handler(BaseHTTPRequestHandler):
             if route=='/':
                 self.send_response(303);self.send_header('Location','/login');self.send_header('Content-Length','0');self.end_headers();return
             return self.send(401,{'error':'login_required'})
+        if route in ('/', '/board') and (ROOT/'board.html').exists(): return self.send(200,(ROOT/'board.html').read_bytes(),'text/html; charset=utf-8')
         if route in ('/', '/pixel-office'): return self.send(200,(ROOT/'pixel_office.html').read_bytes(),'text/html; charset=utf-8')
+        if route=='/api/board':
+            try:
+                import office_board
+                return self.send(200,office_board.board())
+            except Exception as error:
+                return self.send(500,{'error':'board_failed','detail':type(error).__name__})
         if route=='/operations': return self.send(200,(ROOT/'index.html').read_bytes(),'text/html; charset=utf-8')
         if route=='/api/pixel-office':
             import pixel_office

@@ -18,6 +18,10 @@
 #  · 사무실 v1.0.54 (2026-10-28): ① 한글 파일명 문서가 '허용되지 않은 파일'로 거부되던 것 고침 (git 경로 따옴표·8진수 표기 끔)
 #                       ② GitHub main 에 서버를 거치지 않은 수정이 있으면 알림 1번 + 그 수정이 빠진 브랜치는 적용 전에 멈춤
 #                       ③ 충돌 정리 '서버 HEAD≠main' 안내를 main 앞섬/서버 앞섬/갈라짐으로 나눠 할 일까지 표시 (update_conflicts.py)
+#  · 사무실 vNEXT (2026-10-28): ① 사무실 파일 읽기 권한 자동 정리 — 이미 있던 파일도 웹서버(server.py 와 같은 그룹)가 읽을 수 있게
+#                          (pixel_office.html 이 관리자 전용 권한으로 남아 로그인 뒤 첫 화면이 끊김 · pc_monitor.py 502 와 같은 원인)
+#                          주인은 바꾸지 않고, 그룹 쓰기 권한은 주지 않음 · 적용 때마다 /opt/bot-office 전체를 한 번 훑어 고침
+#                       ② STATUS.md 를 쓸 때 사무실 상황판용 복사본 /var/lib/bot-office/status.md (읽기 전용 0644) 도 남김
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -461,10 +465,27 @@ def build_status(reason):
     return "\n".join(L)
 
 
+STATUS_COPY = os.environ.get("U_STATUS_COPY", "/var/lib/bot-office/status.md")
+
+
+def _status_copy(text):
+    """사무실 상황판(웹서버 bot-office 계정)이 읽는 STATUS.md 복사본 · 모두 읽기 0644 (비밀값 없음 — STATUS.md 와 같은 내용)"""
+    try:
+        os.makedirs(os.path.dirname(STATUS_COPY), exist_ok=True)
+        tmp = STATUS_COPY + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, STATUS_COPY)
+    except OSError as e:
+        print("상황판용 STATUS 복사 실패:", type(e).__name__, flush=True)
+
+
 def write_status(reason):
     """STATUS.md 를 쓰고, '갱신' 줄 말고 실제 내용이 바뀌었으면 True"""
     path = os.path.join(REPO, STATUS_FILE)
     new = build_status(reason)
+    _status_copy(new)
     strip = lambda t: re.sub(r"^- 갱신: .*$", "", t, flags=re.M)
     try:
         old = open(path, encoding="utf-8").read()
@@ -509,17 +530,51 @@ def status_daily(st, force=False):
 
 # ---------------------------------------------------------------- 적용
 def _office_perm(existing):
-    """복사할 파일의 주인·그룹·권한. 있던 파일은 그대로 유지, 새 파일은 server.py 와 똑같이 맞춤
-    (예전엔 새 파일을 root 전용 640 으로 만들어 웹서버(bot-office 계정)가 못 읽음 → pc_monitor.py 502 오류)"""
-    ref = existing or os.path.join(OFFICE_DIR, "server.py")
+    """복사할 파일의 주인·그룹·권한. 주인은 그대로, 그룹·읽기 권한은 server.py 와 같게 (웹서버 bot-office 계정이 읽을 수 있게)
+    (예전엔 새 파일을 root 전용 640 으로 만들어 pc_monitor.py 502, 있던 파일은 권한을 그대로 둬서 pixel_office.html 첫 화면 끊김)"""
     try:
-        st = os.stat(ref)
-        uid, gid, mode = st.st_uid, st.st_gid, st.st_mode & 0o777
+        ref = os.stat(os.path.join(OFFICE_DIR, "server.py"))
     except OSError:
+        ref = None
+    try:
+        st = os.stat(existing) if existing else None
+    except OSError:
+        st = None
+    if not ref and not st:
         return 0, 0, 0o644
-    if not existing:
+    base = st or ref
+    uid, gid, mode = base.st_uid, base.st_gid, base.st_mode & 0o777
+    if not st:
         mode &= ~0o111                        # 새 파일엔 실행 권한은 빼고
+    if ref:
+        if gid != ref.st_gid:                 # 그룹을 웹서버 그룹으로 바꿀 땐 그룹 쓰기 권한은 주지 않음
+            gid = ref.st_gid
+            mode &= ~0o020
+        mode |= ref.st_mode & 0o044           # server.py 가 그룹·모두에게 읽기를 열어 둔 만큼 똑같이
     return uid, gid, mode | 0o400             # 주인은 항상 읽을 수 있게
+
+
+def office_perm_repair():
+    """/opt/bot-office 의 .py·.html·.css·.js 중 server.py 기준 읽기 권한이 빠진 파일만 고침 → 고친 파일 이름 목록"""
+    fixed = []
+    try:
+        names = sorted(os.listdir(OFFICE_DIR))
+    except OSError:
+        return fixed
+    for name in names:
+        p = os.path.join(OFFICE_DIR, name)
+        if not name.endswith(OFFICE_EXT) or not os.path.isfile(p) or os.path.islink(p):
+            continue
+        try:
+            st = os.stat(p)
+            uid, gid, mode = _office_perm(p)
+            if (st.st_gid, st.st_mode & 0o777) != (gid, mode):
+                os.chown(p, uid, gid); os.chmod(p, mode); fixed.append(name)
+        except OSError as e:
+            print("사무실 파일 권한 정리 실패:", name, type(e).__name__, flush=True)
+    if fixed:
+        print("사무실 파일 읽기 권한 고침:", ", ".join(fixed), flush=True)
+    return fixed
 
 
 def office_deploy(files):
@@ -681,6 +736,7 @@ def apply(st, key):
     vers = bump_versions([u for u in units if u != OFFICE_UNIT], old_head)
     office_files = units.get(OFFICE_UNIT, [])
     saved = office_deploy(office_files) if office_files else []
+    perm_fixed = office_perm_repair() if office_files else []
     self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py", "sniper_upstream.py") for f in office_files)
     restart = [u for u in units if u != OFFICE_UNIT]
     if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py", "sniper_upstream.py") for f in office_files):
@@ -736,7 +792,8 @@ def apply(st, key):
     st.setdefault("seen", {}).pop(br, None)
     done = ", ".join(NAMES.get(u, u) + " " + t.rsplit("-", 1)[-1] for u, t in zip(units, tags)) or "문서만 반영"
     say(f"🎉 <b>업데이트 완료</b>\n▫️ {esc(done)}\n"
-        f"▫️ 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
+        + (f"▫️ 사무실 파일 읽기 권한 고침: {esc(', '.join(perm_fixed))}\n" if perm_fixed else "")
+        + f"▫️ 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
         + ("\n▫️ 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
     for unit in units:
         root = targets().get(unit)
