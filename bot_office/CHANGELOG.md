@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.56 · 2026-10-28 12:33 (KST)
+- 파일: board.html, office_board.py, server.py
+- 내용: 사무실 상황판 2차 수정 (staging, 사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.0.55 · 2026-10-28 12:13 (KST)
 - 파일: board.html, bot_updater.py, office_board.py, office_url.py, server.py
 - 내용: 사무실 상황판 · 접속 감시 · 파일 권한 자동 정리 (staging, 사무실 vNEXT)

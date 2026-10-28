@@ -2,7 +2,7 @@
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
-# 사무실 vNEXT (2026-10-28): 상황판 서버실 '서버 정리 실행' 버튼 → POST /api/server-care
+# 사무실 v1.0.56 (2026-10-28): 상황판 서버실 '서버 정리 실행' 버튼 → POST /api/server-care
 #   · 웹서버는 관리자 권한이 없으므로 요청 파일(/var/lib/bot-office/care/request)만 씀 → 서버의 bot-server-care-request.path 가 보고 bot-server-care 실행
 #   · 로그인·같은 주소·전용 머리글 필요, 10분에 1번 · 한 줄 JSON 기록 (start.md 2절)
 import base64, hashlib, hmac, json, os, secrets, shutil, subprocess, threading, time

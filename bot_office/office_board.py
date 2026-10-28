@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_board.py   (사무실 vNEXT · 2026-10-28)
-#  · 사무실 vNEXT: 신호등에 이름·켜진 시각 · 매매방·미팅룸 제외 · 팬딩룸에 과거 가격표 수·저장 위치 · 서버 정리(bot-server-care) 상태
+# FILE: /opt/bot-office/office_board.py   (사무실 v1.0.56 · 2026-10-28)
+#  · 사무실 v1.0.56: 신호등에 이름·켜진 시각 · 매매방·미팅룸 제외 · 팬딩룸에 과거 가격표 수·저장 위치 · 서버 정리(bot-server-care) 상태
 # 사무실 상황판 데이터 (/api/board · 로그인 필요 · 보기 전용)
 #  · 주문·승인·설정 변경 기능 없음 — 웹에서 하는 일은 '서버 정리 실행' 요청 하나뿐 (server.py /api/server-care)
 #  · 금액·잔고·수량·계좌·토큰·주소 원문은 넣지 않음 (상태 글자·시각·버전만)
@@ -13,7 +13,7 @@ import json, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "vNEXT"
+VERSION = "v1.0.56"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
 KST = timezone(timedelta(hours=9))
