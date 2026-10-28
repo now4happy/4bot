@@ -2,7 +2,7 @@
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
-# 사무실 vNEXT (2026-10-28): 미팅룸(/room) 연결·옛 결재(/api/deployments)·수정 요청(/api/dev-requests)·업무 흐름(/api/pipeline) 주소 삭제
+# 사무실 v1.0.57 (2026-10-28): 미팅룸(/room) 연결·옛 결재(/api/deployments)·수정 요청(/api/dev-requests)·업무 흐름(/api/pipeline) 주소 삭제
 #   · 해당 파일(ai_room·office_deploy·office_dev·office_pipeline_api 등)도 함께 삭제 · 상황판·픽셀 사무실·운영 화면은 그대로
 # 사무실 v1.0.56 (2026-10-28): 상황판 서버실 '서버 정리 실행' 버튼 → POST /api/server-care
 #   · 웹서버는 관리자 권한이 없으므로 요청 파일(/var/lib/bot-office/care/request)만 씀 → 서버의 bot-server-care-request.path 가 보고 bot-server-care 실행

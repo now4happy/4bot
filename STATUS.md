@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-10-28 12:33 (KST) · 계기: 업데이트 적용 (staging: 사무실 상황판 2차 수정 (staging, 사무실 vNEXT))
+- 갱신: 2026-10-28 13:10 (KST) · 계기: 업데이트 적용 (staging: 꺼진 기능 파일 삭제: generate_ideas.py)
 
 ## 봇별 현재 상태
 
@@ -13,11 +13,11 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (10-28 06:51 KST부터) | v1.0.9 | 2026-10-28 06:51 | 원작 자동 업데이트 범위 제한 |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (10-28 10:48 KST부터) | v4.3.5 | 2026-10-28 10:49 | docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일) |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (10-28 10:47 KST부터) | v4.0.4 | 2026-10-28 10:49 | docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일) |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-28 12:33 KST부터) | v1.0.56 | 2026-10-28 12:33 | 사무실 상황판 2차 수정 (staging, 사무실 vNEXT) |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-28 13:10 KST부터) | v1.0.57 | 2026-10-28 13:10 | 꺼진 기능 파일 삭제: generate_ideas.py |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-28 12:12 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-28 13:10 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (10-28 10:49 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (10-28 12:13 KST부터)
@@ -26,6 +26,7 @@
 
 ## 최근 적용 10건
 
+- 2026-10-28 13:10 · 5번 사무실 비서 v1.0.57 · ai_room.py, apply_deploy.py, deploy_worker.py, draft_change. · 꺼진 기능 파일 삭제: generate_ideas.py
 - 2026-10-28 12:33 · 5번 사무실 비서 v1.0.56 · board.html, office_board.py, server.py · 사무실 상황판 2차 수정 (staging, 사무실 vNEXT)
 - 2026-10-28 12:13 · 5번 사무실 비서 v1.0.55 · board.html, bot_updater.py, office_board.py, office_url.py,  · 사무실 상황판 · 접속 감시 · 파일 권한 자동 정리 (staging, 사무실 vNEXT)
 - 2026-10-28 11:12 · 5번 사무실 비서 v1.0.54 · bot_updater.py, update_conflicts.py · 6. Update 오류 정리: main 앞섬 알림·한글 파일명 인식·충돌 안내 (start.md 파일명 규칙
@@ -35,7 +36,6 @@
 - 2026-10-28 10:03 · 5번 사무실 비서 v1.0.52 · fanding_trade.py, meritz_client.py · 팬딩 매수 자금 추정 기준 표시 + 환전 API 초안 (버튼 미연결)
 - 2026-10-28 09:19 · 5번 사무실 비서 v1.0.51 · fanding_trade.py · 팬딩 진단 이상 즉시 알람 (v4)
 - 2026-10-28 08:38 · 5번 사무실 비서 v1.0.50 · fanding_trade.py · 팬딩 알림 시간
-- 2026-10-28 07:52 · 5번 사무실 비서 v1.0.49 · bot_updater.py, sniper_upstream.py · update: main 기준으로 선택한 이전 변경 정리
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
