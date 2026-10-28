@@ -15,3 +15,10 @@
 - 신규 주문은 b_core.place_order에서 API /v1/orders로 나간다. 새 deployment_gate가 이 함수를 감싸며 (성공여부, 결과) 반환 형식을 유지한다.
 - 미배포 부품2개: bithumb_laoeo_bot/deployment_gate.py, b_core.py. 관리 코인 balance+locked와 대기 주문이 없을 때만 차단 전환한다. 코인 미세잔고도 0으로 반올림하지 않는다.
 - 중지 의미·처음 설치·재개는 06_updater.md. 서버 적용/실계좌 차단 확인은 아직 안 했다.
+
+## 재생 로그 (v4.0.4, 2026-10-28 · start.md 규칙)
+
+- 부품 `replay_log.py`(3번과 같은 파일). 봇 폴더 `logs/events-날짜.jsonl`(일반, 14일) + `logs/audit-날짜.jsonl`(감사, 권한 600). 규칙·재생 명령은 03_toss_dca.md '재생 로그'와 같다.
+- correlation_id: 텔레그램 `tg-<update_id>`, 60초 감시 회차 `sch-<KST 날짜>-<회차>`, 주문 `ord-<참조>`(빗썸 응답 uuid 는 감사 로그에만).
+- 주문 기록은 `b_core.place_order` 안에서 남긴다. 미배포 deployment_gate 가 나중에 이 함수를 감쌀 때도 (성공여부, 결과) 반환 형식은 그대로다.
+- 건너뜀 이유(하루 1번): done_today, before_buy_hour, krw_insufficient, below_min_order, ticker_unavailable, master_off. 잔고 조회 실패는 accounts_unavailable.

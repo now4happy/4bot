@@ -135,3 +135,12 @@
 - 업데이트용 신규 주문 중지 파일4개: deployment_gate.py, toss_api.py, main.py, dca_engine.py. 로컬 작성/34개 검사 범위에 포함, 서버 적용 미확인.
 - 중지 시 주문 transport 외에 실행 시작에서도 반환해 매수일차·사이클을 불필요하게 진행시키지 않는다. 전체/종목별 기존 enabled는 바꾸지 않는다.
 - 중지/설치 상세는 06_updater.md. 과거 시장별 목록/매도 분기 개선은 작성·검증 이력과 실제 배포 증거를 구별해야 하며, 그 작업 재개 시 최신 main과 파일 차이를 먼저 확인한다.
+
+## 재생 로그 (v4.3.5, 2026-10-28 · start.md 규칙)
+
+- 부품 `replay_log.py`(4번과 같은 파일). 봇 폴더 `logs/events-날짜.jsonl`(일반, 14일) + `logs/audit-날짜.jsonl`(감사, 권한 600, 14일). 날짜는 UTC. 서버 저널에는 같은 내용 한 줄 요약.
+- 일반 로그에는 종목·수량·가격·금액·잔고·채팅 식별자를 넣지 않는다. 종목/주문은 `sym_ref`·`chain`(이 서버의 비밀 소금으로 만든 참조값), 원값은 감사 로그에만(`audit_ref` 로 연결).
+- correlation_id: 텔레그램 `tg-<update_id>`, 스케줄러 `sch-kr|us-<날짜>-<회차>`, 주문 체인 `ord-<참조>`(같은 날 같은 종목·같은 주문번호면 같은 체인), 시작/종료 `svc-start|stop`.
+- 건너뜀 이유는 종목·이유별 하루 1번(done_today, awaiting_user_decision, usd_insufficient …), 폴링·스케줄러·토스 API 성공은 10분 요약, 같은 오류는 1시간에 전문 1번 + 횟수 요약.
+- 체결 확인(fill)은 봇이 조회하지 않음 → `fill_check=not_available`. 토스 주문 응답의 주문 식별자 키는 미확정이라 흔한 키(orderId 등)를 찾고, 없으면 `broker_id_found=false`.
+- 재생: 봇 폴더에서 `python3 replay_log.py --last 30` · `python3 replay_log.py <correlation_id>` · `python3 replay_log.py --scan`(금지 값 검사).

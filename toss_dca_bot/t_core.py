@@ -1,25 +1,33 @@
 import os, sys, time, json, glob, inspect, asyncio, requests
+import replay_log as RL   # v4.3.5: 재생 로그 (start.md 규칙) — 매매 동작은 바꾸지 않음
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from toss_api import TossApiClient
 from dca_engine import DcaConfigManager, execute_stock_dca_step
 
-BOT_VERSION = "v4.3.2"
+BOT_VERSION = "v4.3.5"
+# v4.3.5 (2026-10-28): 재생 로그 추가 — 버튼·명령(user_event) / 매매 판단(decision) / 주문·외부 호출(external_call)
+#                     / 설정 변경(state_change) / 보낸 메시지(user_visible) 를 logs/ 에 한 줄 JSON 으로. 금액·종목은 감사 로그에만.
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SNIPER_DIR = "/home/gieokkim/toss_sniper"
 VER_HISTORY_FILE = os.path.join(BASE_DIR, "update_history.json")
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
+RL.setup("toss_dca", BOT_VERSION, BASE_DIR)
 TOSS_ID, TOSS_SECRET = os.getenv("TOSS_CLIENT_ID", "").strip(), os.getenv("TOSS_CLIENT_SECRET", "").strip()
 TG_TOKEN, CHAT_ID = os.getenv("TELEGRAM_BOT_TOKEN", "").strip(), os.getenv("TELEGRAM_CHAT_ID", "").strip()
 fail_reasons = {}
 
 def tg_api(method, payload=None):
     if not TG_TOKEN: return None
-    try: return requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{method}", json=payload, timeout=10).json()
-    except: return None
+    t0 = time.time()
+    try: res = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{method}", json=payload, timeout=10).json()
+    except Exception as e:
+        RL.err("tg_" + method, e, reason="tg_no_response", event_type="user_visible"); res = None
+    RL.tg_result(method, payload, res, int((time.time() - t0) * 1000))
+    return res
 
 def send_panel(text, inline_kb, msg_id=None):
     payload = {"chat_id": CHAT_ID, "text": text, "reply_markup": {"inline_keyboard": inline_kb}}
@@ -71,7 +79,7 @@ async def ensure_cycle_fields():
 async def sync_holdings_from_toss(client: TossApiClient):
     cfg = await ensure_cycle_fields()
     stocks = cfg.get("stocks", {})
-    changed = False
+    changed, added = False, []
     for m_name in ["get_all_holdings", "get_holdings", "get_account_holdings", "get_positions", "get_portfolio"]:
         fn = getattr(client, m_name, None)
         if fn:
@@ -87,10 +95,13 @@ async def sync_holdings_from_toss(client: TossApiClient):
                         if q > 0 and sym not in stocks:
                             is_kr = sym.isdigit()
                             stocks[sym] = {"name": it.get("name", sym), "currency": "KRW" if is_kr else "USD", "market": "KR" if is_kr else "US", "base_amount": 100000.0 if is_kr else 40.0, "target_profit_pct": float(cfg.get("tp1_pct", 10.0)), "sell_ratio_pct": float(cfg.get("sr_pct", 20.0)), "enabled": False, "has_held": True}
-                            changed = True
-            except Exception: pass
+                            changed = True; added.append(sym)
+            except Exception as e: RL.err("holdings_sync", e)
             break
-    if changed: await DcaConfigManager.save(cfg)
+    if changed:
+        aref = RL.audit("holdings_new_stocks", symbols=added)   # 토스 앱 보유종목이 '중지' 상태로 새로 등록됨
+        RL.ev("state_change", "stock_auto_added", count=len(added), sym_refs=[RL.ref(x) for x in added][:10], enabled=False, audit_ref=aref)
+        await DcaConfigManager.save(cfg)
     return cfg
 
 async def smart_us_buy(client: TossApiClient, sym: str, buy_amt: float, cur_p: float, ord_id: str):
