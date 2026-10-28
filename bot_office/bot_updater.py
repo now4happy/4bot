@@ -15,6 +15,9 @@
 #                       ② 버전 자동 기입 고침 — v1.0.48 적용 때 이 파일 속 표시 글자까지 바뀌어 기능이 꺼져 있었음
 #                          (표시 글자를 코드에 직접 쓰지 않고 조립해서 다시는 안 바뀌게)
 #                       ③ sniper_upstream.py 가 바뀌면 업데이트 비서만 재시작 (사무실 서비스는 재시작 안 함)
+#  · 사무실 vNEXT (2026-10-28): ① 한글 파일명 문서가 '허용되지 않은 파일'로 거부되던 것 고침 (git 경로 따옴표·8진수 표기 끔)
+#                       ② GitHub main 에 서버를 거치지 않은 수정이 있으면 알림 1번 + 그 수정이 빠진 브랜치는 적용 전에 멈춤
+#                       ③ 충돌 정리 '서버 HEAD≠main' 안내를 main 앞섬/서버 앞섬/갈라짐으로 나눠 할 일까지 표시 (update_conflicts.py)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -62,14 +65,14 @@ def sh(*a, timeout=120):
  
  
 def git(*a, timeout=120):
-    cmd = ["env", f"HOME={OWNER.pw_dir}", "GIT_TERMINAL_PROMPT=0", "git", "-C", REPO, *a]
+    cmd = ["env", f"HOME={OWNER.pw_dir}", "GIT_TERMINAL_PROMPT=0", "git", "-c", "core.quotepath=false", "-C", REPO, *a]
     if os.geteuid() == 0 and OWNER.pw_uid != 0:
         cmd = ["runuser", "-u", OWNER.pw_name, "--"] + cmd
     return sh(*cmd, timeout=timeout)
  
  
 def git_raw(*a):
-    cmd = ["env", f"HOME={OWNER.pw_dir}", "git", "-C", REPO, *a]
+    cmd = ["env", f"HOME={OWNER.pw_dir}", "git", "-c", "core.quotepath=false", "-C", REPO, *a]
     if os.geteuid() == 0 and OWNER.pw_uid != 0:
         cmd = ["runuser", "-u", OWNER.pw_name, "--"] + cmd
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -199,6 +202,7 @@ def scan(st, force=False):
             st["fetch_err"] = out[:80]; say("⚠️ <b>[업데이트 비서] GitHub 확인 실패</b>\n▫️ " + esc(out[-200:]))
         return
     st["fetch_err"] = ""
+    main_ahead_notice(st)
     rc, refs = git("for-each-ref", "--format=%(refname:short) %(objectname)", "refs/remotes/origin")
     live = {}   # 지금 GitHub에 실제로 있고 아직 반영 안 된 브랜치 → 최신 SHA
     for line in refs.splitlines():
@@ -215,6 +219,26 @@ def scan(st, force=False):
         seen[br] = sha
         offer(st, br, sha)
     prune(st, live)
+
+
+def main_ahead_notice(st):
+    """GitHub main 에 서버를 거치지 않은 수정(웹에서 main 에 바로 올림 등)이 있으면 같은 main 마다 1번만 알림.
+    그대로 두면 서버 HEAD≠main 이라 충돌 정리·STATUS 기록이 멈추고, 다음 승인 때 main 업로드가 실패한다."""
+    rc_m, main = git("rev-parse", "origin/main")
+    if rc_m or not main or git("merge-base", "--is-ancestor", main, "HEAD")[0] == 0:
+        st.pop("main_ahead", None)
+        return
+    if st.get("main_ahead") == main:
+        return
+    st["main_ahead"] = main
+    _, subj = git("log", "--format=%s", "HEAD..origin/main", "-n", "3")
+    _, fs = git("diff", "--name-only", "HEAD...origin/main")
+    fs = [f for f in fs.splitlines() if f.strip()]
+    say("⚠️ <b>[업데이트 비서] GitHub main 에 서버를 거치지 않은 수정이 있습니다</b>\n"
+        "▫️ 수정: " + esc(" / ".join(subj.splitlines()) or "-") + "\n"
+        "▫️ 파일: " + esc(", ".join(fs[:6]) + (" 외" if len(fs) > 6 else "")) + "\n"
+        "▫️ 이대로면 충돌 정리·STATUS 기록이 멈춥니다.\n"
+        "→ GitHub 에서 <b>main 기준 새 브랜치</b>를 만들면 업데이트 알림이 뜹니다. 그 알림을 ✅ 승인하면 서버와 main 이 다시 같아집니다.")
 
 
 def prune(st, live):
@@ -638,6 +662,11 @@ def apply(st, key):
                    [[{"text": "⏸ " + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
     if git("status", "--porcelain", "--untracked-files=no")[1].strip() or git("diff", "--cached", "--name-only")[1].strip():
         return say("⛔ 서버에 저장 안 된 변경이 있어 멈췄습니다. Claude나 Gemini에게 확인을 요청해 주세요.")
+    rc_m, main_sha = git("rev-parse", "origin/main")
+    if rc_m == 0 and git("merge-base", "--is-ancestor", main_sha, "HEAD")[0] and git("merge-base", "--is-ancestor", main_sha, sha)[0]:
+        return say("⛔ GitHub main 에 서버를 거치지 않은 수정이 있고, 이 브랜치는 그 수정을 포함하지 않아 적용하지 않았습니다.\n"
+                   "▫️ 그대로 적용하면 main 업로드가 실패하고 서버·main 이 더 어긋납니다.\n"
+                   "→ main 기준 새 브랜치로 먼저 승인하거나, 이 브랜치를 최신 main 기준으로 다시 올려 주세요.")
     _, old_head = git("rev-parse", "HEAD")
     say(f"⏳ 업데이트 적용 중… ({esc(', '.join(NAMES.get(u, u) for u in units) or '문서')})")
     rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
