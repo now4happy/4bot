@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.2)
+# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.3)
 # V1.1: 예약주문 발주 시간 선택 (장개시 0 / 장마감 10분 전 1 / 장마감 30분 전 2 / 장개시 30분 후 3)
 # V1.2: 살아 있는 예약주문 목록 조회 (앱에서 직접 취소한 건 구분)
+# V1.3: USD 추정 예수금 조회(estm_frcr_amt) + 환전 적용환율/환전신청 초안 (버튼·명령에 연결하지 않음)
 # 메리츠증권 Open API 최소 연결 (해외주식: 현재가·잔고·예약주문)
 #  - 키는 /etc/bot-office/meritz.json 에만 둡니다 (GitHub 에 절대 올리지 않음)
 #    {"app_key": "...", "app_secret": "..."}
@@ -129,6 +130,46 @@ class Meritz:
         if not math.isfinite(value):
             raise MeritzError("USD 예수금 숫자 확인 필요")
         return value
+
+    def usd_estimated(self):
+        """Estimated USD deposit (estm_frcr_amt, unsettled included); app '외화 추정 예수금' basis. Never use alone as spendable cash."""
+        d = self._call("GET", "/accounts/v1/me/overseas/currencies")
+        if d.get("tr_cont") == "1":
+            raise MeritzError("외화잔고 응답이 완전하지 않음")
+        rows = d.get("data")
+        if not isinstance(rows, list):
+            raise MeritzError("외화잔고 형식 확인 필요")
+        usd = [row for row in rows if isinstance(row, dict) and str(row.get("crcd", "")).strip().upper() == "USD"]
+        if len(usd) != 1 or usd[0].get("estm_frcr_amt") in (None, ""):
+            raise MeritzError("USD 추정 예수금 행 없음")
+        try:
+            value = float(str(usd[0]["estm_frcr_amt"]).replace(",", ""))
+        except (ValueError, TypeError):
+            raise MeritzError("USD 추정 예수금 숫자 확인 필요") from None
+        if not math.isfinite(value):
+            raise MeritzError("USD 추정 예수금 숫자 확인 필요")
+        return value
+
+    def fx_applied_rate(self, crcd="USD", mnec_clcd="1"):
+        """환전 적용환율 조회 (읽기 전용). 외화 매수(원화->외화)는 mnec_clcd='1', tltr_aply_byrt 사용.
+        출처: 메리츠 Open API openapi.json v2026-10-22, GET /forex/v1/rates/applied"""
+        d = self._call("GET", "/forex/v1/rates/applied", {"crcd": crcd, "mnec_clcd": mnec_clcd})
+        data = d.get("data") or {}
+        rate_key = "tltr_aply_byrt" if mnec_clcd == "1" else "tltr_aply_slrt"
+        return {"rate": data.get(rate_key), "exrt_stnd_time": data.get("exrt_stnd_time"),
+                "spead": data.get("spead"), "prft_aply_clcd": data.get("prft_aply_clcd"),
+                "prft_aply_cls_val": data.get("prft_aply_cls_val"), "raw": data}
+
+    def fx_exchange(self, frcr_amt, iqry_exrt, exrt_stnd_time, crcd="USD", mnec_clcd="1"):
+        """실시간 환전신청 (실제 돈 이동 — 초안 단계에서는 텔레그램 버튼·명령에 연결하지 말 것).
+        스펙: POST /forex/v1/exchanges, 필수 mnec_clcd, wncr_amt, frcr_amt, exrt_stnd_time, iqry_exrt, crcd.
+        스펙 예시는 wncr_amt=0, frcr_amt=외화금액으로, 원화는 적용환율로 계산된다.
+        스펙상 frcr_amt 타입은 string이지만 예시는 숫자이다 — 서버 수용 여부는 실환전 전에 확인이 필요하고,
+        실환전 테스트로 확인하지 않는다. 성공 rsp_cd는 '0000'이며, 기존 _call OK_CODES에 포함된다."""
+        body = {"mnec_clcd": str(mnec_clcd), "crcd": crcd, "frcr_amt": str(frcr_amt),
+                "wncr_amt": 0, "exrt_stnd_time": exrt_stnd_time, "iqry_exrt": str(iqry_exrt)}
+        d = self._call("POST", "/forex/v1/exchanges", body=body)
+        return d.get("data") or {}
 
     def exchanges(self):
         return self._call("GET", "/reference/v1/overseas/exchanges").get("data") or []
