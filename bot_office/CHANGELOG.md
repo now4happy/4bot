@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.58 · 2026-10-28 13:55 (KST)
+- 파일: index.html, market_manual.py, office_reviews.py, office_tasks.py, pixel_office.html, pixel_office.py, server.py
+- 내용: 픽셀·운영 삭제: office_tasks.py
+- 브랜치: staging
+
 ## v1.0.57 · 2026-10-28 13:10 (KST)
 - 파일: ai_room.py, apply_deploy.py, deploy_worker.py, draft_change.py, generate_ideas.py, install_v2.py, office_deploy.py, office_dev.py, office_package.py, office_pipeline.py, office_pipeline_api.py, office_secretary.py, office_submit.py, optimization_agent.py, prepare_deploy.py, publish_deploy.py, risk_agent.py, room.html, server.py, test_deploy.py
 - 내용: 꺼진 기능 파일 삭제: generate_ideas.py

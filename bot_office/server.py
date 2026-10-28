@@ -3,7 +3,7 @@
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
 # 사무실 v1.0.57 (2026-10-28): 미팅룸(/room) 연결·옛 결재(/api/deployments)·수정 요청(/api/dev-requests)·업무 흐름(/api/pipeline) 주소 삭제
-# 사무실 vNEXT (2026-10-28): 픽셀 사무실(/pixel-office)·운영 화면(/operations)·시장점수·결재기록·업무 주소 삭제
+# 사무실 v1.0.58 (2026-10-28): 픽셀 사무실(/pixel-office)·운영 화면(/operations)·시장점수·결재기록·업무 주소 삭제
 #   · 해당 파일(pixel_office·index·market_manual·office_reviews·office_tasks)도 함께 삭제 · 수집기(collect_inventory·inventory 타이머)는 유지
 #   · 해당 파일(ai_room·office_deploy·office_dev·office_pipeline_api 등)도 함께 삭제 · 상황판·픽셀 사무실·운영 화면은 그대로
 # 사무실 v1.0.56 (2026-10-28): 상황판 서버실 '서버 정리 실행' 버튼 → POST /api/server-care
