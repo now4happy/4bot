@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.54 · 2026-10-28 11:12 (KST)
+- 파일: bot_updater.py, update_conflicts.py
+- 내용: 6. Update 오류 정리: main 앞섬 알림·한글 파일명 인식·충돌 안내 (start.md 파일명 규칙 추가, 로그 영문 파일명)
+- 브랜치: fix-sync-20261028
+
 ## v1.0.53 · 2026-10-28 10:49 (KST)
 - 파일: fanding_trade.py, meritz_client.py
 - 내용: docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일)
