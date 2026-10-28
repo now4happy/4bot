@@ -2,6 +2,9 @@
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
+# 사무실 vNEXT (2026-10-28): 상황판 서버실 '서버 정리 실행' 버튼 → POST /api/server-care
+#   · 웹서버는 관리자 권한이 없으므로 요청 파일(/var/lib/bot-office/care/request)만 씀 → 서버의 bot-server-care-request.path 가 보고 bot-server-care 실행
+#   · 로그인·같은 주소·전용 머리글 필요, 10분에 1번 · 한 줄 JSON 기록 (start.md 2절)
 import base64, hashlib, hmac, json, os, secrets, shutil, subprocess, threading, time
 from collections import deque
 from datetime import datetime, timezone
@@ -305,6 +308,27 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 return self.send(500,{'error':'저장 실패'})
             return self.send(200,result)
+        if route=='/api/server-care':
+            if not self.session(): return self.send(401,{'error':'login_required'})
+            if self.headers.get('X-Bot-Office')!='care': return self.send(403,{'error':'invalid_request'})
+            import office_board
+            rid=secrets.token_hex(6); now=time.time(); ts=datetime.now(timezone.utc)
+            def care_log(outcome,reason=''):
+                print(json.dumps({'ts_utc':ts.isoformat(timespec='seconds'),'ts_kst':ts.astimezone(office_board.KST).isoformat(timespec='seconds'),
+                    'correlation_id':'care-'+rid,'service':'office-board','actor':'user','event_type':'user_event','event':'server_care_requested',
+                    'outcome':outcome,'reason':reason,'version':office_board.VERSION},ensure_ascii=False),flush=True)
+            c=office_board.care()
+            if not c.get('installed'): care_log('skipped','care_not_installed'); return self.send(503,{'error':'care_not_installed'})
+            if not c.get('button'): care_log('skipped','trigger_not_installed'); return self.send(503,{'error':'trigger_not_installed'})
+            if c.get('state')=='running': care_log('skipped','already_running'); return self.send(409,{'error':'already_running'})
+            if c.get('wait_sec'): care_log('skipped','too_soon'); return self.send(429,{'error':'too_soon','wait_sec':c['wait_sec']})
+            try:
+                p=office_board.CARE_REQUEST; tmp=p.with_name('.request.tmp')
+                tmp.write_text(json.dumps({'requested_utc':ts.isoformat(timespec='seconds'),'id':rid})+'\n',encoding='utf-8'); os.replace(tmp,p)
+            except OSError as e:
+                care_log('failed',type(e).__name__); return self.send(500,{'error':'request_write_failed'})
+            office_board._CACHE['at']=0
+            care_log('ok'); return self.send(200,{'ok':True,'id':rid})
         # OFFICE_PIPELINE_V1
         if route=='/api/pipeline':
             if not self.session():

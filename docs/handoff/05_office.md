@@ -19,3 +19,10 @@
 - 버전·최근 적용은 업데이트 비서가 STATUS.md 를 쓸 때 남기는 복사본 `/var/lib/bot-office/status.md`(0644)에서 읽음. 웹서버 계정은 journal 을 못 읽어 '마지막으로 일한 시각' 대신 '켜진 시각'을 보여 줌(한계).
 - `office_url.py`: 터널 주소를 cloudflared 내부 창구(127.0.0.1:20241~20245 `/quicktunnel`)에 먼저 묻고 journal 은 보조. 5분마다 내부 `127.0.0.1:8765/healthz` + 바깥 `<주소>/login` 확인 → 2번 연속 실패면 7번 비서로 원인별 할 일 1번, 복구 때 1번. 결과 `/var/lib/bot-office/office_health.json`, 상태가 바뀔 때만 한 줄 JSON 기록(start.md 2절). `/주소` 에 마지막 접속 확인 표시.
 - `bot_updater.py`: 사무실 파일 복사 때 주인은 그대로, 그룹·읽기 권한은 server.py 와 같게(그룹 쓰기는 주지 않음). 적용 때마다 /opt/bot-office 의 .py·.html·.css·.js 를 훑어 읽기 권한 빠진 파일을 고치고 완료 알림에 표시. 원인: pixel_office.html 관리자 전용 권한 → 로그인 뒤 첫 화면 끊김(2026-10-28).
+
+## 13. 상황판 2차 수정 (2026-10-28, 사무실 v1.0.56 예정) — 파일 작성·가짜 환경 검사 완료, 서버 적용 미확인
+- 탭: 상황판 · 팬딩룸 · 서버실 · 기록실 (매매방·미팅룸 탭 삭제, 미팅룸은 상황판 서비스 목록에서도 뺌. `/room`·`/pixel-office`·`/operations` 주소 자체는 그대로).
+- 봇 신호등: 번호 대신 이름 + 켜진 시각 + 버전 (1~7번, 터널은 서버실에만).
+- 팬딩룸: 모은 과거 가격표 수(`state.json` 의 past_count), 기록된 날짜 수·최근 날짜(`history.jsonl` 의 past_sheet 줄), 저장 폴더 `/var/lib/bot-office/fanding` · 파일 `history.jsonl`. 이미지는 판독 뒤 지우고 판독 결과만 남음.
+- 서버실 '서버 정리 실행' 버튼: POST `/api/server-care`(로그인·같은 주소·`X-Bot-Office: care`, 10분 1번) → 요청 파일 `/var/lib/bot-office/care/request` 만 씀 → 서버의 `bot-server-care-request.path`(관리자 설치 1회)가 보고 기존 `bot-server-care.service`(매일 08:55 자동 정리와 같은 작업) 실행. 웹서버에 관리자 권한을 주지 않음.
+- 디스크 80%·메모리 85%·스왑 50% 이상이거나 최근 정리 실패면 정리 카드 강조 + 오늘 할 일에 표시. 요청은 한 줄 JSON(user_event server_care_requested) 기록.
