@@ -1,5 +1,10 @@
 # 3번 토스 적립 변경 기록
 
+## v4.3.5 · 2026-10-28 10:49 (KST)
+- 파일: main.py, replay_log.py, t_core.py
+- 내용: docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일)
+- 브랜치: fanding-fx-button-20261028
+
 ## v4.3.4 · 2026-10-27 16:31 (KST)
 - 파일: t_core.py, t_ui.py, toss_api.py, toss_token_share.py
 - 내용: Pc와 스플릿 감시

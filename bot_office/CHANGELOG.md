@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.53 · 2026-10-28 10:49 (KST)
+- 파일: fanding_trade.py, meritz_client.py
+- 내용: docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일)
+- 브랜치: fanding-fx-button-20261028
+
 ## v1.0.52 · 2026-10-28 10:03 (KST)
 - 파일: fanding_trade.py, meritz_client.py
 - 내용: 팬딩 매수 자금 추정 기준 표시 + 환전 API 초안 (버튼 미연결)
