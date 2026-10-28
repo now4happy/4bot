@@ -26,3 +26,12 @@
 - 팬딩룸: 모은 과거 가격표 수(`state.json` 의 past_count), 기록된 날짜 수·최근 날짜(`history.jsonl` 의 past_sheet 줄), 저장 폴더 `/var/lib/bot-office/fanding` · 파일 `history.jsonl`. 이미지는 판독 뒤 지우고 판독 결과만 남음.
 - 서버실 '서버 정리 실행' 버튼: POST `/api/server-care`(로그인·같은 주소·`X-Bot-Office: care`, 10분 1번) → 요청 파일 `/var/lib/bot-office/care/request` 만 씀 → 서버의 `bot-server-care-request.path`(관리자 설치 1회)가 보고 기존 `bot-server-care.service`(매일 08:55 자동 정리와 같은 작업) 실행. 웹서버에 관리자 권한을 주지 않음.
 - 디스크 80%·메모리 85%·스왑 50% 이상이거나 최근 정리 실패면 정리 카드 강조 + 오늘 할 일에 표시. 요청은 한 줄 JSON(user_event server_care_requested) 기록.
+
+## 14. 비서 메뉴 정리 · 꺼진 기능 삭제 · 정리 버튼 오류 (2026-10-28, 사무실 v1.0.57 예정) — 파일 작성·가짜 환경 검사 완료, 서버 적용 미확인
+- 7번 비서 하단 메뉴: 📊 조회 · 💲 가격·비용 · 🏢 사무실 · ❓ 도움말. 🏢 사무실 = 지금 주소(/etc/bot-office/office_url)를 여는 URL 버튼(/사무실).
+- 📊 조회: 🗞 브리핑 · 💰 잔액(→ 다음 단계 인라인 버튼으로 한국투자·토스·메리츠·빗썸·전체, `bl:` 콜백) · 🖥 PC 상태 · 🔗 사무실 주소. 📋 현황 삭제.
+- ✍️ 수정 요청·자유 문장 접수·결재(ap/apy/rj/df) 버튼 삭제. 예전 메시지의 그 버튼은 '기능 없어짐' 응답 후 버튼 제거. 코드 수정은 GitHub staging → 6. Update 만.
+- 삭제한 파일(꺼져 있거나 지운 결재·수정 요청에만 쓰이던 것): ai_room.py, room.html, office_pipeline.py, office_pipeline_api.py, office_package.py, office_submit.py, draft_change.py, prepare_deploy.py, publish_deploy.py, install_v2.py, office_dev.py, deploy_worker.py, apply_deploy.py, test_deploy.py, office_deploy.py, risk_agent.py, optimization_agent.py, generate_ideas.py. server.py 의 /room·/api/deployments·/api/dev-requests·/api/pipeline 도 삭제.
+- 서버에서 끈 것(유닛 파일은 /var/backups/bot-office-cleanup-<시각>/ 로 이동): ai-room(.service·-reload.path·-reload.service), bot-office-deploy(.timer·.service), bot-office-pipeline(.timer·.service). 자료 폴더(/var/lib/ai-room 등)는 지우지 않음.
+- 남긴 것(켜져 있음): 픽셀 사무실(/pixel-office · pixel_office·office_tasks), 운영 화면(/operations · index.html·office_reviews·market_manual·collect_inventory + bot-office-inventory.timer), 브리핑 타이머, 서버 정리 타이머, backup_office.py(서버에만 있음, 용도 미확인).
+- 정리 버튼 오류 원인: bot-office.service 가 ProtectSystem=strict + ReadWritePaths(fanding, market-manual)라 /var/lib/bot-office/care 에 쓸 수 없었음(OSError) → drop-in `bot-office.service.d/care.conf` 로 ReadWritePaths 추가.

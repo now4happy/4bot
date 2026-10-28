@@ -2,6 +2,8 @@
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
+# 사무실 vNEXT (2026-10-28): 미팅룸(/room) 연결·옛 결재(/api/deployments)·수정 요청(/api/dev-requests)·업무 흐름(/api/pipeline) 주소 삭제
+#   · 해당 파일(ai_room·office_deploy·office_dev·office_pipeline_api 등)도 함께 삭제 · 상황판·픽셀 사무실·운영 화면은 그대로
 # 사무실 v1.0.56 (2026-10-28): 상황판 서버실 '서버 정리 실행' 버튼 → POST /api/server-care
 #   · 웹서버는 관리자 권한이 없으므로 요청 파일(/var/lib/bot-office/care/request)만 씀 → 서버의 bot-server-care-request.path 가 보고 bot-server-care 실행
 #   · 로그인·같은 주소·전용 머리글 필요, 10분에 1번 · 한 줄 JSON 기록 (start.md 2절)
@@ -11,33 +13,6 @@ from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-
-# ===== AI 협업방 연결 (room-1.0.0): /room 주소는 로그인 확인 후 127.0.0.1:8770 으로 전달 =====
-import urllib.request as _room_ur, urllib.error as _room_ue
-def _room_proxy(h):
-    if not h.session():
-        if h.command == 'GET' and not h.path.startswith('/room/api'):
-            h.send_response(302); h.send_header('Location', '/'); h.end_headers(); return
-        data = b'{"error":"login_required"}'; code = 401; ctype = 'application/json'
-    else:
-        n = int(h.headers.get('Content-Length') or 0)
-        req = _room_ur.Request('http://127.0.0.1:8770' + h.path, data=h.rfile.read(n) if n else None, method=h.command)
-        req.add_header('Content-Type', h.headers.get('Content-Type') or 'application/json')
-        try:
-            r = _room_ur.urlopen(req, timeout=60); code = r.status
-        except _room_ue.HTTPError as e:
-            r = e; code = e.code
-        except Exception as e:
-            r = None; code = 502; data = ('AI room offline: %s' % e).encode(); ctype = 'text/plain; charset=utf-8'
-        if r is not None:
-            data = r.read(); ctype = r.headers.get('Content-Type', 'application/octet-stream')
-    h.send_response(code)
-    h.send_header('Content-Type', ctype)
-    h.send_header('Content-Length', str(len(data)))
-    h.send_header('Cache-Control', 'no-store')
-    h.end_headers()
-    h.wfile.write(data)
-# ===== AI 협업방 연결 끝 =====
 
 ROOT = Path(__file__).resolve().parent
 AUTH_PATH = Path(os.environ.get('BOT_OFFICE_AUTH', '/etc/bot-office/auth.json'))
@@ -119,7 +94,6 @@ class Handler(BaseHTTPRequestHandler):
                 if SESSIONS[k]<now: SESSIONS.pop(k,None)
             return token in SESSIONS
     def do_GET(self):
-        if self.path.startswith('/room'): return _room_proxy(self)
         route=self.path.split('?',1)[0]
         if route=='/api/fanding/control':
             import fanding_trade
@@ -186,24 +160,9 @@ class Handler(BaseHTTPRequestHandler):
         if route=='/api/office-tasks':
             import office_tasks
             return self.send(200,office_tasks.listing())
-        # OFFICE_DEPLOY_V1
-        if route=='/api/deployments':
-            import office_deploy
-            return self.send(200,office_deploy.read())
-        # OFFICE_DEV_API_V1
-        if route=='/api/dev-requests':
-            if not self.session():
-                return self.send(401,{'error':'login_required'})
-            import office_dev
-            return self.send(200,office_dev.read())
-        # OFFICE_PIPELINE_V1
-        if route=='/api/pipeline':
-            import office_pipeline_api
-            return self.send(200,office_pipeline_api.read())
         if route=='/api/status': return self.send(200,snapshot())
         self.send(404,{'error':'not_found'})
     def do_POST(self):
-        if self.path.startswith('/room'): return _room_proxy(self)
         origin=self.headers.get('Origin')
         if origin and origin not in ('https://'+self.headers.get('Host',''),'http://'+self.headers.get('Host','')):
             return self.send(403,{'error':'origin_rejected'})
@@ -277,37 +236,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(400,{'error':'invalid_task'})
             except OSError:
                 return self.send(500,{'error':'storage_failed'})
-        if route=='/api/deployments':
-            if not self.session():
-                return self.send(401,{'error':'login_required'})
-            if self.headers.get('X-Bot-Office')!='deploy':
-                return self.send(403,{'error':'invalid_request'})
-            try:
-                n=int(self.headers.get('Content-Length','0'))
-                if not 0<n<=1024: raise ValueError()
-                import office_deploy
-                d=office_deploy.save(json.loads(self.rfile.read(n)))
-                return self.send(200,d)
-            except (ValueError,TypeError,AttributeError):
-                return self.send(400,{'error':'invalid_deployment'})
-            except OSError:
-                return self.send(500,{'error':'storage_failed'})
-        if route=='/api/dev-requests':
-            if not self.session():
-                return self.send(401,{'error':'login_required'})
-            if self.headers.get('X-Bot-Office')!='dev':
-                return self.send(403,{'error':'invalid_request'})
-            try:
-                n=int(self.headers.get('Content-Length','0'))
-                if not 0<n<=2048:
-                    raise ValueError('요청 크기 확인 필요')
-                import office_dev
-                result=office_dev.save(json.loads(self.rfile.read(n)))
-            except (ValueError,TypeError,KeyError,AttributeError) as e:
-                return self.send(400,{'error':str(e)[:160]})
-            except OSError:
-                return self.send(500,{'error':'저장 실패'})
-            return self.send(200,result)
         if route=='/api/server-care':
             if not self.session(): return self.send(401,{'error':'login_required'})
             if self.headers.get('X-Bot-Office')!='care': return self.send(403,{'error':'invalid_request'})
@@ -329,21 +257,6 @@ class Handler(BaseHTTPRequestHandler):
                 care_log('failed',type(e).__name__); return self.send(500,{'error':'request_write_failed'})
             office_board._CACHE['at']=0
             care_log('ok'); return self.send(200,{'ok':True,'id':rid})
-        # OFFICE_PIPELINE_V1
-        if route=='/api/pipeline':
-            if not self.session():
-                return self.send(401,{'error':'login_required'})
-            if self.headers.get('X-Bot-Office')!='pipeline':
-                return self.send(403,{'error':'invalid_request'})
-            try:
-                n=int(self.headers.get('Content-Length','0'))
-                if not 0<n<=8000: raise ValueError('요청 크기 확인 필요')
-                import office_pipeline_api
-                return self.send(200,office_pipeline_api.save(json.loads(self.rfile.read(n))))
-            except (ValueError,TypeError,AttributeError) as e:
-                return self.send(400,{'error':str(e)[:160]})
-            except OSError:
-                return self.send(500,{'error':'저장 실패'})
         if route!='/api/login': return self.send(404,{'error':'not_found'})
         # Passwords are accepted only through HTTPS or a loopback browser/SSH tunnel.
         if not self.secure() and self.headers.get('Host','').split(':')[0] not in ('127.0.0.1','localhost'):
