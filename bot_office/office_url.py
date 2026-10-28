@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_url.py   (사무실 vNEXT · 2026-10-28)
+# FILE: /opt/bot-office/office_url.py   (사무실 v1.0.55 · 2026-10-28)
 # 사무실 주소(office_url) 한 곳 관리 — 지금은 임시 터널 주소(trycloudflare), 나중에 고정 도메인으로 쉽게 이동
 #
 #  · 서버 파일 /etc/bot-office/office_url 이 '사무실 주소'의 기준 (브리핑·비서·팬딩 안내가 이 값을 씀)
@@ -8,7 +8,7 @@
 #      ① 서버 파일을 새 주소로 고치고 ② 텔레그램으로 새 주소 + 한국 PC 주소 바꾸는 PowerShell 한 줄을 보냄
 #  · 고정 도메인 모드: /주소변경 https://office.내도메인.com → 그 주소로 고정 (터널 기록으로 덮어쓰지 않음)
 #      → 한국 PC 에 붙여넣을 한 줄도 함께 보냄. 다시 임시 주소로: /주소변경 자동
-#  · 사무실 vNEXT: ① 터널 주소를 터널 프로그램(cloudflared 내부 창구 /quicktunnel)에 먼저 물어봄
+#  · 사무실 v1.0.55: ① 터널 주소를 터널 프로그램(cloudflared 내부 창구 /quicktunnel)에 먼저 물어봄
 #                     (오래 켜진 터널은 처음 찍힌 주소 줄이 기록에서 밀려나 못 찾던 문제 · 기록은 보조)
 #                   ② 바깥 접속 감시: 5분마다 사무실 내부(127.0.0.1:8765/healthz)와 바깥 주소(/login)를 열어 봄
 #                     2번 연속 실패하면 7번 비서로 원인(사무실 서버 / 터널)과 할 일을 1번 알림, 되살아나면 복구 알림 1번
@@ -30,7 +30,7 @@ HEALTH_FILE = R / "var/lib/bot-office/office_health.json"
 INSIDE_URL = "http://127.0.0.1:8765/healthz"
 METRICS_PORTS = range(20241, 20246)          # cloudflared 내부 창구 기본 포트 (127.0.0.1 만)
 FAIL_ALERT = 2                               # 연속 실패 몇 번째에 알릴지 (5분 × 2 = 약 10분)
-VERSION = "vNEXT"
+VERSION = "v1.0.55"
 _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 서버 안 주소는 프록시 없이
 
 

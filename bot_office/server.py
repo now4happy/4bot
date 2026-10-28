@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
-# 사무실 vNEXT (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
+# 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
 import base64, hashlib, hmac, json, os, secrets, shutil, subprocess, threading, time
 from collections import deque

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_board.py   (사무실 vNEXT · 2026-10-28)
+# FILE: /opt/bot-office/office_board.py   (사무실 v1.0.55 · 2026-10-28)
 # 사무실 상황판 데이터 (/api/board · 로그인 필요 · 보기 전용)
 #  · 주문·승인·설정 변경 기능 없음 — 버튼은 텔레그램(5·6·7번 비서)에만
 #  · 금액·잔고·수량·계좌·토큰·주소 원문은 넣지 않음 (상태 글자·시각·버전만)
@@ -12,7 +12,7 @@ import json, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "vNEXT"
+VERSION = "v1.0.55"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
 KST = timezone(timedelta(hours=9))
