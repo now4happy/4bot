@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.62 · 2026-10-29 13:06 (KST)
+- 파일: fanding_vr6_win.py
+- 내용: VR6 수집기 1.1.0: 이미지 20장·글 끝까지 스크롤·run.bat 안내 수정 (작업 기록 개정 포함)
+- 브랜치: staging
+
 ## v1.0.61 · 2026-10-29 12:48 (KST)
 - 파일: fanding_vr6.py, fanding_vr6_win.py, meritz_client.py
 - 내용: VR6 예약주문 2단계: fanding_vr6 2.0.0, meritz_client V1.5, fanding_vr6_win 1.0.1
