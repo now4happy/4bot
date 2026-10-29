@@ -20,7 +20,7 @@ CONFIG=R/'etc/bot-office/pc_monitor.json'
 FANDING_CONFIG=R/'etc/bot-office/fanding.json'
 KST=ZoneInfo('Asia/Seoul')
 DEFAULTS={'device_id':'korea-windows','start':'07:50','end':'20:10',
-          'grace_seconds':180,'offline_seconds':180,'app_grace_seconds':180}
+          'grace_seconds':180,'offline_seconds':600,'app_grace_seconds':180}
 
 
 def load(path,default):
@@ -108,7 +108,7 @@ def alerts(current,now,c):
     result=[]
     if not online:
         if not flags.get('pc'):
-            result.append(('pc','offline','⚠️ <b>한국 Windows PC 연결 미확인</b>\n평일 07:50~20:10 감시 중, 3분 이상 상태 보고가 없습니다.\nPC 전원·인터넷·감시 프로그램을 원격 관리 도구에서 확인해 주세요.'))
+            result.append(('pc','offline','⚠️ <b>한국 Windows PC 연결 미확인</b>\n평일 07:50~20:10 감시 중, 10분 이상 상태 보고가 없습니다.\nPC 전원·인터넷·감시 프로그램을 원격 관리 도구에서 확인해 주세요.'))
         return result
     if flags.get('pc'):
         result.append(('pc',None,'✅ <b>한국 Windows PC 연결 복구</b>\n상태 보고가 다시 도착했습니다.'))
