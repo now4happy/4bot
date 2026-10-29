@@ -1,6 +1,8 @@
 from datetime import datetime
 from b_core import *
 
+# v4.3.1: 자산 상황판의 코드 블록 제거 — 텔레그램 기본 글씨 크기 사용
+
 # v4.2.0 (draft): unified SMA법 with independent amount, ratio, and approval lock.
 # v4.1.0 (2026-10-29): 상황판에 관찰 전용 추세 신호 한 줄 추가 — 매수·매도 동작 변경 없음.
 
@@ -48,30 +50,33 @@ def build_balance_board():
             method = "스마트적립"
             status = f"{int(state.get('buy_days', {}).get(cur, 0))}일차"
         rows.append((cur, method, status, bal, eval_krw, prof_pct, avg_p, cur_p))
+    # Monospace code blocks use a smaller font on mobile.
+    # Plain text restores the user's normal Telegram chat font size.
     lines = [
         f"💰 빗썸 자산 상황판  {BOT_VERSION}",
-        "<pre>",
-        f"현금       {krw_bal:>15,.0f}원",
-        f"오늘 필요  {req_krw:>15,.0f}원",
-        f"잔액 상태  {'부족 '+format(shortfall, ',.0f')+'원' if shortfall else '충분'}",
-        f"전체 전원  {'ON' if config.get('power', True) else 'OFF'}",
-        "────────────────────────",
+        f"💵 현금: {krw_bal:,.0f}원",
+        f"🛒 오늘 필요: {req_krw:,.0f}원",
+        f"💳 잔액: {'부족 ' + format(shortfall, ',.0f') + '원' if shortfall else '충분'}",
+        f"🔌 전체 전원: {'ON' if config.get('power', True) else 'OFF'}",
     ]
     for cur, method, status, bal, ev, profit, avg, current in rows:
         lines.extend([
-            f"{cur:<3}  {method:<10}  {status}",
-            f"수량       {bal:>15.6f}",
-            f"평가액     {ev:>15,.0f}원",
-            f"수익률     {profit:>+15.2f}%",
-            f"평단       {avg:>15,.0f}원",
-            f"현재       {current:>15,.0f}원",
-            "────────────────────────",
+            "──────────────",
+            f"🪙 {cur} · {method} · {status}",
+            f"수량: {bal:.6f}",
+            f"평가액: {ev:,.0f}원",
+            f"수익률: {profit:+.2f}%",
+            f"평단가: {avg:,.0f}원",
+            f"현재가: {current:,.0f}원",
         ])
     if not rows:
         lines.append("설정된 BTC/ETH가 없습니다")
-    lines.extend([f"총 추정자산 {total_eval:>13,.0f}원", "</pre>",
-                  f"📈 완성 일봉 추세: {trend_line()}",
-                  f"⏱ {datetime.now(KST).strftime('%H:%M:%S')} 기준"])
+    lines.extend([
+        "──────────────",
+        f"🏦 총 추정자산: {total_eval:,.0f}원",
+        f"📈 완성 일봉 추세: {trend_line()}",
+        f"⏱ {datetime.now(KST).strftime('%H:%M:%S')} 기준",
+    ])
     kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "⚙️ 제어반", "callback_data": "control"}],
           [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "🔙 메인", "callback_data": "main"}]]
     return "\n".join(lines), kb
