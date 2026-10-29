@@ -1,7 +1,7 @@
 from datetime import datetime
 from b_core import *
 
-# v4.2.0 (draft): per-coin method selection, approval-locked method 2.
+# v4.2.0 (draft): unified SMA법 with independent amount, ratio, and approval lock.
 # v4.1.0 (2026-10-29): 상황판에 관찰 전용 추세 신호 한 줄 추가 — 매수·매도 동작 변경 없음.
 
 # 버전 기록은 봇 폴더의 CHANGELOG.md 로 통합 (사무실 업데이트 때 자동으로 쌓임)
@@ -28,7 +28,7 @@ def build_balance_board():
         f"🛒 금일 매수 필요액: {req_krw:,.0f}원 " + (f"({', '.join(req_details)})" if req_details else "(금일 완료)"),
         f"🚨 잔액 상태: " + (f"⚠️ {shortfall:,.0f}원 부족!" if shortfall > 0 else "✅ 잔액 충분"),
         f"📈 추세(완성 일봉): {trend_line()}",
-        "🔧 매매법: " + ", ".join(f"{c} {coin_method(c)}번" for c in ("BTC", "ETH") if c in config.get("coins", {})), "─────────────────", "📦 [보유 코인 현황]"
+        "🔧 매매법: " + ", ".join(f"{c} {'SMA법' if coin_method(c)==2 else '1번 스마트 적립'}" for c in ("BTC", "ETH") if c in config.get("coins", {})), "─────────────────", "📦 [보유 코인 현황]"
     ]
     total_eval, has_coin = krw_bal, False
     for cur in list(config.get("coins", {}).keys()):
@@ -43,7 +43,7 @@ def build_balance_board():
             state.setdefault("buy_days", {})[cur] = max(1, int(round((bal * avg_p) / base_amt)))
             save_json(STATE_FILE, state)
         b_days = int(state.get("buy_days", {}).get(cur, 0))
-        lines.append(f"🪙 {cur} [{'추세 적립(승인 대기)' if coin_method(cur)==2 and not method2_ready(cur) else ('추세 적립' if coin_method(cur)==2 else ('1/2배 대상' if prof_pct >= 1.0 else '1배 대상'))} | ⏳ {b_days}일차]\n • 수량: {bal:.6f} | 평가: {eval_krw:,.0f}원 ({prof_pct:+.2f}%)\n • 평단/현재: {avg_p:,.0f}원 / {cur_p:,.0f}원")
+        lines.append(f"🪙 {cur} [{'SMA법(승인 대기)' if coin_method(cur)==2 and not method2_ready(cur) else ('SMA법' if coin_method(cur)==2 else ('1/2배 대상' if prof_pct >= 1.0 else '1배 대상'))} | ⏳ {b_days}일차]\n • 수량: {bal:.6f} | 평가: {eval_krw:,.0f}원 ({prof_pct:+.2f}%)\n • 평단/현재: {avg_p:,.0f}원 / {cur_p:,.0f}원")
     if not has_coin: lines.append(" • 현재 보유 중인 코인이 없습니다.")
     lines.extend(["─────────────────", f"🏦 총 추정 자산: {total_eval:,.0f}원\n⏱ 갱신: {datetime.now(KST).strftime('%H:%M:%S')}"])
     kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "⚙️ 전술 제어반", "callback_data": "control"}], [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]]
@@ -68,13 +68,21 @@ def build_control_view():
     approval_status = ", ".join(
         f"{c}: {'승인 완료' if method2_ready(c) else '승인 대기'}"
         for c in ("BTC", "ETH") if c in config.get("coins", {}) and coin_method(c) == 2
-    ) or "2번 선택 없음"
+    ) or "SMA법 선택 없음"
     text = (
         f"⚙️ [스마트 적립 전술 제어반 ({BOT_VERSION})]\n"
         f"▫️ 마스터 전원: {'🟢 ON (가동 중)' if pwr_On else '🔴 OFF (일시정지)'}\n▫️ 현재 기준시드: {coins_str}\n"
-        f"▫️ 종목별 매매법: " + ", ".join(f"{c}={coin_method(c)}번" for c in ("BTC", "ETH") if c in config.get("coins", {})) + "\n"
-        f"▫️ 2번 승인 상태: {approval_status}\n"
-        f"▫️ 정기 매수시각: 매일 오후 {config.get('buy_hour', 19)}:00 KST\n▫️ 매수 배율규칙: 수익률 +1.0% 이상 시 1/2배 (그 외 1배)\n─────────────────\n"
+        f"▫️ 종목별 매매법: " + ", ".join(f"{c}={'SMA법' if coin_method(c)==2 else '1번 스마트 적립'}" for c in ("BTC", "ETH") if c in config.get("coins", {})) + "\n"
+        f"▫️ SMA법 승인 상태: {approval_status}\n"
+        + "".join(
+            f"▫️ {c} SMA{TREND_PERIOD[c]} | 매수금액: "
+            + (f"{sma_buy_amount(c):,.0f}원" if sma_buy_amount(c) is not None else "미설정")
+            + " | 하락 매도비율: "
+            + (f"{method2_ratio(c):g}%" if c in config.get("method2_sell_ratios", {}) and method2_ratio(c) is not None else "미설정")
+            + f" | {'승인 완료' if method2_ready(c) else '승인 대기'}\n"
+            for c in ("BTC", "ETH") if c in config.get("coins", {}) and coin_method(c) == 2
+        )
+        + f"▫️ 정기 매수시각: 매일 오후 {config.get('buy_hour', 19)}:00 KST\n▫️ 매수 배율규칙: 수익률 +1.0% 이상 시 1/2배 (그 외 1배)\n─────────────────\n"
         f"📊 [수익률 구간별 매도 계획]\n • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n • {tp1*2:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n • {tp1*3:.0f}% 이상 수익 도달 시 ➔ 미정 (매도 없음)\n⏱ 조회: {datetime.now(KST).strftime('%H:%M:%S')}"
     )
     kb = [

@@ -4,7 +4,7 @@ from b_ui import *
 
 wait_state = {"mode": None}
 
-# ---------------------------------------------------------------- v4.2.0 종목별 추세 적립 초안 (승인 전 주문 잠금)
+# ---------------------------------------------------------------- v4.2.0 SMA법 재작업 초안 (승인 전 주문 잠금)
 # ---------------------------------------------------------------- v4.1.0 관찰 전용 추세 신호 (매매 동작은 그대로)
 # 매일 09:00 KST 이후 코인별 첫 회차에만 갱신하고, 실패해도 매수·매도는 그대로 진행한다.
 # ---------------------------------------------------------------- v4.0.4 재생 로그 도우미 (매매 동작은 그대로)
@@ -46,28 +46,29 @@ def handle_callback(cb):
         if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
             send_panel("❌ 등록된 BTC·ETH만 선택할 수 있습니다.", [[{"text":"🔙 제어반","callback_data":"control"}]], msg_id)
         else:
-            send_panel(f"{coin} 매매법 선택 (2번 주문은 사용자 확정 전 잠금)", [
+            send_panel(f"{coin} 매매법 선택 (SMA법은 별도 승인 전 주문 잠금)", [
                 [{"text":"1번 스마트 적립", "callback_data":f"method_set_{coin}_1"}],
-                [{"text":"2번 추세 적립 (승인 전 관찰)", "callback_data":f"method_set_{coin}_2"}],
+                [{"text":"SMA법 (승인 전 관찰)", "callback_data":f"method_set_{coin}_2"}],
+                [{"text":"SMA법 매수금액 설정", "callback_data":f"method_buy_{coin}"}],
                 [{"text":"하락 교차 매도비율 설정", "callback_data":f"method_ratio_{coin}"}],
-                [{"text":"🔓 2번 매매법 승인", "callback_data":f"method_approve_{coin}"}],
+                [{"text":"🔓 SMA법 승인", "callback_data":f"method_approve_{coin}"}],
                 [{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
     elif data.startswith("method_set_"):
         parts = data.split("_")
         if len(parts) == 4 and parts[2] in TREND_PERIOD and parts[2] in config.get("coins", {}) and parts[3] in ("1", "2"):
             coin, method = parts[2], int(parts[3])
             config.setdefault("coin_methods", {})[coin] = method
-            if method == 2:
-                config.setdefault("method2_approved", {})[coin] = False  # explicit re-approval after each switch
+            config.setdefault("method2_approved", {})[coin] = False  # switching either direction revokes approval
             # A method switch must not trigger a retrospective crossover order.
             state.setdefault("method2_last_processed", {}).pop(coin, None)
+            state.setdefault("method2_selected_on", {}).pop(coin, None)
             save_json(CONFIG_FILE, config); save_json(STATE_FILE, state)
             RL.ev("state_change", "coin_method", "ok", None, actor="user", coin_ref=RL.ref(coin), method=method)
             send_panel(*(build_control_view()), msg_id)
     elif data.startswith("method_approve_"):
         coin = data.removeprefix("method_approve_")
         if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or coin_method(coin) != 2:
-            send_panel("❌ 해당 코인에서 2번 매매법을 먼저 선택하세요.",
+            send_panel("❌ 해당 코인에서 SMA법을 먼저 선택하세요.",
                        [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
         elif coin not in config.get("method2_sell_ratios", {}) or method2_ratio(coin) is None:
             config.setdefault("method2_approved", {})[coin] = False
@@ -77,13 +78,27 @@ def handle_callback(cb):
             send_panel(f"❌ {coin} 매도비율이 저장되지 않았습니다.\n먼저 매도비율을 저장한 후 승인하세요.",
                        [[{"text":"📝 매도비율 설정", "callback_data":f"method_ratio_{coin}"}],
                         [{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
+        elif coin not in config.get("sma_buy_amounts", {}) or sma_buy_amount(coin) is None:
+            config.setdefault("method2_approved", {})[coin] = False
+            save_json(CONFIG_FILE, config)
+            RL.ev("decision", "method2_approval", "skipped", "buy_amount_required",
+                  actor="user", coin_ref=RL.ref(coin))
+            send_panel(f"❌ {coin} SMA법 매수금액이 저장되지 않았습니다. 먼저 금액을 설정하세요.",
+                       [[{"text":"📝 SMA법 매수금액 설정", "callback_data":f"method_buy_{coin}"}],
+                        [{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
         else:
             config.setdefault("method2_approved", {})[coin] = True
             save_json(CONFIG_FILE, config)
             RL.ev("state_change", "method2_approval", "ok", None,
                   actor="user", coin_ref=RL.ref(coin), approved=True)
-            send_panel(f"✅ {coin} 2번 매매법 승인됨. 설정된 신호에 따라 자동주문이 가능해집니다.",
+            send_panel(f"✅ {coin} SMA법 승인됨. 설정된 신호에 따라 자동주문이 가능해집니다.",
                        [[{"text":"⚙️ 제어반", "callback_data":"control"}]], msg_id)
+    elif data.startswith("method_buy_"):
+        coin = data.removeprefix("method_buy_")
+        if coin in TREND_PERIOD and coin in config.get("coins", {}):
+            wait_state["mode"] = "set_sma_buy"; wait_state["coin"] = coin
+            send_panel(f"{coin} SMA법 매수금액(KRW)을 입력하세요. 시드와 별개이며 5,000원 이상이어야 합니다.",
+                       [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
     elif data.startswith("method_ratio_"):
         coin = data.removeprefix("method_ratio_")
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
@@ -105,13 +120,32 @@ def handle_message(msg):
         elif text in ["/control", "제어반"]: send_panel(*(build_control_view()))
         else: send_panel(*(build_main_view()))
         return
+    if wait_state["mode"] == "set_sma_buy":
+        coin = wait_state.get("coin")
+        try:
+            amount = int(text.replace(",", "").replace("원", "").strip())
+            if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or amount < 5000:
+                raise ValueError("invalid SMA amount")
+            config.setdefault("sma_buy_amounts", {})[coin] = amount
+            # Any changed financial setting requires a new explicit approval.
+            config.setdefault("method2_approved", {})[coin] = False
+            save_json(CONFIG_FILE, config)
+            RL.ev("state_change", "sma_buy_amount", "ok", None, actor="user",
+                  coin_ref=RL.ref(coin), audit_ref=RL.audit("sma_buy_amount", coin=coin, amount=amount))
+            wait_state["mode"] = None
+            send_panel(*(build_control_view()))
+        except (ValueError, TypeError):
+            send_panel("❌ SMA법 매수금액은 5,000원 이상의 정수로 입력하세요.",
+                       [[{"text":"🔙 제어반", "callback_data":"control"}]])
+        return
     if wait_state["mode"] == "set_method2_ratio":
         coin = wait_state.get("coin")
         try:
             ratio = float(text.replace("%", "").strip())
-            if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or not (0 < ratio <= 100):
+            if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or not (float("-inf") < ratio < float("inf") and 0 < ratio <= 100):
                 raise ValueError("invalid ratio")
             config.setdefault("method2_sell_ratios", {})[coin] = ratio
+            config.setdefault("method2_approved", {})[coin] = False
             save_json(CONFIG_FILE, config)
             RL.ev("state_change", "method2_ratio", "ok", None, actor="user", coin_ref=RL.ref(coin), audit_ref=RL.audit("method2_ratio", coin=coin, ratio=ratio))
             wait_state["mode"] = None
@@ -177,10 +211,16 @@ def telegram_polling_loop():
             if not getattr(pe, "_rl_logged", False): RL.err("tg_poll", pe)
             time.sleep(3)
 
-def method2_daily_step(coin, base_amt, krw_bal, acc, today_str):
+def method2_daily_step(coin, krw_bal, acc, today_str):
     """One decision per completed candle; method 2 never falls through to method 1.
     The draft is non-trading until user assumptions and review are confirmed.
     """
+    if sma_buy_amount(coin) is None:
+        _decide(coin, "method2", "skipped", "buy_amount_required", daily=True)
+        return krw_bal
+    if method2_ratio(coin) is None:
+        _decide(coin, "method2", "skipped", "ratio_required", daily=True)
+        return krw_bal
     if not method2_ready(coin):
         _decide(coin, "method2", "skipped", "approval_required", daily=True)
         return krw_bal
@@ -212,7 +252,7 @@ def method2_daily_step(coin, base_amt, krw_bal, acc, today_str):
         _decide(coin, "method2", "skipped", "done_today", daily=True)
         return krw_bal
     if direction == "up":
-        size = max(5000, float(base_amt))  # UNCONFIRMED buy-size proposal
+        size = sma_buy_amount(coin)  # User-entered SMA법 amount ONLY; never seed or method-1 multiplier
         if krw_bal < size:
             _decide(coin, "method2", "skipped", "krw_insufficient", daily=True)
             return krw_bal
@@ -237,14 +277,14 @@ def method2_daily_step(coin, base_amt, krw_bal, acc, today_str):
     _decide(coin, "method2", "ok", None, _snap(coin, quantity=quantity, direction=direction))
     ok, result = place_order(coin, side, quantity, ord_type)
     if ok:
-        state["last_action_type"][coin] = "추세매수" if direction == "up" else "추세매도"
+        state["last_action_type"][coin] = "SMA매수" if direction == "up" else "SMA매도"
         save_json(STATE_FILE, state)
-        send_panel(f"{coin} 추세 {('매수' if direction == 'up' else '매도')} 접수", [[{"text":"💰 상황판","callback_data":"balance"}]])
+        send_panel(f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수", [[{"text":"💰 상황판","callback_data":"balance"}]])
         if direction == "up":
             krw_bal -= size
     else:
         _decide(coin, "method2_order", "failed", "order_failed_or_unknown", daily=True)
-        send_panel(f"{coin} 추세 주문 결과 확인 필요. 재주문하지 않습니다.", [[{"text":"💰 상황판","callback_data":"balance"}]])
+        send_panel(f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다.", [[{"text":"💰 상황판","callback_data":"balance"}]])
     return krw_bal
 
 def trading_monitor_loop():
@@ -281,7 +321,7 @@ def trading_monitor_loop():
                     send_panel(f"⚠️ [빗썸 잔액 부족 ({BOT_VERSION})]\n• 필요: {req_krw:,.0f}원 / 보유: {krw_bal:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]])
                 tp1, sr = float(config.get("target_profit_pct", 10.0)), float(config.get("sell_ratio_pct", 20.0))
                 for coin, base_amt in list(config.get("coins", {}).items()):
-                    if base_amt <= 0: continue
+                    if base_amt <= 0 and coin_method(coin) != 2: continue
                     t = get_ticker(coin)
                     if not t: _decide(coin, "coin_step", "skipped", "ticker_unavailable"); continue
                     cur_p = float(t["trade_price"]); acc = accs.get(coin, {})
@@ -289,7 +329,7 @@ def trading_monitor_loop():
                     prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 and bal > 0 else 0.0
                     if coin_method(coin) == 2:
                         if now.hour >= 9:
-                            krw_bal = method2_daily_step(coin, base_amt, krw_bal, acc, today_str)
+                            krw_bal = method2_daily_step(coin, krw_bal, acc, today_str)
                         else:
                             _decide(coin, "method2", "skipped", "before_candle_close", daily=True)
                         continue  # Never execute method 1 rules for a method 2 coin.
