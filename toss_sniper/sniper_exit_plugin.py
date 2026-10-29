@@ -2,9 +2,9 @@
 """
 # MODIFIED: sniper_exit_plugin.py
 순수 롱(SOXL) 전용 '04:07 ~ 16:00 EST 매수 체결 후 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
-보유 중 매 60초 타임쉴드 주기 3중 다중 익절 매도 모니터(SELL_MONITOR_TIME_SHIELD_SEC = 60.0 · Case 70, Case 71) ·
-60초 타임쉴드 경과 시점에만 실시간 현재가 직접 조회 및 3중 다중 익절 조건(① 1층 +1.50% 이상 / ② 2~12층 개별 그리드 +1.00% 이상 /
-③ 2~12층 통합 이동평균 +1.00% 이상) 동시 스캔 후 그 높아진 현재가 지정가(LIMIT) 매도 발주(목표 미달 시 즉시 다음 60초 매도 타임쉴드 자동 재장전) ·
+보유 중 매 1.5초 실시간 3중 다중 익절 매도 모니터(SELL_MONITOR_TIME_SHIELD_SEC = 0.0 · Case 70, Case 71 · 2026-10-29 매매 정책 일치) ·
+매수 후 60초 타임쉴드 경과 뒤 매 1.5초 실시간 현재가 직접 조회 및 3중 다중 익절 조건(① 1층 +1.50% 이상 / ② 2~12층 개별 그리드 +1.00% 이상 /
+③ 2~12층 통합 이동평균 +1.00% 이상) 동시 스캔 후 그 높아진 현재가 지정가(LIMIT) 매도 발주(목표 미달 시 다음 루프에서 다시 판정) ·
 매수 1호가(Bid 1) 참조 및 하향 추격 정정 100% 영구 소각(Case 65) ·
 리앵커링 원가 차감 영구 폐기 및 순수 실물 원가(book_price == actual_avg_price) 100% 보존(Case 69, Case 71) ·
 1층 익절 후 상단 2~12층 잔존 시 1층 공석(GRID_L2 ~ GRID_L12) 보존 및 싸이클 최저가(cycle_min_buy_price) 잠금 유지(Case 59, Case 60, Case 71) ·
@@ -52,9 +52,9 @@ from toss_api import (
 
 logger = logging.getLogger("toss_sniper.sniper_exit_plugin")
 
-# Case 65 & Case 70: 매수 후 60.0초 타임쉴드 · 보유 중 매 60.0초 주기 매도 모니터 타임쉴드 · 매도(0주 종료) 후 60.0초 타임쉴드 상수
+# Case 65 & Case 70: 매수 후 60.0초 타임쉴드(유지) · 보유 중 매도 모니터 블라인드 락 0.0초(2026-10-29, 메인 루프 1.5초마다 실시간 판정) · 매도(0주 종료) 후 60.0초 타임쉴드 상수
 POST_BUY_TO_SELL_SHIELD_SEC: float = 60.0
-SELL_MONITOR_TIME_SHIELD_SEC: float = 60.0
+SELL_MONITOR_TIME_SHIELD_SEC: float = 0.0
 POST_SELL_TO_BUY_SHIELD_SEC: float = 60.0
 
 # 순수 현재가 지정가 매도 주문 발주 후 미체결 최대 대기 시간(초) — 하향 정정 없이 60초 미체결 시 안전 취소
@@ -1004,7 +1004,7 @@ async def sync_pending_sell_order_plugin(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 04:07 ~ 16:00 EST 매수 후 60초 & 보유 중 매 60초 타임쉴드 주기 3중 다중 익절 매도 모니터 (Case 69, 70, 71)
+# [핵심 3] 매수 후 60초 & 보유 중 매 1.5초 실시간 3중 다중 익절 매도 모니터 (Case 69, 70, 71 · 2026-10-29)
 # ---------------------------------------------------------------------------
 async def execute_1m_sniper_sell_and_reanchor_plugin(
     context: Any,
@@ -1014,23 +1014,21 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
 ) -> Dict[str, Any]:
     """
     🎯 2 [Step 2] & 🎯 3 & 🎯 4 & Case 24, 44, 46 ~ 71:
-    04:07:00 ~ 16:00:00 EST 전 구간에서 매 60.0초 타임쉴드 주기로 작동하는 3중 다중 익절 스나이퍼 매도(오팔) 모니터:
+    매수 후 최초 60.0초 타임쉴드 경과 뒤 보유 중 매 1.5초 실시간으로 작동하는 3중 다중 익절 스나이퍼 매도(오팔) 모니터:
     1) 대기 중인 미체결 매도 주문(sell_order_id)이 있으면 먼저 체결 확인을 수행한다.
     2) 🛡️ [Case 65 매수 후 최초 60.0초 강제 타임쉴드 검문]:
        직전 매수 체결로부터 60.0초(POST_BUY_TO_SELL_SHIELD_SEC)가 지나지 않았으면
        일체의 매도 판정을 보류(HOLD_POST_BUY_60S_TIME_SHIELD)하여 휩소를 원천 차단한다!
-    3) 🛡️ [Case 70 보유 중 매 60.0초 주기 매도 모니터 타임쉴드 검문]:
-       직전 매도 모니터 검문 시각(last_sell_gate_eval_mono / last_sell_gate_eval_ts)으로부터
-       60.0초(SELL_MONITOR_TIME_SHIELD_SEC)가 지나지 않았으면 일체의 매도 판정을 보류(HOLD_SELL_MONITOR_60S_TIME_SHIELD)하여
-       1.5초 / 0.4초 상시 감시로 인한 +1.50% / +1.00% 턱걸이 조기 매도를 100% 원천 차단한다!
-    4) 🔍 [Case 71 : 60.0초 타임쉴드 해제 시점 실시간 현재가 직접 조회 & 3중 다중 익절 동시 판정]:
-       60.0초 타임쉴드가 경과하여 매도 모니터가 깨어난 순간 _fetch_fresh_current_soxl_price() 로 실시간 현재가를 새로 조회한 뒤,
+    3) 🛡️ [Case 70 보유 중 매도 모니터 블라인드 락 해제 (SELL_MONITOR_TIME_SHIELD_SEC = 0.0)]:
+       매수 후 60초가 지난 뒤에는 매 메인 루프(1.5초)마다 매도 판정을 하며, 별도의 60초 주기 대기는 두지 않는다.
+    4) 🔍 [Case 71 : 실시간 현재가 직접 조회 & 3중 다중 익절 동시 판정]:
+       _fetch_fresh_current_soxl_price() 로 실시간 현재가를 새로 조회한 뒤,
        evaluate_multi_grid_sell_targets() 를 호출하여:
        - ① 활성 1층(buckets[0]) 단가 대비 +1.50% 이상 도래
        - ② 상단 2층 ~ 12층 개별 그리드 단가 대비 +1.00% 이상 도래
        - ③ 상단 2층 ~ 12층 통합 이동평균 단가(wma_2_to_12) 대비 +1.00% 이상 도래 (1층 본전 이상 시 전량 졸업)
        조건이 충족된 모든 지층(sold_indices)을 그 높아진 실시간 현재가 지정가(LIMIT)로 즉시 매도 발주한다!
-       - 만약 3대 조건 모두 미달이면 즉시 mark_sell_monitor_60s_cycle_shield() 로 다음 60.0초 매도 타임쉴드를 재장전한다!
+       - 만약 3대 조건 모두 미달이면 다음 메인 루프(1.5초)에서 다시 판정한다 (블라인드 락 0.0초).
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
@@ -1046,7 +1044,12 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             now_est=dt_now,
         )
 
-    if not is_active_trading_window(hm) or is_weekend_nyse_closed(dt_now):
+    # 매도 시간창 (2026-10-29): 정규 거래 시간 + 애프터마켓 17:00~19:59.
+    # 매수는 이 검문과 별개로 sniper_plugin에서 04:07~16:00으로만 잠긴다.
+    if (
+        not is_active_trading_window(hm)
+        and not (1700 <= hm <= 1959)
+    ) or is_weekend_nyse_closed(dt_now):
         return {
             "status": "OUTSIDE_TRADING_WINDOW",
             "did_sell_or_ratchet": False,
@@ -1076,7 +1079,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             "remain_shield_sec": remain_buy_sec,
         }
 
-    # 🛡️ 3) [Case 70] 보유 중 매 60.0초 주기 매도 모니터 타임쉴드 강제 검문!
+    # 🛡️ 3) [Case 70] 보유 중 매도 모니터 블라인드 락 검문 (0.0초, 2026-10-29)!
     in_mon_shield, remain_mon_sec = is_within_sell_monitor_time_shield(
         context, st, TARGET_SYMBOL
     )

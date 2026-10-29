@@ -70,7 +70,7 @@ def get_market_session_label(now_est: Optional[datetime] = None) -> str:
         return "🛑 주말휴장"
     hm = dt.hour * 100 + dt.minute
     if hm >= 2000 or hm < 400:
-        return "☀️ 데이마켓 스나이퍼 가동(20:00~익일03:59 ET)"
+        return "☀️ 데이마켓 익절 매도 감시(20:00~익일03:59 ET · 매수 잠금)"
     if 400 <= hm <= 406:
         return "🌅 프리장 오프닝 안정화(04:00~04:06)"
     if 407 <= hm <= 929:
@@ -121,23 +121,21 @@ def evaluate_buy_gate_bucket_status(
         )
 
     if hm >= 2000 or hm < 400:
-        # 하나의 데이마켓이 ET 자정을 지나도 동일 세션 키와 증가 버킷 유지.
-        trade_day = (dt + timedelta(days=1)).date() if hm >= 2000 else dt.date()
-        session_key = f"{trade_day.isoformat()}:DAY"
-        elapsed = (cur_min_of_day - 20 * 60) % (24 * 60)
-        bucket = elapsed // interval
-        next_min = (20 * 60 + (bucket + 1) * interval) % (24 * 60)
-        next_gate = "04:07 ET" if next_min == 240 else f"{next_min // 60:02d}:{next_min % 60:02d} ET"
-        is_open = (str(last_evaluated_date or "") != session_key
-                   or bucket > safe_int(last_evaluated_bucket_id, -1))
-        return is_open, bucket, session_key, {
-            "is_active_window": True,
-            "mins_from_0407": -1,
-            "bucket_10m": bucket,
-            "is_exact_boundary_min": elapsed % interval == 0,
-            "next_gate_hm_str": next_gate,
-            "session_label": get_market_session_label(dt),
-        }
+        # 데이마켓 매수 잠금 (2026-10-29): 데이마켓 매수 버킷은 열지 않는다.
+        # 매도 감시는 이 함수가 아니라 sniper_exit_plugin이 담당한다.
+        return (
+            False,
+            -1,
+            today_str,
+            {
+                "is_active_window": False,
+                "mins_from_0407": -1,
+                "bucket_10m": -1,
+                "is_exact_boundary_min": False,
+                "next_gate_hm_str": "04:07 EST",
+                "session_label": get_market_session_label(dt),
+            },
+        )
 
     mins_from_0407 = max(0, cur_min_of_day - GATE_START_MIN_OF_DAY)
     if hm == 1600:

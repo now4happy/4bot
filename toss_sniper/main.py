@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 데이마켓 + 04:07 ~ 16:00 ET 7층 골디락스 멀티 그리드 지층관리 스나이퍼
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 데이마켓 매수 잠금 + 04:07 ~ 16:00 ET 7층 골디락스 멀티 그리드 지층관리 스나이퍼
 메인 오케스트레이터 · TossApiClient 폴리필(close 포함) · 내장형 사용자 중심 초슬림 텔레그램 롱폴링/관제탑 컨트롤러 통합 코어 모듈 (Step 02 / 02)
 - 최종 확정 챔피언 (🔥 03_7G_PURE_10_01 / 01_7L_STATIC_CYCLE_MIN · Case 71 & Case 72) 100% 결속:
   1) 8%(12.5분할) 황금비율 정액 기반 정량제 & min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑(Case 67) &
@@ -12,9 +12,9 @@
   4) 정적 기억 사이클 최저 매수가(cycle_min_buy_price) 잠금 기반 10분 고정 4단 와이드 활주로 시드보호 매수 게이트
      (WIDE_RUNWAY : 1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% 신저가 도달 시에만 현재가 지정가 추매 및
       2~6층 개별 승격 · 8회차 이상 최상단 6층+7층을 통합 7층 본대[GRID_L7]로 가중평균 합병 · Case 72)
-  5) 🛡️ [Case 65, Case 70, Case 71 & Case 72] 매수 후 최초 60초 타임쉴드 및 보유 중 매 60.0초 타임쉴드 주기 3중 다중 익절 스나이퍼 매도 모니터
-     (60.0초 타임쉴드가 해제된 시점에만 현재가를 조회하여 ① 1층 +1.50% 이상 개별 익절 / ② 2~6층 개별 및 통합 7층 +1.00% 이상 개별 익절 /
-      ③ 2~7층 통합 이동평균 단가 대비 +1.00% 이상 일괄 졸업을 동시 판정하며, 목표 미달 시 즉시 다음 60.0초 매도 타임쉴드 재장전!)
+  5) 🛡️ [Case 65, Case 70, Case 71 & Case 72] 매수 후 최초 60초 타임쉴드 및 보유 중 매 1.5초 실시간 3중 다중 익절 스나이퍼 매도 모니터 (2026-10-29)
+     (매수 후 60초 타임쉴드 해제 뒤 매 1.5초마다 현재가를 조회하여 ① 1층 +1.50% 이상 개별 익절 / ② 2~6층 개별 및 통합 7층 +1.00% 이상 개별 익절 /
+      ③ 2~7층 통합 이동평균 단가 대비 +1.00% 이상 일괄 졸업을 동시 판정하며, 목표 미달 시 다음 루프에서 다시 판정!)
   6) 🚨 [Case 66 미결 매수 선행 정산] 04:07 ~ 16:00 EST 루프 진입 시 reconcile 호출 전에 sync_pending_buy_order_plugin(Step 3-0)을
      최우선 실행하여, 거래소 즉시 체결 시에도 텔레그램 체결 알림 · 자투리 절약금 누적 · 60초 타임쉴드 각인이 100% 실행되도록 보장!
   7) 📡 [Case 11, Case 15, Case 16, Case 62 & Case 64 문단 하단 2중 중복 인라인 메뉴 전면 제거 · /reset 차단 및 /reset_profit(보유지층 보존 수익 초기화) 전용 대체]
@@ -1788,8 +1788,8 @@ class _AdaptiveTelegramBridge:
             "🔹 04:07 ~ 09:29: 🔫 프리장 ",
             "🔹 09:30 ~ 16:00: 🔥 정규장 ",
             "🔹 16:00 ~ 16:59: 🌙 일일 결산",
-            "🔹 17:00 ~ 19:59 ET: 🧹 일일 GC · 대기",
-            "🔹 20:00 ~ 익일03:59 ET: ☀️ 데이마켓 매수·매도",
+            "🔹 17:00 ~ 19:59 ET: 🌇 애프터마켓 익절 매도 감시(매수 잠금)",
+            "🔹 20:00 ~ 익일03:59 ET: ☀️ 데이마켓 익절 매도 감시(매수 잠금)",
             "   한국 낮: 서머타임 09:00~17:00 / 겨울 10:00~18:00",
             "──────────────",
             "📡 /avwap : 실시간 스나이퍼 레이더",
@@ -2875,7 +2875,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     now_est=now_est,
                 )
 
-                # 3-2) 매수 후 60초 & 보유 중 매 60초 타임쉴드 주기 3중 다중 익절 스나이퍼 매도 모니터 (Case 44, 65, 69, 70, 71, 72)
+                # 3-2) 매수 후 60초 & 보유 중 매 1.5초 실시간 3중 다중 익절 스나이퍼 매도 모니터 (Case 44, 65, 69, 70, 71, 72 · 2026-10-29)
                 sell_res = await _call_plugin_adaptive(
                     execute_1m_sniper_sell_and_reanchor_plugin,
                     context=context,
@@ -2901,6 +2901,27 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
             elif 1600 <= hm <= 1659:
                 await _call_plugin_adaptive(
                     execute_1600_daily_closing_settlement_plugin,
+                    context=context,
+                    holdings=holdings,
+                    prices=prices,
+                    now_est=now_est,
+                )
+
+            elif 1700 <= hm <= 1959:
+                # 애프터마켓 매도만 (2026-10-29): 16시 결산 보고는 위 시간에 한 번만
+                # 유지하고, 여기서는 매수 게이트를 호출하지 않는다. 미결 매수가
+                # 있으면 정산만 하고, 매도는 sniper_exit_plugin이 담당한다.
+                st_after = context.ledger.get_state(TARGET_SYMBOL)
+                if str(st_after.get("buy_order_id") or "").strip():
+                    await _call_plugin_adaptive(
+                        sync_pending_buy_order_plugin,
+                        context=context,
+                        holdings=holdings,
+                        prices=prices,
+                        now_est=now_est,
+                    )
+                await _call_plugin_adaptive(
+                    execute_1m_sniper_sell_and_reanchor_plugin,
                     context=context,
                     holdings=holdings,
                     prices=prices,

@@ -527,7 +527,7 @@ async def execute_seed_protected_buy_gate_plugin(
 ) -> Dict[str, Any]:
     """
     🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 71 (챔피언 : 🔥 03_12G_PURE_10_01 + 양방향 60초 타임쉴드 & 현재가 지정가 & Case 67 이중 캡핑):
-    데이마켓(20:00~03:59 ET) 및 기존 04:07~16:00 ET 운용 구간에서:
+    매수는 04:07~16:00 ET 구간에서만 (데이마켓 매수 잠금, 2026-10-29 매매 정책 일치):
     1) 미체결 매수/매도 주문이 대기 중이면 중복 매수 발사를 차단한다.
     2) 🛡️ [Case 65 : 매도(부분 익절 및 0주 싸이클 종료) 후 60.0초 타임쉴드 & 직전 매수 후 60.0초 타임쉴드 강제 검문]
        - 타임쉴드 중에는 10분 버킷(last_evaluated_buy_bucket_id)을 소모하지 않고 대기했다가 60초 경과 직후 판정한다.
@@ -557,6 +557,12 @@ async def execute_seed_protected_buy_gate_plugin(
     # 2) 데이마켓 + 기존 프리/정규장 운용 시간대 및 마스터 전원(is_active) 확인
     if not is_active_trading_window(hm) or is_weekend_nyse_closed(dt_now):
         return {"status": "OUTSIDE_TRADING_WINDOW"}
+
+    # 2-1) 매수 전용 잠금 (2026-10-29): 신규 매수는 04:07~16:00 ET에서만.
+    # 미체결 매수 정산(위 1번)은 이 잠금과 별개로 계속되며, 매도 감시는
+    # sniper_exit_plugin과 main 루프가 따로 담당하므로 이 검문이 매도를 막지 않는다.
+    if not (407 <= hm <= 1600):
+        return {"status": "BUY_WINDOW_LOCKED_DAYMARKET"}
 
     if not bool(st.get("is_active", True)):
         return {"status": "BOT_INACTIVE"}
