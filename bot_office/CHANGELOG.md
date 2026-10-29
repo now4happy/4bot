@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.61 · 2026-10-29 12:48 (KST)
+- 파일: fanding_vr6.py, fanding_vr6_win.py, meritz_client.py
+- 내용: VR6 예약주문 2단계: fanding_vr6 2.0.0, meritz_client V1.5, fanding_vr6_win 1.0.1
+- 브랜치: staging
+
 ## v1.0.60 · 2026-10-29 11:03 (KST)
 - 파일: fanding_fetch_win.py
 - 내용: 팬딩 PC 수집기 1.5.3: 하루 30개·미전송 우선·완료 후 건너뛰기

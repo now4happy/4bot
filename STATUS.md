@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-10-29 11:03 (KST) · 계기: 업데이트 적용 (staging: 팬딩 PC 수집기 1.5.3: 하루 30개·미전송 우선·완료 후 건너뛰기)
+- 갱신: 2026-10-29 12:48 (KST) · 계기: 업데이트 적용 (staging: VR6 예약주문 2단계: fanding_vr6 2.0.0, meritz_client V1.5, fanding_vr6_win 1.0.1)
 
 ## 봇별 현재 상태
 
@@ -13,12 +13,12 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (10-29 10:19 KST부터) | v1.0.10 | 2026-10-29 10:19 | 2번 스나이퍼 매매 정책 일치: 데이마켓 매수 잠금, 애프터마켓 매도 감시, 매도 실시간 (staging) |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (10-28 10:48 KST부터) | v4.3.5 | 2026-10-28 10:49 | docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일) |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (10-28 10:47 KST부터) | v4.0.4 | 2026-10-28 10:49 | docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일) |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-29 11:03 KST부터) | v1.0.60 | 2026-10-29 11:03 | 팬딩 PC 수집기 1.5.3: 하루 30개·미전송 우선·완료 후 건너뛰기 |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-29 12:47 KST부터) | v1.0.61 | 2026-10-29 12:48 | VR6 예약주문 2단계: fanding_vr6 2.0.0, meritz_client V1.5, fanding |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-29 10:42 KST부터)
-- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (10-29 10:42 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-29 12:47 KST부터)
+- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (10-29 12:48 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (10-28 12:13 KST부터)
 - 실패 상태로 남은 서비스·타이머: `bot-office-inventory.service`
@@ -26,6 +26,7 @@
 
 ## 최근 적용 10건
 
+- 2026-10-29 12:48 · 5번 사무실 비서 v1.0.61 · fanding_vr6.py, fanding_vr6_win.py, meritz_client.py · VR6 예약주문 2단계: fanding_vr6 2.0.0, meritz_client V1.5, fanding
 - 2026-10-29 11:03 · 5번 사무실 비서 v1.0.60 · fanding_fetch_win.py · 팬딩 PC 수집기 1.5.3: 하루 30개·미전송 우선·완료 후 건너뛰기
 - 2026-10-29 10:43 · 5번 사무실 비서 v1.0.59 · board.html, fanding_trade.py, office_board.py · 팬딩 아침 알림 정리 + 상황판 가격표 모음 매일 포함 (사무실 v1.0.59 예정)
 - 2026-10-29 10:19 · 2번 토스 스나이퍼 v1.0.10 · main.py, quant_indicators_plugin.py, sniper_exit_plugin.py,  · 2번 스나이퍼 매매 정책 일치: 데이마켓 매수 잠금, 애프터마켓 매도 감시, 매도 실시간 (staging)
@@ -35,7 +36,6 @@
 - 2026-10-28 12:13 · 5번 사무실 비서 v1.0.55 · board.html, bot_updater.py, office_board.py, office_url.py,  · 사무실 상황판 · 접속 감시 · 파일 권한 자동 정리 (staging, 사무실 vNEXT)
 - 2026-10-28 11:12 · 5번 사무실 비서 v1.0.54 · bot_updater.py, update_conflicts.py · 6. Update 오류 정리: main 앞섬 알림·한글 파일명 인식·충돌 안내 (start.md 파일명 규칙
 - 2026-10-28 10:49 · 5번 사무실 비서 v1.0.53 · fanding_trade.py, meritz_client.py · docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일)
-- 2026-10-28 10:49 · 4번 빗썸 적립 v4.0.4 · b_core.py, main.py, replay_log.py · docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
