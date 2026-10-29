@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.66 · 2026-10-29 18:25 (KST)
+- 파일: pc_monitor.py
+- 내용: PC 연결 감시 기준 10분으로 변경: offline_seconds 180→600, 경고 문구 10분 (작업 기록 포함)
+- 브랜치: staging
+
 ## v1.0.65 · 2026-10-29 14:30 (KST)
 - 파일: fanding_trade.py, fanding_vr6.py
 - 내용: 팬딩 VR6 버튼 글자에서 'VR6' 빼기: fanding_trade 1.10.1, fanding_vr6 2.2.1 (작업 기록 포함)
