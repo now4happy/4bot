@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.9.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -49,6 +49,12 @@
 #        ② 잔고 조회 실패 → 매도는 표 수량 그대로 (점검 실패 아님, 증권사가 거절하면 그 줄만 실패)
 #        ③ 거래소 번호를 잔고에서 한 번 알아내면 exch_seen.json 에 저장 → 0주가 돼도 계속 사용
 #        · 보유 수량 차이는 지금처럼 참고 표시만 (사용자가 직접 처리)
+# 1.10.0 (사무실 vNEXT): 5번 봇 메뉴 정리 (사용자 시안 2026-10-29)
+#        · 처음: [🅿 P 매매][🅥 VR6 매매][❓ 도움말] · P: 📋 가격표 💱 환전 🤖 자동(누르면 즉시 켜짐↔꺼짐) 📐 배수 🩺 진단 🔄 재판독 🛠 도구 🏠 처음
+#          🛠 도구: ⏱ 발주시간 🔁 재예약 ⚠️ 재예약 강제 🧠 판독 AI 🗂 과거 수집 ❓ 도움말 ⬅️ P 메뉴 · 메뉴를 열면 상태 한 줄만
+#        · 비서 팬딩 메뉴 잔재 제거: menu_rows(), 비서용 모듈 다시 불러오기(_reload_if_changed — 돌고 있는 본 프로그램을
+#          다시 불러오는 위험) · secretary_message/secretary_callback → bot_message/bot_callback (5번 봇 전용)
+#        · 예전 버튼 글자(🅿 P 메뉴·🏠 메인 메뉴 등)도 계속 동작
 #          · 한 글을 다 봤는데 필요한 날짜 표가 없으면 기존처럼 1번 알림 + 읽은 날짜 표시
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -77,7 +83,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -97,7 +103,7 @@ DEFAULTS = {
     "symbol": "SOXL",
     "price_market": "AX",        # 메리츠 현재가 조회용 거래소 구분 (SOXL: NYSE Arca → 보통 AX). check 명령으로 확인
     "exch_id": "",               # 예약주문용 거래소 번호. 비우면 잔고에서 자동으로 찾음
-    "multiplier": 5,             # 처음 배수 (이후엔 비서 봇 /배수 로 변경)
+    "multiplier": 5,             # 처음 배수 (이후엔 5번 팬딩 봇 📐 배수 로 변경)
     "max_buy_usd": 8000,         # 1회 매수 총액 한도(배수 적용 후). 넘으면 주문 막음
     "auto_order": True,          # 버튼 안 누르면 마감 10분 전 자동주문
     "submit_kst": "09:01",       # 예약주문 접수 시작 (한국시간)
@@ -1660,33 +1666,71 @@ HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <
              "▫️ <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기\n"
              "▫️ <b>/환전 [금액]</b> 추정 기준 부족액 환전 확인·실행 (금액을 안 적으면 부족액으로 계산, 실행은 2차 확인 버튼으로만)")
 
-# ---------------------------------------------------------- 버튼 메뉴 (5번 하단 버튼 · 7번 팬딩 메뉴 공용)
+# ---------------------------------------------------------- 5번 봇 하단 버튼 메뉴
 # 버튼은 기존 명령 글자와 똑같이 처리된다(새 기능이 아니라 같은 기능을 버튼으로 누르는 것).
-MENU_ITEMS = [("pr", "📋 가격표", "/가격표"), ("mt", "📐 배수", "/배수"), ("au", "🤖 자동주문", "/자동"),
-              ("rt", "⏱ 발주시간", "/발주시간"), ("rr", "🔁 재예약", "/재예약"), ("rs", "🔄 재판독", "/재판독"),
-              ("dg", "🩺 진단", "/진단"), ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"),
-              ("rf", "⚠️ 재예약 강제", "/재예약강제"), ("hp", "❓ 도움말", "/help")]
+# (key, 버튼 글자, 명령) — key 는 알림 안 인라인 버튼(fm:key)에서도 씀
+MENU_ITEMS = [("pr", "📋 가격표", "/가격표"), ("fx", "💱 환전", "/환전"), ("mt", "📐 배수", "/배수"),
+              ("dg", "🩺 진단", "/진단"), ("rs", "🔄 재판독", "/재판독"),
+              ("rt", "⏱ 발주시간", "/발주시간"), ("rr", "🔁 재예약", "/재예약"), ("rf", "⚠️ 재예약 강제", "/재예약강제"),
+              ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"), ("hp", "❓ P 도움말", "/help"),
+              ("au", "🤖 자동주문", "/자동")]
 MENU_ALIAS = {label: cmd for _, label, cmd in MENU_ITEMS}
+MENU_ALIAS.update({"❓ 도움말": "/help"})          # 1.10.0 전 하단 버튼 글자
 MENU_CMD = {key: cmd for key, _, cmd in MENU_ITEMS}
 
-
-P_LABEL, VR6_LABEL, HOME_LABEL, ALL_HELP_LABEL = "🅿 P 메뉴", "🅥 VR6 메뉴", "🏠 메인 메뉴", "❓ 전체 도움말"
+P_LABEL, VR6_LABEL, HOME_LABEL, HELP_LABEL = "🅿 P 매매", "🅥 VR6 매매", "🏠 처음", "❓ 전체 도움말"
+P_TOOLS_LABEL, P_BACK_LABEL = "🛠 도구", "⬅️ P 메뉴"
+OLD_P_LABELS = ("🅿 P 메뉴",)                       # 예전 키보드가 남아 있어도 동작
+OLD_HOME_LABELS = ("🏠 메인 메뉴",)
+AUTO_ON_LABEL, AUTO_OFF_LABEL = "🤖 자동 켜짐", "🤖 자동 꺼짐"
 
 
 def main_keyboard():
-    """/start 로 뜨는 첫 화면: P(기존 가격표 매매) / VR6(2주 1회)"""
-    return [[{"text": P_LABEL}, {"text": VR6_LABEL}], [{"text": ALL_HELP_LABEL}]]
+    """/start 첫 화면"""
+    return [[{"text": P_LABEL}, {"text": VR6_LABEL}], [{"text": HELP_LABEL}]]
 
 
 def menu_keyboard():
-    """P 메뉴: 기존 11개 버튼 + 메인으로"""
-    labels = [label for _, label, _ in MENU_ITEMS]
-    return [[{"text": t} for t in labels[i:i + 3]] for i in range(0, len(labels), 3)] + [[{"text": HOME_LABEL}]]
+    """P 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태"""
+    auto = AUTO_ON_LABEL if cfg()["auto_order"] else AUTO_OFF_LABEL
+    return [[{"text": "📋 가격표"}, {"text": "💱 환전"}], [{"text": auto}, {"text": "📐 배수"}],
+            [{"text": "🩺 진단"}, {"text": "🔄 재판독"}], [{"text": P_TOOLS_LABEL}, {"text": HOME_LABEL}]]
+
+
+def tools_keyboard():
+    return [[{"text": "⏱ 발주시간"}, {"text": "🔁 재예약"}], [{"text": "⚠️ 재예약 강제"}, {"text": "🧠 판독 AI"}],
+            [{"text": "🗂 과거 수집"}, {"text": "❓ P 도움말"}], [{"text": P_BACK_LABEL}]]
+
+
+STATUS_KO = {"pending": "결정 대기", "approved": "주문 대기", "submitting": "접수 중", "submitted": "접수 완료",
+             "partial": "일부 실패", "retry": "다시 접수 대기", "retry_warn": "경고 확인 후 접수 대기",
+             "cancelled": "이번엔 안 함", "skipped": "자동주문 안 함", "expired": "마감 지남"}
+
+
+def p_status_line():
+    c, st = cfg(), load(STATE, {})
+    sheets = st.get("sheets") or {}
+    last = sheets[max(sheets)] if sheets else None
+    head = f"🅿 <b>P 매매</b> · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])} · 자동 {'켜짐' if c['auto_order'] else '꺼짐'}"
+    return head + ("\n최근 가격표: " + f"{last['date']} · {STATUS_KO.get(last['status'], last['status'])}" if last else "\n최근 가격표: 없음")
 
 
 def main_menu_text():
-    return ("📋 <b>팬딩 봇</b>\n🅿 <b>P 메뉴</b> — 기존 가격표 자동 매매 (SOXL, 매일 가격표)\n"
-            "🅥 <b>VR6 메뉴</b> — VR6기 (TQQQ, 2주에 한 번 표 수신)\n아래 버튼에서 골라 주세요.")
+    try:
+        import fanding_vr6
+        vr6 = fanding_vr6.status_line()
+    except Exception:
+        vr6 = "🅥 <b>VR6 매매</b> · 상태를 못 읽었어요 (/vr6진단)"
+    return "📋 <b>팬딩 봇</b>\n\n" + p_status_line() + "\n\n" + vr6 + "\n\n아래 버튼에서 골라 주세요."
+
+
+def toggle_auto(tg):
+    """P 자동주문 버튼: 누르면 바로 켜짐↔꺼짐"""
+    c = load(CFG, {})
+    c["auto_order"] = not cfg()["auto_order"]
+    save(CFG, c)
+    tg.send(f"🤖 P 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b> — 버튼을 안 누르면 "
+            + ("마감 10분 전에 자동주문해요 (점검 통과 시)." if c["auto_order"] else "주문하지 않아요."), keyboard=menu_keyboard())
 
 
 def _vr6_text(tg, t):
@@ -1698,11 +1742,6 @@ def _vr6_text(tg, t):
         print("VR6 명령 오류:", type(e).__name__, e, flush=True)
         tg.send("⚠️ VR6 처리 중 오류가 났어요. /vr6진단 으로 확인해 주세요.")
         return True
-
-
-def menu_rows():
-    return [[{"text": label, "callback_data": f"fm:{key}"} for key, label, _ in MENU_ITEMS[i:i + 2]]
-            for i in range(0, len(MENU_ITEMS), 2)]
 
 
 def mult_rows(cur):
@@ -1730,8 +1769,8 @@ def menu_text(tg_s, t):
         st = load(STATE, {})
         tg_s.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)"); return True
     if t in ("/help", "도움말"):
-        tg_s.send("📋 <b>팬딩 봇 사용법</b>\n" + HELP_TEXT); return True
-    return secretary_message(tg_s, t)
+        tg_s.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT); return True
+    return bot_message(tg_s, t)
 
 
 def poll_own_bot(tg):
@@ -1748,20 +1787,30 @@ def poll_own_bot(tg):
             if "callback_query" in u:
                 cb = u["callback_query"]
                 if str(((cb.get("message") or {}).get("chat") or {}).get("id")) == tg.chat:
-                    secretary_callback(tg, cb)
+                    bot_callback(tg, cb)
             elif "message" in u:
                 m = u["message"]
                 if str((m.get("chat") or {}).get("id")) != tg.chat:
                     continue
                 t = (m.get("text") or "").strip()
                 t = MENU_ALIAS.get(t, t)   # 하단 버튼 글자 → 같은 명령
-                if t.lower() in ("/start", "?", "메뉴", "/menu") or t in (HOME_LABEL, ALL_HELP_LABEL):
+                if t.lower() in ("/start", "?", "메뉴", "/menu") or t in (HOME_LABEL,) + OLD_HOME_LABELS:
                     tg.send(main_menu_text(), keyboard=main_keyboard())
-                elif t == P_LABEL or t.lower() == "/p":
-                    tg.send("🅿 <b>P 메뉴</b> — 기존 가격표 자동 매매\n" + HELP_TEXT + "\n\n▫️ 아래 버튼으로도 모든 기능을 쓸 수 있어요.",
-                            keyboard=menu_keyboard())
+                elif t == HELP_LABEL:
+                    try:
+                        import fanding_vr6
+                        vh = "\n\n🅥 <b>VR6 사용법</b>\n" + fanding_vr6.HELP
+                    except Exception:
+                        vh = ""
+                    tg.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT + vh + "\n\n▫️ 첫 화면은 <b>/start</b>", keyboard=main_keyboard())
+                elif t in (P_LABEL, P_BACK_LABEL) + OLD_P_LABELS or t.lower() == "/p":
+                    tg.send(p_status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 🛠 도구에 있어요.", keyboard=menu_keyboard())
+                elif t == P_TOOLS_LABEL:
+                    tg.send("🛠 <b>P 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard())
+                elif t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):
+                    toggle_auto(tg)
                 elif t.lower() in ("/help", "도움말"):
-                    tg.send("📋 <b>팬딩 봇 사용법 (P)</b>\n" + HELP_TEXT + "\n\n▫️ VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
+                    tg.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT + "\n\n▫️ VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
                             keyboard=menu_keyboard())
                 elif t in ("/판독", "판독"):
                     tg.send(vision_status())
@@ -1774,7 +1823,7 @@ def poll_own_bot(tg):
                     tg.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")
                 elif _vr6_text(tg, t):
                     pass
-                elif not secretary_message(tg, t):
+                elif not bot_message(tg, t):
                     tg.send("모르는 명령이에요. <b>/start</b> 로 메뉴를 열어 보세요.")
         except Exception as e:
             print("버튼·명령 처리 오류:", type(e).__name__, e, flush=True)
@@ -1802,15 +1851,7 @@ def _file_changed():
     return _mtimes() != _LOADED_MTIME
 
 
-def _reload_if_changed():
-    """비서 봇이 오래 켜져 있어도 이 파일이 바뀌었으면 새 코드로 다시 불러옴. 바뀌었으면 새 모듈, 아니면 None"""
-    if _file_changed():
-        import importlib
-        return importlib.reload(sys.modules[__name__])
-    return None
-
-
-# ---------------------------------------------------------- 비서 봇 연결 (office_secretary 에서 호출)
+# ---------------------------------------------------------- 5번 봇 글자 명령·버튼 처리
 def _pending_sheet(st):
     for d in sorted(st["sheets"], reverse=True):
         if st["sheets"][d]["status"] in ("pending",):
@@ -1818,11 +1859,8 @@ def _pending_sheet(st):
     return None
 
 
-def secretary_message(tg_s, text, _reloaded=False):
-    """처리했으면 True. tg_s 는 비서 봇의 TG 객체"""
-    mod = None if _reloaded else _reload_if_changed()
-    if mod:
-        return mod.secretary_message(tg_s, text, True)
+def bot_message(tg_s, text):
+    """처리했으면 True. tg_s 는 5번 팬딩 봇의 TG 객체"""
     t = text.strip()
     low = t.lower()
     if t in ("/재판독", "재판독", "/판독요청"):
@@ -1921,10 +1959,7 @@ def secretary_message(tg_s, text, _reloaded=False):
     return False
 
 
-def secretary_callback(tg_s, cb, _reloaded=False):
-    mod = None if _reloaded else _reload_if_changed()
-    if mod:
-        return mod.secretary_callback(tg_s, cb, True)
+def bot_callback(tg_s, cb):
     data = cb.get("data", "")
     if data.startswith("vm:"):   # VR6 메뉴 안의 선택 버튼(배수·일정)
         try:
