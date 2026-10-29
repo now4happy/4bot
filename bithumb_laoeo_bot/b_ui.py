@@ -19,34 +19,61 @@ def calc_today_required_krw(accs):
     return total_req, details
 
 def build_balance_board():
+    """Compact fixed-width board. No account changes, only presentation."""
     accs = {a["currency"]: a for a in get_accounts() if isinstance(a, dict) and "currency" in a}
     krw_bal = float(accs.get("KRW", {}).get("balance", 0))
-    req_krw, req_details = calc_today_required_krw(accs)
+    req_krw, _ = calc_today_required_krw(accs)
     shortfall = max(0, req_krw - krw_bal)
-    lines = [
-        f"💰 [빗썸 자산 상황판 ({BOT_VERSION})]", f"💵 보유 현금(KRW): {krw_bal:,.0f}원",
-        f"🛒 금일 매수 필요액: {req_krw:,.0f}원 " + (f"({', '.join(req_details)})" if req_details else "(금일 완료)"),
-        f"🚨 잔액 상태: " + (f"⚠️ {shortfall:,.0f}원 부족!" if shortfall > 0 else "✅ 잔액 충분"),
-        f"📈 추세(완성 일봉): {trend_line()}",
-        "🔧 매매법: " + ", ".join(f"{c} {'SMA법' if coin_method(c)==2 else '1번 스마트 적립'}" for c in ("BTC", "ETH") if c in config.get("coins", {})), "─────────────────", "📦 [보유 코인 현황]"
-    ]
-    total_eval, has_coin = krw_bal, False
-    for cur in list(config.get("coins", {}).keys()):
-        a = accs.get(cur, {}); bal = float(a.get("balance", 0)) + float(a.get("locked", 0))
-        if bal <= 0: continue
-        has_coin = True; avg_p = float(a.get("avg_buy_price", 0))
-        t = get_ticker(cur); cur_p = float(t["trade_price"]) if t else avg_p
-        eval_krw = bal * cur_p; total_eval += eval_krw
+    total_eval = krw_bal
+    rows = []
+    for cur in ("BTC", "ETH"):
+        if cur not in config.get("coins", {}):
+            continue
+        a = accs.get(cur, {})
+        bal = float(a.get("balance", 0)) + float(a.get("locked", 0))
+        avg_p = float(a.get("avg_buy_price", 0))
+        t = get_ticker(cur)
+        cur_p = float(t["trade_price"]) if t else avg_p
+        eval_krw = bal * cur_p
+        total_eval += eval_krw
         prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 else 0.0
         base_amt = float(config.get("coins", {}).get(cur, 10000))
         if state.get("buy_days", {}).get(cur, 0) == 0 and bal > 0 and avg_p > 0 and base_amt > 0:
             state.setdefault("buy_days", {})[cur] = max(1, int(round((bal * avg_p) / base_amt)))
             save_json(STATE_FILE, state)
-        b_days = int(state.get("buy_days", {}).get(cur, 0))
-        lines.append(f"🪙 {cur} [{'SMA법(승인 대기)' if coin_method(cur)==2 and not method2_ready(cur) else ('SMA법' if coin_method(cur)==2 else ('1/2배 대상' if prof_pct >= 1.0 else '1배 대상'))} | ⏳ {b_days}일차]\n • 수량: {bal:.6f} | 평가: {eval_krw:,.0f}원 ({prof_pct:+.2f}%)\n • 평단/현재: {avg_p:,.0f}원 / {cur_p:,.0f}원")
-    if not has_coin: lines.append(" • 현재 보유 중인 코인이 없습니다.")
-    lines.extend(["─────────────────", f"🏦 총 추정 자산: {total_eval:,.0f}원\n⏱ 갱신: {datetime.now(KST).strftime('%H:%M:%S')}"])
-    kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "⚙️ 전술 제어반", "callback_data": "control"}], [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]]
+        if coin_method(cur) == 2:
+            method = f"SMA{TREND_PERIOD[cur]}"
+            status = "매매가능" if method2_ready(cur) else "설정필요·주문잠금"
+        else:
+            method = "스마트적립"
+            status = f"{int(state.get('buy_days', {}).get(cur, 0))}일차"
+        rows.append((cur, method, status, bal, eval_krw, prof_pct, avg_p, cur_p))
+    lines = [
+        f"💰 빗썸 자산 상황판  {BOT_VERSION}",
+        "<pre>",
+        f"현금       {krw_bal:>15,.0f}원",
+        f"오늘 필요  {req_krw:>15,.0f}원",
+        f"잔액 상태  {'부족 '+format(shortfall, ',.0f')+'원' if shortfall else '충분'}",
+        f"전체 전원  {'ON' if config.get('power', True) else 'OFF'}",
+        "────────────────────────",
+    ]
+    for cur, method, status, bal, ev, profit, avg, current in rows:
+        lines.extend([
+            f"{cur:<3}  {method:<10}  {status}",
+            f"수량       {bal:>15.6f}",
+            f"평가액     {ev:>15,.0f}원",
+            f"수익률     {profit:>+15.2f}%",
+            f"평단       {avg:>15,.0f}원",
+            f"현재       {current:>15,.0f}원",
+            "────────────────────────",
+        ])
+    if not rows:
+        lines.append("설정된 BTC/ETH가 없습니다")
+    lines.extend([f"총 추정자산 {total_eval:>13,.0f}원", "</pre>",
+                  f"📈 완성 일봉 추세: {trend_line()}",
+                  f"⏱ {datetime.now(KST).strftime('%H:%M:%S')} 기준"])
+    kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "⚙️ 제어반", "callback_data": "control"}],
+          [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "🔙 메인", "callback_data": "main"}]]
     return "\n".join(lines), kb
 
 def get_bithumb_schedule_status() -> str:
@@ -64,74 +91,78 @@ def get_bithumb_schedule_status() -> str:
 
 def build_coin_sma_view(coin):
     if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
-        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반","callback_data":"control"}]]
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반", "callback_data":"control"}]]
     method = coin_method(coin)
+    if method == 1:
+        return build_smart_settings(coin)
     amount = sma_buy_amount(coin)
-    ratio = method2_ratio(coin) if coin in config.get("method2_sell_ratios", {}) else None
-    approved = method2_ready(coin)
-    status = ("🟢 승인 완료" if approved else "🔒 승인 대기") if method == 2 else "—"
-    text = (f"🪙 {coin} 매매 설정\n\n"
-            f"매매법: {'SMA법' if method == 2 else '1번 스마트 적립'}\n"
-            f"SMA 기준: {TREND_PERIOD[coin]}일선\n"
-            f"승인: {status}\n"
-            f"SMA 매수금액: {f'{amount:,.0f}원' if amount is not None else '미설정'}\n"
-            f"SMA 매도비율: {f'{ratio:g}%' if ratio is not None else '미설정'}\n\n"
-            "SMA법은 승인 전 주문 잠금 상태입니다.\n"
-            "SMA법 선택 중 기존 정기매수·분할익절은 중단됩니다.")
+    ratio = method2_ratio(coin)
+    ready = method2_ready(coin)
+    text = (f"🪙 {coin} | SMA{TREND_PERIOD[coin]} 매매 설정\n\n"
+            f"상태: {'🟢 자동주문 가능' if ready else '🔒 설정 부족 · 주문 잠금'}\n"
+            f"매수금액: {f'{amount:,.0f}원' if amount is not None else '미설정'}\n"
+            f"매도비율: {f'{ratio:g}%' if ratio is not None else '미설정'}\n\n"
+            "SMA법 선택 = 승인입니다.\n"
+            "금액·비율이 모두 유효하면 별도 승인 없이 다음 신호부터 주문 가능합니다.\n"
+            "SMA법 선택 중에는 기존 정기매수·분할익절이 중단됩니다.")
     kb = [
-        [{"text":"📊 매매법 선택","callback_data":f"method_choose_{coin}"}],
-        [{"text":"💵 SMA 매수금액","callback_data":f"method_buy_{coin}"}],
-        [{"text":"📉 SMA 매도비율","callback_data":f"method_ratio_{coin}"}],
-        [{"text":"🔓 SMA법 승인" if not approved else "✅ 승인 완료","callback_data":f"method_approve_{coin}"}],
-        [{"text":"🔙 제어반","callback_data":"control"}],
+        [{"text":"📊 매매법 변경", "callback_data":f"method_choose_{coin}"}],
+        [{"text":"💵 SMA 매수금액", "callback_data":f"method_buy_{coin}"}],
+        [{"text":"📉 SMA 매도비율", "callback_data":f"method_ratio_{coin}"}],
+        [{"text":"🔙 제어반", "callback_data":"control"}],
+    ]
+    return text, kb
+
+
+def build_smart_settings(coin):
+    if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
+        return "❌ 코인 설정을 확인하세요.", [[{"text":"🔙 제어반", "callback_data":"control"}]]
+    pwr = config.get("power", True)
+    tp = float(config.get("target_profit_pct", 10.0))
+    sr = float(config.get("sell_ratio_pct", 20.0))
+    text = (f"🪙 {coin} | 1번 스마트 적립\n\n"
+            f"시드: {config['coins'][coin]:,.0f}원\n"
+            f"진행: {state.get('buy_days', {}).get(coin, 0)}일차\n"
+            f"익절: {tp:g}% / {tp*2:g}% → {sr:g}% 매도\n"
+            f"전체 전원: {'🟢 ON' if pwr else '🔴 OFF'}\n\n"
+            "⚠️ 전원·익절 규칙은 BTC/ETH 공통 설정입니다.\n"
+            "전체 전원을 끄면 SMA법 주문도 중단됩니다.")
+    kb = [
+        [{"text":"📊 매매법 변경", "callback_data":f"method_choose_{coin}"}],
+        [{"text":"🔴 전체 매매 정지" if pwr else "🟢 전체 매매 가동", "callback_data":"toggle_power"}],
+        [{"text":("✅ " if tp==10 and sr==20 else "")+"10%·20% / 20% 매도", "callback_data":"prof_10_20"},
+         {"text":("✅ " if tp==5 and sr==20 else "")+"5%·10% / 20% 매도", "callback_data":"prof_5_20"}],
+        [{"text":"💵 코인 시드 설정", "callback_data":"ask_buy"}, {"text":"🔢 매수일수 보정", "callback_data":"ask_day"}],
+        [{"text":"🎯 익절·매도비율 입력 (공통)", "callback_data":"ask_custom"}],
+        [{"text":"🔙 제어반", "callback_data":"control"}],
     ]
     return text, kb
 
 
 def build_coin_method_choice(coin):
     if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
-        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반","callback_data":"control"}]]
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반", "callback_data":"control"}]]
     current = coin_method(coin)
     return (f"🪙 {coin} 매매법 선택\n\n"
             "① 스마트 적립 — 기존 정기매수·분할익절\n"
             f"② SMA법 — SMA{TREND_PERIOD[coin]} 기준\n\n"
-            "매매법 변경 시 SMA법 승인은 초기화됩니다.",
-            [[{"text":("✅ " if current==1 else "")+"1번 스마트 적립","callback_data":f"method_set_{coin}_1"}],
-             [{"text":("✅ " if current==2 else "")+f"SMA법 (SMA{TREND_PERIOD[coin]})","callback_data":f"method_set_{coin}_2"}],
-             [{"text":"🔙 코인 설정","callback_data":f"method_coin_{coin}"}]])
+            "⚠️ SMA법 선택이 곧 승인입니다.\n"
+            "금액·비율이 저장되어 있으면 즉시 주문 가능 상태가 됩니다.\n"
+            "설정이 없으면 주문은 잠깁니다.",
+            [[{"text":("✅ " if current==1 else "")+"1번 스마트 적립", "callback_data":f"method_set_{coin}_1"}],
+             [{"text":("✅ " if current==2 else "")+f"SMA법 (SMA{TREND_PERIOD[coin]})", "callback_data":f"method_set_{coin}_2"}],
+             [{"text":"🔙 제어반", "callback_data":"control"}]])
+
 
 def build_control_view():
-    pwr_On = config.get("power", True)
-    coins_str = ", ".join([f"{k}: {v:,}원({state.get('buy_days', {}).get(k, 0)}일차)" for k, v in config.get("coins", {}).items()]) or "없음"
-    tp1, sr = float(config.get("target_profit_pct", 10.0)), float(config.get("sell_ratio_pct", 20.0))
-    approval_status = ", ".join(
-        f"{c}: {'승인 완료' if method2_ready(c) else '승인 대기'}"
-        for c in ("BTC", "ETH") if c in config.get("coins", {}) and coin_method(c) == 2
-    ) or "SMA법 선택 없음"
-    text = (
-        f"⚙️ [스마트 적립 전술 제어반 ({BOT_VERSION})]\n"
-        f"▫️ 마스터 전원: {'🟢 ON (가동 중)' if pwr_On else '🔴 OFF (일시정지)'}\n▫️ 현재 기준시드: {coins_str}\n"
-        f"▫️ 종목별 매매법: " + ", ".join(f"{c}={'SMA법' if coin_method(c)==2 else '1번 스마트 적립'}" for c in ("BTC", "ETH") if c in config.get("coins", {})) + "\n"
-        f"▫️ SMA법 승인 상태: {approval_status}\n"
-        + "".join(
-            f"▫️ {c} SMA{TREND_PERIOD[c]} | 매수금액: "
-            + (f"{sma_buy_amount(c):,.0f}원" if sma_buy_amount(c) is not None else "미설정")
-            + " | 하락 매도비율: "
-            + (f"{method2_ratio(c):g}%" if c in config.get("method2_sell_ratios", {}) and method2_ratio(c) is not None else "미설정")
-            + f" | {'승인 완료' if method2_ready(c) else '승인 대기'}\n"
-            for c in ("BTC", "ETH") if c in config.get("coins", {}) and coin_method(c) == 2
-        )
-        + f"▫️ 정기 매수시각: 매일 오후 {config.get('buy_hour', 19)}:00 KST\n▫️ 매수 배율규칙: 수익률 +1.0% 이상 시 1/2배 (그 외 1배)\n─────────────────\n"
-        f"📊 [수익률 구간별 매도 계획]\n • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n • {tp1*2:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n • {tp1*3:.0f}% 이상 수익 도달 시 ➔ 미정 (매도 없음)\n⏱ 조회: {datetime.now(KST).strftime('%H:%M:%S')}"
-    )
-    kb = [
-        [{"text": "🪙 BTC 설정", "callback_data": "method_coin_BTC"}, {"text": "🪙 ETH 설정", "callback_data": "method_coin_ETH"}],
-        [{"text": "🔴 스마트 적립 정지" if pwr_On else "🟢 스마트 적립 가동", "callback_data": "toggle_power"}],
-        [{"text": ("✅ " if tp1==10.0 and sr==20.0 else "") + "🎯 10%·20% (잔고 20%매도)", "callback_data": "prof_10_20"}, {"text": ("✅ " if tp1==5.0 and sr==20.0 else "") + "🎯 5%·10% (잔고 20%매도)", "callback_data": "prof_5_20"}],
-        [{"text": "💵 코인 시드 설정", "callback_data": "ask_buy"}, {"text": "🔢 코인 일수 보정", "callback_data": "ask_day"}],
-        [{"text": "🎯 익절/매도비율 직접입력", "callback_data": "ask_custom"}],
-        [{"text": "💰 내 자산 상황판", "callback_data": "balance"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]
-    ]
+    text = (f"⚙️ 매매법 제어반 ({BOT_VERSION})\n\n"
+            f"전체 전원: {'🟢 ON' if config.get('power', True) else '🔴 OFF'}\n"
+            "BTC 또는 ETH를 선택해 매매법과 해당 설정을 관리하세요.\n"
+            "SMA법은 선택 즉시 승인되며 금액·비율이 유효하면 자동주문이 가능합니다.")
+    kb = [[{"text":"🪙 BTC 설정", "callback_data":"method_coin_BTC"},
+           {"text":"🪙 ETH 설정", "callback_data":"method_coin_ETH"}],
+          [{"text":"💰 자산 상황판", "callback_data":"balance"},
+           {"text":"🔙 메인", "callback_data":"main"}]]
     return text, kb
 
 def build_main_view():

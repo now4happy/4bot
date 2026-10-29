@@ -4,6 +4,7 @@ from b_ui import *
 
 wait_state = {"mode": None}
 
+# ---------------------------------------------------------------- v4.3.0 coin method-first UI and selection-is-approval
 # ---------------------------------------------------------------- v4.2.0 SMA법 재작업 초안 (승인 전 주문 잠금)
 # ---------------------------------------------------------------- v4.1.0 관찰 전용 추세 신호 (매매 동작은 그대로)
 # 매일 09:00 KST 이후 코인별 첫 회차에만 갱신하고, 실패해도 매수·매도는 그대로 진행한다.
@@ -28,6 +29,8 @@ def handle_callback(cb):
     cb_id, data, msg_id = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
     RL.ev("user_event", "tg_button", "ok", None, actor="user", button=RL.button(data), seen_message_id=msg_id)
     wait_state["mode"] = None; tg_api("answerCallbackQuery", {"callback_query_id": cb_id})
+    if data.startswith(("method_coin_", "smart_settings_", "method_choose_")):
+        wait_state["coin"] = data.rsplit("_", 1)[-1]
     if data == "balance": send_panel(*(build_balance_board()), msg_id)
     elif data == "control": send_panel(*(build_control_view()), msg_id)
     elif data == "main": send_panel(*(build_main_view()), msg_id)
@@ -35,15 +38,18 @@ def handle_callback(cb):
     elif data == "toggle_power":
         config["power"] = not config.get("power", True); save_json(CONFIG_FILE, config)
         RL.ev("state_change", "master_power", "ok", None, actor="user", before=not config["power"], after=config["power"])
-        send_panel(*(build_control_view()), msg_id)
+        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_control_view()), msg_id)
     elif data.startswith("prof_"):
         _, tp, sr = data.split("_"); before = [config.get("target_profit_pct"), config.get("sell_ratio_pct")]
         config["target_profit_pct"], config["sell_ratio_pct"] = float(tp), float(sr); save_json(CONFIG_FILE, config)
         RL.ev("state_change", "take_profit_rule", "ok", None, actor="user", before=before, after=[float(tp), float(sr)])
-        send_panel(*(build_control_view()), msg_id)
+        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_control_view()), msg_id)
     elif data.startswith("method_coin_"):
         coin = data.removeprefix("method_coin_")
-        send_panel(*(build_coin_sma_view(coin)), msg_id)
+        send_panel(*(build_coin_method_choice(coin)), msg_id)
+    elif data.startswith("smart_settings_"):
+        coin = data.removeprefix("smart_settings_")
+        send_panel(*(build_smart_settings(coin)), msg_id)
     elif data.startswith("method_choose_"):
         coin = data.removeprefix("method_choose_")
         send_panel(*(build_coin_method_choice(coin)), msg_id)
@@ -51,42 +57,17 @@ def handle_callback(cb):
         parts = data.split("_")
         if len(parts) == 4 and parts[2] in TREND_PERIOD and parts[2] in config.get("coins", {}) and parts[3] in ("1", "2"):
             coin, method = parts[2], int(parts[3])
+            if coin_method(coin) == method:
+                send_panel(*(build_coin_sma_view(coin)), msg_id)
+                return
             config.setdefault("coin_methods", {})[coin] = method
-            config.setdefault("method2_approved", {})[coin] = False  # switching either direction revokes approval
-            # A method switch must not trigger a retrospective crossover order.
+            # Preserve prior processed signal when the same method is reselected.
+            # Switching methods must not create retrospective crossover orders.
             state.setdefault("method2_last_processed", {}).pop(coin, None)
             state.setdefault("method2_selected_on", {}).pop(coin, None)
             save_json(CONFIG_FILE, config); save_json(STATE_FILE, state)
             RL.ev("state_change", "coin_method", "ok", None, actor="user", coin_ref=RL.ref(coin), method=method)
             send_panel(*(build_coin_sma_view(coin)), msg_id)
-    elif data.startswith("method_approve_"):
-        coin = data.removeprefix("method_approve_")
-        if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or coin_method(coin) != 2:
-            send_panel("❌ 해당 코인에서 SMA법을 먼저 선택하세요.",
-                       [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
-        elif coin not in config.get("method2_sell_ratios", {}) or method2_ratio(coin) is None:
-            config.setdefault("method2_approved", {})[coin] = False
-            save_json(CONFIG_FILE, config)
-            RL.ev("decision", "method2_approval", "skipped", "ratio_required",
-                  actor="user", coin_ref=RL.ref(coin))
-            send_panel(f"❌ {coin} 매도비율이 저장되지 않았습니다.\n먼저 매도비율을 저장한 후 승인하세요.",
-                       [[{"text":"📝 매도비율 설정", "callback_data":f"method_ratio_{coin}"}],
-                        [{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
-        elif coin not in config.get("sma_buy_amounts", {}) or sma_buy_amount(coin) is None:
-            config.setdefault("method2_approved", {})[coin] = False
-            save_json(CONFIG_FILE, config)
-            RL.ev("decision", "method2_approval", "skipped", "buy_amount_required",
-                  actor="user", coin_ref=RL.ref(coin))
-            send_panel(f"❌ {coin} SMA법 매수금액이 저장되지 않았습니다. 먼저 금액을 설정하세요.",
-                       [[{"text":"📝 SMA법 매수금액 설정", "callback_data":f"method_buy_{coin}"}],
-                        [{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
-        else:
-            config.setdefault("method2_approved", {})[coin] = True
-            save_json(CONFIG_FILE, config)
-            RL.ev("state_change", "method2_approval", "ok", None,
-                  actor="user", coin_ref=RL.ref(coin), approved=True)
-            send_panel(f"✅ {coin} SMA법 승인됨. 설정된 신호에 따라 자동주문이 가능해집니다.",
-                       [[{"text":"🔙 코인 설정", "callback_data":f"method_coin_{coin}"}]], msg_id)
     elif data.startswith("method_buy_"):
         coin = data.removeprefix("method_buy_")
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
@@ -98,9 +79,9 @@ def handle_callback(cb):
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
             wait_state["mode"] = "set_method2_ratio"; wait_state["coin"] = coin
             send_panel(f"📉 {coin} SMA 매도비율을 숫자로 입력하세요.\n예: 50 (50% 매도)\n1~100 사이로 입력하세요.", [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
-    elif data == "ask_buy": wait_state["mode"] = "setbuy"; send_panel("💵 [코인 시드 설정] 예: BTC 20000 / 삭제: BTC 0", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
-    elif data == "ask_day": wait_state["mode"] = "setday"; send_panel("🔢 [코인 매수일수 보정] 예: BTC 5 또는 ETH 6", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
-    elif data == "ask_custom": wait_state["mode"] = "setcustom"; send_panel("🎯 [1차익절% 매도비율%] 예: 10 20", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
+    elif data == "ask_buy": wait_state["mode"] = "setbuy"; send_panel("💵 [코인 시드 설정] 예: BTC 20000 / 삭제: BTC 0", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
+    elif data == "ask_day": wait_state["mode"] = "setday"; send_panel("🔢 [코인 매수일수 보정] 예: BTC 5 또는 ETH 6", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
+    elif data == "ask_custom": wait_state["mode"] = "setcustom"; send_panel("🎯 [1차익절% 매도비율%] 예: 10 20 (두 코인 공통)", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
 
 def handle_message(msg):
     if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
@@ -121,8 +102,6 @@ def handle_message(msg):
             if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or amount < 5000:
                 raise ValueError("invalid SMA amount")
             config.setdefault("sma_buy_amounts", {})[coin] = amount
-            # Any changed financial setting requires a new explicit approval.
-            config.setdefault("method2_approved", {})[coin] = False
             save_json(CONFIG_FILE, config)
             RL.ev("state_change", "sma_buy_amount", "ok", None, actor="user",
                   coin_ref=RL.ref(coin), audit_ref=RL.audit("sma_buy_amount", coin=coin, amount=amount))
@@ -139,7 +118,6 @@ def handle_message(msg):
             if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or not (float("-inf") < ratio < float("inf") and 0 < ratio <= 100):
                 raise ValueError("invalid ratio")
             config.setdefault("method2_sell_ratios", {})[coin] = ratio
-            config.setdefault("method2_approved", {})[coin] = False
             save_json(CONFIG_FILE, config)
             RL.ev("state_change", "method2_ratio", "ok", None, actor="user", coin_ref=RL.ref(coin), audit_ref=RL.audit("method2_ratio", coin=coin, ratio=ratio))
             wait_state["mode"] = None
@@ -153,7 +131,7 @@ def handle_message(msg):
             coin = parts[0].upper(); d = max(0, int(parts[1].replace("일", "").replace("차", "")))
             RL.ev("state_change", "buy_day_manual", "ok", None, actor="user", coin_ref=RL.ref(coin), day_before=state.get("buy_days", {}).get(coin), day_after=d)
             state.setdefault("buy_days", {})[coin] = d; save_json(STATE_FILE, state); wait_state["mode"] = None
-            send_panel(*(build_control_view()))
+            send_panel(*(build_smart_settings(coin)) if coin in TREND_PERIOD else build_control_view())
         except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setday"); send_panel("❌ 예: BTC 5", [[{"text": "🔙 제어반", "callback_data": "control"}]])
         return
     if wait_state["mode"] == "setbuy":
@@ -166,7 +144,7 @@ def handle_message(msg):
             else: config["coins"][coin] = amt
             save_json(CONFIG_FILE, config); wait_state["mode"] = None
             RL.ev("state_change", "coin_seed", "ok", None, actor="user", coin_ref=RL.ref(coin), removed=amt <= 0, audit_ref=aref)
-            send_panel(*(build_control_view()))
+            send_panel(*(build_smart_settings(coin)) if coin in TREND_PERIOD else build_control_view())
         except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setbuy"); send_panel("❌ 예: BTC 20000", [[{"text": "🔙 제어반", "callback_data": "control"}]])
         return
     elif wait_state["mode"] == "setcustom":

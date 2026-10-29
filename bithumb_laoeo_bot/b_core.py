@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from math import isfinite
 
-BOT_VERSION = "v4.2.1"
+BOT_VERSION = "v4.3.0"
 # v4.2.0 (draft rework): unified SMA법; separate per-coin buy amount and explicit approval.
 # v4.0.4 (2026-10-28): 재생 로그 추가 — 버튼·명령 / 매매 판단 / 빗썸 주문·조회 / 설정 변경 / 보낸 메시지를 logs/ 에 한 줄 JSON 으로.
 #                     금액·코인·수량은 감사 로그(logs/audit-*, 권한 600)에만. 실패 시 이유 코드 필수.
@@ -70,9 +70,8 @@ def sma_buy_amount(coin):
     return value if isfinite(value) and value >= 5000 else None
 
 def method2_ready(coin):
-    # All three must be explicit. No default or implicit approval on load.
+    # Selecting SMA is approval; valid per-coin financial inputs are mandatory.
     return (coin_method(coin) == 2
-            and config.get("method2_approved", {}).get(coin) is True
             and coin in config.get("method2_sell_ratios", {})
             and method2_ratio(coin) is not None
             and coin in config.get("sma_buy_amounts", {})
@@ -110,6 +109,8 @@ def tg_api(method, payload=None):
 
 def send_panel(text, inline_kb, msg_id=None):
     payload = {"chat_id": CHAT_ID, "text": text, "reply_markup": {"inline_keyboard": inline_kb}}
+    if "<pre>" in text and "</pre>" in text:
+        payload["parse_mode"] = "HTML"
     if msg_id:
         payload["message_id"] = msg_id
         res = tg_api("editMessageText", payload)
