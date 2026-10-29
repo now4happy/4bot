@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-10-29 13:34 (KST) · 계기: 업데이트 적용 (staging: VR6 환전·09:00 알림 + P·VR6 매도 수량 맞춤: fanding_trade 1.9.0, fanding_vr6 2.1.0 (작업 기록 포함))
+- 갱신: 2026-10-29 14:17 (KST) · 계기: 업데이트 적용 (staging: 팬딩 메뉴 정리: fanding_trade 1.10.0, fanding_vr6 2.2.0, bot_updater 비서 재시작 목록에서 fanding 제외 (작업 기록 포함))
 
 ## 봇별 현재 상태
 
@@ -13,12 +13,12 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (10-29 10:19 KST부터) | v1.0.10 | 2026-10-29 10:19 | 2번 스나이퍼 매매 정책 일치: 데이마켓 매수 잠금, 애프터마켓 매도 감시, 매도 실시간 (staging) |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (10-28 10:48 KST부터) | v4.3.5 | 2026-10-28 10:49 | docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일) |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (10-28 10:47 KST부터) | v4.0.4 | 2026-10-28 10:49 | docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일) |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-29 13:33 KST부터) | v1.0.63 | 2026-10-29 13:34 | VR6 환전·09:00 알림 + P·VR6 매도 수량 맞춤: fanding_trade 1.9.0, fandi |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (10-29 14:16 KST부터) | v1.0.64 | 2026-10-29 14:17 | 팬딩 메뉴 정리: fanding_trade 1.10.0, fanding_vr6 2.2.0, bot_updat |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-29 13:34 KST부터)
-- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (10-29 13:34 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-29 14:17 KST부터)
+- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (10-29 14:17 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (10-28 12:13 KST부터)
 - 실패 상태로 남은 서비스·타이머: `bot-office-inventory.service`
@@ -26,6 +26,7 @@
 
 ## 최근 적용 10건
 
+- 2026-10-29 14:17 · 5번 사무실 비서 v1.0.64 · bot_updater.py, fanding_trade.py, fanding_vr6.py · 팬딩 메뉴 정리: fanding_trade 1.10.0, fanding_vr6 2.2.0, bot_updat
 - 2026-10-29 13:34 · 5번 사무실 비서 v1.0.63 · fanding_trade.py, fanding_vr6.py · VR6 환전·09:00 알림 + P·VR6 매도 수량 맞춤: fanding_trade 1.9.0, fandi
 - 2026-10-29 13:06 · 5번 사무실 비서 v1.0.62 · fanding_vr6_win.py · VR6 수집기 1.1.0: 이미지 20장·글 끝까지 스크롤·run.bat 안내 수정 (작업 기록 개정 포함)
 - 2026-10-29 12:48 · 5번 사무실 비서 v1.0.61 · fanding_vr6.py, fanding_vr6_win.py, meritz_client.py · VR6 예약주문 2단계: fanding_vr6 2.0.0, meritz_client V1.5, fanding
@@ -35,7 +36,6 @@
 - 2026-10-28 13:55 · 5번 사무실 비서 v1.0.58 · index.html, market_manual.py, office_reviews.py, office_task · 픽셀·운영 삭제: office_tasks.py
 - 2026-10-28 13:10 · 5번 사무실 비서 v1.0.57 · ai_room.py, apply_deploy.py, deploy_worker.py, draft_change. · 꺼진 기능 파일 삭제: generate_ideas.py
 - 2026-10-28 12:33 · 5번 사무실 비서 v1.0.56 · board.html, office_board.py, server.py · 사무실 상황판 2차 수정 (staging, 사무실 vNEXT)
-- 2026-10-28 12:13 · 5번 사무실 비서 v1.0.55 · board.html, bot_updater.py, office_board.py, office_url.py,  · 사무실 상황판 · 접속 감시 · 파일 권한 자동 정리 (staging, 사무실 vNEXT)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
