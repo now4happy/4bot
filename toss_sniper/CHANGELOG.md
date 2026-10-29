@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.10 · 2026-10-29 10:19 (KST)
+- 파일: main.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py
+- 내용: 2번 스나이퍼 매매 정책 일치: 데이마켓 매수 잠금, 애프터마켓 매도 감시, 매도 실시간 (staging)
+- 브랜치: staging
+
 ## v1.0.9 · 2026-10-28 06:51 (KST)
 - 파일: plugin_updater.py
 - 내용: 원작 자동 업데이트 범위 제한
