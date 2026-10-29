@@ -1,5 +1,10 @@
 # 4번 빗썸 적립 변경 기록
 
+## v4.1.0 · 2026-10-29 16:15 (KST)
+- 파일: b_core.py, b_ui.py, main.py
+- 내용: 4번 빗썸 추세 신호 v4.1.0: BTC SMA100·ETH SMA200 관찰 전용 표시 (작업 기록 포함)
+- 브랜치: staging
+
 ## v4.0.4 · 2026-10-28 10:49 (KST)
 - 파일: b_core.py, main.py, replay_log.py
 - 내용: docs/log 한글 파일명 삭제 (영문 파일명으로 대체, 내용 동일)
