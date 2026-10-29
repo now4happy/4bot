@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_vr6.py   (FANDING_VR6_WIN_V1.0.1)
+# FILE: C:\fanding\fanding_vr6.py   (FANDING_VR6_WIN_V1.1.0)
 #   저장소 위치: bot_office/fanding_vr6_win.py (서버에선 실행하지 않음 · 윈도우에 GitHub 에서 내려받아 fanding_vr6.py 로 저장)
 # 윈도우 PC 전용: 팬딩 VR6기(TQQQ) 게시글의 표 이미지를 가져와 사무실 서버로 보냄 (2주에 한 번)
 #   - 기존 P 가격표 수집기(fanding_fetch.py)와 별개 프로그램. 같은 폴더·같은 config.json·같은 로그인(browser_profile)을 씀.
@@ -10,21 +10,24 @@
 #  준비 (한 번만. P 수집기를 이미 쓰고 있으면 설치·로그인은 이미 되어 있음)
 #    py fanding_vr6.py test     ← 글·이미지를 찾는지 확인 (서버와 대화 안 함, test_vr6 폴더에 저장)
 #
-#  평소: run.bat 의 맨 위에 한 줄 추가 →  py fanding_vr6.py run >> fetch_log.txt 2>&1
-#        (진행일이 아니면 1초 만에 끝나서 기존 P 수집기에 영향이 없음)
+#  평소: run.bat 의 맨 아래(P 수집기 줄 다음)에 한 줄 추가 →  py fanding_vr6.py run >> fetch_log.txt 2>&1
+#        (진행일이 아니면 몇 초 만에 끝남. 진행일엔 새 글이 나올 때까지 vr6_stop_at 까지 재시도하므로
+#         맨 위에 두면 P 가격표 수집이 막힘 → 반드시 P 줄 다음. 같은 로그인 폴더를 쓰므로 차례로 실행)
 #  수동: py fanding_vr6.py run     진행일이면 진행 · py fanding_vr6.py send   진행일과 상관없이 최신 글 보내기
 #
 #  설정: 같은 폴더의 config.json (office_url·upload_token 은 P 와 같음). VR6 용 항목은 모두 선택:
 #    "vr6_post_url": "https://fanding.kr/@laofus/post/226323/"   (시리즈 주소를 모를 때 이 글에서 시리즈를 찾음)
 #    "vr6_series_url": "https://fanding.kr/@laofus/series/2393/"  (1.0.1 부터 기본값. 바뀌면 config.json 에 넣기)
 #    "vr6_stop_at": "23:00"  "retry_min": 5  "headless": true
+#  1.1.0 (2026-10-29): 글의 이미지를 8장까지만 받던 제한 → 20장 (41주차 글은 9장, 9번째가 매매 계획표라 빠졌음)
+#         · 글 끝까지 스크롤해 늦게 뜨는 이미지까지 받음 · run.bat 안내를 '맨 아래 줄'로 바로잡음
 #  1.0.1 (2026-10-29): VR6 시리즈 주소 기본값 = series/2393 (글에서 시리즈를 찾는 단계 생략)
 # ==========================================================
 import hashlib, json, re, sys, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"
@@ -144,11 +147,17 @@ def list_posts(page, series_url):
     return posts
 
 
-def grab_images(page, post_url, limit=8):
+def grab_images(page, post_url, limit=20):
     page.goto(post_url, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(5000)
-    for _ in range(6):
+    last = -1
+    for _ in range(25):                     # 글 끝까지 내려서 늦게 뜨는 이미지까지 모두 불러옴 (VR6 계획표는 마지막 그림)
         page.mouse.wheel(0, 1200); page.wait_for_timeout(600)
+        y = page.evaluate("() => window.scrollY + window.innerHeight >= document.body.scrollHeight - 5 ? -2 : window.scrollY")
+        if y == -2 and last == -2:
+            break
+        last = y
+    page.wait_for_timeout(1500)
     imgs = page.eval_on_selector_all(
         "img", "els => els.map((e,i) => ({i, src: e.currentSrc || e.src, w: e.naturalWidth, h: e.naturalHeight}))")
     cands = [x for x in imgs if x["w"] >= 300 and x["h"] >= 300][:limit]
