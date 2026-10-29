@@ -4,7 +4,8 @@ from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from math import isfinite
 
-BOT_VERSION = "v4.1.0"
+BOT_VERSION = "v4.2.0"
+# v4.2.0 (draft): per-coin daily-close crossover method; execution locked pending user confirmation.
 # v4.0.4 (2026-10-28): 재생 로그 추가 — 버튼·명령 / 매매 판단 / 빗썸 주문·조회 / 설정 변경 / 보낸 메시지를 logs/ 에 한 줄 JSON 으로.
 #                     금액·코인·수량은 감사 로그(logs/audit-*, 권한 600)에만. 실패 시 이유 코드 필수.
 # v4.1.0 (2026-10-29): 관찰 전용 BTC·ETH 추세 신호 추가 — 매수·매도 동작 변경 없음.
@@ -45,6 +46,48 @@ config = load_json(CONFIG_FILE, {"power": True, "coins": {"BTC": 10000, "ETH": 1
 state = load_json(STATE_FILE, {"last_action_date": {}, "last_action_type": {}, "last_low_bal_ts": 0, "sold_stage": {}})
 for k in ["last_action_date", "last_action_type", "sold_stage", "buy_days"]:
     if k not in state or not isinstance(state[k], dict): state[k] = {}
+# Method 2 is opt-in per coin; live execution remains LOCKED until all
+# financial assumptions have been explicitly approved outside this draft.
+# No existing config keys or trade settings are migrated or overwritten.
+METHOD2_DEFAULT_SELL_PCT = 20.0  # UNCONFIRMED proposal, not an approved default
+
+def coin_method(coin):
+    value = config.get("coin_methods", {}).get(coin, 1)
+    return 2 if value == 2 else 1
+
+def method2_ratio(coin):
+    try:
+        value = float(config.get("method2_sell_ratios", {}).get(coin, METHOD2_DEFAULT_SELL_PCT))
+    except (TypeError, ValueError):
+        return None
+    return value if isfinite(value) and 0 < value <= 100 else None
+
+def method2_ready(coin):
+    # The user has NOT approved the buy size, sell ratio or method separation.
+    # Explicit per-coin approval must be reviewed by Muse before enabling.
+    return (config.get("method2_approved", {}).get(coin) is True
+            and coin in config.get("method2_sell_ratios", {}))
+
+def daily_crossover(closes, period):
+    """Completed daily close crossing its *own* SMA vs prior completed day.
+    Never uses intraday ticker. Returns up/down/none/unknown.
+    """
+    if len(closes) < period + 1:
+        return "unknown"
+    prev_sma = compute_sma(closes[:-1], period)
+    curr_sma = compute_sma(closes, period)
+    if prev_sma is None or curr_sma is None:
+        return "unknown"
+    prev_side = 1 if closes[-2] > prev_sma else (-1 if closes[-2] < prev_sma else 0)
+    curr_side = 1 if closes[-1] > curr_sma else (-1 if closes[-1] < curr_sma else 0)
+    if not prev_side or not curr_side:
+        return "none"  # equality is not a crossover
+    if prev_side < 0 and curr_side > 0:
+        return "up"
+    if prev_side > 0 and curr_side < 0:
+        return "down"
+    return "none"
+
 history = load_json(HISTORY_FILE, [])
 def tg_api(method, payload=None):
     if not TG_TOKEN: return None
