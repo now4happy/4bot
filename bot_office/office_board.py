@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_board.py   (사무실 v1.0.56 · 2026-10-28)
+# FILE: /opt/bot-office/office_board.py   (사무실 v1.0.59 · 2026-10-29)
+#  · 사무실 v1.0.59: 팬딩룸 가격표 모음 = 과거 수집 + 매일 받는 가격표(날짜 기준 중복 없이) · 기간(가장 옛날~최근)·마지막 추가 시각
+#    (과거 수집은 옛날 쪽으로 쌓여 '최근 날짜'가 안 바뀌어 멈춘 것처럼 보이던 문제)
 #  · 사무실 v1.0.56: 신호등에 이름·켜진 시각 · 매매방·미팅룸 제외 · 팬딩룸에 과거 가격표 수·저장 위치 · 서버 정리(bot-server-care) 상태
 # 사무실 상황판 데이터 (/api/board · 로그인 필요 · 보기 전용)
 #  · 주문·승인·설정 변경 기능 없음 — 웹에서 하는 일은 '서버 정리 실행' 요청 하나뿐 (server.py /api/server-care)
@@ -13,7 +15,7 @@ import json, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "v1.0.56"
+VERSION = "v1.0.59"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
 KST = timezone(timedelta(hours=9))
@@ -108,14 +110,24 @@ def fanding():
         past = {"count": int(ft.load(ft.STATE, {}).get("past_count", 0) or 0), "folder": str(ft.HISTORY.parent),
                 "file": ft.HISTORY.name, "dates": None, "latest": "", "size_kb": None, "readable": True}
         try:
-            dates = set()
+            dates, past_d, daily_d, last_at = set(), set(), set(), ""
             with open(ft.HISTORY, encoding="utf-8") as fh:
                 for line in fh:
-                    if '"past_sheet"' in line:
-                        d = re.search(r'"date":\s*"(\d{4}-\d{2}-\d{2})"', line)
-                        if d:
-                            dates.add(d.group(1))
-            past.update(dates=len(dates), latest=max(dates) if dates else "", size_kb=round(ft.HISTORY.stat().st_size / 1024))
+                    if '"past_sheet"' not in line and '"kind": "sheet"' not in line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    d = str(row.get("date") or "")
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+                        continue
+                    dates.add(d)
+                    (past_d if row.get("kind") == "past_sheet" else daily_d).add(d)
+                    last_at = max(last_at, str(row.get("at") or ""))
+            past.update(count=len(dates), dates=len(dates), past_dates=len(past_d), daily_dates=len(daily_d),
+                        latest=max(dates) if dates else "", oldest=min(dates) if dates else "",
+                        last_added=last_at[:16].replace("T", " "), size_kb=round(ft.HISTORY.stat().st_size / 1024))
         except FileNotFoundError:
             past.update(dates=0)
         except OSError:

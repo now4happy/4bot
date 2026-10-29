@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.7)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.8)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -37,6 +37,13 @@
 #        · 추정 예수금(estm_frcr_amt, 미결제 포함, 앱 기준)을 주 표시, 예수금은 참고로 표시
 #        · 환전 필요 달러 = 추정 기준 부족, 예수금 기준 부족은 참고로만 표시
 #        · 추정액이 결제 가능액이 아닐 수 있다는 경고 문구 포함 · 환전 버튼은 아직 연결하지 않음
+# 1.8.8 (사무실 v1.0.59 예정): 아침 팬딩 알림 2건 정리 (2026-10-29 08:00·08:51 KST 알림)
+#        ① 'PC 연결 확인 안 됨' — 고정 08:00이 아니라 한국 PC 감시가 본 실제 켜진 시각 + 10분 뒤부터 판단
+#          (pc_collector_grace_min, 기본 10) · PC 감시도 보고 없으면 'PC 꺼짐·인터넷 끊김 의심'으로 구분
+#          · 알림에 한국 PC·수집기 상태 2줄 추가 · 보류·미전송은 한 줄 JSON(replay)로 남김
+#        ② 재수집 글 안의 예전 가격표(필요 종가일보다 과거 + 종가도 지금 시세와 다름)는 알림 없이 기록만
+#          · 날짜는 과거인데 종가가 지금 시세와 맞으면 '날짜 오독 의심'으로 알림(주문 안 함)
+#          · 한 글을 다 봤는데 필요한 날짜 표가 없으면 기존처럼 1번 알림 + 읽은 날짜 표시
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -60,11 +67,11 @@
 # ==========================================================
 import base64, fcntl, hashlib, hmac, html, json, os, re, sys, tempfile, time, urllib.error, urllib.parse, urllib.request, uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.8.7"
+VERSION = "1.8.8"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -618,7 +625,19 @@ def recovery_tick(tg):
     problem = None
     active_limit = 900 if pc.get("stage") in ("connecting", "listing", "images", "uploading", "history", "parsing") else 180
     if not pc.get("at") or time.time() - pc["at"] > active_limit:
-        problem = "PC 연결 확인 안 됨: run.bat·스케줄러·서버 control 경로/통신 확인 (PC 전원 꺼짐으로 단정하지 않음)"
+        # 1.8.8: '켜지고 10분 뒤'는 고정 08:00이 아니라 한국 PC 감시가 본 실제 켜진 시각 기준
+        mon = pc_monitor_view(now)
+        grace = int(cfg().get("pc_collector_grace_min", 10) or 0) * 60
+        if mon["online"] and mon["on_for"] is not None and mon["on_for"] < grace and not manual:
+            replay("collector_check_waiting", "skipped", "pc_on_under_grace",
+                   pc_on_min=mon["on_for"] // 60, grace_min=grace // 60, expected=expected)
+            return
+        if mon["online"]:
+            problem = "PC는 켜져 있음 · 팬딩 수집기 연결 없음: 작업 스케줄러·run.bat 실행 확인"
+        elif mon["known"]:
+            problem = "PC 연결 확인 안 됨: 한국 PC 감시도 보고 없음 → PC 전원·인터넷 확인"
+        else:
+            problem = "PC 연결 확인 안 됨: run.bat·스케줄러·서버 control 경로/통신 확인 (PC 전원 꺼짐으로 단정하지 않음)"
     elif pc.get("stage") in ("logged_out", "no_posts", "no_image", "error", "server_error", "daily_stopped"):
         problem = "윈도우 단계 실패: " + pc["stage"] + " · /진단 확인"
     attempt = st.get("vision_last_attempt") or {}
@@ -641,7 +660,26 @@ def recovery_tick(tg):
             if control.get("alert_key") == key:
                 return
             control["alert_key"] = key
-        tg.send("⚠️ <b>팬딩 자료 누락 진단</b>\n" + html.escape(problem) + "\n필요 종가일: " + expected + "\n재접속·재수집 요청은 자동 등록됩니다. /재판독 으로도 요청 가능")
+        reply = tg.send("⚠️ <b>팬딩 자료 누락 진단</b>\n" + html.escape(problem) + "\n필요 종가일: " + expected
+                        + "\n" + pc_status_lines()
+                        + "\n재접속·재수집 요청은 자동 등록됩니다. /재판독 으로도 요청 가능")
+        replay("diag_alert", "ok" if isinstance(reply, dict) and reply.get("message_id") else "failed",
+               "" if isinstance(reply, dict) and reply.get("message_id") else "telegram_send_failed",
+               event_type="user_visible", problem=problem.split(":")[0], expected=expected,
+               message_id=(reply or {}).get("message_id") if isinstance(reply, dict) else None)
+
+
+def pc_monitor_view(now=None):
+    """한국 PC 감시(pc-monitor.json): 보고가 살아 있는지, 켜진 지 몇 초인지 (이번 켜짐 기준)"""
+    try:
+        pc = (load(HOME / "pc-monitor.json", {}) or {}).get("pc") or {}
+    except Exception:
+        pc = {}
+    t = time.time()
+    online = bool(pc.get("at") and t - pc["at"] <= 300)
+    first = pc.get("first_at")
+    on_for = int(t - first) if online and first else None
+    return {"known": bool(pc.get("at")), "online": online, "on_for": on_for}
 
 
 def vision_status():
@@ -728,6 +766,19 @@ def log_history(kind, data):
             f.write(json.dumps({"kind": kind, "at": now_kst().isoformat(), **data}, ensure_ascii=False) + "\n")
     except Exception as e:
         print("기록 실패:", e, flush=True)
+
+
+def replay(event, outcome, reason="", event_type="decision", **fields):
+    """start.md 2절: 서비스 로그에 한 줄 JSON. 금액·식별자는 넣지 않는다."""
+    try:
+        now = datetime.now(timezone.utc)
+        print(json.dumps({"ts_utc": now.isoformat(timespec="seconds"),
+                          "ts_kst": now.astimezone(KST).isoformat(timespec="seconds"),
+                          "service": "fanding", "actor": "scheduler", "event_type": event_type,
+                          "event": event, "outcome": outcome, "reason": reason, "version": VERSION, **fields},
+                         ensure_ascii=False), flush=True)
+    except Exception:
+        pass
 
 
 def core(p):
@@ -1227,7 +1278,10 @@ def batch_done(tg, meta, kind):
         if b["done"] >= b["n"]:
             st["batches"].pop(bid, None)
             if "wrong_date" in b["kinds"] and not any(k in ("sheet", "sheet_dup") for k in b["kinds"]):
-                tg.send("⚠️ 최근 글 판독 완료: 필요한 종가일의 가격표를 아직 찾지 못했습니다. /진단 확인 · 다음 자동 재접속에서 재확인합니다.")
+                seen = (st.get("wrong_dates") or {}).get(bid, "")
+                tg.send("⚠️ 최근 글 판독 완료: 필요한 종가일의 가격표를 아직 찾지 못했습니다."
+                        + (" (이 글에서 읽은 종가일: " + html.escape(seen) + ")" if seen else "")
+                        + " /진단 확인 · 다음 자동 재접속에서 재확인합니다.")
             elif not any(k in ("sheet", "sheet_dup", "error") for k in b["kinds"]):
                 tg.send(f"❓ <b>팬딩 글에서 가격표를 못 찾았어요</b>\n이미지 {b['n']}장을 확인했지만 모두 가격표가 아니었어요."
                         f"\n글: {html.escape(meta.get('post', ''))[:200]}\n가격표가 다른 글에 올라왔는지 확인해 주세요.")
@@ -1258,7 +1312,24 @@ def handle_image(tg, data, sha, meta):
         return "other"
     expected = meta.get("expected")
     if expected and first.get("close_date") != expected:
-        tg.send("ℹ️ 재수집 이미지 종가일 불일치: " + html.escape(str(first.get("close_date"))) + " / 필요 " + html.escape(expected) + " · 주문에 사용하지 않음")
+        got = str(first.get("close_date") or "")
+        refs = [x for x in ((market or {}).get("price"), (market or {}).get("prev_close")) if x]
+        close_now = bool(first.get("close") and any(abs(first["close"] - x) / x <= 0.005 for x in refs))
+        with locked_state() as st:
+            st.setdefault("wrong_dates", {})[meta.get("batch") or "-"] = got
+            st["wrong_dates"] = dict(list(st["wrong_dates"].items())[-20:])
+        if got and got < expected and not close_now:
+            # 글 안에 함께 실린 예전 가격표(참고 이미지) → 알림 없이 기록만. 한 글 전체에 필요 날짜가 없으면 batch_done 이 알림.
+            replay("wrong_date_image", "skipped", "older_reference_sheet", event_type="user_visible",
+                   read_date=got, expected=expected)
+            return "wrong_date"
+        if close_now:
+            tg.send("⚠️ <b>가격표 날짜 오독 의심</b>\n읽은 종가일 " + html.escape(got) + " / 필요 " + html.escape(expected)
+                    + "\n종가 숫자는 지금 메리츠 시세와 맞습니다. 날짜만 잘못 읽었을 수 있어요.\n주문에 사용하지 않음 · /재판독 또는 가격표 직접 확인")
+            replay("wrong_date_image", "ok", "date_misread_suspected", event_type="user_visible",
+                   read_date=got, expected=expected)
+        else:
+            tg.send("ℹ️ 재수집 이미지 종가일 불일치: " + html.escape(got) + " / 필요 " + html.escape(expected) + " · 주문에 사용하지 않음")
         return "wrong_date"
     try:
         second = gemini_read(data, PROMPTS[1], avoid=first_ai)

@@ -1,5 +1,6 @@
 <!doctype html>
 <!-- 사무실 상황판 · 사무실 v1.0.56 (2026-10-28) · 주문·승인은 텔레그램 · 웹에서 하는 일은 '서버 정리 실행' 하나 · 데이터: /api/board -->
+<!-- 사무실 v1.0.59: 팬딩룸 가격표 모음에 매일 가격표 포함 · 기간·마지막 추가 시각 -->
 <!-- 사무실 v1.0.56: 신호등에 이름·켜진 시각 · 매매방·미팅룸 탭 삭제 · 팬딩룸(과거 가격표 수·저장 위치) · 서버실 '서버 정리 실행' 버튼 -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>사무실 상황판</title>
@@ -54,7 +55,7 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
   </section>
   <section id="fanding">
     <div class="card"><h2>오늘 가격표</h2><dl class="kv" id="fdKv"></dl></div>
-    <div class="card"><h2>과거 가격표 모음</h2><dl class="kv" id="pastKv"></dl>
+    <div class="card"><h2>가격표 모음</h2><dl class="kv" id="pastKv"></dl>
       <p class="note">가격표 이미지는 판독만 하고 지우며, 판독 결과만 위 파일에 하루 한 줄씩 쌓입니다. 서버에만 있고 GitHub 에는 올라가지 않습니다.</p></div>
     <div class="card"><h2>하남 컴 (PC 감시)</h2><dl class="kv" id="pcKv"></dl></div>
     <p class="note">자세한 진단·재판독은 팬딩 봇 /진단 · /재판독.</p>
@@ -113,7 +114,8 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
     var f=d.fanding;
     kv($('fdKv'),f.ok?[['필요 종가일',f.expected],['가격표',f.status,f.ready?null:'err']]:[['상태','읽기 실패 ('+(f.error||'?')+')','err']]);
     var p=f.past;
-    kv($('pastKv'),f.ok&&p?[['모은 과거 가격표',p.count+'장'],['기록된 날짜',p.readable?(p.dates+'일'+(p.latest?' · 최근 '+p.latest:'')):'읽기 권한 없음',p.readable?null:'err'],
+    kv($('pastKv'),f.ok&&p?[['모은 가격표',p.readable?(p.count+'장'+(p.past_dates!=null?' (과거 수집 '+p.past_dates+' · 매일 '+p.daily_dates+')':'')):'읽기 권한 없음',p.readable?null:'err'],
+      ['기간',p.oldest?(p.oldest+' ~ '+p.latest):'-'],['마지막 추가',p.last_added?(p.last_added+' KST'):'-'],
       ['저장 폴더',p.folder,null,'code'],['저장 파일',p.file+(p.size_kb!=null?' ('+p.size_kb+'KB)':''),null,'code']]:[['상태','읽기 실패','err']]);
     var pc=d.pc;
     kv($('pcKv'),pc.ok?[['감시 시간',pc.hours+(pc.watching?' (지금 감시 중)':' (감시 시간 밖)')],['PC 연결',pc.age_min==null?'기록 없음':pc.age_min+'분 전',(pc.watching&&(pc.age_min==null||pc.age_min>=10))?'err':null],
