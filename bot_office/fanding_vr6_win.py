@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_vr6.py   (FANDING_VR6_WIN_V1.0.0)
+# FILE: C:\fanding\fanding_vr6.py   (FANDING_VR6_WIN_V1.0.1)
 #   저장소 위치: bot_office/fanding_vr6_win.py (서버에선 실행하지 않음 · 윈도우에 GitHub 에서 내려받아 fanding_vr6.py 로 저장)
 # 윈도우 PC 전용: 팬딩 VR6기(TQQQ) 게시글의 표 이미지를 가져와 사무실 서버로 보냄 (2주에 한 번)
 #   - 기존 P 가격표 수집기(fanding_fetch.py)와 별개 프로그램. 같은 폴더·같은 config.json·같은 로그인(browser_profile)을 씀.
@@ -16,14 +16,15 @@
 #
 #  설정: 같은 폴더의 config.json (office_url·upload_token 은 P 와 같음). VR6 용 항목은 모두 선택:
 #    "vr6_post_url": "https://fanding.kr/@laofus/post/226323/"   (시리즈 주소를 모를 때 이 글에서 시리즈를 찾음)
-#    "vr6_series_url": "https://fanding.kr/@laofus/series/숫자/"  (알면 이걸 쓰는 게 가장 확실)
+#    "vr6_series_url": "https://fanding.kr/@laofus/series/2393/"  (1.0.1 부터 기본값. 바뀌면 config.json 에 넣기)
 #    "vr6_stop_at": "23:00"  "retry_min": 5  "headless": true
+#  1.0.1 (2026-10-29): VR6 시리즈 주소 기본값 = series/2393 (글에서 시리즈를 찾는 단계 생략)
 # ==========================================================
 import hashlib, json, re, sys, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"
@@ -37,7 +38,7 @@ def log(*a):
 
 
 def cfg():
-    c = {"vr6_post_url": "https://fanding.kr/@laofus/post/226323/", "vr6_series_url": "", "vr6_stop_at": "23:00",
+    c = {"vr6_post_url": "https://fanding.kr/@laofus/post/226323/", "vr6_series_url": "https://fanding.kr/@laofus/series/2393/", "vr6_stop_at": "23:00",
          "retry_min": 5, "headless": True}
     c.update(json.loads(CFG.read_text(encoding="utf-8")))
     return c

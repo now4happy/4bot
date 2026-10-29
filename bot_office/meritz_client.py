@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.4)
+# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.5)
 # V1.1: 예약주문 발주 시간 선택 (장개시 0 / 장마감 10분 전 1 / 장마감 30분 전 2 / 장개시 30분 후 3)
 # V1.2: 살아 있는 예약주문 목록 조회 (앱에서 직접 취소한 건 구분)
 # V1.3: USD 추정 예수금 조회(estm_frcr_amt) + 환전 적용환율/환전신청 초안 (버튼·명령에 연결하지 않음)
 # V1.4: KRW 예수금 조회 + 환전 버튼 연결 (실행은 2차 확인 버튼에서만)
+# V1.5: 계좌별 키·토큰 파일 선택 (VR6 계좌 = /etc/bot-office/meritz_vr6.json) · 예약주문에 예약방식·종료일 옵션
+#       (기간잔량 "2" 등). 인자를 안 주면 기존(P)과 똑같이 일반예약 "1"·시작=종료일
 # 메리츠증권 Open API 최소 연결 (해외주식: 현재가·잔고·예약주문)
 #  - 키는 /etc/bot-office/meritz.json 에만 둡니다 (GitHub 에 절대 올리지 않음)
 #    {"app_key": "...", "app_secret": "..."}
@@ -30,15 +32,16 @@ def _mac():
 
 
 class Meritz:
-    def __init__(self, keys_path=KEYS):
+    def __init__(self, keys_path=KEYS, token_cache=None):
         k = json.loads(Path(keys_path).read_text(encoding="utf-8"))
         self.key, self.secret = k["app_key"].strip(), k["app_secret"].strip()
+        self.token_cache = Path(token_cache) if token_cache else TOKEN_CACHE   # 계좌마다 따로 (서로 덮어쓰지 않게)
 
     # ---------------- 토큰
     def token(self, fresh=False):
         if not fresh:
             try:
-                c = json.loads(TOKEN_CACHE.read_text())
+                c = json.loads(self.token_cache.read_text())
                 if c.get("key") == self.key[:6] and c.get("exp", 0) > time.time() + 120:
                     return c["token"]
             except (OSError, ValueError, KeyError):
@@ -53,9 +56,9 @@ class Meritz:
         except urllib.error.HTTPError as e:
             raise MeritzError(f"토큰 발급 실패 HTTP {e.code}: {e.read()[:200].decode('utf-8', 'replace')}")
         tok, ttl = d["access_token"], int(d.get("expires_in", 43200))
-        TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        TOKEN_CACHE.write_text(json.dumps({"token": tok, "exp": time.time() + ttl - 60, "key": self.key[:6]}))
-        os.chmod(TOKEN_CACHE, 0o600)
+        self.token_cache.parent.mkdir(parents=True, exist_ok=True)
+        self.token_cache.write_text(json.dumps({"token": tok, "exp": time.time() + ttl - 60, "key": self.key[:6]}))
+        os.chmod(self.token_cache, 0o600)
         return tok
 
     # ---------------- 호출
@@ -198,12 +201,18 @@ class Meritz:
         return self._call("GET", "/reference/v1/overseas/market-hours", {"ovrs_stck_mrkt_tr_cls_code": "01"}).get("data") or {}
 
     # ---------------- 예약주문 (Limit VWAP, 장개시 발주)
-    def reserve(self, side, symbol, exch_id, qty, price, date_us, aspr="8", confirm_warn=False, hour_code="2"):
-        """예약주문 접수. 증권사 착오매매 경고가 오면 WarnNeeded 를 올림 (자동으로 '확인' 하지 않음)"""
+    def reserve(self, side, symbol, exch_id, qty, price, date_us, aspr="8", confirm_warn=False, hour_code="2",
+                rsev_cls="1", date_end=None):
+        """예약주문 접수. 증권사 착오매매 경고가 오면 WarnNeeded 를 올림 (자동으로 '확인' 하지 않음)
+        rsev_cls: "1" 일반예약(기본, 시작=종료일) · "2" 기간잔량 · "3" 기간예약. "2"/"3" 은 date_end(YYYYMMDD) 필수"""
+        rsev_cls = str(rsev_cls)
+        date_end = date_end or date_us
+        if rsev_cls in ("2", "3") and date_end <= date_us:
+            raise MeritzError("기간 예약은 종료일이 시작일보다 뒤여야 함")
         body = {"ovrs_stck_symb_iscd": symbol, "ovrs_exch_vndr_idno": exch_id, "rsev_aspr_tpcd": aspr,
                 "odqt": str(int(qty)), "ovrs_stck_oder_prc": f"{price:.4f}".rstrip("0").rstrip("."),
-                "warn_cnfr_yn": "Y" if confirm_warn else "N", "oder_rsev_cls_code": "1",
-                "oder_rsev_hour_clcd": str(hour_code), "oder_sta_date": date_us, "oder_fin_date": date_us}
+                "warn_cnfr_yn": "Y" if confirm_warn else "N", "oder_rsev_cls_code": rsev_cls,
+                "oder_rsev_hour_clcd": str(hour_code), "oder_sta_date": date_us, "oder_fin_date": date_end}
         path = f"/trading/v1/overseas/reserved-orders/{'buy' if side == 'buy' else 'sell'}"
         d = self._call("POST", path, body=body)
         data = d.get("data") or {}

@@ -1,32 +1,40 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V1.0.0)
-# 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 5번 팬딩 봇으로 보여 주는 단계
+# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.0.0)
+# 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
-#  지금 되는 것 (1단계)
-#    - 윈도우 PC(fanding_vr6.py)가 진행일에 최신 글의 이미지를 올림 → 5번 봇에 사진으로 알림 (배수 표시)
-#    - 진행 일정(2주 주기)·배수는 서버가 관리. PC는 올리기 전에 서버에 '오늘 진행일인지' 물어봄
-#    - 5번 봇 [🅥 VR6 메뉴]에서 배수·일정·표 보기·진단
-#  아직 없는 것 (2단계, 표 형식 확인 후)
-#    - 표 판독, 수량 계산, 메리츠 예약주문. 이 파일은 주문을 내지 않는다.
+#  2.0.0 (2026-10-29) 주문 단계 추가
+#    - 글의 이미지 중 '매수계획/매도계획' 표를 AI 로 찾아 2번 교차 판독(fanding_trade.vision 사용, P 와 같은 AI)
+#    - VR 검산: 매수점 = 최소값 ÷ (체결 전 개수), 매도점 = 최대값 ÷ (체결 전 개수), Pool 은 매수마다 빼고 매도마다 더함.
+#      숫자가 하나라도 안 맞으면 '판독 의심' → 자동주문 안 함
+#    - 배수: 표는 1배수(줄마다 1주). 배수 ×N 이면 줄마다 N주, 가격은 그대로
+#    - 주문: 지정가("1") · 기간잔량("2") · 장개시 발주("0") · 시작일=표 기간 첫 거래일(마감 지난 날은 건너뜀) · 종료일=표 끝날
+#      매수·매도 모두. 5번 봇 [✅ 주문]/[❌] · 안 누르면 첫 발주일 예약마감(08:30 ET) 10분 전에 자동주문(점검 모두 통과 시)
+#    - 계좌: VR6 전용 키 /etc/bot-office/meritz_vr6.json (P 키와 별도, 토큰 파일도 별도). 키 없으면 주문 안 함
+#    - 알림에 매수 필요 달러·보유 달러·부족액 표시 (환전은 사용자가 직접. 자동환전 없음)
+#    - 이전 회차 주문은 기간이 끝나면 증권사에서 없어지므로 취소하지 않음
+#    - 명령 추가: /vr6주문 · /vr6재판독 · /vr6자동켜기 · /vr6자동끄기
+#  1.0.0 표 이미지를 받아 5번 봇에 보여 주는 단계 (진행 일정·배수 관리)
 #
 #  fanding_trade.py(기존 P 흐름)와 분리: 상태는 vr6.json 따로. fanding_trade.py 가 이 파일을 불러 쓰며,
 #  이 파일이 오류가 나도 P 흐름이 멈추지 않도록 fanding_trade.py 쪽에서 예외를 막는다.
-#  웹서버(bot-office 계정)는 INBOX 에 파일만 쓰고, 상태 저장은 상시 프로그램(root)만 한다.
+#  웹서버(bot-office 계정)는 INBOX 에 파일만 쓰고, 상태 저장·주문은 상시 프로그램(root)만 한다.
 # ==========================================================
 import fcntl, hashlib, html, json, os, re, tempfile, time, urllib.parse, uuid
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
 VDIR = HOME / "vr6"
 STATE, LOCKF = HOME / "vr6.json", HOME / ".vr6.lock"
-KST = ZoneInfo("Asia/Seoul")
+KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
+KEYS_VR6 = R / "etc/bot-office/meritz_vr6.json"     # VR6 계좌 키 (P 의 meritz.json 과 별도, GitHub 에 올리지 않음)
+TOKEN_VR6 = HOME / "meritz_vr6_token.json"
 WEEK = "월화수목금토일"
 
 # 게시글 https://fanding.kr/@laofus/post/226323 은 2026-10-26(월)에 직접 진행한 회차 → 다음은 2주 뒤 월요일
@@ -42,16 +50,27 @@ DEFAULTS = {
     "cycles": {},
     "pc": {},
     "alerted": "",
+    # 2.0.0 주문 단계
+    "auto_order": True,          # 버튼 안 누르면 첫 발주일 마감 10분 전 자동주문 (점검 모두 통과 시)
+    "price_market": "OQ",        # 메리츠 시세 조회 거래소 (TQQQ = 나스닥 OQ)
+    "exch_id": "",               # 예약주문 거래소 번호. 비우면 VR6 계좌 잔고에서 찾음
+    "cutoff_et": "08:30",        # 예약 마감으로 보는 시각 (미국 동부, 정규장 1시간 전) — P 와 같은 기준
+    "alarm_before_min": 30,
+    "auto_before_min": 10,
+    "submit_kst": "09:01",       # 메리츠 예약 접수는 한국시간 09:00 부터
+    "plans": {},
 }
 
 MENU_LABEL, HOME_LABEL = "🅥 VR6 메뉴", "🏠 메인 메뉴"
-BUTTONS = {"📋 VR6 표": "/vr6표", "📐 VR6 배수": "/vr6배수", "📅 VR6 일정": "/vr6일정",
+BUTTONS = {"📝 VR6 주문": "/vr6주문", "📋 VR6 표": "/vr6표", "📐 VR6 배수": "/vr6배수", "📅 VR6 일정": "/vr6일정",
            "🔄 VR6 지금 진행": "/vr6지금", "🩺 VR6 진단": "/vr6진단", "❓ VR6 도움말": "/vr6도움말"}
 
-HELP = ("▫️ <b>/vr6표</b> 최근에 받은 표 다시 보기\n▫️ <b>/vr6배수</b> 현재 배수 · <b>/vr6배수 10</b> 바꾸기\n"
+HELP = ("▫️ <b>/vr6주문</b> 이번 회차 주문표·주문 상태 (버튼 다시 띄우기)\n"
+        "▫️ <b>/vr6표</b> 최근에 받은 표 다시 보기 · <b>/vr6재판독</b> 받은 표를 다시 판독\n"
+        "▫️ <b>/vr6배수</b> 현재 배수 · <b>/vr6배수 10</b> 바꾸기\n"
         "▫️ <b>/vr6일정</b> 다음 진행일 · <b>/vr6일정 2026-11-09</b> 날짜 바꾸기\n"
-        "▫️ <b>/vr6지금</b> 일정과 상관없이 PC가 다음에 확인할 때 바로 진행\n▫️ <b>/vr6진단</b> PC 연락·마지막 진행 상태")
-NOTE_NO_ORDER = "ℹ️ 지금은 표를 받아 보여 주는 단계예요. 표 판독·수량 계산·주문은 아직 없어요(주문 규칙 확정 전)."
+        "▫️ <b>/vr6지금</b> 일정과 상관없이 PC가 다음에 확인할 때 바로 진행\n"
+        "▫️ <b>/vr6자동켜기</b> · <b>/vr6자동끄기</b> 버튼 안 누를 때 자동주문\n▫️ <b>/vr6진단</b> PC 연락·계좌 연결·마지막 진행 상태")
 
 
 # ---------------------------------------------------------- 저장
@@ -200,22 +219,20 @@ def process_inbox(tg):
 
 
 def _handle_image(tg, data, meta):
+    """이미지는 조용히 저장만 (2.0.0). 글 전송이 끝나면(_handle_done) 주문표를 찾아 한 번에 알림"""
     sha = hashlib.sha256(data).hexdigest()
     ext = "png" if data[:4] == b"\x89PNG" else "jpg"
     with locked() as st:
         dup = sha in st["seen"] and not st["force"]
-        cycle, mult, sym = st["next_due"], st["multiplier"], st["symbol"]
+        cycle = st["next_due"]
     if dup:
         print("VR6 이미 받은 이미지 → 무시", flush=True)
         return "dup"
     VDIR.mkdir(parents=True, exist_ok=True)
     name = f"{cycle}_{sha[:8]}.{ext}"
-    path = VDIR / name
-    path.write_bytes(data)
-    idx, count = meta.get("idx") or "?", meta.get("count") or "?"
-    tg.photo(path, f"🅥 <b>VR6 표</b> {idx}/{count} · {sym} · 배수 ×{mult}\n글: {html.escape(meta.get('post', ''))[:200]}")
+    (VDIR / name).write_bytes(data)
     with locked() as st:
-        st["seen"] = ([x for x in st["seen"] if x != sha] + [sha])[-80:]      # 사진 전송 뒤에 '받음' 기록
+        st["seen"] = ([x for x in st["seen"] if x != sha] + [sha])[-80:]
         cyc = st["cycles"].setdefault(cycle, {"images": [], "post": meta.get("post", "")})
         if name not in cyc["images"]:
             cyc["images"].append(name)
@@ -242,28 +259,527 @@ def _handle_done(tg, meta, now=None):
             st["alerted"] = ""
         st["force"] = False
         mult, sym, nd = st["multiplier"], st["symbol"], _d(st["next_due"])
-    head = "✅ <b>VR6 표 수신 완료</b>"
-    if advanced:
-        tail = f"다음 진행 예정: <b>{nd.isoformat()}({_wd(nd)})</b>"
+    tail = (f"다음 진행 예정: <b>{nd.isoformat()}({_wd(nd)})</b>" if advanced
+            else f"(일정 밖 수동 전송이라 다음 진행일은 그대로: {nd.isoformat()}({_wd(nd)}))")
+    tg.send(f"✅ <b>VR6 표 수신 완료</b> · {sym} · 배수 ×{mult}\n받은 이미지 {len(images)}장 · 글 번호 {pid or '?'}\n{tail}\n"
+            "🔎 주문표(매수계획·매도계획)를 찾아 판독할게요…")
+    try:
+        build_plan(tg, cycle, now=now)
+    except Exception as e:      # 판독 오류로 '끝' 파일이 계속 남아 AI 를 반복 호출하지 않게, 알리고 끝낸다
+        replay("vr6_plan_build", "failed", type(e).__name__, event_type="decision", cycle=cycle)
+        tg.send(f"🚨 <b>VR6 주문표 판독 오류</b>\n{html.escape(str(e))[:300]}\n주문하지 않았어요. /vr6재판독 으로 다시 해 보세요.")
+
+
+# ---------------------------------------------------------- 로그 (start.md 2절: 한 줄 JSON, 금액·식별자 없음)
+def replay(event, outcome, reason="", event_type="decision", **fields):
+    try:
+        now = datetime.now(timezone.utc)
+        print(json.dumps({"ts_utc": now.isoformat(timespec="seconds"),
+                          "ts_kst": now.astimezone(KST).isoformat(timespec="seconds"),
+                          "correlation_id": fields.pop("cid", ""), "service": "fanding-vr6", "actor": "scheduler",
+                          "event_type": event_type, "event": event, "outcome": outcome, "reason": reason,
+                          "version": VERSION, **fields}, ensure_ascii=False), flush=True)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------- 표 판독 (AI 는 fanding_trade.vision 사용)
+_ROW = {"type": "OBJECT", "properties": {"qty": {"type": "INTEGER", "description": "잔여개수"},
+                                          "price": {"type": "NUMBER", "description": "매수점/매도점"},
+                                          "pool": {"type": "NUMBER", "description": "Pool"}},
+        "required": ["qty", "price", "pool"]}
+PLAN_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "is_vr_plan": {"type": "BOOLEAN"},
+        "reason": {"type": "STRING"},
+        "title": {"type": "STRING", "description": "맨 위 제목 (예: VR 6기 41주차)"},
+        "start_md": {"type": "STRING", "description": "기간 시작 MM-DD (예: 10월 26일 → 10-26)"},
+        "end_md": {"type": "STRING", "description": "기간 끝 MM-DD (예: 11월 6일 → 11-06)"},
+        "min_value": {"type": "NUMBER", "description": "매수계획 표의 노란 칸 최소값"},
+        "buy_base_qty": {"type": "INTEGER", "description": "매수계획 노란 줄 잔여개수"},
+        "buy_base_pool": {"type": "NUMBER", "description": "매수계획 노란 줄 Pool"},
+        "buys": {"type": "ARRAY", "items": _ROW},
+        "max_value": {"type": "NUMBER", "description": "매도계획 표의 노란 칸 최대값"},
+        "sell_base_qty": {"type": "INTEGER", "description": "매도계획 노란 줄 잔여개수"},
+        "sell_base_pool": {"type": "NUMBER", "description": "매도계획 노란 줄 Pool"},
+        "sells": {"type": "ARRAY", "items": _ROW},
+    },
+    "required": ["is_vr_plan", "start_md", "end_md", "min_value", "max_value", "buy_base_qty", "sell_base_qty",
+                 "buys", "sells"],
+}
+PLAN_PROMPTS = [
+    "이 이미지가 VR(밸류 리밸런싱) '매수계획 / 매도계획' 표인지 판단하고, 맞으면 숫자를 그대로 옮기세요. 계산·추측 금지.\n"
+    "특징: 맨 위 'VR 6기 ○○주차 < ○월 ○일 ~ ○월 ○일 >' 제목, 왼쪽 '매수계획 2주간 기간잔량 지정가 예약매수' 표"
+    "(칸: 최소값 | 잔여개수 | 매수점 | Pool), 오른쪽 '매도계획' 표(칸: 최대값 | 잔여개수 | 매도점 | Pool).\n"
+    "맞으면 is_vr_plan=true. 각 표의 노란 첫 줄(최소값·최대값, 잔여개수, Pool)은 min_value/max_value, *_base_qty, *_base_pool 에,\n"
+    "그 아래 줄(매수점·매도점이 빨간 숫자로 있는 줄)은 위에서 아래 순서로 buys / sells 에 {qty: 잔여개수, price: 매수점·매도점, pool: Pool}.\n"
+    "기간은 start_md, end_md 를 MM-DD 로. 아니면 is_vr_plan=false 로 하고 숫자 칸은 0, 배열은 빈 배열.",
+    "Transcribe this VR trading plan image exactly. Do not compute or guess. If it is not the two-table plan "
+    "(left '매수계획' with columns 최소값/잔여개수/매수점/Pool, right '매도계획' with columns 최대값/잔여개수/매도점/Pool), "
+    "set is_vr_plan=false. Otherwise: title = top title; start_md/end_md = the date range in the title as MM-DD; "
+    "min_value, buy_base_qty, buy_base_pool = the yellow first row of the buy table; buys = each following row top to bottom "
+    "as {qty: 잔여개수, price: 매수점, pool: Pool}; max_value, sell_base_qty, sell_base_pool and sells likewise for the sell table. "
+    "Copy every decimal digit exactly.",
+]
+
+
+def _ft():
+    import fanding_trade          # 같은 폴더. AI 판독 순서·키 설정을 P 와 함께 쓴다
+    return fanding_trade
+
+
+def _num(v, nd=2):
+    try:
+        x = float(str(v).replace(",", "").replace("$", ""))
+        return round(x, nd) if x == x else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _md(v):
+    m = re.search(r"(\d{1,2})\D+(\d{1,2})", str(v or ""))
+    return f"{int(m.group(1)):02d}-{int(m.group(2)):02d}" if m else ""
+
+
+def normalize(r):
+    def rows(lst):
+        out = []
+        for x in lst or []:
+            try:
+                q = int(x.get("qty"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            pr, pool = _num(x.get("price")), _num(x.get("pool"))
+            if pr and pr > 0:
+                out.append({"qty": q, "price": pr, "pool": pool})
+        return out
+    flag = r.get("is_vr_plan")
+    flag = flag if isinstance(flag, bool) else str(flag).strip().lower() in ("true", "yes", "1")
+    toint = lambda v: int(v) if str(v).strip().lstrip("-").isdigit() else None
+    return {"is_plan": flag, "title": str(r.get("title") or "")[:60], "start_md": _md(r.get("start_md")),
+            "end_md": _md(r.get("end_md")), "min_value": _num(r.get("min_value")), "max_value": _num(r.get("max_value")),
+            "buy_base_qty": toint(r.get("buy_base_qty")), "buy_base_pool": _num(r.get("buy_base_pool")),
+            "sell_base_qty": toint(r.get("sell_base_qty")), "sell_base_pool": _num(r.get("sell_base_pool")),
+            "buys": rows(r.get("buys")), "sells": rows(r.get("sells"))}
+
+
+def core(p):
+    rows = lambda lst: tuple((x["qty"], x["price"], x["pool"]) for x in lst)
+    return (p["start_md"], p["end_md"], p["min_value"], p["max_value"], p["buy_base_qty"], p["buy_base_pool"],
+            p["sell_base_qty"], p["sell_base_pool"], rows(p["buys"]), rows(p["sells"]))
+
+
+def read_plan(img, avoid=""):
+    ft = _ft()
+    p = normalize(ft.vision(img, PLAN_PROMPTS[1 if avoid else 0], PLAN_SCHEMA, 3072, avoid=avoid))
+    return p, ft.LAST_PROVIDER.get("name", "")
+
+
+def vr_math(p):
+    """VR 표 검산. [(통과?, 설명)] — 표 숫자끼리 맞는지만 본다 (AI 오독 잡기)"""
+    out = []
+    add = lambda ok, msg: out.append({"ok": bool(ok), "msg": msg})
+    mn, mx = p.get("min_value") or 0, p.get("max_value") or 0
+    for side, base_q, base_pool, rows, lim in (("매수", p["buy_base_qty"], p["buy_base_pool"], p["buys"], mn),
+                                               ("매도", p["sell_base_qty"], p["sell_base_pool"], p["sells"], mx)):
+        if not rows:
+            add(True, f"{side} 줄 없음 (표에 {side}이 없는 회차)"); continue
+        if not base_q or not lim or base_pool is None:
+            add(False, f"{side} 표 첫 줄(기준 개수·{'최소값' if side == '매수' else '최대값'}·Pool)을 못 읽음"); continue
+        bad, q, pool = [], base_q, base_pool
+        step = 1 if side == "매수" else -1
+        for r in rows:
+            exp_q = q + step
+            exp_price = round(lim / q, 2)               # 체결 전 개수로 나눈 값
+            exp_pool = round(pool - r["price"] if side == "매수" else pool + r["price"], 2)
+            if r["qty"] != exp_q:
+                bad.append(f"개수 {r['qty']}(기대 {exp_q})")
+            if abs(r["price"] - exp_price) > 0.011:
+                bad.append(f"{r['price']:g}(계산 {exp_price:g})")
+            if r["pool"] is None or abs(r["pool"] - exp_pool) > 0.011:
+                bad.append(f"Pool {r['pool']}(계산 {exp_pool:g})")
+            if side == "매수" and exp_pool < -0.005:
+                bad.append("Pool 이 0 아래")
+            q, pool = exp_q, exp_pool if r["pool"] is None else r["pool"]
+        add(not bad, f"{side} 검산 {len(rows)}줄 일치 ({'최소값' if side == '매수' else '최대값'}÷개수, Pool 누적)" if not bad
+            else f"{side} 검산 불일치: " + ", ".join(bad[:6]))
+    if p["buy_base_qty"] and p["sell_base_qty"]:
+        add(p["buy_base_qty"] == p["sell_base_qty"], f"기준 보유 개수 매수표 {p['buy_base_qty']} / 매도표 {p['sell_base_qty']}")
+    if p["buy_base_pool"] is not None and p["sell_base_pool"] is not None:
+        add(abs(p["buy_base_pool"] - p["sell_base_pool"]) <= 0.011, "기준 Pool 매수표·매도표 같음")
+    return out
+
+
+def table_dates(p, ref):
+    """표의 MM-DD 기간 → 실제 날짜 (연도는 진행일에 가장 가까운 해)"""
+    try:
+        sm, sd = map(int, p["start_md"].split("-")); em, ed = map(int, p["end_md"].split("-"))
+        cands = [date(y, sm, sd) for y in (ref.year - 1, ref.year, ref.year + 1)]
+        start = min(cands, key=lambda d: abs((d - ref).days))
+        end = date(start.year, em, ed)
+        if end < start:
+            end = date(start.year + 1, em, ed)
+        return start, end
+    except (ValueError, AttributeError):
+        return None, None
+
+
+# ---------------------------------------------------------- 시간 계산
+def _hm(s):
+    h, m = str(s).split(":")
+    return int(h), int(m)
+
+
+def cutoff_kst(d, st):
+    h, m = _hm(st["cutoff_et"])
+    return datetime(d.year, d.month, d.day, h, m, tzinfo=ET).astimezone(KST)
+
+
+def first_order_day(start, end, now, st):
+    """표 기간 안에서 아직 예약 마감 전인 첫 평일 (휴장일은 고려 안 함 — 기간잔량이라 다음 날 다시 나감)"""
+    d = start
+    while d <= end:
+        if d.weekday() < 5 and now < cutoff_kst(d, st):
+            return d
+        d += timedelta(days=1)
+    return None
+
+
+def deadlines(plan, st):
+    cut = cutoff_kst(_d(plan["order_start"]), st)
+    return cut - timedelta(minutes=int(st["alarm_before_min"])), cut - timedelta(minutes=int(st["auto_before_min"])), cut
+
+
+# ---------------------------------------------------------- 메리츠 VR6 계좌 (조회는 읽기만)
+def client():
+    from meritz_client import Meritz
+    return Meritz(KEYS_VR6, token_cache=TOKEN_VR6)
+
+
+def account(st, m=None):
+    snap = {"at": datetime.now(KST).isoformat(timespec="minutes"), "errors": []}
+    if not KEYS_VR6.exists():
+        snap["errors"].append("VR6 계좌 키 파일 없음 (/etc/bot-office/meritz_vr6.json)")
+        return snap
+    try:
+        m = m or client()
+    except Exception as e:
+        snap["errors"].append(f"키 파일 읽기 오류: {type(e).__name__}"); return snap
+    try:
+        pr = m.price(st["symbol"], st["price_market"])
+        snap.update(price=pr["price"], prev_close=pr["prev_close"])
+    except Exception as e:
+        snap["errors"].append(f"시세: {str(e)[:120]}")
+    try:
+        hold, sellable, exch, avg = m.holding(st["symbol"])
+        snap.update(holding=hold, sellable=sellable, exch_id=exch)
+    except Exception as e:
+        snap["errors"].append(f"잔고: {str(e)[:120]}")
+    for k, fn in (("usd_cash", "usd_cash"), ("usd_est", "usd_estimated")):
+        try:
+            snap[k] = getattr(m, fn)()
+        except Exception:
+            pass
+    return snap
+
+
+# ---------------------------------------------------------- 주문표 만들기
+def order_lines(plan):
+    """[(side, price, qty)] — 표의 줄마다 배수만큼"""
+    k = int(plan["mult"])
+    p = plan["parsed"]
+    return [("buy", r["price"], k) for r in p["buys"]] + [("sell", r["price"], k) for r in p["sells"]]
+
+
+def need_usd(plan):
+    return round(sum(pr * q for s, pr, q in order_lines(plan) if s == "buy"), 2)
+
+
+def run_checks(plan, st, now):
+    p, acc, k = plan["parsed"], plan.get("account") or {}, int(plan["mult"])
+    out = []
+    add = lambda ok, msg: out.append({"ok": bool(ok), "msg": msg})
+    add(plan.get("reads_agree"), "AI 두 번 판독 결과 일치" if plan.get("reads_agree")
+        else "AI 두 번 판독 결과가 다르거나 확인 판독 실패 → 숫자 꼭 확인")
+    out += vr_math(p)
+    if not p["buys"] and not p["sells"]:
+        add(False, "주문 줄을 하나도 못 읽음")
+    s, e = plan.get("start"), plan.get("end")
+    if not s:
+        add(False, "표의 기간(시작~끝 날짜)을 못 읽음")
     else:
-        tail = f"(일정 밖 수동 전송이라 다음 진행일은 그대로: {nd.isoformat()}({_wd(nd)}))"
-    tg.send(f"{head} · {sym} · 배수 ×{mult}\n이번에 보여 드린 이미지 {len(images)}장 · 글 번호 {pid or '?'}\n{tail}\n{NOTE_NO_ORDER}")
+        ref = _d(plan["cycle"])
+        gap = abs((_d(s) - ref).days)
+        add(gap <= 7, f"표 기간 {s}~{e} · 진행일 {plan['cycle']} 과 {gap}일 차이" + ("" if gap <= 7 else " → 다른 회차 표?"))
+        span = (_d(e) - _d(s)).days
+        add(4 <= span <= 16, f"기간 길이 {span}일 (보통 11일: 월~다음 주 금)")
+        add(bool(plan.get("order_start")), f"첫 발주일 {plan.get('order_start')} (미국 날짜)" if plan.get("order_start")
+            else "표 기간 안에 예약 마감 전인 날이 남지 않음")
+    add(1 <= k <= 50, f"배수 ×{k}")
+    cur = acc.get("price")
+    if cur:
+        bad = [r["price"] for r in p["buys"] if not 0.5 * cur <= r["price"] <= 1.5 * cur] + \
+              [r["price"] for r in p["sells"] if not 0.5 * cur <= r["price"] <= 2.0 * cur]
+        add(not bad, f"가격 범위 정상 (현재가 {cur:g} 기준)" if not bad else f"현재가 {cur:g} 와 너무 먼 가격: {bad[:5]}")
+    else:
+        add(False, "메리츠 시세 확인 실패 → 가격 대조 못 함")
+    sell_q = sum(q for sd, pr, q in order_lines(plan) if sd == "sell")
+    if sell_q:
+        if acc.get("sellable") is not None:
+            add(sell_q <= acc["sellable"], f"매도 합계 {sell_q}주 ≤ 매도가능 {acc['sellable']}주")
+        else:
+            add(False, "VR6 계좌 잔고 확인 실패 → 매도 수량 대조 못 함")
+    if not (st.get("exch_id") or acc.get("exch_id")):
+        add(False, "거래소 번호를 모름 (VR6 계좌 잔고에 TQQQ 가 없으면 vr6.json 에 exch_id 설정 필요)")
+    if not KEYS_VR6.exists():
+        add(False, "VR6 계좌 키 없음 (/etc/bot-office/meritz_vr6.json) → 주문 못 함")
+    return out, all(x["ok"] for x in out)
 
 
+def info_lines(plan):
+    acc, p, k = plan.get("account") or {}, plan["parsed"], int(plan["mult"])
+    need = need_usd(plan)
+    L = ["\n💵 <b>매수 자금 (VR6 계좌)</b>", f"▫️ 매수 줄이 모두 체결될 때 필요한 달러: <b>${need:,.2f}</b>"]
+    cash, est = acc.get("usd_cash"), acc.get("usd_est")
+    L.append("▫️ 보유 달러(예수금): " + (f"${cash:,.2f}" if cash is not None else "조회 불가"))
+    if est is not None:
+        L.append(f"▫️ 외화 추정 예수금(미결제 포함): ${est:,.2f}")
+    if cash is not None:
+        gap = round(need - cash, 2)
+        L.append(f"▫️ <b>부족: ${gap:,.2f} → 환전 필요</b>" if gap > 0 else f"▫️ 부족 없음 (여유 ${-gap:,.2f})")
+    L.append("▫️ 환전은 직접 해 주세요(자동환전 없음). 2주 기간이라 매수가 나가는 날 달러가 있으면 됩니다.")
+    base = p.get("buy_base_qty") or p.get("sell_base_qty")
+    if base:
+        L.append("\n📦 <b>보유 수량 비교</b>")
+        exp = base * k
+        if acc.get("holding") is not None:
+            diff = acc["holding"] - exp
+            L.append(f"▫️ 표 {base}주 × {k} = {exp}주 / VR6 계좌 {acc['holding']}주" + (" (일치)" if not diff else f" (차이 {diff:+d}주)"))
+        else:
+            L.append(f"▫️ 표 {base}주 × {k} = {exp}주 / VR6 계좌 조회 불가")
+    cur = acc.get("price")
+    if cur and any(r["price"] >= cur for r in p["buys"]):
+        L.append(f"▫️ 참고: 현재가({cur:g})보다 높은 매수점이 있어 첫날 장 시작에 바로 체결될 수 있어요.")
+    if acc.get("errors"):
+        L.append("▫️ 조회 오류: " + html.escape(" / ".join(acc["errors"]))[:300])
+    return L
+
+
+def plan_text(plan, st, head="🅥 <b>VR6 주문표</b>"):
+    p, k = plan["parsed"], int(plan["mult"])
+    L = [f"{head} · {html.escape(p.get('title') or '')} · {st['symbol']} · 배수 ×{k}",
+         f"기간 {plan.get('start') or '?'} ~ {plan.get('end') or '?'} · 첫 발주일 {plan.get('order_start') or '-'} (미국)",
+         "주문 방식: 지정가 · 기간잔량 · 장개시 발주 (줄마다 " + f"{k}주)"]
+    if p["buys"]:
+        L.append(f"\n🔴 <b>매수 {len(p['buys'])}줄</b> (최소값 {p.get('min_value')})")
+        L += [f"  {r['price']:g} × {k}주 → 보유 {r['qty'] * k}주" for r in p["buys"]]
+    if p["sells"]:
+        L.append(f"\n🔵 <b>매도 {len(p['sells'])}줄</b> (최대값 {p.get('max_value')})")
+        L += [f"  {r['price']:g} × {k}주 → 보유 {r['qty'] * k}주" for r in p["sells"]]
+    L += info_lines(plan)
+    bad = [x for x in plan["checks"] if not x["ok"]]
+    L.append("\n🛡 <b>안전점검</b> " + ("모두 통과" if not bad else f"{len(bad)}건 미통과"))
+    L += [("  ✅ " if x["ok"] else "  ❌ ") + html.escape(x["msg"]) for x in plan["checks"]]
+    if plan["status"] == "pending" and plan.get("order_start"):
+        _, auto, cut = deadlines(plan, st)
+        if not st["auto_order"]:
+            L.append(f"\n⏰ 자동주문 꺼짐 · 버튼으로 결정해 주세요 (마감 {cut:%m-%d %H:%M} KST)")
+        elif plan["auto_ok"]:
+            L.append(f"\n⏰ 버튼을 안 누르면 <b>{auto:%m-%d %H:%M} KST</b> 에 자동주문해요.")
+        else:
+            L.append("\n⛔ 점검 미통과라 자동주문 안 해요. 숫자를 확인하고 직접 [✅ 주문] 하거나 앱에서 주문해 주세요.")
+    return "\n".join(L)
+
+
+def plan_rows(plan):
+    key = f"{plan['cycle']}:{plan['ver']}"
+    return [[{"text": "✅ 주문", "callback_data": f"vm:ok:{key}"}, {"text": "❌ 이번엔 안 함", "callback_data": f"vm:no:{key}"}]]
+
+
+def build_plan(tg, cycle, now=None):
+    """받은 이미지 중 주문표를 찾아 판독·점검하고 5번 봇에 알림. 주문은 tick 이 낸다"""
+    now = now or datetime.now(KST)
+    st0 = _fill(load(STATE, {}))
+    names = [n for n in st0["cycles"].get(cycle, {}).get("images", []) if (VDIR / n).exists()]
+    old = st0["plans"].get(cycle)
+    if old and old["status"] in ("submitting", "submitted", "partial", "retry", "retry_warn", "approved"):
+        tg.send("⚠️ <b>VR6 이번 회차는 이미 주문을 진행했어요</b> · 새로 판독하지 않아요. 상태: /vr6주문")
+        return None
+    found = None
+    for n in reversed(names):                 # 주문표는 보통 글의 마지막 이미지 → 뒤에서부터
+        data = (VDIR / n).read_bytes()
+        first, ai1 = read_plan(data)
+        replay("vr6_image_judged", "ok", "plan" if first["is_plan"] else "not_plan", cycle=cycle, ai=ai1)
+        if first["is_plan"] and (first["buys"] or first["sells"]):
+            found = (n, data, first, ai1); break
+    if not found:
+        tg.send(f"❓ <b>VR6 주문표를 못 찾았어요</b> (이미지 {len(names)}장 확인)\n주문하지 않아요. 받은 표: /vr6표 · 다시: /vr6재판독")
+        replay("vr6_plan_found", "skipped", "no_plan_image", event_type="user_visible", cycle=cycle)
+        return None
+    n, data, first, ai1 = found
+    try:
+        second, ai2 = read_plan(data, avoid=ai1)
+    except Exception as e:
+        print("VR6 확인 판독 실패:", e, flush=True)
+        second, ai2 = None, ""
+    agree = bool(second) and core(first) == core(second)
+    with locked() as st:
+        start, end = table_dates(first, _d(cycle))
+        o_start = first_order_day(start, end, now, st) if start else None
+        plan = {"cycle": cycle, "img": n, "parsed": first, "reads_agree": agree, "ai": [ai1, ai2],
+                "mult": int(st["multiplier"]), "start": start.isoformat() if start else "",
+                "end": end.isoformat() if end else "", "order_start": o_start.isoformat() if o_start else "",
+                "status": "pending", "orders": [], "ver": int((old or {}).get("ver", 0)) + 1, "alarm_sent": False,
+                "received": now.isoformat(timespec="minutes")}
+    plan["account"] = account(st)
+    with locked() as st:
+        plan["checks"], plan["auto_ok"] = run_checks(plan, st, now)
+        if old and old.get("msg_id"):
+            tg.clear_buttons(old["msg_id"])
+        st["plans"][cycle] = plan
+        for k in sorted(st["plans"])[:-6]:
+            st["plans"].pop(k, None)
+        text = plan_text(plan, st, "🅥 <b>VR6 주문표 도착</b>" if not old else "🅥 <b>VR6 주문표 (다시 판독)</b>")
+    tg.photo(VDIR / n, f"🅥 VR6 주문표 · {html.escape(first.get('title') or cycle)}")
+    r = tg.send(text, plan_rows(plan) if plan["order_start"] else None)
+    with locked() as st:
+        if cycle in st["plans"]:
+            st["plans"][cycle]["msg_id"] = (r or {}).get("message_id")
+    replay("vr6_plan_ready", "ok" if plan["auto_ok"] else "partial", "" if plan["auto_ok"] else "checks_failed",
+           event_type="user_visible", cycle=cycle, reads_agree=agree, buy_rows=len(first["buys"]),
+           sell_rows=len(first["sells"]), mult=plan["mult"], failed_checks=len([x for x in plan["checks"] if not x["ok"]]),
+           message_id=(r or {}).get("message_id"))
+    return plan
+
+
+# ---------------------------------------------------------- 주문 접수 (tick 에서만 호출)
+def submit(tg, cycle, confirm_warn=False):
+    from meritz_client import WarnNeeded
+    st = _fill(load(STATE, {}))
+    plan = st["plans"][cycle]
+    m = client()
+    exch = st.get("exch_id") or (plan.get("account") or {}).get("exch_id")
+    if not exch:
+        exch = account(st, m).get("exch_id")
+    if not exch:
+        raise RuntimeError("거래소 번호(exch_id)를 몰라 주문 못 함")
+    sd, ed = plan["order_start"].replace("-", ""), plan["end"].replace("-", "")
+    done = {(o["side"], o["price"], o["i"]) for o in plan["orders"] if o.get("no")}
+    orders = [o for o in plan["orders"] if o.get("no")]
+    for i, (side, price, qty) in enumerate(order_lines(plan)):
+        if (side, price, i) in done:
+            continue
+        o = {"side": side, "price": price, "qty": qty, "i": i, "at": datetime.now(KST).isoformat(timespec="seconds")}
+        try:
+            r = m.reserve(side, st["symbol"], exch, qty, price, sd, aspr="1", confirm_warn=confirm_warn,
+                          hour_code="0", rsev_cls="2", date_end=ed)
+            o["no"] = r["no"]
+        except WarnNeeded as e:
+            o["warn"] = str(e)
+        except Exception as e:
+            o["err"] = str(e)
+        replay("vr6_reserve", "ok" if o.get("no") else "failed", "warn" if o.get("warn") else ("" if o.get("no") else "error"),
+               event_type="external_call", cycle=cycle, side=side, line=i, broker_no=o.get("no"))
+        orders.append(o)
+        time.sleep(0.3)
+    ok = len([o for o in orders if o.get("no")]) == len(order_lines(plan))
+    acc = account(st, m)
+    with locked() as st2:
+        pl = st2["plans"][cycle]
+        pl["orders"], pl["status"] = sorted(orders, key=lambda o: o["i"]), "submitted" if ok else "partial"
+        pl["account_after"] = acc
+        plan = pl
+    L = [f"{'✅' if ok else '⚠️'} <b>VR6 메리츠 예약주문 {'완료' if ok else '일부 실패'}</b> · {cycle} 회차 · "
+         f"{'자동' if plan.get('approved_by') == 'auto' else '승인'}",
+         f"기간잔량 지정가 · 장개시 발주 · {plan['order_start']} ~ {plan['end']} (미국)"]
+    for o in plan["orders"]:
+        tag = f"접수 #{o['no']}" if o.get("no") else (f"⚠️ 증권사 경고: {o['warn']}" if o.get("warn") else f"❌ {o.get('err')}")
+        L.append(f"{'🔴 매수' if o['side'] == 'buy' else '🔵 매도'} {o['price']:g} × {o['qty']} → {html.escape(str(tag))[:160]}")
+    rows = None
+    key = f"{cycle}:{plan['ver']}"
+    if any(o.get("warn") for o in plan["orders"]):
+        L.append("\n증권사 '주문 착오 방지' 경고예요. 숫자가 맞으면 아래 버튼으로 경고 확인 후 다시 넣어요.")
+        rows = [[{"text": "⚠️ 경고 확인하고 주문", "callback_data": f"vm:wy:{key}"}]]
+    elif not ok:
+        rows = [[{"text": "🔁 실패한 것만 다시", "callback_data": f"vm:re:{key}"}]]
+    plan = dict(plan, account=acc)
+    L += info_lines(plan)
+    r = tg.send("\n".join(L), rows)
+    replay("vr6_orders_result", "ok" if ok else "partial", event_type="user_visible", cycle=cycle,
+           accepted=len([o for o in orders if o.get("no")]), total=len(order_lines(plan)), message_id=(r or {}).get("message_id"))
+
+
+# ---------------------------------------------------------- 시간표 처리 (fanding_trade.loop 이 20초마다 부름)
 def tick(tg, now=None):
-    """진행일이 지났는데 표가 안 왔으면 한 번만 알림 (PC 꺼짐·로그인 풀림 대비)"""
     now = now or datetime.now(KST)
     with locked() as st:
         due = _d(st["next_due"])
         late = (today_kst(now) > due) or (today_kst(now) == due and now.hour >= 18)
-        if not late or st["alerted"] == st["next_due"]:
-            return
-        st["alerted"] = st["next_due"]
+        send_late = late and st["alerted"] != st["next_due"]
+        if send_late:
+            st["alerted"] = st["next_due"]
         pc = st.get("pc") or {}
-    seen = datetime.fromtimestamp(pc["at"], KST).strftime("%m-%d %H:%M") if pc.get("at") else "기록 없음"
-    tg.send(f"⚠️ <b>VR6 진행일({due.isoformat()}, {_wd(due)})이 지났는데 아직 표를 못 받았어요</b>\n"
-            f"PC가 마지막으로 서버에 물어본 때: {seen}\nWindows PC가 켜져 있는지, 팬딩 로그인이 풀리지 않았는지 확인하고 "
-            "PC에서 <code>py fanding_vr6.py run</code> 을 실행하세요. 상태는 /vr6진단")
+    if send_late:
+        seen = datetime.fromtimestamp(pc["at"], KST).strftime("%m-%d %H:%M") if pc.get("at") else "기록 없음"
+        tg.send(f"⚠️ <b>VR6 진행일({due.isoformat()}, {_wd(due)})이 지났는데 아직 표를 못 받았어요</b>\n"
+                f"PC가 마지막으로 서버에 물어본 때: {seen}\nWindows PC가 켜져 있는지, 팬딩 로그인이 풀리지 않았는지 확인하고 "
+                "PC에서 <code>py fanding_vr6.py run</code> 을 실행하세요. 상태는 /vr6진단")
+    todo = []
+    with locked() as st:
+        for cycle, pl in st["plans"].items():
+            if pl["status"] == "submitting" and time.time() - pl.get("submit_t", 0) > 600:
+                pl["status"] = "partial"
+                tg.send(f"⚠️ VR6 {cycle} 회차 주문 접수 도중 프로그램이 다시 켜졌어요. 메리츠 앱에서 접수 여부를 확인해 주세요.",
+                        [[{"text": "🔁 빠진 것만 다시", "callback_data": f"vm:re:{cycle}:{pl['ver']}"}]])
+            if pl["status"] not in ("pending", "approved", "retry", "retry_warn") or not pl.get("order_start"):
+                continue
+            alarm, auto, cut = deadlines(pl, st)
+            if now >= cut:                       # 첫 발주일 마감이 지남 → 기간 안의 다음 평일로 미룸
+                nxt = first_order_day(_d(pl["order_start"]) + timedelta(days=1), _d(pl["end"]), now, st)
+                tg.clear_buttons(pl.get("msg_id"))
+                if not nxt:
+                    pl["status"] = "expired"
+                    tg.send(f"ℹ️ VR6 {cycle} 회차: 표 기간 안에 예약 마감 전인 날이 남지 않아 이번 주문은 넘어갑니다.")
+                    continue
+                pl["order_start"], pl["alarm_sent"] = nxt.isoformat(), False
+                alarm, auto, cut = deadlines(pl, st)
+                r = tg.send(f"ℹ️ VR6 {cycle} 회차: 마감이 지나 첫 발주일을 <b>{nxt.isoformat()}</b>(미국)로 미뤘어요. "
+                            f"새 마감 {cut:%m-%d %H:%M} KST", plan_rows(pl) if pl["status"] == "pending" else None)
+                if pl["status"] == "pending":
+                    pl["msg_id"] = (r or {}).get("message_id")
+            if pl["status"] == "pending" and st["auto_order"]:
+                if now >= auto:
+                    tg.clear_buttons(pl.get("msg_id"))
+                    if pl["auto_ok"]:
+                        pl["status"], pl["approved_by"] = "approved", "auto"
+                        tg.send(f"🤖 <b>버튼이 안 눌려 VR6 자동주문 진행</b> · {cycle} 회차 (점검 모두 통과)")
+                    else:
+                        pl["status"] = "skipped"
+                        bad = "\n".join("  · " + html.escape(x["msg"]) for x in pl["checks"] if not x["ok"])
+                        tg.send(f"⛔ <b>VR6 자동주문 안 함</b> · {cycle} 회차\n안전점검을 통과 못 했어요:\n{bad}\n"
+                                "필요하면 메리츠 앱에서 직접 주문해 주세요.")
+                    replay("vr6_auto_decision", "ok" if pl["auto_ok"] else "skipped",
+                           "" if pl["auto_ok"] else "checks_failed", cycle=cycle)
+                    continue
+                if now >= alarm and not pl.get("alarm_sent"):
+                    pl["alarm_sent"] = True
+                    tg.send(f"⏰ <b>VR6 주문 확인 마감 30분 전</b> · {cycle} 회차\n{auto:%H:%M} 에 "
+                            + ("자동주문합니다." if pl["auto_ok"] else "점검 미통과라 자동주문 안 합니다.")
+                            + f"\n매수 필요 달러 ${need_usd(pl):,.2f} — 부족하면 지금 환전해 주세요.", plan_rows(pl))
+                    continue
+            if pl["status"] in ("approved", "retry", "retry_warn") and (now.hour, now.minute) >= _hm(st["submit_kst"]):
+                todo.append((cycle, pl["status"] == "retry_warn"))
+                pl["status"], pl["submit_t"] = "submitting", time.time()
+    for cycle, warn in todo:
+        try:
+            submit(tg, cycle, confirm_warn=warn)
+        except Exception as e:
+            with locked() as st:
+                pl = st["plans"][cycle]; pl["status"] = "partial"; ver = pl["ver"]
+            replay("vr6_submit", "failed", type(e).__name__, event_type="external_call", cycle=cycle)
+            tg.send(f"🚨 <b>VR6 주문 접수 오류</b> · {cycle}\n{html.escape(str(e))[:400]}",
+                    [[{"text": "🔁 다시 시도", "callback_data": f"vm:re:{cycle}:{ver}"}]])
 
 
 # ---------------------------------------------------------- 5번 봇 메뉴·명령
@@ -285,11 +801,22 @@ def _mult_rows(cur):
             [cb(n) for n in (1, 2, 3, 4, 5)], [cb(n) for n in (6, 7, 8, 10, 12)]]
 
 
+STATUS_NAMES = {"pending": "결정 대기", "approved": "주문 대기(곧 접수)", "submitting": "접수 중", "submitted": "접수 완료",
+                "partial": "일부 실패", "retry": "다시 접수 대기", "retry_warn": "경고 확인 후 접수 대기",
+                "cancelled": "이번엔 안 함", "skipped": "자동주문 안 함(점검 미통과)", "expired": "기간 지남"}
+
+
+def _latest_plan(st):
+    return st["plans"][max(st["plans"])] if st["plans"] else None
+
+
 def summary_text(now=None):
     st = _fill(load(STATE, {}))
     nd = _d(st["next_due"])
+    pl = _latest_plan(st)
+    last = f"\n최근 주문표: {pl['cycle']} 회차 · {STATUS_NAMES.get(pl['status'], pl['status'])}" if pl else "\n최근 주문표: 없음"
     return (f"🅥 <b>VR6 메뉴</b> · {st['symbol']}\n배수 <b>×{st['multiplier']}</b> · 다음 진행 <b>{nd.isoformat()}({_wd(nd)})</b> "
-            f"· 주기 {st['interval_days']}일\n{NOTE_NO_ORDER}")
+            f"· 주기 {st['interval_days']}일 · 자동주문 {'켜짐' if st['auto_order'] else '꺼짐'}{last}")
 
 
 def diagnosis(now=None):
@@ -298,12 +825,21 @@ def diagnosis(now=None):
     seen = datetime.fromtimestamp(pc["at"], KST).strftime("%Y-%m-%d %H:%M") if pc.get("at") else "아직 없음"
     cyc = st["cycles"].get(max(st["cycles"])) if st["cycles"] else None
     nd = _d(st["next_due"])
+    acc = account(st)
+    if acc["errors"]:
+        conn = "❌ " + html.escape(" / ".join(acc["errors"]))[:300]
+    else:
+        conn = (f"✅ 연결됨 · TQQQ 보유 {acc.get('holding', '?')}주(매도가능 {acc.get('sellable', '?')}) · "
+                f"현재가 {acc.get('price', '?')}" + (f" · 보유 달러 ${acc['usd_cash']:,.2f}" if acc.get("usd_cash") is not None else ""))
+    pl = _latest_plan(st)
     return ("🩺 <b>VR6 진단</b>\n"
             f"• PC가 마지막으로 서버에 물어본 때: {seen}" + (f" (프로그램 v{html.escape(str(pc.get('version')))})" if pc.get("version") else "") + "\n"
             f"• 다음 진행일: {nd.isoformat()}({_wd(nd)}) · 지금 진행 요청: {'켜짐' if st['force'] else '꺼짐'}\n"
             f"• 마지막 완료: {st['last_done']} · 마지막으로 처리한 글 번호: {st['last_post_id']}\n"
             f"• 최근 받은 표: {len(cyc['images']) if cyc else 0}장\n"
-            f"• 상태 파일: {'있음' if STATE.exists() else '아직 없음(기본값 사용)'}")
+            f"• 최근 주문표: " + (f"{pl['cycle']} · {STATUS_NAMES.get(pl['status'], pl['status'])}" if pl else "없음") + "\n"
+            f"• VR6 계좌(조회만): {conn}\n"
+            f"• 자동주문: {'켜짐' if st['auto_order'] else '꺼짐'} · 상태 파일: {'있음' if STATE.exists() else '아직 없음(기본값 사용)'}")
 
 
 def _set_mult(tg, n):
@@ -311,7 +847,10 @@ def _set_mult(tg, n):
         tg.send("배수는 1~50 사이로 적어 주세요."); return
     with locked() as st:
         old = st["multiplier"]; st["multiplier"] = n
-    tg.send(f"📐 VR6 배수 ×{old} → <b>×{n}</b>\n다음에 받는 표부터 알림에 표시돼요.", _mult_rows(n))
+        pl = _latest_plan(st)
+        pending = pl and pl["status"] == "pending"
+    note = "\n이미 받은 주문표(결정 대기)는 그때 배수 그대로예요. 새 배수로 하려면 /vr6재판독" if pending else ""
+    tg.send(f"📐 VR6 배수 ×{old} → <b>×{n}</b>\n다음에 받는 주문표부터 적용돼요.{note}", _mult_rows(n))
 
 
 def _shift(tg, days):
@@ -362,15 +901,74 @@ def handle_text(tg, text):
     if low in ("/vr6표", "vr6표"):
         st = _fill(load(STATE, {}))
         cyc = st["cycles"].get(max(st["cycles"])) if st["cycles"] else None
-        names = [n for n in (cyc or {}).get("images", []) if (VDIR / n).exists()][:8]
+        names = [n for n in (cyc or {}).get("images", []) if (VDIR / n).exists()][:10]
         if not names:
             tg.send("아직 받은 VR6 표가 없어요."); return True
         for i, n in enumerate(names, 1):
             tg.photo(VDIR / n, f"🅥 <b>VR6 표</b> {i}/{len(names)} · {st['symbol']} · 현재 배수 ×{st['multiplier']}")
         return True
+    if low in ("/vr6주문", "vr6주문"):
+        st = _fill(load(STATE, {}))
+        pl = _latest_plan(st)
+        if not pl:
+            tg.send("아직 VR6 주문표가 없어요. 표를 받으면 자동으로 판독해서 알려 드려요."); return True
+        head = f"🅥 <b>VR6 주문표</b> [{STATUS_NAMES.get(pl['status'], pl['status'])}]"
+        r = tg.send(plan_text(pl, st, head), plan_rows(pl) if pl["status"] == "pending" and pl.get("order_start") else None)
+        if pl["status"] == "pending" and (r or {}).get("message_id"):
+            with locked() as st2:
+                old = st2["plans"][pl["cycle"]].get("msg_id")
+                st2["plans"][pl["cycle"]]["msg_id"] = r["message_id"]
+            tg.clear_buttons(old)
+        if pl.get("orders"):
+            tg.send("📄 접수 기록\n" + "\n".join(
+                f"{'🔴 매수' if o['side'] == 'buy' else '🔵 매도'} {o['price']:g} × {o['qty']} → "
+                + (f"#{o['no']}" if o.get("no") else html.escape(str(o.get("warn") or o.get("err")))[:100]) for o in pl["orders"]))
+        return True
+    if low in ("/vr6재판독", "vr6재판독"):
+        st = _fill(load(STATE, {}))
+        if not st["cycles"]:
+            tg.send("다시 판독할 VR6 표가 없어요."); return True
+        cycle = max(st["cycles"])
+        tg.send(f"🔎 VR6 {cycle} 회차 표를 다시 판독할게요 (배수 ×{st['multiplier']})…")
+        try:
+            build_plan(tg, cycle)
+        except Exception as e:
+            tg.send(f"🚨 VR6 재판독 오류: {html.escape(str(e))[:300]}")
+        return True
+    if low in ("/vr6자동켜기", "vr6자동켜기", "/vr6자동끄기", "vr6자동끄기"):
+        on = "켜기" in low
+        with locked() as st:
+            st["auto_order"] = on
+        tg.send(f"🤖 VR6 자동주문 <b>{'켜짐' if on else '꺼짐'}</b> — 버튼을 안 누르면 "
+                + ("첫 발주일 마감 10분 전에 자동주문해요 (점검 모두 통과 시)." if on else "주문하지 않아요."))
+        return True
     if low in ("/vr6진단", "vr6진단"):
         tg.send(diagnosis()); return True
     return False
+
+
+def _plan_action(tg, cb, act, cycle, ver):
+    with locked() as st:
+        pl = st["plans"].get(cycle)
+        if not pl or str(pl["ver"]) != ver:
+            tg.answer(cb.get("id"), "예전 주문표 버튼이에요"); return
+        msg_id = (cb.get("message") or {}).get("message_id")
+        if act in ("ok", "no"):
+            if pl["status"] != "pending":
+                tg.answer(cb.get("id"), f"이미 처리됨: {STATUS_NAMES.get(pl['status'], pl['status'])}"); return
+            pl["status"] = "approved" if act == "ok" else "cancelled"
+            pl["approved_by"] = "button"
+            msg = ("✅ VR6 주문 승인 — 곧(한국시간 09:00 이후) 메리츠에 접수해요." if act == "ok"
+                   else "❌ VR6 이번 회차는 주문하지 않아요.")
+        else:
+            if pl["status"] != "partial":
+                tg.answer(cb.get("id"), f"지금 상태: {STATUS_NAMES.get(pl['status'], pl['status'])}"); return
+            pl["status"] = "retry_warn" if act == "wy" else "retry"
+            msg = "🔁 실패한 줄만 다시 접수할게요." + (" (증권사 경고 확인)" if act == "wy" else "")
+    tg.answer(cb.get("id"))
+    tg.clear_buttons(msg_id)
+    tg.send(msg)
+    replay("vr6_button", "ok", act, event_type="user_event", cycle=cycle, message_id=msg_id)
 
 
 def callback(tg, cb):
@@ -378,6 +976,9 @@ def callback(tg, cb):
     if not data.startswith("vm:"):
         return False
     parts = data.split(":")
+    if parts[1] in ("ok", "no", "re", "wy") and len(parts) == 4:
+        _plan_action(tg, cb, parts[1], parts[2], parts[3])
+        return True
     tg.answer(cb.get("id"))
     if parts[1] == "mt" and len(parts) > 2 and parts[2].isdigit():
         _set_mult(tg, int(parts[2]))
