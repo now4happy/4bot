@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.1)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -55,6 +55,10 @@
 #        · 비서 팬딩 메뉴 잔재 제거: menu_rows(), 비서용 모듈 다시 불러오기(_reload_if_changed — 돌고 있는 본 프로그램을
 #          다시 불러오는 위험) · secretary_message/secretary_callback → bot_message/bot_callback (5번 봇 전용)
 #        · 예전 버튼 글자(🅿 P 메뉴·🏠 메인 메뉴 등)도 계속 동작
+# 1.10.1 (사무실 vNEXT): VR6 버튼 글자에서 'VR6' 빼기 (사용자 요청 — 산만함) → P·VR6 가 같은 글자 버튼을 씀
+#        · 하단 버튼은 글자만 오므로, 마지막으로 띄운 키보드가 P/VR6 중 무엇인지 menu_mode.json 에 기억해서
+#          같은 글자(💱 환전·🤖 자동·📐 배수·🩺 진단·🔄 재판독·🛠 도구·❓ 도움말·⬅️ 메뉴)를 그 메뉴로 보냄 (route_shared)
+#        · 키보드를 보낼 때마다 TG.send 가 모드를 기록 → 화면에 보이는 키보드와 항상 같음 · 확인 메시지에 🅿/🅥 표시
 #          · 한 글을 다 봤는데 필요한 날짜 표가 없으면 기존처럼 1번 알림 + 읽은 날짜 표시
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -83,7 +87,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -243,6 +247,8 @@ class TG:
             return json.load(r).get("result", {})
 
     def send(self, text, rows=None, keyboard=None):
+        if keyboard and not rows:
+            remember_menu(keyboard)     # 지금 화면의 하단 키보드가 P/VR6 중 무엇인지 기억 (같은 글자 버튼 구분용)
         p = {"chat_id": self.chat, "text": text[:3900], "parse_mode": "HTML", "disable_web_page_preview": True}
         if rows:
             p["reply_markup"] = {"inline_keyboard": rows}
@@ -1672,15 +1678,15 @@ HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <
 MENU_ITEMS = [("pr", "📋 가격표", "/가격표"), ("fx", "💱 환전", "/환전"), ("mt", "📐 배수", "/배수"),
               ("dg", "🩺 진단", "/진단"), ("rs", "🔄 재판독", "/재판독"),
               ("rt", "⏱ 발주시간", "/발주시간"), ("rr", "🔁 재예약", "/재예약"), ("rf", "⚠️ 재예약 강제", "/재예약강제"),
-              ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"), ("hp", "❓ P 도움말", "/help"),
+              ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"), ("hp", "❓ P 도움말", "/help"),   # 1.10.0 글자
               ("au", "🤖 자동주문", "/자동")]
 MENU_ALIAS = {label: cmd for _, label, cmd in MENU_ITEMS}
 MENU_ALIAS.update({"❓ 도움말": "/help"})          # 1.10.0 전 하단 버튼 글자
 MENU_CMD = {key: cmd for key, _, cmd in MENU_ITEMS}
 
 P_LABEL, VR6_LABEL, HOME_LABEL, HELP_LABEL = "🅿 P 매매", "🅥 VR6 매매", "🏠 처음", "❓ 전체 도움말"
-P_TOOLS_LABEL, P_BACK_LABEL = "🛠 도구", "⬅️ P 메뉴"
-OLD_P_LABELS = ("🅿 P 메뉴",)                       # 예전 키보드가 남아 있어도 동작
+P_TOOLS_LABEL, P_BACK_LABEL = "🛠 도구", "⬅️ 메뉴"
+OLD_P_LABELS = ("🅿 P 메뉴", "⬅️ P 메뉴")            # 예전 키보드가 남아 있어도 동작
 OLD_HOME_LABELS = ("🏠 메인 메뉴",)
 AUTO_ON_LABEL, AUTO_OFF_LABEL = "🤖 자동 켜짐", "🤖 자동 꺼짐"
 
@@ -1699,7 +1705,40 @@ def menu_keyboard():
 
 def tools_keyboard():
     return [[{"text": "⏱ 발주시간"}, {"text": "🔁 재예약"}], [{"text": "⚠️ 재예약 강제"}, {"text": "🧠 판독 AI"}],
-            [{"text": "🗂 과거 수집"}, {"text": "❓ P 도움말"}], [{"text": P_BACK_LABEL}]]
+            [{"text": "🗂 과거 수집"}, {"text": "❓ 도움말"}], [{"text": P_BACK_LABEL}]]
+
+
+# ---------- P·VR6 가 같은 글자를 쓰는 버튼 → 지금 보고 있는 메뉴로 보냄 (1.10.1)
+MENU_MODE = HOME / "menu_mode.json"
+P_KB_MARKS, VR6_KB_MARKS, HOME_KB_MARKS = ("📋 가격표", "⏱ 발주시간"), ("📝 주문표", "📋 받은 표"), ("🅿 P 매매",)
+SHARED = {"💱 환전": ("/환전", "/vr6환전"), "📐 배수": ("/배수", "/vr6배수"), "🩺 진단": ("/진단", "/vr6진단"),
+          "🔄 재판독": ("/재판독", "/vr6재판독"), "🛠 도구": (P_TOOLS_LABEL, "/vr6도구"), "❓ 도움말": ("/help", "/vr6도움말"),
+          "⬅️ 메뉴": ("/p", "/vr6"), AUTO_ON_LABEL: (AUTO_ON_LABEL, "/vr6자동전환"), AUTO_OFF_LABEL: (AUTO_OFF_LABEL, "/vr6자동전환")}
+
+
+def remember_menu(keyboard):
+    try:
+        labels = {b.get("text") for row in keyboard for b in row}
+        mode = ("vr6" if labels & set(VR6_KB_MARKS) else "p" if labels & set(P_KB_MARKS)
+                else "home" if labels & set(HOME_KB_MARKS) else None)
+        if mode and load(MENU_MODE, {}).get("mode") != mode:
+            save(MENU_MODE, {"mode": mode, "at": now_kst().isoformat(timespec="seconds")})
+    except Exception as e:
+        print("메뉴 모드 기록 실패:", e, flush=True)
+
+
+MENU_UNKNOWN = "__menu_unknown__"
+
+
+def route_shared(t):
+    """같은 글자 버튼이면 지금 메뉴(P/VR6)의 명령으로 바꿈. 모르면 P (1.10.0 전 동작과 같음).
+    단 🤖 자동(누르면 바로 바뀜)은 어느 메뉴인지 모르면 아무것도 바꾸지 않고 메뉴를 다시 열게 함"""
+    if t not in SHARED:
+        return t
+    mode = load(MENU_MODE, {}).get("mode")
+    if mode not in ("p", "vr6") and t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):
+        return MENU_UNKNOWN
+    return SHARED[t][1 if mode == "vr6" else 0]
 
 
 STATUS_KO = {"pending": "결정 대기", "approved": "주문 대기", "submitting": "접수 중", "submitted": "접수 완료",
@@ -1729,7 +1768,7 @@ def toggle_auto(tg):
     c = load(CFG, {})
     c["auto_order"] = not cfg()["auto_order"]
     save(CFG, c)
-    tg.send(f"🤖 P 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b> — 버튼을 안 누르면 "
+    tg.send(f"🅿 🤖 P 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b> — 버튼을 안 누르면 "
             + ("마감 10분 전에 자동주문해요 (점검 통과 시)." if c["auto_order"] else "주문하지 않아요."), keyboard=menu_keyboard())
 
 
@@ -1793,6 +1832,7 @@ def poll_own_bot(tg):
                 if str((m.get("chat") or {}).get("id")) != tg.chat:
                     continue
                 t = (m.get("text") or "").strip()
+                t = route_shared(t)        # P·VR6 같은 글자 버튼 → 지금 메뉴의 명령
                 t = MENU_ALIAS.get(t, t)   # 하단 버튼 글자 → 같은 명령
                 if t.lower() in ("/start", "?", "메뉴", "/menu") or t in (HOME_LABEL,) + OLD_HOME_LABELS:
                     tg.send(main_menu_text(), keyboard=main_keyboard())
@@ -1809,6 +1849,9 @@ def poll_own_bot(tg):
                     tg.send("🛠 <b>P 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard())
                 elif t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):
                     toggle_auto(tg)
+                elif t == MENU_UNKNOWN:
+                    tg.send("🤖 P·VR6 중 어느 메뉴의 버튼인지 몰라서 아무것도 바꾸지 않았어요. 메뉴를 다시 열고 눌러 주세요.",
+                            keyboard=main_keyboard())
                 elif t.lower() in ("/help", "도움말"):
                     tg.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT + "\n\n▫️ VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
                             keyboard=menu_keyboard())

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.2.0)
+# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.2.1)
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
+#  2.2.1 (2026-10-29) 버튼 글자에서 'VR6' 빼기 (사용자 요청): 📝 주문표 💱 환전 🤖 자동 켜짐/꺼짐 📐 배수 🩺 진단 🔄 재판독 🛠 도구 🏠 처음
+#    · 🛠 도구: 📋 받은 표 📅 일정 ⏭ 지금 진행 ❓ 도움말 ⬅️ 메뉴 · P 와 같은 글자는 fanding_trade.route_shared 가 지금 메뉴 기준으로
+#      /vr6… 명령으로 바꿔서 넘김 · 새 명령 /vr6도구 · /vr6자동전환 · 예전 'VR6' 글자 버튼도 그대로 동작
 #  2.2.0 (2026-10-29) 메뉴 정리 (사용자 시안): 📝 VR6 주문표 💱 VR6 환전 🤖 VR6 자동(누르면 즉시 켜짐↔꺼짐) 📐 VR6 배수
 #    🩺 VR6 진단 🔄 VR6 재판독 🛠 VR6 도구 🏠 처음 · 🛠 VR6 도구: 📋 VR6 받은 표 📅 VR6 일정 ⏭ VR6 지금 진행 ❓ VR6 도움말 ⬅️ VR6 메뉴
 #    · 버튼 글자에 'VR6' 를 붙임 (P 버튼과 같은 글자면 봇이 구분 못 함) · 메뉴를 열면 상태 두 줄만 · 예전 버튼 글자도 동작
@@ -37,7 +40,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -75,11 +78,17 @@ DEFAULTS = {
 
 MENU_LABEL, HOME_LABEL = "🅥 VR6 매매", "🏠 처음"
 OLD_MENU_LABELS = ("🅥 VR6 메뉴", "⬅️ VR6 메뉴")      # 예전 키보드·도구에서 돌아오기
-TOOLS_LABEL = "🛠 VR6 도구"
-AUTO_ON_LABEL, AUTO_OFF_LABEL = "🤖 VR6 자동 켜짐", "🤖 VR6 자동 꺼짐"
-BUTTONS = {"📝 VR6 주문표": "/vr6주문", "💱 VR6 환전": "/vr6환전", "📐 VR6 배수": "/vr6배수", "🩺 VR6 진단": "/vr6진단",
+# 화면 글자 (P 와 같은 글자 💱 환전·🤖 자동·📐 배수·🩺 진단·🔄 재판독·🛠 도구·❓ 도움말·⬅️ 메뉴 는
+#  fanding_trade.route_shared 가 VR6 메뉴일 때 아래 /vr6… 명령으로 바꿔서 넘김)
+KB_MAIN = [["📝 주문표", "💱 환전"], ["AUTO", "📐 배수"], ["🩺 진단", "🔄 재판독"], ["🛠 도구", "🏠 처음"]]
+KB_TOOLS = [["📋 받은 표", "📅 일정"], ["⏭ 지금 진행", "❓ 도움말"], ["⬅️ 메뉴"]]
+AUTO_ON, AUTO_OFF = "🤖 자동 켜짐", "🤖 자동 꺼짐"
+BUTTONS = {"📝 주문표": "/vr6주문", "📋 받은 표": "/vr6표", "📅 일정": "/vr6일정", "⏭ 지금 진행": "/vr6지금",
+           # 2.2.0 글자 (VR6 붙은 버튼)
+           "📝 VR6 주문표": "/vr6주문", "💱 VR6 환전": "/vr6환전", "📐 VR6 배수": "/vr6배수", "🩺 VR6 진단": "/vr6진단",
            "🔄 VR6 재판독": "/vr6재판독", "📋 VR6 받은 표": "/vr6표", "📅 VR6 일정": "/vr6일정",
-           "⏭ VR6 지금 진행": "/vr6지금", "❓ VR6 도움말": "/vr6도움말",
+           "⏭ VR6 지금 진행": "/vr6지금", "❓ VR6 도움말": "/vr6도움말", "🛠 VR6 도구": "/vr6도구",
+           "🤖 VR6 자동 켜짐": "/vr6자동전환", "🤖 VR6 자동 꺼짐": "/vr6자동전환",
            # 2.2.0 전 버튼 글자
            "📝 VR6 주문": "/vr6주문", "📋 VR6 표": "/vr6표", "🔄 VR6 지금 진행": "/vr6지금"}
 
@@ -1040,14 +1049,12 @@ def fx_exec(tg, cb, amount_str):
 # ---------------------------------------------------------- 5번 봇 메뉴·명령
 def keyboard():
     """VR6 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태"""
-    auto = AUTO_ON_LABEL if _fill(load(STATE, {}))["auto_order"] else AUTO_OFF_LABEL
-    return [[{"text": "📝 VR6 주문표"}, {"text": "💱 VR6 환전"}], [{"text": auto}, {"text": "📐 VR6 배수"}],
-            [{"text": "🩺 VR6 진단"}, {"text": "🔄 VR6 재판독"}], [{"text": TOOLS_LABEL}, {"text": HOME_LABEL}]]
+    auto = AUTO_ON if _fill(load(STATE, {}))["auto_order"] else AUTO_OFF
+    return [[{"text": auto if t == "AUTO" else t} for t in row] for row in KB_MAIN]
 
 
 def tools_keyboard():
-    return [[{"text": "📋 VR6 받은 표"}, {"text": "📅 VR6 일정"}], [{"text": "⏭ VR6 지금 진행"}, {"text": "❓ VR6 도움말"}],
-            [{"text": "⬅️ VR6 메뉴"}]]
+    return [[{"text": t} for t in row] for row in KB_TOOLS]
 
 
 def alias(t):
@@ -1130,13 +1137,13 @@ def handle_text(tg, text):
     t = alias(text.strip())
     low = t.lower()
     if t in (MENU_LABEL,) + OLD_MENU_LABELS or low in ("/vr6", "vr6"):
-        tg.send(status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 🛠 VR6 도구에 있어요.", keyboard=keyboard()); return True
-    if t == TOOLS_LABEL:
+        tg.send(status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 🛠 도구에 있어요.", keyboard=keyboard()); return True
+    if low in ("/vr6도구", "vr6도구"):
         tg.send("🛠 <b>VR6 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard()); return True
-    if t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):              # 누르면 바로 켜짐↔꺼짐
+    if low in ("/vr6자동전환", "vr6자동전환"):             # 🤖 자동 버튼: 누르면 바로 켜짐↔꺼짐
         with locked() as st:
             st["auto_order"] = on = not st["auto_order"]
-        tg.send(f"🤖 VR6 자동주문 <b>{'켜짐' if on else '꺼짐'}</b> — 버튼을 안 누르면 "
+        tg.send(f"🅥 🤖 VR6 자동주문 <b>{'켜짐' if on else '꺼짐'}</b> — 버튼을 안 누르면 "
                 + ("첫 발주일 마감 10분 전에 자동주문해요 (점검 모두 통과 시)." if on else "주문하지 않아요."), keyboard=keyboard())
         replay("vr6_auto_toggle", "ok", "on" if on else "off", event_type="user_event")
         return True
