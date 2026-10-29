@@ -1,6 +1,8 @@
 from datetime import datetime
 from b_core import *
 
+# v4.1.0 (2026-10-29): 상황판에 관찰 전용 추세 신호 한 줄 추가 — 매수·매도 동작 변경 없음.
+
 # 버전 기록은 봇 폴더의 CHANGELOG.md 로 통합 (사무실 업데이트 때 자동으로 쌓임)
 
 def calc_today_required_krw(accs):
@@ -23,7 +25,8 @@ def build_balance_board():
     lines = [
         f"💰 [빗썸 자산 상황판 ({BOT_VERSION})]", f"💵 보유 현금(KRW): {krw_bal:,.0f}원",
         f"🛒 금일 매수 필요액: {req_krw:,.0f}원 " + (f"({', '.join(req_details)})" if req_details else "(금일 완료)"),
-        f"🚨 잔액 상태: " + (f"⚠️ {shortfall:,.0f}원 부족!" if shortfall > 0 else "✅ 잔액 충분"), "─────────────────", "📦 [보유 코인 현황]"
+        f"🚨 잔액 상태: " + (f"⚠️ {shortfall:,.0f}원 부족!" if shortfall > 0 else "✅ 잔액 충분"),
+        f"📈 추세(일봉, 표시만): {trend_line()}", "─────────────────", "📦 [보유 코인 현황]"
     ]
     total_eval, has_coin = krw_bal, False
     for cur in list(config.get("coins", {}).keys()):

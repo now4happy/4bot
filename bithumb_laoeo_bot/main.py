@@ -4,6 +4,8 @@ from b_ui import *
 
 wait_state = {"mode": None}
 
+# ---------------------------------------------------------------- v4.1.0 관찰 전용 추세 신호 (매매 동작은 그대로)
+# 매일 09:00 KST 이후 코인별 첫 회차에만 갱신하고, 실패해도 매수·매도는 그대로 진행한다.
 # ---------------------------------------------------------------- v4.0.4 재생 로그 도우미 (매매 동작은 그대로)
 import os, signal
 
@@ -123,6 +125,17 @@ def trading_monitor_loop():
                 now = datetime.now(KST); today_str = now.strftime("%Y-%m-%d")
                 if runtime_info.get("date") != today_str: runtime_info["date"] = today_str; runtime_info["count"] = 0
                 RL.new_cid("sch", today_str, runtime_info.get("count", 0))
+                # v4.1.0 관찰 전용: 빗썸 일봉 마감(09:00 KST) 후 하루 1회만 갱신.
+                # 봇이 오전에 기동되어도 미마감 일봉을 쓰거나 당일 갱신을 놓치지 않는다.
+                if now.hour >= 9:
+                    for _coin in list(config.get("coins", {}).keys()):
+                        if _coin in TREND_PERIOD and trend_signals.get(_coin, {}).get("date") != today_str:
+                            try:
+                                update_trend_signal(_coin)
+                            except Exception as _te:
+                                trend_signals[_coin] = {"signal": "unknown", "sma": None, "close": None,
+                                                        "date": today_str, "reason": "update_failed"}
+                                RL.err("trend_update", _te, reason="trend_update_failed")
                 accs = {a["currency"]: a for a in get_accounts() if isinstance(a, dict) and "currency" in a}
                 if "KRW" not in accs:
                     # 잔고 조회 실패 시 이번 회차는 매수·매도·익절단계 초기화를 모두 건너뜀 (가짜 잔액부족 알림·중복 익절 방지)

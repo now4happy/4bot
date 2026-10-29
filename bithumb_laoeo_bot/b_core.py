@@ -2,10 +2,13 @@ import os, time, json, uuid, hashlib, jwt, requests, threading
 import replay_log as RL   # v4.0.4: 재생 로그 (start.md 규칙) — 매매 동작은 바꾸지 않음
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
+from math import isfinite
 
-BOT_VERSION = "v4.0.4"
+BOT_VERSION = "v4.1.0"
 # v4.0.4 (2026-10-28): 재생 로그 추가 — 버튼·명령 / 매매 판단 / 빗썸 주문·조회 / 설정 변경 / 보낸 메시지를 logs/ 에 한 줄 JSON 으로.
 #                     금액·코인·수량은 감사 로그(logs/audit-*, 권한 600)에만. 실패 시 이유 코드 필수.
+# v4.1.0 (2026-10-29): 관찰 전용 BTC·ETH 추세 신호 추가 — 매수·매도 동작 변경 없음.
+#                     일봉 종가 기준 BTC SMA100, ETH SMA200, 완성된 봉만 사용, 하루 1회 갱신, 상황판 표시만.
 KST = timezone(timedelta(hours=9))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE, STATE_FILE = os.path.join(BASE_DIR, "bot_config.json"), os.path.join(BASE_DIR, "bot_state.json")
@@ -82,6 +85,110 @@ def get_ticker(coin):
         RL.err("bithumb_ticker", RuntimeError(f"HTTP {r.status_code}"), reason=f"bithumb_http_{r.status_code}", coin_ref=RL.ref(coin))
     except Exception as e: RL.err("bithumb_ticker", e, coin_ref=RL.ref(coin))
     return None
+
+# --- v4.1.0 관찰 전용 추세 신호 (매수·매도를 바꾸지 않음) ---
+TREND_PERIOD = {"BTC": 100, "ETH": 200}
+trend_signals = {}  # coin -> {signal: up|down|unknown, sma, close, date, reason}
+
+def compute_sma(closes, period):
+    """완성된 종가 배열(오래된 순)에서 SMA를 구한다. 봉이 부족하면 None."""
+    if not isinstance(closes, (list, tuple)) or period <= 0 or len(closes) < period:
+        return None
+    return sum(float(x) for x in closes[-period:]) / period
+
+def get_daily_closes(coin, period):
+    """완성된 일봉 종가(오래된 순)를 period개 모은다. 실패·부족 시 빈 리스트.
+    빗썸 일봉 API는 최신 봉부터 반환한다(공식 문서).
+    09:00 KST에 끝나는 봉만 사용하고, `to`는 가장 오래된 봉의 KST 시각이다."""
+    closes_newest = []
+    seen_dates = set()
+    to_param = None
+    # Bithumb daily candles start at 09:00 KST; a candle is complete only
+    # when its next 09:00 KST boundary has passed. `to` is KST, not UTC.
+    now_kst = datetime.now(KST)
+    for _ in range(3):
+        url = "https://api.bithumb.com/v1/candles/days"
+        params = {"market": f"KRW-{coin}", "count": 200}
+        if to_param:
+            params["to"] = to_param
+        try:
+            r = requests.get(url, params=params, timeout=10)
+            if r.status_code != 200:
+                RL.err("bithumb_candles", RuntimeError(f"HTTP {r.status_code}"), reason=f"bithumb_http_{r.status_code}", coin_ref=RL.ref(coin))
+                return []
+            data = r.json()
+        except Exception as e:
+            RL.err("bithumb_candles", e, coin_ref=RL.ref(coin))
+            return []
+        if not isinstance(data, list) or not data:
+            break
+        for c in data:
+            if not isinstance(c, dict):
+                return []
+            try:
+                start = datetime.fromisoformat(c["candle_date_time_kst"]).replace(tzinfo=KST)
+                # Fail closed if the API returns an unexpected candle boundary.
+                if (start.hour, start.minute, start.second) != (9, 0, 0):
+                    return []
+                kst_date = start.date().isoformat()
+                if start + timedelta(days=1) > now_kst or kst_date in seen_dates:
+                    continue
+                close = float(c["trade_price"])
+                if not isfinite(close) or close <= 0:
+                    return []
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return []
+            seen_dates.add(kst_date)
+            closes_newest.append(close)
+            if len(closes_newest) >= period:
+                break
+        if len(closes_newest) >= period:
+            break
+        oldest_kst = data[-1].get("candle_date_time_kst") if isinstance(data[-1], dict) else None
+        if not oldest_kst or oldest_kst == to_param:
+            break
+        to_param = oldest_kst
+    return list(reversed(closes_newest))
+
+def update_trend_signal(coin):
+    """하루 1회 호출용. 신호를 trend_signals에 저장하고, SMA·종가는 감사 로그에만 남긴다.
+    조회 실패·봉 부족이면 신호를 unknown으로 남기고, 매수·매도 쪽에는 아무 영향도 주지 않는다."""
+    period = TREND_PERIOD.get(coin)
+    today = datetime.now(KST).strftime("%Y-%m-%d")
+    if not period:
+        return None
+    closes = get_daily_closes(coin, period)
+    if len(closes) < period:
+        trend_signals[coin] = {"signal": "unknown", "sma": None, "close": None, "date": today, "reason": "insufficient_candles"}
+        RL.ev("decision", "trend_signal", "skipped", "insufficient_candles", actor="scheduler", coin_ref=RL.ref(coin))
+        return trend_signals[coin]
+    sma = compute_sma(closes, period)
+    close = closes[-1]
+    prev = trend_signals.get(coin, {}).get("signal")
+    if close > sma:
+        signal = "up"
+    elif close < sma:
+        signal = "down"
+    else:
+        signal = prev if prev in ("up", "down") else "unknown"
+    trend_signals[coin] = {"signal": signal, "sma": sma, "close": close, "date": today, "reason": None}
+    RL.ev("decision", "trend_signal", "ok", None, actor="scheduler", coin_ref=RL.ref(coin),
+          audit_ref=RL.audit("trend_signal", coin=coin, signal=signal, sma=sma, close=close, period=period, date=today))
+    return trend_signals[coin]
+
+def trend_line():
+    """상황판 표시용 한 줄. 가격·SMA 수치는 표시하지 않고 신호 단어만 쓴다."""
+    parts = []
+    for coin in ("BTC", "ETH"):
+        sig = trend_signals.get(coin, {}).get("signal")
+        period = TREND_PERIOD.get(coin)
+        if sig == "up":
+            parts.append(f"{coin} 상승(SMA{period} 위)")
+        elif sig == "down":
+            parts.append(f"{coin} 하락(SMA{period} 아래)")
+        else:
+            parts.append(f"{coin} 확인불가")
+    return " · ".join(parts)
 
 def place_order(coin, side, price_or_vol, ord_type):
     t0 = time.time(); chain = "ord-" + (RL.ref(f"{coin}|{side}|{t0}") or "x")
