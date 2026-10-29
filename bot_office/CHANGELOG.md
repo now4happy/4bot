@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.63 · 2026-10-29 13:34 (KST)
+- 파일: fanding_trade.py, fanding_vr6.py
+- 내용: VR6 환전·09:00 알림 + P·VR6 매도 수량 맞춤: fanding_trade 1.9.0, fanding_vr6 2.1.0 (작업 기록 포함)
+- 브랜치: staging
+
 ## v1.0.62 · 2026-10-29 13:06 (KST)
 - 파일: fanding_vr6_win.py
 - 내용: VR6 수집기 1.1.0: 이미지 20장·글 끝까지 스크롤·run.bat 안내 수정 (작업 기록 개정 포함)
