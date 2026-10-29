@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.8.8)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.9.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -43,6 +43,12 @@
 #          · 알림에 한국 PC·수집기 상태 2줄 추가 · 보류·미전송은 한 줄 JSON(replay)로 남김
 #        ② 재수집 글 안의 예전 가격표(필요 종가일보다 과거 + 종가도 지금 시세와 다름)는 알림 없이 기록만
 #          · 날짜는 과거인데 종가가 지금 시세와 맞으면 '날짜 오독 의심'으로 알림(주문 안 함)
+# 1.9.0 (사무실 v1.0.63 예정): 잔고가 표와 달라도 자동주문이 막히지 않게 (사용자 결정 2026-10-29)
+#        ① 매도 합계(표×배수) > 계좌 매도가능 → 가장 높은 매도가 줄부터 모자란 수량만큼 줄여 주문 (점검 실패 아님)
+#          · 매도가능 수량은 처음 접수 직전에 다시 조회 (재시도·실패 줄 다시 넣기 때는 처음 수량 그대로 → 중복 방지)
+#        ② 잔고 조회 실패 → 매도는 표 수량 그대로 (점검 실패 아님, 증권사가 거절하면 그 줄만 실패)
+#        ③ 거래소 번호를 잔고에서 한 번 알아내면 exch_seen.json 에 저장 → 0주가 돼도 계속 사용
+#        · 보유 수량 차이는 지금처럼 참고 표시만 (사용자가 직접 처리)
 #          · 한 글을 다 봤는데 필요한 날짜 표가 없으면 기존처럼 1번 알림 + 읽은 날짜 표시
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
@@ -71,7 +77,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.8.8"
+VERSION = "1.9.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -817,13 +823,15 @@ def run_checks(sheet, mult, market=None):
     buy_total = sum(r["price"] * r["qty"] * mult for r in p["buys"])
     add(buy_total <= float(c["max_buy_usd"]), f"매수 총액 {fmt_money(buy_total)} (한도 {fmt_money(float(c['max_buy_usd']))})")
     sell_qty = sum(r["qty"] * mult for r in p["sells"])
-    if market and market.get("sellable") is not None:
-        add(sell_qty <= market["sellable"], f"매도 합계 {sell_qty}주 ≤ 매도가능 {market['sellable']}주")
+    if market and market.get("sellable") is not None:        # 1.9.0: 잔고 차이로 막지 않음
+        s_ok = market["sellable"]
+        add(True, f"매도 합계 {sell_qty}주 ≤ 매도가능 {s_ok}주" if sell_qty <= s_ok else
+            f"⚠️ 매도가능 {s_ok}주 < 표 매도 {sell_qty}주 → 가장 높은 매도가부터 {sell_qty - s_ok}주 줄여 주문")
     elif sell_qty:
-        add(False, "메리츠 잔고 확인 실패 → 매도 수량 대조 못 함")
+        add(True, "⚠️ 잔고 조회 실패 → 매도는 표 수량 그대로 (증권사가 거절하면 그 줄만 실패)")
     if market and market.get("holding") is not None and p.get("holding_qty"):
         add(True, f"참고: 표 보유 {p['holding_qty']}×{mult}={p['holding_qty'] * mult}주 / 내 계좌 {market['holding']}주")
-    if not (cfg().get("exch_id") or (market or {}).get("exch_id")):
+    if not (cfg().get("exch_id") or (market or {}).get("exch_id") or seen_exch(cfg()["symbol"])):
         add(False, "거래소 번호를 모름 (설정 exch_id 필요)")
     auto_ok = all(x["ok"] for x in out)
     return out, auto_ok
@@ -840,6 +848,7 @@ def account_snapshot(client=None):
     try:
         hold, sellable, exch, avg = client.holding(cfg()["symbol"])
         snap.update(holding=hold, sellable=sellable, exch_id=exch, avg=avg)
+        remember_exch(cfg()["symbol"], exch)
     except Exception:
         pass
     try:
@@ -911,6 +920,7 @@ def market_snapshot():
     try:
         hold, sellable, exch, avg = m.holding(c["symbol"])
         snap.update(holding=hold, sellable=sellable, exch_id=exch, avg=avg)
+        remember_exch(c["symbol"], exch)
     except Exception as e:
         snap["error"] = (snap.get("error", "") + f" / 잔고: {e}").strip(" /")
     try:
@@ -935,11 +945,51 @@ def deadlines(sheet):
             cutoff - timedelta(minutes=int(c["auto_before_min"])), cutoff)
 
 
-def order_lines(sheet):
+def cap_sells(lines, sellable):
+    """매도 합계가 매도가능보다 많으면 가장 높은 매도가 줄부터 모자란 만큼 줄임. 줄 순서·개수는 그대로(0 가능)"""
+    if sellable is None:
+        return list(lines), 0
+    short = sum(q for s, _, q in lines if s == "sell") - int(sellable)
+    if short <= 0:
+        return list(lines), 0
+    out, cut = list(lines), 0
+    for i in sorted((i for i, (s, _, _) in enumerate(out) if s == "sell"), key=lambda i: -out[i][1]):
+        if short <= 0:
+            break
+        s, pr, q = out[i]
+        d = min(q, short)
+        out[i] = (s, pr, q - d)
+        short -= d; cut += d
+    return out, cut
+
+
+def raw_lines(sheet):
     mult = sheet["mult"]
     p = sheet["parsed"]
     return ([("buy", r["price"], r["qty"] * mult) for r in p["buys"]] +
             [("sell", r["price"], r["qty"] * mult) for r in p["sells"]])
+
+
+def order_lines(sheet, keep_zero=False):
+    """실제로 넣을 주문. 매도가능이 모자라면 가장 높은 매도가부터 줄인 수량"""
+    lines, _ = cap_sells(raw_lines(sheet), (sheet.get("market") or {}).get("sellable"))
+    return lines if keep_zero else [x for x in lines if x[2] > 0]
+
+
+EXCH_SEEN = HOME / "exch_seen.json"
+
+
+def remember_exch(symbol, exch):
+    """잔고에서 알아낸 거래소 번호 저장 (0주가 돼도 쓰도록)"""
+    try:
+        if exch and load(EXCH_SEEN, {}).get(symbol) != exch:
+            d = load(EXCH_SEEN, {}); d[symbol] = exch; save(EXCH_SEEN, d)
+    except Exception as e:
+        print("거래소 번호 저장 실패:", e, flush=True)
+
+
+def seen_exch(symbol):
+    return load(EXCH_SEEN, {}).get(symbol)
 
 
 def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
@@ -949,9 +999,10 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     us = datetime.strptime(sheet["us_date"], "%Y%m%d")
     L = [head, f"▫️ {c['symbol']} · {html.escape(p['close_date'])} 종가 {p['close']} · {html.escape(p.get('cycle') or '')}",
          f"▫️ 배수 <b>×{mult}</b> · 주문일(미국) {us:%m/%d} · Limit VWAP 예약 · <b>{RESERVE_NAMES.get(str(c.get('reserve_time', '2')), '')} 발주</b>"]
-    for side, price, qty in order_lines(sheet):
+    for (side, price, rq), (_, _, qty) in zip(raw_lines(sheet), order_lines(sheet, keep_zero=True)):
+        cut = f" ← 매도가능 부족으로 {rq}에서 줄임" if qty != rq else ""
         L.append(f"{'🔴 매수' if side == 'buy' else '🔵 매도'} <b>{price:g} × {qty}</b>"
-                 f"  <i>(표 {qty // mult})</i>  {fmt_money(price * qty)}")
+                 f"  <i>(표 {rq // mult})</i>  {fmt_money(price * qty)}{cut}")
     bad = [x for x in sheet["checks"] if not x["ok"]]
     if bad:
         L.append("\n⚠️ <b>확인 필요</b>")
@@ -1431,7 +1482,14 @@ def submit(tg, sheet, confirm_warn=False):
     from meritz_client import Meritz, WarnNeeded
     c = cfg()
     m = Meritz()
-    exch = c.get("exch_id") or (sheet.get("market") or {}).get("exch_id")
+    if not sheet["orders"]:   # 처음 접수에만 매도가능 다시 조회 (재시도·실패 줄 다시 넣기 때는 수량 고정 → 중복 방지)
+        try:
+            hold, sellable, ex, _ = m.holding(c["symbol"])
+            sheet.setdefault("market", {}).update(holding=hold, sellable=sellable, exch_id=ex or (sheet.get("market") or {}).get("exch_id"))
+            remember_exch(c["symbol"], ex)
+        except Exception as e:
+            print("접수 직전 잔고 조회 실패 (마지막 조회값 사용):", e, flush=True)
+    exch = c.get("exch_id") or (sheet.get("market") or {}).get("exch_id") or seen_exch(c["symbol"])
     if not exch:
         exch = market_snapshot().get("exch_id")
     if not exch:

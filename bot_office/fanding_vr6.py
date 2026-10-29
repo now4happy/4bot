@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.0.0)
+# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.1.0)
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
+#  2.1.0 (2026-10-29) 환전 버튼 + 09:00 알림
+#    - 주문표 알림은 KST 09:00 (메리츠 예약 접수·환전이 되는 시각). 표가 그 전에 오면 09:00 까지 모아 두었다가 보냄
+#    - 보유 달러(예수금)가 매수 필요 달러보다 적으면 [💱 환전 금액 확인] 버튼 → 확인 화면 → [✅ 환전 실행]
+#      (2차 확인 · 10분 안 · 실행 직전 환율이 1% 넘게 바뀌면 중단 · VR6 계좌 키로만). /vr6환전 · /vr6환전 300
+#    - 밤 마감 30분 전 알림은 결정 대기(버튼 안 누름)이거나 달러가 부족할 때만. 자동환전은 없음
+#    - 잔고가 표와 달라도 막지 않음: 매도 합계(표×배수) > 매도가능 → 가장 높은 매도가 줄부터 모자란 만큼 줄여 주문
+#      (매도가능은 처음 접수 직전에 다시 조회) · 잔고 조회 실패 → 매도 표 수량 그대로 · 보유 수량 차이는 참고 표시만
+#    - 거래소 번호를 한 번 알아내면 vr6_exch_seen.json 에 저장 (TQQQ 0주가 돼도 주문 가능)
 #  2.0.0 (2026-10-29) 주문 단계 추가
 #    - 글의 이미지 중 '매수계획/매도계획' 표를 AI 로 찾아 2번 교차 판독(fanding_trade.vision 사용, P 와 같은 AI)
 #    - VR 검산: 매수점 = 최소값 ÷ (체결 전 개수), 매도점 = 최대값 ÷ (체결 전 개수), Pool 은 매수마다 빼고 매도마다 더함.
@@ -26,7 +34,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -58,6 +66,7 @@ DEFAULTS = {
     "alarm_before_min": 30,
     "auto_before_min": 10,
     "submit_kst": "09:01",       # 메리츠 예약 접수는 한국시간 09:00 부터
+    "notice_kst": "09:00",       # 주문표 알림 시각 (그 전에 받은 표는 이때 보냄)
     "plans": {},
 }
 
@@ -70,7 +79,9 @@ HELP = ("▫️ <b>/vr6주문</b> 이번 회차 주문표·주문 상태 (버튼
         "▫️ <b>/vr6배수</b> 현재 배수 · <b>/vr6배수 10</b> 바꾸기\n"
         "▫️ <b>/vr6일정</b> 다음 진행일 · <b>/vr6일정 2026-11-09</b> 날짜 바꾸기\n"
         "▫️ <b>/vr6지금</b> 일정과 상관없이 PC가 다음에 확인할 때 바로 진행\n"
-        "▫️ <b>/vr6자동켜기</b> · <b>/vr6자동끄기</b> 버튼 안 누를 때 자동주문\n▫️ <b>/vr6진단</b> PC 연락·계좌 연결·마지막 진행 상태")
+        "▫️ <b>/vr6자동켜기</b> · <b>/vr6자동끄기</b> 버튼 안 누를 때 자동주문\n"
+        "▫️ <b>/vr6환전</b> 부족 달러 환전 확인 · <b>/vr6환전 300</b> 금액 지정 (실행은 확인 버튼에서만)\n"
+        "▫️ <b>/vr6진단</b> PC 연락·계좌 연결·마지막 진행 상태")
 
 
 # ---------------------------------------------------------- 저장
@@ -474,6 +485,8 @@ def account(st, m=None):
     try:
         hold, sellable, exch, avg = m.holding(st["symbol"])
         snap.update(holding=hold, sellable=sellable, exch_id=exch)
+        if exch and seen_exch(st["symbol"]) != exch:            # 0주가 돼도 쓰도록 저장
+            d = load(EXCH_SEEN, {}); d[st["symbol"]] = exch; save(EXCH_SEEN, d, 0o600)
     except Exception as e:
         snap["errors"].append(f"잔고: {str(e)[:120]}")
     for k, fn in (("usd_cash", "usd_cash"), ("usd_est", "usd_estimated")):
@@ -485,11 +498,40 @@ def account(st, m=None):
 
 
 # ---------------------------------------------------------- 주문표 만들기
-def order_lines(plan):
+def raw_lines(plan):
     """[(side, price, qty)] — 표의 줄마다 배수만큼"""
     k = int(plan["mult"])
     p = plan["parsed"]
     return [("buy", r["price"], k) for r in p["buys"]] + [("sell", r["price"], k) for r in p["sells"]]
+
+
+def cap_sells(lines, sellable):
+    """매도 합계가 매도가능보다 많으면 가장 높은 매도가 줄부터 모자란 만큼 줄임 (줄 순서·개수 그대로, 0 가능)"""
+    if sellable is None:
+        return list(lines), 0
+    short = sum(q for s, _, q in lines if s == "sell") - int(sellable)
+    out, cut = list(lines), 0
+    for i in sorted((i for i, (s, _, _) in enumerate(out) if s == "sell"), key=lambda i: -out[i][1]):
+        if short <= 0:
+            break
+        s, pr, q = out[i]
+        d = min(q, short)
+        out[i] = (s, pr, q - d)
+        short -= d; cut += d
+    return out, cut
+
+
+def order_lines(plan, keep_zero=False):
+    """실제로 넣을 주문 (매도가능이 모자라면 줄인 수량). keep_zero=True 면 표 줄 순서 그대로(0 포함)"""
+    lines, _ = cap_sells(raw_lines(plan), (plan.get("account") or {}).get("sellable"))
+    return lines if keep_zero else [x for x in lines if x[2] > 0]
+
+
+EXCH_SEEN = HOME / "vr6_exch_seen.json"
+
+
+def seen_exch(symbol):
+    return load(EXCH_SEEN, {}).get(symbol)
 
 
 def need_usd(plan):
@@ -524,13 +566,16 @@ def run_checks(plan, st, now):
         add(not bad, f"가격 범위 정상 (현재가 {cur:g} 기준)" if not bad else f"현재가 {cur:g} 와 너무 먼 가격: {bad[:5]}")
     else:
         add(False, "메리츠 시세 확인 실패 → 가격 대조 못 함")
-    sell_q = sum(q for sd, pr, q in order_lines(plan) if sd == "sell")
-    if sell_q:
-        if acc.get("sellable") is not None:
-            add(sell_q <= acc["sellable"], f"매도 합계 {sell_q}주 ≤ 매도가능 {acc['sellable']}주")
+    sell_q = sum(q for sd, pr, q in raw_lines(plan) if sd == "sell")
+    if sell_q:                                   # 잔고 차이로는 막지 않음 (사용자 결정 2026-10-29)
+        sa = acc.get("sellable")
+        if sa is None:
+            add(True, "⚠️ 잔고 조회 실패 → 매도는 표 수량 그대로 (증권사가 거절하면 그 줄만 실패)")
+        elif sell_q <= sa:
+            add(True, f"매도 합계 {sell_q}주 ≤ 매도가능 {sa}주")
         else:
-            add(False, "VR6 계좌 잔고 확인 실패 → 매도 수량 대조 못 함")
-    if not (st.get("exch_id") or acc.get("exch_id")):
+            add(True, f"⚠️ 매도가능 {sa}주 < 표 매도 {sell_q}주 → 가장 높은 매도가부터 {sell_q - sa}주 줄여 주문")
+    if not (st.get("exch_id") or acc.get("exch_id") or seen_exch(st["symbol"])):
         add(False, "거래소 번호를 모름 (VR6 계좌 잔고에 TQQQ 가 없으면 vr6.json 에 exch_id 설정 필요)")
     if not KEYS_VR6.exists():
         add(False, "VR6 계좌 키 없음 (/etc/bot-office/meritz_vr6.json) → 주문 못 함")
@@ -548,7 +593,7 @@ def info_lines(plan):
     if cash is not None:
         gap = round(need - cash, 2)
         L.append(f"▫️ <b>부족: ${gap:,.2f} → 환전 필요</b>" if gap > 0 else f"▫️ 부족 없음 (여유 ${-gap:,.2f})")
-    L.append("▫️ 환전은 직접 해 주세요(자동환전 없음). 2주 기간이라 매수가 나가는 날 달러가 있으면 됩니다.")
+    L.append("▫️ 부족하면 아래 [💱 환전 금액 확인] 버튼이나 <code>/vr6환전</code> 으로 환전할 수 있어요 (확인 후 실행 · 자동환전 없음).")
     base = p.get("buy_base_qty") or p.get("sell_base_qty")
     if base:
         L.append("\n📦 <b>보유 수량 비교</b>")
@@ -576,7 +621,10 @@ def plan_text(plan, st, head="🅥 <b>VR6 주문표</b>"):
         L += [f"  {r['price']:g} × {k}주 → 보유 {r['qty'] * k}주" for r in p["buys"]]
     if p["sells"]:
         L.append(f"\n🔵 <b>매도 {len(p['sells'])}줄</b> (최대값 {p.get('max_value')})")
-        L += [f"  {r['price']:g} × {k}주 → 보유 {r['qty'] * k}주" for r in p["sells"]]
+        capped = [q for sd, _, q in order_lines(plan, keep_zero=True) if sd == "sell"]
+        for r, q in zip(p["sells"], capped):
+            L.append(f"  {r['price']:g} × {q}주 → 보유 {r['qty'] * k}주" if q == k else
+                     f"  {r['price']:g} × <b>{q}주</b> (표 {k}주 → 매도가능 부족으로 줄임)")
     L += info_lines(plan)
     bad = [x for x in plan["checks"] if not x["ok"]]
     L.append("\n🛡 <b>안전점검</b> " + ("모두 통과" if not bad else f"{len(bad)}건 미통과"))
@@ -592,9 +640,23 @@ def plan_text(plan, st, head="🅥 <b>VR6 주문표</b>"):
     return "\n".join(L)
 
 
-def plan_rows(plan):
+def usd_gap(plan, acc=None):
+    """매수 필요 달러 - 보유 달러(예수금). 조회 못 하면 None"""
+    cash = (acc if acc is not None else plan.get("account") or {}).get("usd_cash")
+    return None if cash is None else round(need_usd(plan) - cash, 2)
+
+
+def fx_row(plan, acc=None):
+    gap = usd_gap(plan, acc)
+    if gap is None or gap <= 0:
+        return []
+    return [[{"text": f"💱 환전 금액 확인 (부족 ${gap:,.2f})", "callback_data": f"vm:fc:{plan['cycle']}:{plan['ver']}"}]]
+
+
+def plan_rows(plan, decide=True):
     key = f"{plan['cycle']}:{plan['ver']}"
-    return [[{"text": "✅ 주문", "callback_data": f"vm:ok:{key}"}, {"text": "❌ 이번엔 안 함", "callback_data": f"vm:no:{key}"}]]
+    rows = [[{"text": "✅ 주문", "callback_data": f"vm:ok:{key}"}, {"text": "❌ 이번엔 안 함", "callback_data": f"vm:no:{key}"}]] if decide else []
+    return rows + fx_row(plan)
 
 
 def build_plan(tg, cycle, now=None):
@@ -633,24 +695,54 @@ def build_plan(tg, cycle, now=None):
                 "status": "pending", "orders": [], "ver": int((old or {}).get("ver", 0)) + 1, "alarm_sent": False,
                 "received": now.isoformat(timespec="minutes")}
     plan["account"] = account(st)
+    head = "🅥 <b>VR6 주문표 도착</b>" if not old else "🅥 <b>VR6 주문표 (다시 판독)</b>"
     with locked() as st:
         plan["checks"], plan["auto_ok"] = run_checks(plan, st, now)
         if old and old.get("msg_id"):
             tg.clear_buttons(old["msg_id"])
+        hold = now < notice_time(now, st)
+        if hold:
+            plan["notice_pending"], plan["notice_head"] = True, head
         st["plans"][cycle] = plan
         for k in sorted(st["plans"])[:-6]:
             st["plans"].pop(k, None)
-        text = plan_text(plan, st, "🅥 <b>VR6 주문표 도착</b>" if not old else "🅥 <b>VR6 주문표 (다시 판독)</b>")
-    tg.photo(VDIR / n, f"🅥 VR6 주문표 · {html.escape(first.get('title') or cycle)}")
-    r = tg.send(text, plan_rows(plan) if plan["order_start"] else None)
+    if hold:
+        replay("vr6_plan_ready", "skipped", "held_until_notice_time", event_type="user_visible", cycle=cycle,
+               reads_agree=agree, failed_checks=len([x for x in plan["checks"] if not x["ok"]]))
+        print(f"VR6 주문표 준비 완료 → {_fill(load(STATE, {}))['notice_kst']} KST 에 알림", flush=True)
+        return plan
+    send_plan_notice(tg, cycle, head)
+    return _fill(load(STATE, {}))["plans"].get(cycle)
+
+
+def notice_time(now, st):
+    h, m = _hm(st["notice_kst"])
+    return now.replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+def send_plan_notice(tg, cycle, head, refresh=False):
+    """주문표 사진 + 내용 + 버튼. refresh=True 면 (09:00 보류 뒤) 계좌·점검을 다시 보고 보냄"""
+    st = _fill(load(STATE, {}))
+    plan = st["plans"].get(cycle)
+    if not plan:
+        return
+    if refresh:
+        acc = account(st)
+        with locked() as st:
+            pl = st["plans"][cycle]
+            pl["account"] = acc
+            pl["checks"], pl["auto_ok"] = run_checks(pl, st, datetime.now(KST))
+            plan = dict(pl)
+    tg.photo(VDIR / plan["img"], f"🅥 VR6 주문표 · {html.escape(plan['parsed'].get('title') or cycle)}")
+    r = tg.send(plan_text(plan, st, head), plan_rows(plan, decide=plan["status"] == "pending" and bool(plan["order_start"])) or None)
     with locked() as st:
         if cycle in st["plans"]:
             st["plans"][cycle]["msg_id"] = (r or {}).get("message_id")
+            st["plans"][cycle].pop("notice_pending", None)
     replay("vr6_plan_ready", "ok" if plan["auto_ok"] else "partial", "" if plan["auto_ok"] else "checks_failed",
-           event_type="user_visible", cycle=cycle, reads_agree=agree, buy_rows=len(first["buys"]),
-           sell_rows=len(first["sells"]), mult=plan["mult"], failed_checks=len([x for x in plan["checks"] if not x["ok"]]),
-           message_id=(r or {}).get("message_id"))
-    return plan
+           event_type="user_visible", cycle=cycle, reads_agree=plan.get("reads_agree"),
+           buy_rows=len(plan["parsed"]["buys"]), sell_rows=len(plan["parsed"]["sells"]), mult=plan["mult"],
+           failed_checks=len([x for x in plan["checks"] if not x["ok"]]), message_id=(r or {}).get("message_id"))
 
 
 # ---------------------------------------------------------- 주문 접수 (tick 에서만 호출)
@@ -659,7 +751,13 @@ def submit(tg, cycle, confirm_warn=False):
     st = _fill(load(STATE, {}))
     plan = st["plans"][cycle]
     m = client()
-    exch = st.get("exch_id") or (plan.get("account") or {}).get("exch_id")
+    if not plan["orders"]:          # 처음 접수에만 매도가능 다시 조회 (재시도 때는 수량 고정 → 중복 방지)
+        acc0 = account(st, m)
+        if acc0.get("sellable") is not None:
+            with locked() as st2:
+                st2["plans"][cycle]["account"] = acc0
+                plan = st2["plans"][cycle]
+    exch = st.get("exch_id") or (plan.get("account") or {}).get("exch_id") or seen_exch(st["symbol"])
     if not exch:
         exch = account(st, m).get("exch_id")
     if not exch:
@@ -667,8 +765,8 @@ def submit(tg, cycle, confirm_warn=False):
     sd, ed = plan["order_start"].replace("-", ""), plan["end"].replace("-", "")
     done = {(o["side"], o["price"], o["i"]) for o in plan["orders"] if o.get("no")}
     orders = [o for o in plan["orders"] if o.get("no")]
-    for i, (side, price, qty) in enumerate(order_lines(plan)):
-        if (side, price, i) in done:
+    for i, (side, price, qty) in enumerate(order_lines(plan, keep_zero=True)):
+        if qty <= 0 or (side, price, i) in done:
             continue
         o = {"side": side, "price": price, "qty": qty, "i": i, "at": datetime.now(KST).isoformat(timespec="seconds")}
         try:
@@ -683,7 +781,8 @@ def submit(tg, cycle, confirm_warn=False):
                event_type="external_call", cycle=cycle, side=side, line=i, broker_no=o.get("no"))
         orders.append(o)
         time.sleep(0.3)
-    ok = len([o for o in orders if o.get("no")]) == len(order_lines(plan))
+    n_total = len(order_lines(plan))
+    ok = len([o for o in orders if o.get("no")]) == n_total
     acc = account(st, m)
     with locked() as st2:
         pl = st2["plans"][cycle]
@@ -707,7 +806,7 @@ def submit(tg, cycle, confirm_warn=False):
     L += info_lines(plan)
     r = tg.send("\n".join(L), rows)
     replay("vr6_orders_result", "ok" if ok else "partial", event_type="user_visible", cycle=cycle,
-           accepted=len([o for o in orders if o.get("no")]), total=len(order_lines(plan)), message_id=(r or {}).get("message_id"))
+           accepted=len([o for o in orders if o.get("no")]), total=n_total, message_id=(r or {}).get("message_id"))
 
 
 # ---------------------------------------------------------- 시간표 처리 (fanding_trade.loop 이 20초마다 부름)
@@ -725,9 +824,19 @@ def tick(tg, now=None):
         tg.send(f"⚠️ <b>VR6 진행일({due.isoformat()}, {_wd(due)})이 지났는데 아직 표를 못 받았어요</b>\n"
                 f"PC가 마지막으로 서버에 물어본 때: {seen}\nWindows PC가 켜져 있는지, 팬딩 로그인이 풀리지 않았는지 확인하고 "
                 "PC에서 <code>py fanding_vr6.py run</code> 을 실행하세요. 상태는 /vr6진단")
-    todo = []
+    todo, notices, fx_check = [], [], []
     with locked() as st:
         for cycle, pl in st["plans"].items():
+            if pl.get("notice_pending") and now >= notice_time(now, st):
+                notices.append((cycle, pl.get("notice_head") or "🅥 <b>VR6 주문표 도착</b>"))
+                pl["notice_pending"] = False
+            # 밤 마감 30분 전: 이미 승인·접수된 회차는 달러가 모자랄 때만 알림 (결정 대기는 아래에서 따로)
+            if (pl["status"] in ("approved", "submitting", "submitted", "partial", "retry", "retry_warn")
+                    and pl.get("order_start") and not pl.get("alarm_sent")):
+                alarm, _, cut = deadlines(pl, st)
+                if alarm <= now < cut:
+                    pl["alarm_sent"] = True
+                    fx_check.append(cycle)
             if pl["status"] == "submitting" and time.time() - pl.get("submit_t", 0) > 600:
                 pl["status"] = "partial"
                 tg.send(f"⚠️ VR6 {cycle} 회차 주문 접수 도중 프로그램이 다시 켜졌어요. 메리츠 앱에서 접수 여부를 확인해 주세요.",
@@ -766,11 +875,36 @@ def tick(tg, now=None):
                     pl["alarm_sent"] = True
                     tg.send(f"⏰ <b>VR6 주문 확인 마감 30분 전</b> · {cycle} 회차\n{auto:%H:%M} 에 "
                             + ("자동주문합니다." if pl["auto_ok"] else "점검 미통과라 자동주문 안 합니다.")
-                            + f"\n매수 필요 달러 ${need_usd(pl):,.2f} — 부족하면 지금 환전해 주세요.", plan_rows(pl))
+                            + f"\n매수 필요 달러 ${need_usd(pl):,.2f} — 부족하면 아래 버튼으로 환전할 수 있어요.", plan_rows(pl))
                     continue
+            if pl["status"] == "pending" and not st["auto_order"] and now >= alarm and not pl.get("alarm_sent"):
+                pl["alarm_sent"] = True
+                tg.send(f"⏰ <b>VR6 결정 대기 · 마감 30분 전</b> · {cycle} 회차\n자동주문이 꺼져 있어요. 주문하려면 아래 [✅ 주문]을 "
+                        f"눌러 주세요 (마감 {cut:%H:%M} KST, 지나면 다음 거래일로 미뤄요).", plan_rows(pl))
+                continue
             if pl["status"] in ("approved", "retry", "retry_warn") and (now.hour, now.minute) >= _hm(st["submit_kst"]):
                 todo.append((cycle, pl["status"] == "retry_warn"))
                 pl["status"], pl["submit_t"] = "submitting", time.time()
+    for cycle, head in notices:
+        try:
+            send_plan_notice(tg, cycle, head, refresh=True)
+        except Exception as e:
+            print("VR6 09:00 알림 오류:", type(e).__name__, e, flush=True)
+    for cycle in fx_check:
+        try:
+            st = _fill(load(STATE, {}))
+            pl = st["plans"][cycle]
+            acc = account(st)
+            gap = usd_gap(pl, acc)
+            if gap is not None and gap > 0:
+                tg.send(f"💱 <b>VR6 달러 부족</b> · {cycle} 회차\n매수 줄이 모두 체결되려면 ${need_usd(pl):,.2f} 필요 · "
+                        f"보유 달러 ${acc['usd_cash']:,.2f} → <b>${gap:,.2f} 부족</b>\n"
+                        "예약은 걸려 있지만 달러가 없으면 매수가 거절될 수 있어요.", fx_row(pl, acc))
+            replay("vr6_night_fx_check", "ok" if gap is not None else "failed",
+                   "short" if (gap or 0) > 0 else ("enough" if gap is not None else "account_error"),
+                   event_type="user_visible", cycle=cycle)
+        except Exception as e:
+            print("VR6 달러 확인 오류:", type(e).__name__, e, flush=True)
     for cycle, warn in todo:
         try:
             submit(tg, cycle, confirm_warn=warn)
@@ -780,6 +914,118 @@ def tick(tg, now=None):
             replay("vr6_submit", "failed", type(e).__name__, event_type="external_call", cycle=cycle)
             tg.send(f"🚨 <b>VR6 주문 접수 오류</b> · {cycle}\n{html.escape(str(e))[:400]}",
                     [[{"text": "🔁 다시 시도", "callback_data": f"vm:re:{cycle}:{ver}"}]])
+
+
+# ---------------------------------------------------------- 환전 (사용자 버튼에서만 실행 · 자동환전 없음)
+FX_TTL_MINUTES = 10
+
+
+def _fx_amount(s):
+    from decimal import Decimal, InvalidOperation
+    try:
+        v = Decimal(str(s).replace("$", "").replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        return None
+    return v if v.is_finite() and v > 0 else None
+
+
+def fx_show(tg, amount=None, plan=None):
+    """환전 확인 화면 (실행 안 함). 기본 금액 = 이번 회차 매수 필요 달러 - 보유 달러(예수금)"""
+    from decimal import Decimal
+    st = _fill(load(STATE, {}))
+    plan = plan or _latest_plan(st)
+    if not KEYS_VR6.exists():
+        tg.send("💱 VR6 계좌 키가 없어 환전할 수 없어요 (/etc/bot-office/meritz_vr6.json)."); return
+    try:
+        m = client()
+    except Exception as e:
+        tg.send(f"💱 VR6 계좌 연결 오류 ({html.escape(type(e).__name__)})"); return
+    acc = account(st, m)
+    need = Decimal(str(need_usd(plan))) if plan else None
+    cash = Decimal(str(acc["usd_cash"])) if acc.get("usd_cash") is not None else None
+    gap = max(Decimal(0), need - cash) if (need is not None and cash is not None) else None
+    if amount is None:
+        amount = gap
+    head = ["💱 <b>VR6 환전 확인</b> — 아직 실행하지 않았어요",
+            "▫️ 보유 달러(예수금): " + (f"${cash:,.2f}" if cash is not None else "조회 불가"),
+            "▫️ 이번 회차 매수 필요 달러: " + (f"${need:,.2f} ({plan['cycle']} 회차)" if need is not None else "주문표 없음"),
+            "▫️ 부족: " + (f"${gap:,.2f}" if gap is not None else "계산 보류")]
+    if amount is None or amount <= 0:
+        tg.send("\n".join(head + ["환전이 필요 없어요. 금액을 직접 정하려면 <code>/vr6환전 300</code> 처럼 적어 주세요."])); return
+    amount = amount.quantize(Decimal("0.01"))
+    try:
+        info = m.fx_applied_rate()
+        rate, rtime = Decimal(str(info["rate"])), str(info.get("exrt_stnd_time") or "")
+    except Exception as e:
+        tg.send(f"💱 적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). 환전 가능 시간(평일 낮)인지 확인하고 다시 해 주세요."); return
+    try:
+        krw = Decimal(str(m.krw_cash()))
+    except Exception:
+        krw = None
+    krw_need = amount * rate
+    with locked() as st2:
+        st2["fx_pending"] = {"amount": f"{amount:.2f}", "rate": str(rate), "time": rtime,
+                             "created_at": datetime.now(KST).isoformat(), "cycle": (plan or {}).get("cycle")}
+    L = head[:1] + [f"▫️ 환전할 달러: <b>${amount:,.2f}</b>" + (" (부족액보다 많아요)" if gap is not None and amount > gap else ""),
+                    f"▫️ 적용환율: {rate:,.4f} (기준 {html.escape(rtime)})",
+                    f"▫️ 필요 원화(추정): 약 {krw_need:,.0f}원 (수수료 별도 · 실제 금액은 실행 결과 기준)",
+                    "▫️ VR6 계좌 원화 예수금: " + (f"{krw:,.0f}원" if krw is not None else "조회 불가")] + head[1:]
+    if krw is not None and krw < krw_need:
+        L.append("⚠️ 원화가 부족해 실행 버튼을 안 띄웠어요. 원화를 먼저 넣거나 <code>/vr6환전 금액</code> 으로 줄여 주세요.")
+        tg.send("\n".join(L), [[{"text": "❌ 취소", "callback_data": "vm:fn"}]]); return
+    L.append(f"실행 버튼은 {FX_TTL_MINUTES}분 동안 유효해요. 누르면 그때 환율을 다시 보고, 1% 넘게 바뀌었으면 실행하지 않아요.")
+    tg.send("\n".join(L), [[{"text": "✅ 환전 실행", "callback_data": f"vm:fx:{amount:.2f}"},
+                            {"text": "❌ 취소", "callback_data": "vm:fn"}]])
+    replay("vr6_fx_quote", "ok", event_type="user_visible", cycle=(plan or {}).get("cycle"))
+
+
+def fx_exec(tg, cb, amount_str):
+    from decimal import Decimal, InvalidOperation
+    msg_id = (cb.get("message") or {}).get("message_id")
+    tg.answer(cb.get("id"), "환전을 확인할게요")
+    tg.clear_buttons(msg_id)
+    with locked() as st:
+        pend = st.pop("fx_pending", None)
+    try:
+        amount = Decimal(amount_str)
+    except (InvalidOperation, ValueError):
+        tg.send("환전 금액이 이상해요. 다시 /vr6환전 으로 열어 주세요."); return
+    if not pend or pend.get("amount") != f"{amount:.2f}":
+        tg.send("환전 확인 정보가 없거나 금액이 달라요. /vr6환전 으로 다시 열어 주세요. (실행 안 함)"); return
+    try:
+        age = (datetime.now(KST) - datetime.fromisoformat(pend["created_at"])).total_seconds() / 60
+    except (KeyError, ValueError):
+        age = 999
+    if age > FX_TTL_MINUTES:
+        tg.send(f"환전 확인 후 {FX_TTL_MINUTES}분이 지났어요. 환율이 바뀔 수 있어 실행하지 않았어요. /vr6환전 으로 다시 열어 주세요."); return
+    try:
+        m = client()
+        info = m.fx_applied_rate()
+        new_rate, new_time = Decimal(str(info["rate"])), str(info.get("exrt_stnd_time") or "")
+        old_rate = Decimal(pend["rate"])
+    except Exception as e:
+        tg.send(f"환전 중단: 실행 직전 환율 조회 실패 ({html.escape(type(e).__name__)}). 돈은 움직이지 않았어요."); return
+    if old_rate and abs(new_rate - old_rate) / old_rate > Decimal("0.01"):
+        tg.send(f"환율이 {old_rate:,.4f} → {new_rate:,.4f} 로 1% 넘게 바뀌어 실행하지 않았어요. 새 환율로 다시 보여 드릴게요.")
+        return fx_show(tg, amount=amount)
+    try:
+        res = m.fx_exchange(f"{amount:.2f}", str(new_rate), new_time)      # 이 줄만 실제 돈이 움직인다
+    except Exception as e:
+        replay("vr6_fx_exchange", "failed", type(e).__name__, event_type="external_call")
+        tg.send(f"⚠️ 환전 결과를 확인하지 못했어요 ({html.escape(type(e).__name__)}: {html.escape(str(e))[:150]}).\n"
+                "환전이 됐을 수도 있어 다시 실행하지 않았어요. 메리츠 앱의 환전 내역을 먼저 확인해 주세요."); return
+    replay("vr6_fx_exchange", "ok", event_type="external_call", broker_no=res.get("tr_srno"))
+    acc = account(_fill(load(STATE, {})), m)
+    L = ["✅ <b>VR6 환전 완료</b>", f"▫️ 환전한 달러: ${amount:,.2f}",
+         f"▫️ 적용환율: {html.escape(str(res.get('aply_exrt') or new_rate))}"]
+    if res.get("tr_amt") is not None:
+        L.append(f"▫️ 차감된 원화: {html.escape(str(res['tr_amt']))}원")
+    L.append("▫️ 환전 후 보유 달러(예수금): " + (f"${acc['usd_cash']:,.2f}" if acc.get("usd_cash") is not None else "조회 불가"))
+    pl = _latest_plan(_fill(load(STATE, {})))
+    if pl and acc.get("usd_cash") is not None:
+        gap = usd_gap(pl, acc)
+        L.append(f"▫️ {pl['cycle']} 회차 매수 필요 ${need_usd(pl):,.2f} → " + (f"아직 ${gap:,.2f} 부족" if gap > 0 else "충분해요"))
+    tg.send("\n".join(L))
 
 
 # ---------------------------------------------------------- 5번 봇 메뉴·명령
@@ -913,7 +1159,7 @@ def handle_text(tg, text):
         if not pl:
             tg.send("아직 VR6 주문표가 없어요. 표를 받으면 자동으로 판독해서 알려 드려요."); return True
         head = f"🅥 <b>VR6 주문표</b> [{STATUS_NAMES.get(pl['status'], pl['status'])}]"
-        r = tg.send(plan_text(pl, st, head), plan_rows(pl) if pl["status"] == "pending" and pl.get("order_start") else None)
+        r = tg.send(plan_text(pl, st, head), plan_rows(pl, decide=pl["status"] == "pending" and bool(pl.get("order_start"))) or None)
         if pl["status"] == "pending" and (r or {}).get("message_id"):
             with locked() as st2:
                 old = st2["plans"][pl["cycle"]].get("msg_id")
@@ -941,6 +1187,15 @@ def handle_text(tg, text):
             st["auto_order"] = on
         tg.send(f"🤖 VR6 자동주문 <b>{'켜짐' if on else '꺼짐'}</b> — 버튼을 안 누르면 "
                 + ("첫 발주일 마감 10분 전에 자동주문해요 (점검 모두 통과 시)." if on else "주문하지 않아요."))
+        return True
+    m = re.fullmatch(r"(?:/vr6환전|vr6환전)\s*([\d,.$]+)?", t, re.I)
+    if m:
+        amt = None
+        if m.group(1):
+            amt = _fx_amount(m.group(1))
+            if amt is None:
+                tg.send("금액을 <code>/vr6환전 300</code> 처럼 적어 주세요."); return True
+        fx_show(tg, amount=amt)
         return True
     if low in ("/vr6진단", "vr6진단"):
         tg.send(diagnosis()); return True
@@ -978,6 +1233,22 @@ def callback(tg, cb):
     parts = data.split(":")
     if parts[1] in ("ok", "no", "re", "wy") and len(parts) == 4:
         _plan_action(tg, cb, parts[1], parts[2], parts[3])
+        return True
+    if parts[1] == "fc" and len(parts) == 4:          # 주문표의 [💱 환전 금액 확인]
+        tg.answer(cb.get("id"), "환전 금액을 계산할게요")
+        st = _fill(load(STATE, {}))
+        pl = st["plans"].get(parts[2])
+        fx_show(tg, plan=pl if pl and str(pl["ver"]) == parts[3] else None)
+        return True
+    if parts[1] == "fx" and len(parts) == 3:          # [✅ 환전 실행]
+        fx_exec(tg, cb, parts[2])
+        return True
+    if parts[1] == "fn":                               # [❌ 취소]
+        with locked() as st:
+            st.pop("fx_pending", None)
+        tg.answer(cb.get("id"), "취소했어요")
+        tg.clear_buttons((cb.get("message") or {}).get("message_id"))
+        tg.send("❌ 환전 취소 · 실행하지 않았어요.")
         return True
     tg.answer(cb.get("id"))
     if parts[1] == "mt" and len(parts) > 2 and parts[2].isdigit():
