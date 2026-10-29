@@ -43,16 +43,10 @@ def handle_callback(cb):
         send_panel(*(build_control_view()), msg_id)
     elif data.startswith("method_coin_"):
         coin = data.removeprefix("method_coin_")
-        if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
-            send_panel("❌ 등록된 BTC·ETH만 선택할 수 있습니다.", [[{"text":"🔙 제어반","callback_data":"control"}]], msg_id)
-        else:
-            send_panel(f"{coin} 매매법 선택 (SMA법은 별도 승인 전 주문 잠금)", [
-                [{"text":"1번 스마트 적립", "callback_data":f"method_set_{coin}_1"}],
-                [{"text":"SMA법 (승인 전 관찰)", "callback_data":f"method_set_{coin}_2"}],
-                [{"text":"SMA법 매수금액 설정", "callback_data":f"method_buy_{coin}"}],
-                [{"text":"하락 교차 매도비율 설정", "callback_data":f"method_ratio_{coin}"}],
-                [{"text":"🔓 SMA법 승인", "callback_data":f"method_approve_{coin}"}],
-                [{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
+        send_panel(*(build_coin_sma_view(coin)), msg_id)
+    elif data.startswith("method_choose_"):
+        coin = data.removeprefix("method_choose_")
+        send_panel(*(build_coin_method_choice(coin)), msg_id)
     elif data.startswith("method_set_"):
         parts = data.split("_")
         if len(parts) == 4 and parts[2] in TREND_PERIOD and parts[2] in config.get("coins", {}) and parts[3] in ("1", "2"):
@@ -64,7 +58,7 @@ def handle_callback(cb):
             state.setdefault("method2_selected_on", {}).pop(coin, None)
             save_json(CONFIG_FILE, config); save_json(STATE_FILE, state)
             RL.ev("state_change", "coin_method", "ok", None, actor="user", coin_ref=RL.ref(coin), method=method)
-            send_panel(*(build_control_view()), msg_id)
+            send_panel(*(build_coin_sma_view(coin)), msg_id)
     elif data.startswith("method_approve_"):
         coin = data.removeprefix("method_approve_")
         if coin not in TREND_PERIOD or coin not in config.get("coins", {}) or coin_method(coin) != 2:
@@ -92,18 +86,18 @@ def handle_callback(cb):
             RL.ev("state_change", "method2_approval", "ok", None,
                   actor="user", coin_ref=RL.ref(coin), approved=True)
             send_panel(f"✅ {coin} SMA법 승인됨. 설정된 신호에 따라 자동주문이 가능해집니다.",
-                       [[{"text":"⚙️ 제어반", "callback_data":"control"}]], msg_id)
+                       [[{"text":"🔙 코인 설정", "callback_data":f"method_coin_{coin}"}]], msg_id)
     elif data.startswith("method_buy_"):
         coin = data.removeprefix("method_buy_")
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
             wait_state["mode"] = "set_sma_buy"; wait_state["coin"] = coin
-            send_panel(f"{coin} SMA법 매수금액(KRW)을 입력하세요. 시드와 별개이며 5,000원 이상이어야 합니다.",
+            send_panel(f"💵 {coin} SMA 매수금액을 숫자로 입력하세요.\n예: 100000 (원)\n시드와 별개이며 5,000원 이상입니다.",
                        [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
     elif data.startswith("method_ratio_"):
         coin = data.removeprefix("method_ratio_")
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
             wait_state["mode"] = "set_method2_ratio"; wait_state["coin"] = coin
-            send_panel(f"{coin} 하락 교차 매도비율 입력 (1~100, 승인 전 주문 잠금)", [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
+            send_panel(f"📉 {coin} SMA 매도비율을 숫자로 입력하세요.\n예: 50 (50% 매도)\n1~100 사이로 입력하세요.", [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
     elif data == "ask_buy": wait_state["mode"] = "setbuy"; send_panel("💵 [코인 시드 설정] 예: BTC 20000 / 삭제: BTC 0", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
     elif data == "ask_day": wait_state["mode"] = "setday"; send_panel("🔢 [코인 매수일수 보정] 예: BTC 5 또는 ETH 6", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
     elif data == "ask_custom": wait_state["mode"] = "setcustom"; send_panel("🎯 [1차익절% 매도비율%] 예: 10 20", [[{"text": "🔙 제어반", "callback_data": "control"}]], msg_id)
@@ -133,7 +127,7 @@ def handle_message(msg):
             RL.ev("state_change", "sma_buy_amount", "ok", None, actor="user",
                   coin_ref=RL.ref(coin), audit_ref=RL.audit("sma_buy_amount", coin=coin, amount=amount))
             wait_state["mode"] = None
-            send_panel(*(build_control_view()))
+            send_panel(*(build_coin_sma_view(coin)))
         except (ValueError, TypeError):
             send_panel("❌ SMA법 매수금액은 5,000원 이상의 정수로 입력하세요.",
                        [[{"text":"🔙 제어반", "callback_data":"control"}]])
@@ -149,7 +143,7 @@ def handle_message(msg):
             save_json(CONFIG_FILE, config)
             RL.ev("state_change", "method2_ratio", "ok", None, actor="user", coin_ref=RL.ref(coin), audit_ref=RL.audit("method2_ratio", coin=coin, ratio=ratio))
             wait_state["mode"] = None
-            send_panel(*(build_control_view()))
+            send_panel(*(build_coin_sma_view(coin)))
         except (ValueError, TypeError):
             send_panel("❌ 1~100 사이 숫자를 입력하세요.", [[{"text":"🔙 제어반", "callback_data":"control"}]])
         return

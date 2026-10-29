@@ -61,6 +61,45 @@ def get_bithumb_schedule_status() -> str:
         return f"⏳ 대기 중 (오늘 {buy_h:02d}:00 정기매수 시작)"
     return f"🟢 금일 {buy_h:02d}:00 정기매수 진행/점검 중"
 
+
+def build_coin_sma_view(coin):
+    if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반","callback_data":"control"}]]
+    method = coin_method(coin)
+    amount = sma_buy_amount(coin)
+    ratio = method2_ratio(coin) if coin in config.get("method2_sell_ratios", {}) else None
+    approved = method2_ready(coin)
+    status = ("🟢 승인 완료" if approved else "🔒 승인 대기") if method == 2 else "—"
+    text = (f"🪙 {coin} 매매 설정\n\n"
+            f"매매법: {'SMA법' if method == 2 else '1번 스마트 적립'}\n"
+            f"SMA 기준: {TREND_PERIOD[coin]}일선\n"
+            f"승인: {status}\n"
+            f"SMA 매수금액: {f'{amount:,.0f}원' if amount is not None else '미설정'}\n"
+            f"SMA 매도비율: {f'{ratio:g}%' if ratio is not None else '미설정'}\n\n"
+            "SMA법은 승인 전 주문 잠금 상태입니다.\n"
+            "SMA법 선택 중 기존 정기매수·분할익절은 중단됩니다.")
+    kb = [
+        [{"text":"📊 매매법 선택","callback_data":f"method_choose_{coin}"}],
+        [{"text":"💵 SMA 매수금액","callback_data":f"method_buy_{coin}"}],
+        [{"text":"📉 SMA 매도비율","callback_data":f"method_ratio_{coin}"}],
+        [{"text":"🔓 SMA법 승인" if not approved else "✅ 승인 완료","callback_data":f"method_approve_{coin}"}],
+        [{"text":"🔙 제어반","callback_data":"control"}],
+    ]
+    return text, kb
+
+
+def build_coin_method_choice(coin):
+    if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반","callback_data":"control"}]]
+    current = coin_method(coin)
+    return (f"🪙 {coin} 매매법 선택\n\n"
+            "① 스마트 적립 — 기존 정기매수·분할익절\n"
+            f"② SMA법 — SMA{TREND_PERIOD[coin]} 기준\n\n"
+            "매매법 변경 시 SMA법 승인은 초기화됩니다.",
+            [[{"text":("✅ " if current==1 else "")+"1번 스마트 적립","callback_data":f"method_set_{coin}_1"}],
+             [{"text":("✅ " if current==2 else "")+f"SMA법 (SMA{TREND_PERIOD[coin]})","callback_data":f"method_set_{coin}_2"}],
+             [{"text":"🔙 코인 설정","callback_data":f"method_coin_{coin}"}]])
+
 def build_control_view():
     pwr_On = config.get("power", True)
     coins_str = ", ".join([f"{k}: {v:,}원({state.get('buy_days', {}).get(k, 0)}일차)" for k, v in config.get("coins", {}).items()]) or "없음"
@@ -86,7 +125,7 @@ def build_control_view():
         f"📊 [수익률 구간별 매도 계획]\n • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n • {tp1*2:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도\n • {tp1*3:.0f}% 이상 수익 도달 시 ➔ 미정 (매도 없음)\n⏱ 조회: {datetime.now(KST).strftime('%H:%M:%S')}"
     )
     kb = [
-        [{"text": "🪙 BTC 매매법", "callback_data": "method_coin_BTC"}, {"text": "🪙 ETH 매매법", "callback_data": "method_coin_ETH"}],
+        [{"text": "🪙 BTC 설정", "callback_data": "method_coin_BTC"}, {"text": "🪙 ETH 설정", "callback_data": "method_coin_ETH"}],
         [{"text": "🔴 스마트 적립 정지" if pwr_On else "🟢 스마트 적립 가동", "callback_data": "toggle_power"}],
         [{"text": ("✅ " if tp1==10.0 and sr==20.0 else "") + "🎯 10%·20% (잔고 20%매도)", "callback_data": "prof_10_20"}, {"text": ("✅ " if tp1==5.0 and sr==20.0 else "") + "🎯 5%·10% (잔고 20%매도)", "callback_data": "prof_5_20"}],
         [{"text": "💵 코인 시드 설정", "callback_data": "ask_buy"}, {"text": "🔢 코인 일수 보정", "callback_data": "ask_day"}],
