@@ -6,6 +6,7 @@
   ② 스나이퍼 현 장부 {"SOXL": {...}} 읽기 복구 ③ 간결 브리핑에 '토스 달러 확인'(2번 다음 1회분 + 3번 미국 적립 vs 보유 달러)
   ④ 봇 5개·서버 상태 한 줄 요약 (이상 있으면 기존처럼 상세)
 """
+# 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -243,43 +244,110 @@ def sniper_balance_lines(toss):
     return [f"🔷 토스 추가 인증 계좌 · 현금 주문가능금액: {values['KRW']} / {values['USD']}"]
 
 
-def meritz_lines():
-    """메리츠 해외계좌 외화 예수금 (읽기 전용 · meritz_client.py 사용) [MERITZ_BAL_V3]
-    frcr_amt=예수금, estm_frcr_amt=추정(미결제 포함). 앱 '해외잔고>외화잔고' 대표값이 추정 예수금이라 그것을 주 표시, 예수금은 함께 표시."""
+def _meritz_brief_token_cache(label, shared_token, keys_path):
+    """브리핑 전용 캐시. 팬딩 P/VR6 토큰은 읽기만 하며 절대 쓰지 않는다."""
+    import stat
+    import tempfile
+    base = Path(tempfile.gettempdir()) / f"bot-office-meritz-brief-{os.getuid()}"
     try:
-        here = str(Path(__file__).resolve().parent)
-        if here not in sys.path:
-            sys.path.insert(0, here)
-        import meritz_client
-        c = meritz_client.TOKEN_CACHE
-        if c.exists() and not os.access(c, os.R_OK | os.W_OK):
-            import tempfile
-            meritz_client.TOKEN_CACHE = Path(tempfile.gettempdir()) / f"meritz_token_brief_{os.getuid()}.json"
-        rows = meritz_client.Meritz()._call("GET", "/accounts/v1/me/overseas/currencies").get("data")
-        if not isinstance(rows, list):
-            raise ValueError("외화잔고 형식 확인 필요")
-        found, est = {}, None
-        for row in rows:
-            if isinstance(row, dict):
-                cur = str(row.get("crcd", "")).strip().upper()
-                if cur in ("USD", "KRW") and cur not in found:
-                    found[cur] = balance_value(row.get("frcr_amt"))
-                    if cur == "USD":
-                        try:
-                            est = balance_value(row.get("estm_frcr_amt"))
-                        except Exception:
-                            est = None
-        dep = money(found["USD"], "USD") if "USD" in found else "조회 불가"
-        if est is not None:
-            out = [f"🏛 메리츠 | 추정 예수금 USD {money(est, 'USD')} (앱 기준) · 예수금 {dep}"]
-        else:
-            out = [f"🏛 메리츠 | 예수금 USD {dep} · 추정 예수금 조회 불가"]
-        if "KRW" in found:
-            out.append(f"   ↳ KRW {money(found['KRW'], 'KRW')}")
-        return out
-    except Exception as e:
-        why = html.escape(f"{type(e).__name__}: {e}"[:80])
-        return [f"🏛 메리츠 | 조회 불가 ({why})"]
+        base.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = base.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise PermissionError("브리핑 전용 토큰 폴더 권한 오류")
+    private = base / f"{label.lower()}_token.json"
+    if private.exists() or private.is_symlink():
+        state = private.lstat()
+        if (not stat.S_ISREG(state.st_mode) or state.st_uid != os.getuid()
+                or stat.S_IMODE(state.st_mode) & 0o077):
+            raise PermissionError("브리핑 전용 토큰 파일 권한 오류")
+
+    # 기존 팬딩 유효 토큰을 전용 캐시에 복사해서 재발급을 줄인다. 원본에는 쓰지 않는다.
+    try:
+        saved = json.loads(Path(shared_token).read_text(encoding="utf-8"))
+        key_data = json.loads(Path(keys_path).read_text(encoding="utf-8"))
+        prefix = key_data["app_key"].strip()[:6]
+        exp = float(saved["exp"])
+        if (not isinstance(saved.get("token"), str) or not saved["token"]
+                or saved.get("key") != prefix or not math.isfinite(exp)
+                or exp <= time.time() + 120):
+            raise ValueError("사용 가능한 공유 토큰 없음")
+        local = load(private, {})
+        try:
+            local_exp = float(local.get("exp", 0))
+        except (TypeError, ValueError, AttributeError):
+            local_exp = 0
+        if exp > local_exp:
+            fd, tmp = tempfile.mkstemp(prefix="token_", dir=str(base))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump({"token": saved["token"], "exp": exp, "key": prefix}, f)
+                os.replace(tmp, private)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        print(f"[MERITZ_BRIEF] {label}: 공유 토큰 사용 불가, 계좌별 전용 캐시 사용 ({type(e).__name__})", file=sys.stderr)
+    return private
+
+
+def meritz_lines():
+    """메리츠 P·VR6 별도 외화잔고 조회 (읽기 전용) [MERITZ_BAL_V4].
+    USD 추정(estm_frcr_amt)과 예수금(frcr_amt)을 모두 표시하며 계좌/통화 합산 금지.
+    """
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    result = []
+    accounts = (
+        ("P", R / "etc/bot-office/meritz.json",
+         R / "var/lib/bot-office/fanding/meritz_token.json"),
+        ("VR6", R / "etc/bot-office/meritz_vr6.json",
+         R / "var/lib/bot-office/fanding/meritz_vr6_token.json"),
+    )
+    for label, keys_path, shared_token in accounts:
+        prefix = f"🏛 메리츠 {label}"
+        try:
+            if not keys_path.is_file():
+                result.append(f"{prefix} | 조회 불가 (계좌 키 없음)")
+                continue
+            import meritz_client
+            private_token = _meritz_brief_token_cache(label, shared_token, keys_path)
+            # 키와 토큰을 둘 다 명시한다. 인자 없는 Meritz()는 VR6에서 절대 금지.
+            response = meritz_client.Meritz(keys_path, token_cache=private_token)._call(
+                "GET", "/accounts/v1/me/overseas/currencies")
+            rows = response.get("data")
+            if not isinstance(rows, list):
+                raise ValueError("외화잔고 응답 형식 오류")
+            by_currency = {}
+            for item in rows:
+                if isinstance(item, dict):
+                    cur = str(item.get("crcd", "")).strip().upper()
+                    if cur in ("USD", "KRW") and cur not in by_currency:
+                        by_currency[cur] = item
+
+            def amount(cur, field):
+                try:
+                    return money(balance_value(by_currency[cur][field]), cur)
+                except (KeyError, ValueError, TypeError, OverflowError):
+                    return "조회 불가"
+
+            estimated, deposited = amount("USD", "estm_frcr_amt"), amount("USD", "frcr_amt")
+            result.append(f"{prefix} | 추정 예수금 USD {estimated} (앱 기준) · 예수금 {deposited}")
+            if "KRW" in by_currency:
+                result.append(f"   ↳ KRW {amount('KRW', 'frcr_amt')}")
+        except Exception as e:
+            # API 에러 응답에는 키·토큰 내용이 섞일 수 있어 메시지는 버리고 형식만 쓴다.
+            if isinstance(e, PermissionError):
+                reason = "토큰/키 접근 권한 오류"
+            elif isinstance(e, ValueError):
+                reason = "잔고 응답 형식 오류"
+            else:
+                reason = f"조회 오류 ({type(e).__name__})"
+            result.append(f"{prefix} | 조회 불가 ({html.escape(reason[:80])})")
+    return result
 
 
 def toss_account_lines():
