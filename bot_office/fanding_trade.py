@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.1)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.2)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -60,6 +60,8 @@
 #          같은 글자(💱 환전·🤖 자동·📐 배수·🩺 진단·🔄 재판독·🛠 도구·❓ 도움말·⬅️ 메뉴)를 그 메뉴로 보냄 (route_shared)
 #        · 키보드를 보낼 때마다 TG.send 가 모드를 기록 → 화면에 보이는 키보드와 항상 같음 · 확인 메시지에 🅿/🅥 표시
 #          · 한 글을 다 봤는데 필요한 날짜 표가 없으면 기존처럼 1번 알림 + 읽은 날짜 표시
+# 1.10.2: 날짜 오독 때 다른 AI로 날짜·주문 핵심 숫자 교차 확인, 불일치 시 주문 제외
+#         · 이미지+필요 종가일/글+필요 종가일 알림 1회, 새 요청 ID 재판독 허용
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -87,7 +89,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.10.1"
+VERSION = "1.10.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1330,7 +1332,7 @@ def handle_history_image(data, sha, meta):
 
 
 def batch_done(tg, meta, kind):
-    """윈도우가 한 글의 이미지 n장을 묶어 보냄 → 다 처리했는데 가격표가 없으면 알림"""
+    """한 글의 이미지 n장을 다 처리한 뒤, 글+필요 종가일당 누락 알림 한 번만 보낸다."""
     bid, n = meta.get("batch"), int(meta.get("count") or 0)
     if not bid or n <= 0:
         return
@@ -1340,20 +1342,36 @@ def batch_done(tg, meta, kind):
         b["kinds"].append(kind)
         if b["done"] >= b["n"]:
             st["batches"].pop(bid, None)
-            if "wrong_date" in b["kinds"] and not any(k in ("sheet", "sheet_dup") for k in b["kinds"]):
-                seen = (st.get("wrong_dates") or {}).get(bid, "")
-                tg.send("⚠️ 최근 글 판독 완료: 필요한 종가일의 가격표를 아직 찾지 못했습니다."
-                        + (" (이 글에서 읽은 종가일: " + html.escape(seen) + ")" if seen else "")
-                        + " /진단 확인 · 다음 자동 재접속에서 재확인합니다.")
+            post = str(meta.get("post") or "").rstrip("/")
+            post_key = hashlib.sha256(post.encode("utf-8")).hexdigest() if post else "batch:" + bid
+            notice_key = str(meta.get("expected") or "") + ":" + post_key
+            if any(k in ("wrong_date", "wrong_date_dup") for k in b["kinds"]) and not any(k in ("sheet", "sheet_dup") for k in b["kinds"]):
+                # 초안에서 빠져 있던 부분 복원: 날짜 오독 배치 알림도 글+필요 종가일당 1회만 보낸다.
+                # 이미지별 오독 알림과 중복되지 않게, 이 배치 알림은 1회로 제한한다.
+                alerted = st.setdefault("wrong_date_post_alerted", {})
+                if notice_key not in alerted:
+                    alerted[notice_key] = now_kst().isoformat()
+                    st["wrong_date_post_alerted"] = dict(list(alerted.items())[-800:])
+                    seen = (st.get("wrong_dates") or {}).get(bid, "")
+                    tg.send("⚠️ 최근 글 판독 완료: 필요한 종가일의 가격표를 아직 찾지 못했습니다."
+                            + (" (이 글에서 읽은 종가일: " + html.escape(seen) + ")" if seen else "")
+                            + " /진단 확인 · 다음 자동 재접속에서 재확인합니다.")
             elif not any(k in ("sheet", "sheet_dup", "error") for k in b["kinds"]):
-                tg.send(f"❓ <b>팬딩 글에서 가격표를 못 찾았어요</b>\n이미지 {b['n']}장을 확인했지만 모두 가격표가 아니었어요."
-                        f"\n글: {html.escape(meta.get('post', ''))[:200]}\n가격표가 다른 글에 올라왔는지 확인해 주세요.")
+                alerted = st.setdefault("missing_post_alerted", {})
+                if notice_key not in alerted:
+                    alerted[notice_key] = now_kst().isoformat()
+                    st["missing_post_alerted"] = dict(list(alerted.items())[-800:])
+                    tg.send(f"❓ <b>팬딩 글에서 가격표를 못 찾았어요</b>\n이미지 {b['n']}장을 확인했지만 모두 가격표가 아니었어요."
+                            f"\n글: {html.escape(meta.get('post', ''))[:200]}\n가격표가 다른 글에 올라왔는지 확인해 주세요.")
         for k in [k for k, v in st["batches"].items() if time.time() - v.get("at", 0) > 86400]:
             st["batches"].pop(k, None)
 
-
 def handle_image(tg, data, sha, meta):
-    """돌려주는 값: sheet(새 가격표) / sheet_dup(이미 받은 가격표) / other(가격표 아님)"""
+    """sheet / sheet_dup / wrong_date / wrong_date_dup / other"""
+    expected = meta.get("expected")
+    # 필요한 종가일과 이미지 해시가 모두 같아야 중복으로 판단한다.
+    wrong_key = f"{expected}:{sha}" if expected else ""
+    attempt = str(meta.get("request_id") or meta.get("batch") or meta.get("at") or "")
     with locked_state() as st:
         known = st.setdefault("kinds2", {})
         recorded = next((sh for sh in st["sheets"].values() if sh.get("sha") == sha), None)
@@ -1363,6 +1381,9 @@ def handle_image(tg, data, sha, meta):
             print("이미 받은 가격표 → 무시", flush=True); return "sheet_dup"
         if known.get(sha) == "other" and not meta.get("request_id"):
             return "other"
+        # 같은 요청의 같은 오독 이미지는 재판독하지 않되, 새 요청 ID라면 반드시 재시도한다.
+        if wrong_key and attempt and st.setdefault("wrong_date_attempts", {}).get(wrong_key) == attempt:
+            return "wrong_date_dup"
     market = market_snapshot()
     flag, first, why = read_and_judge(data)
     first_ai = LAST_PROVIDER["name"]
@@ -1373,33 +1394,68 @@ def handle_image(tg, data, sha, meta):
             st["kinds2"][sha] = "other"
             st["kinds2"] = dict(list(st["kinds2"].items())[-500:])
         return "other"
-    expected = meta.get("expected")
+    second = None
     if expected and first.get("close_date") != expected:
         got = str(first.get("close_date") or "")
         refs = [x for x in ((market or {}).get("price"), (market or {}).get("prev_close")) if x]
         close_now = bool(first.get("close") and any(abs(first["close"] - x) / x <= 0.005 for x in refs))
-        with locked_state() as st:
-            st.setdefault("wrong_dates", {})[meta.get("batch") or "-"] = got
-            st["wrong_dates"] = dict(list(st["wrong_dates"].items())[-20:])
-        if got and got < expected and not close_now:
-            # 글 안에 함께 실린 예전 가격표(참고 이미지) → 알림 없이 기록만. 한 글 전체에 필요 날짜가 없으면 batch_done 이 알림.
-            replay("wrong_date_image", "skipped", "older_reference_sheet", event_type="user_visible",
-                   read_date=got, expected=expected)
-            return "wrong_date"
+        corrected = False
+        second_date = ""
+        second_ai = ""
+        failure = "older_reference_sheet" if got and got < expected and not close_now else "date_mismatch"
         if close_now:
-            tg.send("⚠️ <b>가격표 날짜 오독 의심</b>\n읽은 종가일 " + html.escape(got) + " / 필요 " + html.escape(expected)
-                    + "\n종가 숫자는 지금 메리츠 시세와 맞습니다. 날짜만 잘못 읽었을 수 있어요.\n주문에 사용하지 않음 · /재판독 또는 가격표 직접 확인")
-            replay("wrong_date_image", "ok", "date_misread_suspected", event_type="user_visible",
-                   read_date=got, expected=expected)
-        else:
-            tg.send("ℹ️ 재수집 이미지 종가일 불일치: " + html.escape(got) + " / 필요 " + html.escape(expected) + " · 주문에 사용하지 않음")
-        return "wrong_date"
-    try:
-        second = gemini_read(data, PROMPTS[1], avoid=first_ai)
-        print(f"교차 확인: 1차 {first_ai} · 2차 {LAST_PROVIDER['name']}", flush=True)
-    except Exception as e:          # 확인용 판독 실패 → 가격표는 알리되 자동주문은 막음
-        print("확인용 두 번째 판독 실패:", e, flush=True)
-        second = dict(first, close=-1)
+            try:
+                second = gemini_read(data, PROMPTS[1], avoid=first_ai)
+                second_ai = LAST_PROVIDER["name"]
+                second_date = str(second.get("close_date") or "")
+                # 기존 core의 종가/매수가/매도가 + 보유 평단/개수까지 검증한다.
+                numbers_agree = (core(first)[1:] == core(second)[1:] and
+                                 all(first.get(k) == second.get(k) for k in ("avg_price", "holding_qty")))
+                if second_ai != first_ai and second_date == expected and numbers_agree:
+                    # 원본 오독 날짜는 replay에 남기고, 저장/안전점검용 두 판독은 정정된 동일 날짜로 기록.
+                    first = dict(first, close_date=expected)
+                    corrected = True
+                    replay("wrong_date_crosscheck", "corrected", "different_ai_numbers_agree",
+                           event_type="decision", first_date=got, second_date=second_date, expected=expected,
+                           first_ai=first_ai, second_ai=second_ai)
+                else:
+                    failure = ("same_provider" if second_ai == first_ai else
+                               "second_date_mismatch" if second_date != expected else "numbers_mismatch")
+            except Exception as e:
+                failure = "second_read_failed"
+                print("날짜 오독 교차 확인 실패:", type(e).__name__, flush=True)
+        if not corrected:
+            replay("wrong_date_crosscheck", "rejected", failure, event_type="decision",
+                   first_date=got, second_date=second_date, expected=expected,
+                   first_ai=first_ai, second_ai=second_ai)
+            notify = False
+            with locked_state() as st:
+                st.setdefault("wrong_dates", {})[meta.get("batch") or "-"] = got
+                st["wrong_dates"] = dict(list(st["wrong_dates"].items())[-20:])
+                attempts = st.setdefault("wrong_date_attempts", {})
+                attempts[wrong_key] = attempt
+                st["wrong_date_attempts"] = dict(list(attempts.items())[-800:])
+                # 예전 참고 표는 경고 없이 넘기고, 실제 날짜 오독/불일치만 이미지별 한 번 알림.
+                if not (got and got < expected and not close_now):
+                    alerted = st.setdefault("wrong_date_alerted", {})
+                    if wrong_key not in alerted:
+                        alerted[wrong_key] = now_kst().isoformat()
+                        st["wrong_date_alerted"] = dict(list(alerted.items())[-800:])
+                        notify = True
+            if notify:
+                if close_now:
+                    tg.send("⚠️ <b>가격표 날짜 오독 의심</b>\n읽은 종가일 " + html.escape(got) + " / 필요 " + html.escape(expected)
+                            + "\n다른 AI 교차 확인에서도 날짜·핵심 숫자를 확정하지 못했습니다.\n주문에 사용하지 않음 · /재판독 또는 가격표 직접 확인")
+                else:
+                    tg.send("ℹ️ 재수집 이미지 종가일 불일치: " + html.escape(got) + " / 필요 " + html.escape(expected) + " · 주문에 사용하지 않음")
+            return "wrong_date"
+    if second is None:  # 날짜가 처음부터 맞던 기존 정상 가격표 경로
+        try:
+            second = gemini_read(data, PROMPTS[1], avoid=first_ai)
+            print(f"교차 확인: 1차 {first_ai} · 2차 {LAST_PROVIDER['name']}", flush=True)
+        except Exception as e:          # 기존 동작 유지: 두 번째 판독 실패 시 알림, 자동주문은 차단
+            print("확인용 두 번째 판독 실패:", e, flush=True)
+            second = dict(first, close=-1)
     reads = [first, second]
     agree = core(reads[0]) == core(reads[1])
     parsed = reads[0]
