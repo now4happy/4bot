@@ -5,7 +5,7 @@
 SOXL 단일 롱 7-Tier 순수 멀티 그리드(1층 공격수 + 2~6층 개별 완충층 + 통합 7층 본대) 폴더별 3중 지층 원장(SoxlStratumLedger) 코어 모듈 (Step 02 / 06)
 - 제1헌법: 모든 파일 I/O 및 네트워크 통신의 asyncio.to_thread 비동기 격리 + GlobalThrottle 중앙 통제
 - 제2헌법: 기동 시 GET /api/v1/accounts 1회 호출로 BROKERAGE accountSeq 메모리 락온 및 X-Tossinvest-Account 자동 주입
-- 제3헌법 ~ 제6헌법 및 Case 01 ~ 72 전수 락온:
+- 제3헌법 ~ 제6헌법 및 Case 01 ~ 72 전수 락온 · Case 82 윗꼬리 포착 이식:
   1) REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단)
   2) get_holdings_map_with_status, get_candles_1m, get_candles_1d, get_current_prices_batch,
      get_orderbook, get_buying_power_usd, get_sellable_quantity, create_order, modify_order,
@@ -22,6 +22,7 @@ SOXL 단일 롱 7-Tier 순수 멀티 그리드(1층 공격수 + 2~6층 개별 �
      (MAX_GRID_TIERS_7 = 7 : 1층 공격수 + 2~6층 개별 완충층 + 통합 7층 본대) & 정적 싸이클 최저가 잠금(STATIC_CYCLE_MIN)]
      - 모든 보유 지층(1층 ~ 7층)의 book_price == actual_avg_price 및 book_invested_usd == actual_cost_usd 순수 실물 원가 100% 보존!
      - AST 심볼 하위 호환을 위해 MAX_GRID_TIERS_12 = 7 별칭을 동시 제공하며, 다중 그리드 동시 매도 인덱스(pending_sell_indices) 탑재!
+  7) [Case 82] 최근 체결 5초 윗꼬리 고가 조회 추가 (기존 매도 지정가/토큰/계좌/주문 정책 변경 없음)
 """
 
 from __future__ import annotations
@@ -1526,6 +1527,87 @@ class TossApiClient:
     async def get_current_price(self, symbol: str = TARGET_SYMBOL) -> float:
         p_map = await self.get_current_prices_batch((symbol,))
         return safe_float(p_map.get(str(symbol).upper().strip()), 0.0)
+
+    @staticmethod
+    def _case82_trade_timestamp_epoch(value: Any) -> float:
+        """Case 82: 숫자 epoch(ms 포함) 또는 ISO8601 시각을 초 단위로 해석한다."""
+        if value is None or isinstance(value, bool):
+            return 0.0
+        if isinstance(value, (int, float)):
+            parsed = safe_float(value, 0.0)
+            return parsed / 1000.0 if parsed > 1e12 else max(0.0, parsed)
+        text_value = str(value).strip()
+        if not text_value:
+            return 0.0
+        try:
+            parsed = float(text_value)
+            if math.isfinite(parsed):
+                return parsed / 1000.0 if parsed > 1e12 else max(0.0, parsed)
+        except (TypeError, ValueError):
+            pass
+        try:
+            dt = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+            # 시각대 없는 ISO 시각은 기존 봇의 America/New_York 기준으로 처리.
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=EST_TZ)
+            return max(0.0, dt.timestamp())
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+    async def get_recent_trades(
+        self, symbol: str = TARGET_SYMBOL, count: int = 15
+    ) -> List[Dict[str, Any]]:
+        """Case 82: 계좌 헤더 없이 /api/v1/trades 에서 최대 50건 조회한다."""
+        q_count = max(1, min(50, safe_int(count, 15)))
+        try:
+            res = await self._request(
+                method="GET",
+                path="/api/v1/trades",
+                params={
+                    "symbol": str(symbol or TARGET_SYMBOL).upper().strip(),
+                    "count": q_count,
+                },
+                require_account=False,
+                rate_group="MARKET_DATA",
+            )
+            records = res.get("result") if isinstance(res, dict) else []
+            if isinstance(records, dict):
+                records = records.get("trades", [])
+            if not isinstance(records, list):
+                return []
+            return [record for record in records if isinstance(record, dict)]
+        except Exception:
+            # 시장 데이터 조회 실패로 기존 매도 감시 루프를 멈추지 않는다.
+            return []
+
+    async def get_recent_wick_high_price(
+        self,
+        symbol: str = TARGET_SYMBOL,
+        lookback_sec: float = 5.0,
+        min_after_ts: float = 0.0,
+        count: int = 15,
+    ) -> Tuple[float, float]:
+        """Case 82: 최근 5초(서버시차 +2초 허용)의 유효 체결 최고가/시각."""
+        try:
+            trades = await self.get_recent_trades(symbol=symbol, count=count)
+            now_ts = time.time()
+            window = max(0.0, safe_float(lookback_sec, 5.0))
+            after_ts = max(0.0, safe_float(min_after_ts, 0.0))
+            best_price, best_ts = 0.0, 0.0
+            for trade in trades:
+                price = safe_float(trade.get("price"), 0.0)
+                volume = safe_float(trade.get("volume"), 0.0)
+                ts = self._case82_trade_timestamp_epoch(trade.get("timestamp"))
+                if price <= 0.0 or volume <= 0.0 or ts <= after_ts:
+                    continue
+                age = now_ts - ts
+                if age < -2.0 or age > window:
+                    continue
+                if price > best_price or (price == best_price and ts > best_ts):
+                    best_price, best_ts = price, ts
+            return best_price, best_ts
+        except Exception:
+            return 0.0, 0.0
 
     async def get_orderbook(
         self, symbol: str = TARGET_SYMBOL

@@ -10,7 +10,7 @@
 1층 익절 후 상단 2~12층 잔존 시 1층 공석(GRID_L2 ~ GRID_L12) 보존 및 싸이클 최저가(cycle_min_buy_price) 잠금 유지(Case 59, Case 60, Case 71) ·
 매도 체결(부분 익절 및 0주 전량 졸업) 즉시 60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) &
 15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 03 / 07)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 71 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 71 완벽 준수 · Case 82 윗꼬리 포착 이식
 """
 
 from __future__ import annotations
@@ -59,6 +59,12 @@ POST_SELL_TO_BUY_SHIELD_SEC: float = 60.0
 
 # 순수 현재가 지정가 매도 주문 발주 후 미체결 최대 대기 시간(초) — 하향 정정 없이 60초 미체결 시 안전 취소
 SELL_ORDER_MAX_WAIT_SEC: float = 60.0
+
+# Case 82: 현재가 미달 시 가까운 익절 목표에 한해 최근 체결 윗꼬리 감시.
+WICK_TRADE_LOOKBACK_SEC: float = 5.0
+WICK_TRADE_FETCH_COUNT: int = 15
+WICK_PROXIMITY_TRIGGER_RATIO: float = 0.975
+WICK_PROBE_MIN_INTERVAL_SEC: float = 1.2
 
 
 # ---------------------------------------------------------------------------
@@ -1003,6 +1009,102 @@ async def sync_pending_sell_order_plugin(
     }
 
 
+def _case82_nearest_sell_target(
+    buckets: Sequence[StratumBucket],
+    rise_l1_pct: float,
+    rise_upper_pct: float,
+) -> float:
+    """기존 3중 익절에 포함된 목표만 사용한다 (골든포켓 제외)."""
+    if not buckets:
+        return 0.0
+    active_l1 = has_active_l1_bucket(buckets)
+    targets: List[float] = []
+
+    def ceil2(price: float) -> float:
+        return math.ceil((price - 1e-9) * 100.0) / 100.0
+
+    if active_l1 and buckets[0].qty > 0:
+        l1_p = safe_float(buckets[0].book_price, 0.0)
+        if l1_p > 0.0:
+            targets.append(ceil2(l1_p * (1.0 + rise_l1_pct / 100.0)))
+    for upper in buckets[1:] if active_l1 else buckets:
+        book_p = safe_float(upper.book_price, 0.0)
+        if upper.qty > 0 and book_p > 0.0:
+            targets.append(ceil2(book_p * (1.0 + rise_upper_pct / 100.0)))
+    try:
+        upper_wma_target = safe_float(
+            compute_upper_2_to_12_moving_avg(buckets).get("upper_wma_target_price"),
+            0.0,
+        )
+        if upper_wma_target > 0.0:
+            targets.append(upper_wma_target)
+    except Exception:
+        pass
+    return min(targets) if targets else 0.0
+
+
+def _case82_trade_timestamp_fallback(raw_ts: Any) -> float:
+    """구 API 클라이언트용 폴백: timezone 없는 ISO 시각은 EST_TZ 적용."""
+    if raw_ts is None or isinstance(raw_ts, bool):
+        return 0.0
+    raw = str(raw_ts).strip()
+    if not raw:
+        return 0.0
+    try:
+        numeric = float(raw)
+        if math.isfinite(numeric):
+            return numeric / 1000.0 if numeric > 1e12 else max(0.0, numeric)
+    except (ValueError, TypeError):
+        pass
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=EST_TZ)
+        return max(0.0, dt.timestamp())
+    except (ValueError, TypeError, OverflowError):
+        return 0.0
+
+
+async def _case82_probe_wick_high(
+    api: Any, min_after_ts: float
+) -> Tuple[float, float]:
+    """전용 메서드 우선, 없을 때만 최근 체결 리스트에 동일 필터 적용."""
+    try:
+        get_wick = getattr(api, "get_recent_wick_high_price", None)
+        if callable(get_wick):
+            result = await get_wick(
+                symbol=TARGET_SYMBOL,
+                lookback_sec=WICK_TRADE_LOOKBACK_SEC,
+                min_after_ts=min_after_ts,
+                count=WICK_TRADE_FETCH_COUNT,
+            )
+            return safe_float(result[0], 0.0), safe_float(result[1], 0.0)
+        get_trades = getattr(api, "get_recent_trades", None)
+        if not callable(get_trades):
+            return 0.0, 0.0
+        records = await get_trades(symbol=TARGET_SYMBOL, count=WICK_TRADE_FETCH_COUNT)
+        if not isinstance(records, list):
+            return 0.0, 0.0
+        now_ts = time.time()
+        best_price, best_ts = 0.0, 0.0
+        for trade in records:
+            if not isinstance(trade, dict):
+                continue
+            price = safe_float(trade.get("price"), 0.0)
+            volume = safe_float(trade.get("volume"), 0.0)
+            ts = _case82_trade_timestamp_fallback(trade.get("timestamp"))
+            if price <= 0.0 or volume <= 0.0 or ts <= min_after_ts:
+                continue
+            age = now_ts - ts
+            if age < -2.0 or age > WICK_TRADE_LOOKBACK_SEC:
+                continue
+            if price > best_price or (price == best_price and ts > best_ts):
+                best_price, best_ts = price, ts
+        return best_price, best_ts
+    except Exception:
+        return 0.0, 0.0
+
+
 # ---------------------------------------------------------------------------
 # [핵심 3] 매수 후 60초 & 보유 중 매 1.5초 실시간 3중 다중 익절 매도 모니터 (Case 69, 70, 71 · 2026-10-29)
 # ---------------------------------------------------------------------------
@@ -1028,7 +1130,9 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
        - ② 상단 2층 ~ 12층 개별 그리드 단가 대비 +1.00% 이상 도래
        - ③ 상단 2층 ~ 12층 통합 이동평균 단가(wma_2_to_12) 대비 +1.00% 이상 도래 (1층 본전 이상 시 전량 졸업)
        조건이 충족된 모든 지층(sold_indices)을 그 높아진 실시간 현재가 지정가(LIMIT)로 즉시 매도 발주한다!
-       - 만약 3대 조건 모두 미달이면 다음 메인 루프(1.5초)에서 다시 판정한다 (블라인드 락 0.0초).
+       - 3대 조건 모두 미달이면 Case 82에 따라 최단 목표가 -2.5% 이내에서만 최근 5초 체결 윗꼬리를 조회한다.
+       - 유효 윗꼬리가 목표를 넘고 현 시세보다 높을 때만 3중 조건을 한 번 더 판정하며,
+         그래도 미달하면 다음 메인 루프(1.5초)에서 다시 판정한다 (블라인드 락 0.0초).
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
@@ -1118,6 +1222,49 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         rise_l1_pct=rise_sell_l1_pct,
         rise_upper_pct=rise_sell_upper_pct,
     )
+
+    # [Case 82] 기존 실시간 가격 판정이 미달인 경우에만 5초 체결 윗꼬리 재판정.
+    # 스캔 실패는 매도 조건을 변경하지 않고 기존 모니터링으로 복귀한다.
+    if not bool(sell_eval.get("should_sell")):
+        nearest_target_p = _case82_nearest_sell_target(
+            buckets, rise_sell_l1_pct, rise_sell_upper_pct
+        )
+        if (
+            nearest_target_p > 0.0
+            and fresh_live_p >= nearest_target_p * WICK_PROXIMITY_TRIGGER_RATIO
+        ):
+            snap_map = getattr(context, "exit_snapshot_cache", None)
+            if not isinstance(snap_map, dict):
+                snap_map = {}
+                context.exit_snapshot_cache = snap_map
+            wick_state = snap_map.get(TARGET_SYMBOL)
+            if not isinstance(wick_state, dict):
+                wick_state = {}
+            now_mono = time.monotonic()
+            prev_probe_mono = safe_float(wick_state.get("case82_last_probe_mono"), 0.0)
+            if now_mono - prev_probe_mono >= WICK_PROBE_MIN_INTERVAL_SEC:
+                # 조회 시작 전에 시각을 기록하여 중복 폴링을 막는다.
+                wick_state["case82_last_probe_mono"] = now_mono
+                used_ts = safe_float(wick_state.get("case82_consumed_ts"), 0.0)
+                snap_map[TARGET_SYMBOL] = wick_state
+                wick_high_p, wick_high_ts = await _case82_probe_wick_high(
+                    context.api, min_after_ts=used_ts
+                )
+                # 유효한 최고가 체결 시각은 성공/미달에 관계없이 소모 처리한다.
+                if wick_high_p > 0.0 and wick_high_ts > used_ts:
+                    wick_state["case82_consumed_ts"] = wick_high_ts
+                    if (
+                        wick_high_p >= nearest_target_p
+                        and wick_high_p > fresh_live_p
+                    ):
+                        wick_eval = evaluate_multi_grid_sell_targets(
+                            buckets=buckets,
+                            live_price=max(fresh_live_p, wick_high_p),
+                            rise_l1_pct=rise_sell_l1_pct,
+                            rise_upper_pct=rise_sell_upper_pct,
+                        )
+                        if bool(wick_eval.get("should_sell")):
+                            sell_eval = wick_eval
 
     if bool(sell_eval.get("should_sell")):
         sold_indices = list(sell_eval.get("sold_indices") or [])
