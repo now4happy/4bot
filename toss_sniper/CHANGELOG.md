@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.11 · 2026-10-30 10:55 (KST)
+- 파일: sniper_exit_plugin.py, toss_api.py
+- 내용: 2번 스나이퍼 Case 82 윗꼬리 포착 이식: toss_api.py, sniper_exit_plugin.py
+- 브랜치: staging
+
 ## v1.0.10 · 2026-10-29 10:19 (KST)
 - 파일: main.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py
 - 내용: 2번 스나이퍼 매매 정책 일치: 데이마켓 매수 잠금, 애프터마켓 매도 감시, 매도 실시간 (staging)
