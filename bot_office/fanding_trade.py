@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.2)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.3)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -62,6 +62,7 @@
 #          · 한 글을 다 봤는데 필요한 날짜 표가 없으면 기존처럼 1번 알림 + 읽은 날짜 표시
 # 1.10.2: 날짜 오독 때 다른 AI로 날짜·주문 핵심 숫자 교차 확인, 불일치 시 주문 제외
 #         · 이미지+필요 종가일/글+필요 종가일 알림 1회, 새 요청 ID 재판독 허용
+# 1.10.3: PC v1.5.4의 1차 실패 대기/09:00 단 1회/영구 정지 게이트; 주문 로직 불변
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -89,7 +90,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "1.10.2"
+VERSION = "1.10.3"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -540,16 +541,25 @@ def bridge_state():
         pass
 
 
+def fanding_scan_paused(bridge):
+    """PC 수집 버전별 중단 정보는 서버에 남긴다. 서버 자동 재요청 차단용."""
+    return (bridge.get("scan_gate") or {}).get("policy") in ("waiting_09", "retry_09", "stopped")
+
+# 1.10.3: PC v1.5.4의 1차 실패 대기/09:00 단 1회/영구 정지 게이트; 주문 로직 불변
 def request_scan(reason="manual"):
     now = time.time()
     expected = last_session_date().isoformat()
     with bridge_state() as b:
+        if fanding_scan_paused(b):
+            gate = b.get("scan_gate") or {}
+            return ("PC 수집기는 추가 사이트 요청을 받지 않습니다. KST 09:00 재시도 1회만 허용됩니다."
+                    if gate.get("policy") in ("waiting_09", "retry_09") else
+                    "PC 수집기는 같은 버전에서 정지되었습니다. 코드 업데이트 또는 PC 정지 표시 직접 삭제 전까지 사이트 요청 없음.")
         req = b.get("request") or {}
         if now - req.get("at", 0) < 300:
             return "최근 요청이 대기/처리 중입니다. /진단 으로 확인하세요."
         b["request"] = {"id": uuid.uuid4().hex, "at": now, "expected": expected, "reason": reason}
     return f"윈도우 PC에 사이트 재접속·최신 자료 재판독 요청을 등록했습니다.\n필요 종가일: {expected} (게시일과 다름)\nPC 대기 프로그램 실행 중이면 약30초 내 확인합니다."
-
 
 def sheet_ready(sheet):
     return bool(sheet and (sheet.get("reads_agree") or sheet.get("status") in
@@ -578,15 +588,27 @@ def http_control(h):
             stages = {"idle", "connecting", "listing", "images", "uploading", "parsing", "history", "sent", "daily_done", "daily_stopped", "logged_out", "no_posts", "no_image", "error", "server_error"}
             if not isinstance(d, dict) or d.get("stage") not in stages:
                 return h.send(400, {"error": "bad_stage"})
+            policy = d.get("scan_policy", "legacy")
+            if policy not in ("legacy", "first", "waiting_09", "retry_09", "stopped", "ready"):
+                return h.send(400, {"error": "bad_scan_policy"})
             with bridge_state() as b:
                 b["pc"] = {"at": time.time(), "stage": d["stage"], "version": str(d.get("version", ""))[:20],
                            "request_id": str(d.get("request_id", ""))[:32],
                            "mode": str(d.get("mode", ""))[:10],
                            "run_path": str(d.get("run_path", ""))[:240]}
+                b["scan_gate"] = {"policy": policy, "version": str(d.get("version", ""))[:20],
+                                  "expected": expected, "at": time.time()}
                 req = b.get("request") or {}
-                # A PC started after the morning request expired must not idle forever.
-                if (d.get("want_scan") is True and not ready
-                        and (req.get("expected") != expected or time.time() - req.get("at", 0) > 1800)):
+                if not ready and policy == "retry_09":
+                    now = now_kst()
+                    key = str(d.get("version", "")) + ":" + now.date().isoformat() + ":" + expected
+                    # 한국시간 09:00 이후, 이 날짜/버전의 재시도 요청을 딱 한 번만 생성한다.
+                    if now.hour >= 9 and b.get("retry_09_request_key") != key:
+                        b["retry_09_request_key"] = key
+                        b["request"] = {"id": uuid.uuid4().hex, "at": time.time(),
+                                        "expected": expected, "reason": "retry_09"}
+                elif (d.get("want_scan") is True and policy in ("legacy", "first") and not ready
+                      and (req.get("expected") != expected or time.time() - req.get("at", 0) > 1800)):
                     b["request"] = {"id": uuid.uuid4().hex, "at": time.time(),
                                     "expected": expected, "reason": "pc_start"}
         with bridge_state() as b:
@@ -601,7 +623,6 @@ def http_control(h):
         return h.send(400, {"error": "bad_json"})
     except OSError:
         return h.send(500, {"error": "control_storage_failed"})
-
 
 def diagnosis():
     b, st = load(BRIDGE, {}), load(STATE, {})
@@ -640,6 +661,8 @@ def recovery_tick(tg):
     b = load(BRIDGE, {})
     pc = b.get("pc") or {}
     req = b.get("request") or {}
+    if fanding_scan_paused(b):
+        return  # 1.5.4 PC가 진단 1회만 발송: 서버 재요청·중복 진단 둘 다 차단
     if auto_window and missing and time.time() - req.get("at", 0) >= 1800:
         request_scan("missing")
     problem = None

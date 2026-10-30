@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.5.3)
+# FILE: C:\fanding\fanding_fetch.py   (FANDING_FETCH_V1.5.4)
 #   저장소 위치: bot_office/fanding_fetch_win.py (서버에선 실행하지 않음 · 윈도우가 GitHub 에서 내려받음)
 # 윈도우 PC 전용: 팬딩 가격표 이미지를 가져와 사무실 서버로 보내고 종료
 # 1.1.0: 글 안의 큰 이미지를 모두 보냄 → 서버가 가격표만 골라냄 (이미지 순서가 바뀌어도 OK)
@@ -14,6 +14,8 @@
 #   · 매일 받는 가격표 글 1개는 PC 보관 + 수집 완료 목록에 추가 → 다음 날 '남은 글'로 다시 세지 않음
 #   · 다시 모으려면 backfill_complete.json 삭제, 또는 py fanding_fetch.py backfill (수동은 종료 표시 무시)
 #
+# 1.5.4: 최초 실패 즉시 중단·1회 진단, KST 09:00 1회 재시도, 재실패 시 버전별 영구 정지
+#
 #  준비 (한 번만)
 #    py -m pip install playwright
 #    py -m playwright install chromium
@@ -21,7 +23,7 @@
 #    py fanding_fetch.py test      ← 가격표를 찾는지 확인 (서버로 안 보냄)
 #
 #  매일 (작업 스케줄러가 자동 실행)
-#    py fanding_fetch.py run       ← 새 가격표를 찾을 때까지 몇 분 간격 재시도, 보내면 종료
+#    py fanding_fetch.py run       ← 첫 실패 즉시 중단, 09:00 단 1회 재시도
 #
 #  설정: 같은 폴더의 config.json
 #    {"office_url": "https://사무실주소", "upload_token": "서버와 같은 암호",
@@ -33,7 +35,7 @@ from datetime import timedelta, timezone
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "1.5.3"
+VERSION = "1.5.4"
 HERE = Path(__file__).resolve().parent
 CFG = HERE / "config.json"
 PROFILE = HERE / "browser_profile"      # 팬딩 로그인이 저장되는 전용 브라우저 폴더
@@ -42,6 +44,128 @@ BACKFILL = HERE / "backfill_done.json"     # 이미 보낸 과거 글 목록
 BACKFILL_COMPLETE = HERE / "backfill_complete.json"   # 과거 글 다 모음 표시 (있으면 매일 과거 수집 안 함)
 DEBUG = HERE / "debug"
 
+
+# 1.5.4 상태 파일: 동일 버전 09:00 실패 뒤에는 날짜가 바뀌어도 자동 접속 금지.
+RETRY_STATE = HERE / "fanding_retry_state.json"
+KST = timezone(timedelta(hours=9))
+DIAG_STEPS = ("사이트 시리즈 목록 가져오기", "로그인 상태 확인", "글 목록·최신 글 선택",
+              "글 페이지 가져오기", "글 안 이미지 가져오기", "서버로 이미지 전송",
+              "서버 판독 결과 대기·확인")
+TRACE = {"step": "사이트 시리즈 목록 가져오기", "last": "없음", "post": ""}
+SCAN_POLICY = {"value": "first"}
+
+
+def progress(step, success=False, post=""):
+    if step not in DIAG_STEPS:
+        raise ValueError("잘못된 수집 단계")
+    TRACE["step"] = step
+    if success:
+        TRACE["last"] = step
+    if post:
+        TRACE["post"] = post
+
+
+def kst_now():
+    return datetime.now(KST)
+
+
+def read_retry_state():
+    if not RETRY_STATE.exists():
+        return {}
+    try:
+        state = json.loads(RETRY_STATE.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("invalid")
+        return state
+    except (ValueError, OSError):
+        # 손상된 정지 기록을 지워서 자동 사이트 접속하는 쪽으로 처리하지 않는다.
+        return {"version": VERSION, "phase": "stopped", "reason": "정지 기록 읽기 실패"}
+
+
+def save_retry_state(state):
+    atomic_write(RETRY_STATE, json.dumps(state, ensure_ascii=False, indent=2).encode("utf-8"))
+
+
+def retry_state_for_today(now, expected):
+    state = read_retry_state()
+    if state.get("version") != VERSION:
+        # 새 버전에서만 이전 버전의 영구 정지를 해제한다. 운영자가 파일 삭제해도 초기화된다.
+        state = {}
+    if state.get("phase") == "stopped":
+        return state
+    if state.get("date") != now.date().isoformat():
+        if state.get("phase") in ("waiting_09", "retrying_09"):
+            state["phase"] = "stopped"  # 전날에 중단된 시도를 새 날에 자동 재개하지 않음.
+            save_retry_state(state)
+            return state
+        state = {}
+    if not state:
+        state = {"version": VERSION, "date": now.date().isoformat(), "expected": expected,
+                 "phase": "first", "first_diag_sent": False, "retry_diag_sent": False}
+        save_retry_state(state)
+    return state
+
+
+def retry_action(state, now):
+    """사이트 접근을 허용하는 순간만 first/at_09로 반환. 같은 버전 정지는 절대 허용하지 않음."""
+    phase = state.get("phase")
+    nine = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    if phase == "first":
+        return "first"
+    if phase == "waiting_09":
+        return "at_09" if now >= nine and state.get("date") == now.date().isoformat() else "wait"
+    if phase in ("retrying_09", "stopped"):
+        return "stop"
+    return "done" if phase == "ready" else "stop"
+
+
+def failure_label(result, info):
+    labels = {"logged_out": "로그인 풀림 의심", "no_posts": "글 없음", "no_image": "이미지 없음",
+              "parsing": "필요 종가일 자료 없음(날짜 오독·가격표 아님 가능)",
+              "server_error": "서버 전송 실패 또는 판독 대기 초과", "error": "수집 단계 오류"}
+    return labels.get(result, "수집 실패") + (" · " + str(info)[:38] if info else "")
+
+
+def report_failure(c, state, kind, result, info):
+    """한 시도당 진단 한 번. 전송 실패 시 무한 재전송하지 않고 로컬 기록에 남긴다."""
+    key = "first_diag_sent" if kind == "first" else "retry_diag_sent"
+    if state.get(key):
+        return
+    state[key] = True
+    save_retry_state(state)  # 네트워크 전송 전 1회 플래그를 고정하여 중복 통지 방지
+    failed_at = kst_now().strftime("%Y-%m-%d %H:%M:%S KST")
+    late_first = kind == "first" and kst_now().hour >= 9
+    next_step = ("09:00 이후 첫 실패입니다. 추가 자동 재시도 없이 업데이트까지 멈춥니다" if late_first else
+                 "KST 09:00에 1회 다시 시도합니다" if kind == "first" else
+                 "09:00 재시도도 실패했습니다. 자동 재시도를 멈춥니다. 업데이트 뒤 새 코드로 다시 시도합니다")
+    # 서버의 X-Fanding-Note는 300자까지만 전달: 식별자, 상세 오류 원문 노출 금지.
+    parts = ["⚠️ 팬딩 PC 수집 진단", "실패 단계: " + TRACE["step"],
+             "마지막 성공: " + TRACE["last"], "사유: " + failure_label(result, info),
+             "시각: " + failed_at, "필요 종가일: " + str(state.get("expected") or "미확인")]
+    if TRACE.get("post"):
+        parts.append("글: " + TRACE["post"][:80])
+    parts.append(next_step)
+    note = "\n".join(parts)
+    if len(note) > 300:
+        # 필수 항목 + 마지막 일정은 보존, 긴 글 주소는 축약.
+        parts[3] = "사유: " + failure_label(result, "")
+        for i, part in enumerate(parts):
+            if part.startswith("글: "):
+                parts[i] = "글: " + part[3:40]
+        note = "\n".join(parts)
+    log(note)
+    try:
+        post_server(c, note=note[:300])
+    except Exception as exc:
+        log("진단 전달 실패(재전송하지 않음):", type(exc).__name__)
+
+
+def set_gate(c, policy, request_id=""):
+    SCAN_POLICY["value"] = policy
+    try:
+        control(c, "daily_stopped" if policy == "stopped" else "idle", request_id)
+    except Exception as exc:
+        log("수집 중단 상태 서버 통지 실패:", type(exc).__name__)
 
 def log(*a):
     print(datetime.now().strftime("%m-%d %H:%M:%S"), *a, flush=True)
@@ -130,9 +254,14 @@ def looks_logged_out(page):
     return ("로그인하고" in t or "익명의 팬" in t) and "로그아웃" not in t
 
 
-def grab_images(page, post_url, limit=16):
-    """글 안의 큰 이미지를 위에서부터 모두 가져옴 (가격표 판별은 서버가 함)"""
+def grab_images(page, post_url, limit=16, trace=None):
+    """글 이미지 1회 가져오기. 기존 fallback은 유지하고 진단 단계만 기록."""
+    if trace:
+        trace("글 페이지 가져오기", post=post_url)
     page.goto(post_url, wait_until="domcontentloaded", timeout=60000)
+    if trace:
+        trace("글 페이지 가져오기", success=True)
+        trace("글 안 이미지 가져오기")
     page.wait_for_timeout(5000)
     for _ in range(6):
         page.mouse.wheel(0, 1200); page.wait_for_timeout(600)
@@ -159,13 +288,18 @@ def grab_images(page, post_url, limit=16):
         h = hashlib.sha256(data).hexdigest()
         if h not in seen:
             seen.add(h); out.append(data)
+    if trace and out:
+        trace("글 안 이미지 가져오기", success=True)
     return out, imgs
 
-
 def control(c, stage="idle", request_id=""):
+    policy = SCAN_POLICY["value"]
+    # 서버가 새 요청을 만들어도 '대기/정지'에서는 사이트 접속을 유발할 수 없다.
     data = json.dumps({"stage":stage, "request_id":request_id, "version":VERSION,
                        "mode": "watch" if WORKER_MODE["stay_open"] else "run",
-                       "run_path": str(Path(__file__).resolve()), "want_scan": True}).encode()
+                       "run_path": str(Path(__file__).resolve()),
+                       "want_scan": policy in ("first", "retry_09"),
+                       "scan_policy": policy}).encode()
     req = urllib.request.Request(c["office_url"].rstrip("/") + "/api/fanding/control", data=data,
                                  headers={"X-Fanding-Token":c["upload_token"], "Content-Type":"application/json"})
     try:
@@ -180,9 +314,9 @@ def control(c, stage="idle", request_id=""):
         raise RuntimeError("서버 control 응답 형식 오류")
     return result
 
-
 def once(c, upload=True, request=None):
     from playwright.sync_api import sync_playwright
+    TRACE.update(step="사이트 시리즈 목록 가져오기", last="없음", post="")
     def stage(name):
         if upload and request:
             control(c, name, request["id"])
@@ -191,39 +325,51 @@ def once(c, upload=True, request=None):
         ctx = browser(p, c["headless"])
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
+            progress("사이트 시리즈 목록 가져오기")
             stage("listing")
             posts = latest_post_url(page, c["series_url"])
+            progress("사이트 시리즈 목록 가져오기", success=True)
+            progress("로그인 상태 확인")
             if looks_logged_out(page):
                 return "logged_out", None
+            progress("로그인 상태 확인", success=True)
+            progress("글 목록·최신 글 선택")
             if not posts:
                 return "no_posts", None
-            # Publication date is not the price sheet's close date: Saturday can be Monday's material.
+            progress("글 목록·최신 글 선택", success=True)
             candidates = posts[:max(1, min(5, int(c.get("recent_posts", 3))))]
             total = 0
             for post in candidates:
                 stage("images")
-                images, _ = grab_images(page, post)
+                images, _ = grab_images(page, post, trace=progress)
+                progress("로그인 상태 확인")
                 if looks_logged_out(page):
                     return "logged_out", None
+                progress("로그인 상태 확인", success=True)
                 if not images:
-                    continue
+                    # 첫 오류에서 바로 중단. 다음 글/이미지 접근 없음.
+                    progress("글 안 이미지 가져오기", post=post)
+                    return "no_image", None
                 if not upload:
                     folder = HERE / "test_images"; folder.mkdir(exist_ok=True)
                     for i, image in enumerate(images, 1):
                         (folder / f"post_{total}_image_{i}.jpg").write_bytes(image)
                 else:
                     stage("uploading")
+                    progress("서버로 이미지 전송")
                     sha = hashlib.sha256((post + (request or {}).get("id", "")).encode()).hexdigest()
                     for i, image in enumerate(images, 1):
                         reply = post_server(c, image, post=post, batch=sha[:16], idx=i, count=len(images), request=request)
                         if not reply.get("ok"):
                             return "server_error", None
+                    progress("서버로 이미지 전송", success=True)
                 total += len(images)
                 if upload and request:
-                    # Wait for server acknowledgement before sending older posts; reduce paid AI calls.
+                    progress("서버 판독 결과 대기·확인")
                     for _ in range(60):
                         ack = control(c, "parsing", request["id"])
                         if ack.get("ready"):
+                            progress("서버 판독 결과 대기·확인", success=True)
                             keep_daily_post(c, post, images)
                             return "sent", f"필요 종가일 자료 확보 · {total}장 전송"
                         if not ack.get("pending_images"):
@@ -231,16 +377,14 @@ def once(c, upload=True, request=None):
                         time.sleep(30)
                     else:
                         return "server_error", "서버 판독 대기30분 초과"
-            if total and upload and request:
-                # Upload success alone is not proof that the expected sheet was read.
-                return "parsing", f"{total}장 전송 · 필요 종가일 판독 미확인, 재확인 예정"
+                    # 어떤 이유든 필요 종가일 자료가 없는 것을 '오류'로 보고 즉시 중단.
+                    return "parsing", f"{total}장 전송 · 필요 종가일 자료 없음"
             return ("sent" if upload else "test_ok", f"{total}장 / 최근 {len(candidates)}개 글") if total else ("no_image", None)
         finally:
             ctx.close()
 
-
 def watch(stay_open=False):
-    # One persistent worker per PC; existing daily task may start another instance safely.
+    # 원본의 단일 실행 잠금과 정상 성공 후 최소 1시간/stop_at/과거 수집 동작은 보존.
     lock = (HERE / "watch.lock").open("a+b")
     lock.seek(0); lock.write(b"0"); lock.flush(); lock.seek(0)
     try:
@@ -252,45 +396,96 @@ def watch(stay_open=False):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         log("대기 프로그램이 이미 실행 중입니다."); lock.close(); return
-    completed = set()
-    attempts = {}
     WORKER_MODE["stay_open"] = stay_open
-    start = datetime.now(timezone(timedelta(hours=9)))
+    start = kst_now()
     settings = cfg()
     stop_h, stop_m = map(int, settings.get("stop_at", "11:30").split(":"))
     minimum_end = start + timedelta(hours=1)
     stop = max(start.replace(hour=stop_h, minute=stop_m, second=0, microsecond=0), minimum_end)
-    log("작업 시작: 최소1시간 유지 · 당일 자료 확보·과거 수집 완료 후 자동 종료" if not stay_open else "상시 대기 모드")
+    log("작업 시작: 첫 오류 뒤 KST 09:00 단 한 번 재시도 · 실패 시 버전 정지")
+    state = retry_state_for_today(start, "")
     try:
+        if state.get("phase") == "stopped":
+            log("동일 버전 정지 상태 · 사이트 접속하지 않음. 업데이트 또는 정지 파일 직접 삭제 필요")
+            set_gate(settings, "stopped")
+            return
+        if state.get("phase") == "retrying_09":
+            state["phase"] = "stopped"  # 재시도 도중 중단/충돌 시 세 번째 접근 차단
+            save_retry_state(state)
+            set_gate(settings, "stopped")
+            return
         while True:
+            now = kst_now()
+            action = retry_action(state, now)
+            if action == "stop":
+                set_gate(settings, "stopped")
+                return
+            if action == "wait":
+                SCAN_POLICY["value"] = "waiting_09"
+                # 기존 서버는 요청을 생성할 수 있으나 PC는 while 대기 중 어떤 사이트 코드도 호출하지 않음.
+                try:
+                    control(settings, "idle")
+                except Exception as exc:
+                    log("09:00 대기 폴링 실패:", type(exc).__name__)
+                time.sleep(min(30, max(1, (now.replace(hour=9, minute=0, second=0, microsecond=0) - now).total_seconds())))
+                continue
+            if action in ("first", "at_09"):
+                kind = "first" if action == "first" else "retry"
+                SCAN_POLICY["value"] = "first" if kind == "first" else "retry_09"
+                if kind == "retry":
+                    state["phase"] = "retrying_09" # 재시도 시작 전 기록: 재시작으로 3차 접속 방지
+                    save_retry_state(state)
+                TRACE.update(step="서버 판독 결과 대기·확인", last="없음", post="")
+                try:
+                    c = cfg()
+                    reply = control(c, LAST_STAGE["value"])
+                    expected = reply.get("expected") or state.get("expected") or ""
+                    state["expected"] = expected
+                    save_retry_state(state)
+                    if reply.get("ready"):
+                        result, info = "sent", "서버에서 이미 필요 종가일 자료 확보"
+                    else:
+                        request = reply.get("request")
+                        if not request or not request.get("id"):
+                            result, info = "server_error", "서버가 수집 요청을 주지 않음"
+                        else:
+                            state["expected"] = request.get("expected") or expected
+                            save_retry_state(state)
+                            result, info = once(c, request=request)
+                            ack = control(c, result, request["id"])
+                            if ack.get("ready"):
+                                result = "sent"
+                            elif result == "sent":
+                                result, info = "parsing", "서버에서 필요 종가일 확보 확인 불가"
+                except Exception as exc:
+                    result, info = "error", type(exc).__name__
+                log("수집 결과:", result, info or "")
+                LAST_STAGE["value"] = result
+                if result == "sent":
+                    state["phase"] = "ready"
+                    save_retry_state(state)
+                    SCAN_POLICY["value"] = "ready"
+                else:
+                    is_final = kind == "retry" or kst_now() >= now.replace(hour=9, minute=0, second=0, microsecond=0)
+                    state["phase"] = "stopped" if is_final else "waiting_09"
+                    save_retry_state(state)
+                    # 진단 알림 서버 전송보다 먼저 게이트를 동기화해 서버 자동 새 요청 틈을 줄인다.
+                    set_gate(settings, state["phase"])
+                    report_failure(c if 'c' in locals() else settings, state, "retry" if kind == "retry" else "first", result, info)
+                    if is_final:
+                        # 09:00 이후 첫 실패라면 09:00이 지난 상태: 그날 추가 사이트 접속을 하지 않음.
+                        if kind == "first":
+                            log("첫 실패 시각이 이미 09:00 이후여서 09:00 재시도 건너뜀 · 영구 정지")
+                        return
+                    continue
+            # 자료 확보 후에는 원본의 과거 수집과 자동 종료 흐름을 그대로 유지.
             try:
                 c = cfg()
+                SCAN_POLICY["value"] = "ready"
                 reply = control(c, LAST_STAGE["value"])
-                request = reply.get("request")
-                retry_sec = max(60, int(c.get("retry_min", 5)) * 60)
-                if (request and not reply.get("ready") and not reply.get("pending_images")
-                        and request["id"] not in completed
-                        and time.monotonic() - attempts.get(request["id"], -1e12) >= retry_sec):
-                    try:
-                        result, info = once(c, request=request)
-                    except Exception as exc:
-                        result, info = "error", type(exc).__name__
-                    attempts[request["id"]] = time.monotonic()
-                    ack = control(c, result, request["id"])
-                    if ack.get("ready"):
-                        completed.add(request["id"])
-                    if len(completed) > 100:
-                        completed = {request["id"]}
-                    if len(attempts) > 100:
-                        attempts = {request["id"]: attempts[request["id"]]}
-                    log("수집 결과:", result, info or "")
-                    # Keep failure visible between heartbeats; do not claim parsing success on upload.
-                    c["last_stage"] = result
-                    LAST_STAGE["value"] = result
-                reply = control(c, LAST_STAGE["value"])
-                day = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+                day = kst_now().date().isoformat()
                 hist = HERE / "backfill_day.txt"
-                if reply.get("ready") and 8 <= datetime.now(timezone(timedelta(hours=9))).hour < 12 and (not hist.exists() or hist.read_text() != day):
+                if reply.get("ready") and 8 <= kst_now().hour < 12 and (not hist.exists() or hist.read_text() != day):
                     c["watch_mode"] = True
                     try:
                         backfill(c)
@@ -300,7 +495,7 @@ def watch(stay_open=False):
                     LAST_STAGE["value"] = "sent"
                 if not stay_open:
                     final = control(c, LAST_STAGE["value"])
-                    if final.get("ready") and datetime.now(timezone(timedelta(hours=9))) >= minimum_end:
+                    if final.get("ready") and kst_now() >= minimum_end:
                         try:
                             control(c, "daily_done")
                             post_server(c, note="오늘 필요 자료 확보·PC 수집 작업 완료. 수집기를 자동 종료합니다. 재판독이 필요하면 PC에서 run.bat를 다시 실행하세요.")
@@ -308,20 +503,17 @@ def watch(stay_open=False):
                             log("완료 알림 전송 실패 · 확보된 자료는 서버에서 확인")
                         log("오늘 작업 완료 · 자동 종료")
                         return
-                    if datetime.now(timezone(timedelta(hours=9))) >= stop:
+                    if kst_now() >= stop:
                         control(c, "daily_stopped")
                         post_server(c, note="오늘 자료 미확보 상태로 종료 시각에 도달했습니다. /진단 확인 후 필요시 PC run.bat를 다시 실행하세요.")
                         return
             except Exception as exc:
-                detail = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
-                log("서버 연결 실패:", detail, "주소·네트워크·서버 업데이트 확인")
-                if not stay_open and datetime.now(timezone(timedelta(hours=9))) >= stop:
-                    log("종료시각 도달 · 서버 연결 실패는 fetch_log.txt 확인")
+                log("성공 후 서버 연결 실패:", type(exc).__name__)
+                if not stay_open and kst_now() >= stop:
                     return
             time.sleep(30)
     finally:
         lock.close()
-
 
 LAST_STAGE = {"value":"idle"}
 WORKER_MODE = {"stay_open": False}
@@ -512,6 +704,9 @@ def cmd_run():
 if __name__ == "__main__":
     cmd = (sys.argv[1:] or ["run"])[0]
     log(f"팬딩 가져오기 v{VERSION} · {cmd}")
+    if cmd in ("login", "test", "backfill", "send") and read_retry_state().get("version") == VERSION and read_retry_state().get("phase") in ("waiting_09", "retrying_09", "stopped"):
+        log("팬딩 수집 접근 중단 상태 · 정지 파일 삭제 또는 새 버전 업데이트 전 사이트 접속하지 않음")
+        sys.exit(0)
     if cmd == "login":
         cmd_login()
     elif cmd == "test":
