@@ -1,6 +1,6 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v7 · 상단 2열 승인 시안) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
-<!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 표시 밑, 칸 안 흰색, 상단 2열 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 · 한 화면 승인 시안) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
 <style>
@@ -10,30 +10,30 @@
   --c-l1:#4cc2ad;--c-ind:#e3b04f;--c-up:#86a9cf;--c-wma:#b49cf0}}
 *{box-sizing:border-box}html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI','Apple SD Gothic Neo','Malgun Gothic',sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}
-header{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px}
 h1{font-size:16px;margin:0;letter-spacing:-.4px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .tools{display:flex;gap:6px;flex:none}.tools a,.tools button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:6px 9px;font:inherit;font-size:13px;text-decoration:none;white-space:nowrap}
-main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
+main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
 .status{font-size:13px;color:var(--muted);margin:2px 2px 8px;overflow-wrap:anywhere}.status b{color:var(--ink)}
 .err{color:var(--bad)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px 12px;margin-bottom:6px}
 .profit{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
 .profit .big{font-size:20px;font-weight:700;letter-spacing:-.4px}.profit .sm{font-size:12.5px;color:var(--muted)}
 .top2{display:flex;gap:12px}.top2 .col{flex:1;min-width:0}.top2 .col+.col{border-left:1px solid var(--line);padding-left:12px}
-.top2 .big{font-size:28px;font-weight:700;letter-spacing:-.4px}.top2 .sm{font-size:12.5px;color:var(--muted)}.top2 .line{font-size:13.5px;margin-top:4px}
+.top2 .big{font-size:24px;font-weight:700;letter-spacing:-.4px}.top2 .sm{font-size:12px;color:var(--muted)}.top2 .line{font-size:13px;margin-top:2px}
 .gray{color:var(--muted)}
 .pos{color:var(--ok)}.neg{color:var(--bad)}
 .legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);margin:2px 2px 8px}
-.lrow{display:flex;align-items:flex-start;gap:8px;border-top:1px solid var(--line);padding:8px 0 6px}.lrow:first-of-type{border-top:0}
+.lrow{display:flex;align-items:flex-start;gap:8px;border-top:1px solid var(--line);padding:3px 0}.lrow:first-of-type{border-top:0}
 .lrow.dim{opacity:.72}
-.tiercol{width:52px;flex:none;padding-top:2px}
-.tier{font-size:13.5px;font-weight:700}
+.tiercol{width:78px;flex:none;padding-top:0}
+.tier{font-size:13px;font-weight:700}
 .tierqty{font-size:12.5px;color:var(--muted)}
 .barwrap{flex:1;min-width:0}
-.bar{display:flex;height:34px;border:2px solid #1f3530;border-radius:6px;overflow:hidden;background:#fff}
+.bar{display:flex;height:16px;border:2px solid #1f3530;border-radius:6px;overflow:hidden;background:#fff}
 .cell{flex:none;background:#fff;border-right:1px solid #1f3530}
 .cell:last-child{border-right:0}
-.prices{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:2px}
+.prices{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:0}
 .lp{font-size:11.5px;color:var(--muted);margin:1px 2px 0;overflow-wrap:anywhere}
 .lp.ok{color:var(--ok);font-weight:650}.lp.lk{color:var(--warn)}
 .hold{font-size:13.5px;margin:8px 2px 0;overflow-wrap:anywhere}
@@ -90,18 +90,17 @@ main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
     var scale=maxEnd>avail?avail/maxEnd:1,cell=cellBase*scale,step=stepBase*scale;
     T.forEach(function(t){
       var tg=null;G.forEach(function(g){if((g.kind==='l1'||g.kind==='indiv')&&g.tiers.indexOf(t.tier)>=0)tg=g});
-      var locked=!!(tg&&tg.locked),st=statusText(t.target,locked,tg&&tg.unlock_hm,t.reached,lp),sc=statusCls(locked,t.reached,lp);
-      var extra=(tg&&tg.wma_only&&tg.also_wma)?' · 이평 졸업만':'';
+      var locked=!!(tg&&tg.locked);
+      var flagSym=locked?' 🔒':(t.reached?' ✓':'');
       var col=COL[t.kind==='l1'?'l1':'up'];
       var row=el('div','lrow'+(locked?' dim':''));
-      var tc=el('div','tiercol');tc.appendChild(el('div','tier',t.tier+'층'));tc.appendChild(el('div','tierqty',t.qty+'주'+(t.lot_count>1?' ('+t.lot_count+'회)':'')));row.appendChild(tc);
+      var tc=el('div','tiercol');tc.appendChild(el('div','tier',t.tier+'층 '+t.qty+'주'+(t.lot_count>1?' ('+t.lot_count+'회)':'')));row.appendChild(tc);
       var wrap=el('div','barwrap'),off=(t.tier-1)*step,barW=t.qty*cell;
       var bar=el('div','bar');bar.style.marginLeft=off+'px';bar.style.width=barW+'px';bar.style.borderColor=col;
       for(var i=0;i<t.qty;i++){var c=el('div','cell');c.style.width=cell+'px';bar.appendChild(c)}
       wrap.appendChild(bar);
       var pr=el('div','prices');pr.style.marginLeft=off+'px';pr.style.width=barW+'px';
-      pr.appendChild(el('span',null,usd(t.price)));pr.appendChild(el('span',null,usd(t.target)));wrap.appendChild(pr);
-      wrap.appendChild(el('div','lp'+(sc?' '+sc:''),'산 '+usd(t.price)+' → 목표 '+usd(t.target)+' (+'+t.target_pct.toFixed(1)+'%) · '+st+extra));
+      pr.appendChild(el('span',null,usd(t.price)));pr.appendChild(el('span',null,usd(t.target)+flagSym));wrap.appendChild(pr);
       row.appendChild(wrap);box.appendChild(row);
     });
     // 1층이 없으면 맨 아래에 없음 행 (계단 최하단)
@@ -161,7 +160,7 @@ main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
     T2.appendChild(left);T2.appendChild(right);
     draw(d);
     var n=[];n.push('달러($) 기준 · '+d.fx.note+'.');
-    n.push('비율·척도 무시: 위층일수록 오른쪽에서 시작하고, 바 길이는 주수예요. 전체가 틀을 넘으면 전체를 같은 비율로 줄여요.');
+    n.push('비율·척도 무시: 위층일수록 오른쪽에서 시작하고, 바 길이는 주수예요. 층 옆 숫자가 보유 주수, 바 아래 왼쪽이 매수, 오른쪽이 매도(목표) 가격이에요. 전체가 틀을 넘으면 전체를 같은 비율로 줄여요.');
     if(!r.history_available)n.push('개별 과거 매도(언제·어느 층·얼마에)는 원장에 목록이 없어 표시하지 않아요. 누적 실현 이익만 보여 줘요.');
     $('notes').textContent=n.join(' ');
   }
