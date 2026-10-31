@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.13 · 2026-10-31 17:50 (KST)
+- 파일: main.py, tg_ui_plugin.py
+- 내용: 스나이퍼 매매 그림: 텔레그램 메뉴 + 사무실 그림 페이지/API (상단 1개층 밤 잠김 수정 포함)
+- 브랜치: staging
+
 ## v1.0.12 · 2026-10-31 11:18 (KST)
 - 파일: quant_engine.py, sniper_exit_plugin.py
 - 내용: 2번 스나이퍼 Case 83 오버나이트 개별 매도 잠금: quant_engine.py, sniper_exit_plugin.py
