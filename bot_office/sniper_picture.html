@@ -1,0 +1,148 @@
+<!doctype html>
+<!-- 사무실 스나이퍼 매매 그림 (초안 · 버전은 Muse 가 부여) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>스나이퍼 매매 그림</title>
+<style>
+:root{--bg:#f4f3ee;--card:#fffefa;--ink:#1f3530;--muted:#76827c;--line:#dfe0d6;--accent:#2b5446;--ok:#2f8a57;--warn:#c98a1a;--bad:#c4473a;--chip:#eceee4;
+  --c-l1:#1f7a6b;--c-ind:#c98a1a;--c-up:#4d6f93;--c-wma:#7255b8}
+@media (prefers-color-scheme:dark){:root{--bg:#141917;--card:#1c2320;--ink:#e6ece8;--muted:#93a29a;--line:#2c3631;--accent:#8fc9ad;--ok:#5cc28a;--warn:#e3b04f;--bad:#ef7a6c;--chip:#25302b;
+  --c-l1:#4cc2ad;--c-ind:#e3b04f;--c-up:#86a9cf;--c-wma:#b49cf0}}
+*{box-sizing:border-box}html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI','Apple SD Gothic Neo','Malgun Gothic',sans-serif;-webkit-text-size-adjust:100%;overflow-x:hidden}
+header{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px}
+h1{font-size:16px;margin:0;letter-spacing:-.4px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tools{display:flex;gap:6px;flex:none}.tools a,.tools button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:9px;padding:6px 9px;font:inherit;font-size:13px;text-decoration:none;white-space:nowrap}
+main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
+.status{font-size:13px;color:var(--muted);margin:2px 2px 8px;overflow-wrap:anywhere}.status b{color:var(--ink)}
+.err{color:var(--bad)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:10px}
+.profit{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.profit .big{font-size:20px;font-weight:700;letter-spacing:-.4px}.profit .sm{font-size:12.5px;color:var(--muted)}
+.pos{color:var(--ok)}.neg{color:var(--bad)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);margin:2px 2px 8px}
+.axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin:0 2px 4px}
+.live{position:relative;height:22px;margin:0 10px 2px}
+.chip{position:absolute;top:0;transform:translateX(-50%);background:var(--ink);color:var(--bg);font-size:11px;font-weight:700;border-radius:9px;padding:1px 8px;white-space:nowrap}
+.lrow{border-top:1px solid var(--line);padding:7px 0 6px}.lrow:first-of-type{border-top:0}
+.lrow.dim{opacity:.72}
+.lh{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.ln{font-size:13.5px;font-weight:650;min-width:0}.ln small{font-weight:400;color:var(--muted);font-size:12px}
+.ls{font-size:12px;color:var(--muted);text-align:right;flex:none}.ls.ok{color:var(--ok);font-weight:650}.ls.lk{color:var(--warn)}
+.track{position:relative;height:24px;margin:2px 10px 0}
+.track:before{content:'';position:absolute;left:0;right:0;top:11px;height:2px;background:var(--line)}
+.seg{position:absolute;top:8px;height:8px;border-radius:4px;opacity:.9}
+.seg.lock{background-image:repeating-linear-gradient(45deg,transparent 0 4px,var(--card) 4px 6px)}
+.buy{position:absolute;top:6px;width:12px;height:12px;border-radius:50%;margin-left:-6px;border:2px solid var(--card)}
+.tgt{position:absolute;top:5px;width:14px;height:14px;margin-left:-7px;text-align:center;font-size:14px;line-height:14px}
+.now{position:absolute;top:0;width:3px;height:24px;margin-left:-1.5px;background:var(--ink);border-radius:2px}
+.lp{font-size:11.5px;color:var(--muted);margin:1px 2px 0;overflow-wrap:anywhere}
+.hold{font-size:13.5px;margin:8px 2px 0;overflow-wrap:anywhere}
+.note{font-size:12px;color:var(--muted);margin:8px 2px 0;overflow-wrap:anywhere}
+.flag{font-size:12.5px;margin:2px 2px 8px;padding:5px 9px;border-radius:9px;background:var(--chip)}
+.empty{text-align:center;padding:26px 0;font-size:14px}.empty small{display:block;color:var(--muted);font-size:12px;margin-top:4px}
+</style></head><body>
+<header><h1>📈 스나이퍼 매매 그림</h1>
+  <div class="tools"><a href="/board">상황판</a><button id="reload" type="button">새로고침</button></div></header>
+<main>
+  <div class="status" id="status">불러오는 중…</div>
+  <div class="flag" id="flag" hidden></div>
+  <div class="card"><div class="profit" id="profit"></div></div>
+  <div class="card">
+    <div class="legend"><span>● 산 가격</span><span>▶ 1층 목표 +1.5%</span><span>◆ 개별 목표 +1.0%</span><span>■ 통합이평 +1.0%</span><span>┃ 지금 가격</span><span>✓ 도달 · 🔒 잠김</span></div>
+    <div class="axis"><span id="axLo"></span><span>← 낮은 가격 · 가격 · 높은 가격 →</span><span id="axHi"></span></div>
+    <div class="live" id="liveRow"></div>
+    <div id="pic" aria-label="층별 가격 그림"></div>
+    <div class="hold" id="hold"></div>
+  </div>
+  <p class="note" id="notes"></p>
+</main>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+    function usd(v){return '$'+Number(v).toFixed(2)}
+  function sg(v){return (v>=0?'+':'-')+'$'+Math.abs(v).toFixed(2)}
+  function cls(v){return v>=0?'pos':'neg'}
+  var ERR={ledger_not_found:'스나이퍼 원장을 찾지 못했어요 (스나이퍼 폴더 위치 확인 필요)',ledger_unreadable:'원장을 읽지 못했어요 (읽기 권한 또는 파일 형식 확인 필요)',engine_unavailable:'계산 모듈(quant_engine)을 읽지 못했어요',picture_failed:'그림 데이터를 만들지 못했어요'};
+
+  function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+  var COL={l1:'var(--c-l1)',up:'var(--c-up)',indiv:'var(--c-ind)',wma:'var(--c-wma)'};
+  var MARK={l1:'▶',indiv:'◆',wma:'■'};
+
+  function draw(d){
+    var box=$('pic');box.textContent='';$('liveRow').textContent='';$('axLo').textContent='';$('axHi').textContent='';
+    var T=d.tiers||[],G=d.targets||[],lp=d.price&&d.price.live;
+    if(!T.length){var em=el('div','empty','보유 지층 없음 · 0주');em.appendChild(el('small',null,'60초 타임쉴드 확인 뒤 1층 산입 대기'));if(lp)em.appendChild(el('small',null,'현재가 '+usd(lp)));box.appendChild(em);return}
+    // 모든 줄이 같은 가격축을 쓴다: 가격이 다르면 시작 위치도 다르다
+    var ps=[];T.forEach(function(t){ps.push(t.price,t.target)});G.forEach(function(g){ps.push(g.price);if(g.avg_price)ps.push(g.avg_price)});if(lp)ps.push(lp);
+    var lo=Math.min.apply(null,ps),hi=Math.max.apply(null,ps);if(hi-lo<0.05){hi+=0.3;lo-=0.3}
+    var pad=(hi-lo)*0.04;lo-=pad;hi+=pad;
+    function X(p){return ((p-lo)/(hi-lo)*100).toFixed(2)+'%'}
+    $('axLo').textContent=usd(lo);$('axHi').textContent=usd(hi);
+    if(lp){var c=el('span','chip','지금 '+usd(lp));c.style.left=X(lp);$('liveRow').appendChild(c)}
+
+    function addRow(o){
+      var r=el('div','lrow'+(o.dim?' dim':'')),h=el('div','lh'),n=el('div','ln',o.name);n.appendChild(document.createTextNode(' '));n.appendChild(el('small',null,o.sub));
+      h.appendChild(n);h.appendChild(el('div','ls'+(o.cls?' '+o.cls:''),o.status));r.appendChild(h);
+      var tr=el('div','track'),a=Math.min(o.from,o.to),b=Math.max(o.from,o.to);
+      var seg=el('div','seg'+(o.lock?' lock':''));seg.style.left=X(a);seg.style.width='calc('+X(b)+' - '+X(a)+')';seg.style.background=o.color;tr.appendChild(seg);
+      var bd=el('div','buy');bd.style.left=X(o.from);bd.style.background=o.color;tr.appendChild(bd);
+      var tm=el('div','tgt',o.mark);tm.style.left=X(o.to);tm.style.color=o.color;tr.appendChild(tm);
+      if(lp){var nw=el('div','now');nw.style.left=X(lp);tr.appendChild(nw)}
+      r.appendChild(tr);r.appendChild(el('div','lp',o.text));box.appendChild(r)}
+
+    function status(tgt,locked,unlock,reached){
+      if(!lp)return {t:'목표 '+usd(tgt),c:''};
+      if(locked)return {t:'🔒 '+(unlock||'04:07')+' 해금'+(reached?' · 도달':''),c:'lk'};
+      if(reached)return {t:'✓ 목표 도달',c:'ok'};
+      return {t:'목표까지 +'+((tgt/lp-1)*100).toFixed(1)+'%',c:''}}
+
+    T.forEach(function(t){
+      var tg=null;G.forEach(function(g){if((g.kind==='l1'||g.kind==='indiv')&&g.tiers.indexOf(t.tier)>=0)tg=g});
+      var locked=!!(tg&&tg.locked),st=status(t.target,locked,tg&&tg.unlock_hm,t.reached),col=COL[t.kind==='l1'?'l1':'up'];
+      var extra=(tg&&tg.wma_only&&tg.also_wma)?' · 이평 졸업만':'';
+      addRow({name:t.tier+'층',sub:t.qty+'주'+(t.lot_count>1?' ('+t.lot_count+'회)':''),status:st.t+extra,cls:st.c,from:t.price,to:t.target,color:col,mark:t.kind==='l1'?MARK.l1:MARK.indiv,dim:locked,lock:locked,
+        text:'산 '+usd(t.price)+' → 목표 '+usd(t.target)+' (+'+t.target_pct.toFixed(1)+'%)'})});
+    G.forEach(function(g){if(g.kind!=='wma')return;
+      var st=status(g.price,false,'',g.reached),nt=g.tiers.length,qty=0;T.forEach(function(t){if(g.tiers.indexOf(t.tier)>=0)qty+=t.qty});
+      var lockNote=(d.session&&d.session.overnight&&T.length&&T[0].kind==='l1')?' · 1층이 본전 넘으면 졸업':'';
+      addRow({name:'통합이평',sub:g.tiers[0]+'~'+g.tiers[nt-1]+'층 '+qty+'주',status:st.t+lockNote,cls:st.c,from:g.avg_price||g.price,to:g.price,color:COL.wma,mark:MARK.wma,
+        text:'평단 '+usd(g.avg_price||g.price)+' → 목표 '+usd(g.price)+' (+'+g.pct.toFixed(1)+'%)'})});
+  }
+
+  function render(d){
+    var st=$('status'),fl=$('flag');
+    if(!d.ok){st.className='status err';st.textContent=ERR[d.error]||('불러오기 실패: '+(d.error||'?'));fl.hidden=true;$('pic').textContent='';$('liveRow').textContent='';$('profit').textContent='';$('hold').textContent='';$('notes').textContent='';return}
+    var lp=d.price.live;
+    st.className='status';st.textContent='';
+    var b=document.createElement('b');b.textContent='SOXL · '+d.session.name+' ('+d.session.hm+' ET)';st.appendChild(b);
+    st.appendChild(document.createTextNode(' · '+(lp?'현재가 '+usd(lp):'현재가 미확인')+' · 확인 '+d.observed_kst.slice(5,16)+' KST'+(d.ledger?' · 원장 '+d.ledger.updated_kst.slice(6,11):'')));
+    var msgs=[];
+    if(!d.is_active)msgs.push('⏸ 스나이퍼 가동 OFF');
+    if(d.session.weekend_closed)msgs.push('🛑 주말휴장');
+    if(d.engine){if(d.engine.should_sell)msgs.push('⚡ 지금 매도 조건 충족: '+d.engine.sell_tiers.join('·')+'층');
+      else if(d.engine.overnight_indiv_locked)msgs.push('🔒 밤 시간 · 개별 매도 잠김 (통합이평 졸업만 가능)')}
+    if(!lp)msgs.push('현재가를 알 수 없어 지금 가격선·미실현 손익은 숨겼어요');
+    fl.hidden=!msgs.length;fl.textContent=msgs.join(' · ');
+    var r=d.realized,P=$('profit');P.textContent='';
+    var l=document.createElement('div');var s1=document.createElement('div');s1.className='sm';s1.textContent='판 이익 · 누적 실현(세후)';var s2=document.createElement('div');s2.className='big '+cls(r.cumulative_net_usd);s2.textContent=sg(r.cumulative_net_usd);l.appendChild(s1);l.appendChild(s2);
+    var rr=document.createElement('div');rr.className='sm';rr.style.textAlign='right';rr.textContent='매도 '+r.sell_events+'회 (이익 '+r.win_events+') · '+r.sold_shares+'주'+(r.daily_net_usd?' · 오늘 '+sg(r.daily_net_usd):'');
+    P.appendChild(l);P.appendChild(rr);
+    draw(d);
+    var h=d.holding,H=$('hold');
+    if(h.shares>0){H.textContent='보유 '+h.shares+'주 ('+h.tiers_count+'개층) · 평단 '+usd(h.avg_price)+' · 미실현 '+(h.unrealized_usd==null?'현재가 미확인':sg(h.unrealized_usd)+' ('+(h.unrealized_pct>=0?'+':'')+h.unrealized_pct.toFixed(2)+'%)')}
+    else H.textContent='보유 없음';
+    var n=[];n.push('달러($) 기준 · '+d.fx.note+'.');
+    if(!r.history_available)n.push('개별 과거 매도(언제·어느 층·얼마에)는 원장에 목록이 없어 표시하지 않아요. 누적 실현 이익만 보여 줘요.');
+    $('notes').textContent=n.join(' ');
+  }
+  function load(){
+    return fetch('/api/sniper-picture',{credentials:'same-origin',cache:'no-store'}).then(function(r){
+      if(r.status===401){location.href='/login';return null}
+      if(!r.ok)throw new Error('HTTP '+r.status);return r.json()
+    }).then(function(d){if(d)render(d)}).catch(function(e){var s=$('status');s.className='status err';s.textContent='불러오기 실패: '+e.message+' · 새로고침을 눌러 보세요'});
+  }
+  $('reload').addEventListener('click',load);
+  load();setInterval(load,30000);
+})();
+</script>
+</body></html>

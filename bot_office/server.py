@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
+# 사무실 (초안 · 버전은 Muse 가 부여): 스나이퍼 매매 그림 추가 — GET /sniper-picture (페이지) · GET /api/sniper-picture (데이터), 둘 다 로그인 필요·보기 전용
+#   · 로그인 안 된 /sniper-picture 는 /login 으로, /api/sniper-picture 는 401. /api/board 와 첫 화면 규칙은 그대로
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
 # 사무실 v1.0.57 (2026-10-28): 미팅룸(/room) 연결·옛 결재(/api/deployments)·수정 요청(/api/dev-requests)·업무 흐름(/api/pipeline) 주소 삭제
@@ -103,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
         if route=='/healthz': return self.send(200,{'ok':True})
         if route=='/login': return self.send(200,(ROOT/'login.html').read_bytes(),'text/html; charset=utf-8')
         if not self.session():
-            if route=='/':
+            if route in ('/','/sniper-picture'):
                 self.send_response(303);self.send_header('Location','/login');self.send_header('Content-Length','0');self.end_headers();return
             return self.send(401,{'error':'login_required'})
         if route in ('/', '/board') and (ROOT/'board.html').exists(): return self.send(200,(ROOT/'board.html').read_bytes(),'text/html; charset=utf-8')
@@ -113,6 +115,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,office_board.board())
             except Exception as error:
                 return self.send(500,{'error':'board_failed','detail':type(error).__name__})
+        # SNIPER_PICTURE_V1: 2번 스나이퍼 매매 그림 (보기 전용 · 위 로그인 검사를 그대로 통과한 요청만 여기 도착)
+        if route=='/sniper-picture' and (ROOT/'sniper_picture.html').exists(): return self.send(200,(ROOT/'sniper_picture.html').read_bytes(),'text/html; charset=utf-8')
+        if route=='/api/sniper-picture':
+            try:
+                import sniper_picture
+                return self.send(200,sniper_picture.picture())
+            except Exception as error:
+                return self.send(500,{'error':'picture_failed','detail':type(error).__name__})
         # IDEA_REPORT_V1
         if route=='/api/idea-report':
             try:
