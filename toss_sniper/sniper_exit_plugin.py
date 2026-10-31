@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_exit_plugin.py
+# MODIFIED: sniper_exit_plugin.py · Case 83 overnight individual exit lock
 순수 롱(SOXL) 전용 '04:07 ~ 16:00 EST 매수 체결 후 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
 보유 중 매 1.5초 실시간 3중 다중 익절 매도 모니터(SELL_MONITOR_TIME_SHIELD_SEC = 0.0 · Case 70, Case 71 · 2026-10-29 매매 정책 일치) ·
 매수 후 60초 타임쉴드 경과 뒤 매 1.5초 실시간 현재가 직접 조회 및 3중 다중 익절 조건(① 1층 +1.50% 이상 / ② 2~12층 개별 그리드 +1.00% 이상 /
@@ -1013,21 +1013,24 @@ def _case82_nearest_sell_target(
     buckets: Sequence[StratumBucket],
     rise_l1_pct: float,
     rise_upper_pct: float,
+    is_overnight_session: bool = False,
 ) -> float:
     """기존 3중 익절에 포함된 목표만 사용한다 (골든포켓 제외)."""
     if not buckets:
         return 0.0
     active_l1 = has_active_l1_bucket(buckets)
     targets: List[float] = []
+    has_upper = len(buckets) > (1 if active_l1 else 0)
+    wma_only = bool(is_overnight_session and has_upper)
 
     def ceil2(price: float) -> float:
         return math.ceil((price - 1e-9) * 100.0) / 100.0
 
-    if active_l1 and buckets[0].qty > 0:
+    if not wma_only and active_l1 and buckets[0].qty > 0:
         l1_p = safe_float(buckets[0].book_price, 0.0)
         if l1_p > 0.0:
             targets.append(ceil2(l1_p * (1.0 + rise_l1_pct / 100.0)))
-    for upper in buckets[1:] if active_l1 else buckets:
+    for upper in ([] if wma_only else (buckets[1:] if active_l1 else buckets)):
         book_p = safe_float(upper.book_price, 0.0)
         if upper.qty > 0 and book_p > 0.0:
             targets.append(ceil2(book_p * (1.0 + rise_upper_pct / 100.0)))
@@ -1136,6 +1139,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
+    is_overnight_session = not (407 <= hm <= 1600)
 
     st = context.ledger.get_state(TARGET_SYMBOL)
 
@@ -1221,13 +1225,15 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         live_price=fresh_live_p,
         rise_l1_pct=rise_sell_l1_pct,
         rise_upper_pct=rise_sell_upper_pct,
+        is_overnight_session=is_overnight_session,
     )
 
     # [Case 82] 기존 실시간 가격 판정이 미달인 경우에만 5초 체결 윗꼬리 재판정.
     # 스캔 실패는 매도 조건을 변경하지 않고 기존 모니터링으로 복귀한다.
     if not bool(sell_eval.get("should_sell")):
         nearest_target_p = _case82_nearest_sell_target(
-            buckets, rise_sell_l1_pct, rise_sell_upper_pct
+            buckets, rise_sell_l1_pct, rise_sell_upper_pct,
+            is_overnight_session=is_overnight_session,
         )
         if (
             nearest_target_p > 0.0
@@ -1262,6 +1268,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                             live_price=max(fresh_live_p, wick_high_p),
                             rise_l1_pct=rise_sell_l1_pct,
                             rise_upper_pct=rise_sell_upper_pct,
+                            is_overnight_session=is_overnight_session,
                         )
                         if bool(wick_eval.get("should_sell")):
                             sell_eval = wick_eval

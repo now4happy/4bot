@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine.py
+# MODIFIED: quant_engine.py · Case 83 overnight individual exit lock
 순수 롱(SOXL) 전용 '8%(12.5분할) 황금비율 정액제 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67 탑재) ·
 자투리 절약금 및 세후 실물 수익금 실시간 시드 풀 무리셋 연속 복리 산입 ·
 최종 확정 챔피언(🔥 03_7G_PURE_10_01 / 01_7L_STATIC_CYCLE_MIN) 보유 회차별 4단 와이드 점진 활주로
@@ -674,6 +674,7 @@ def evaluate_multi_grid_sell_targets(
     live_price: float,
     rise_l1_pct: float = 1.50,
     rise_upper_pct: float = 1.00,
+    is_overnight_session: bool = False,
 ) -> Dict[str, Any]:
     """
     🚨 [Case 71 & Case 72 : 60초 타임쉴드 주기 3중 다중 익절 스나이퍼 매도 판정기]:
@@ -707,9 +708,12 @@ def evaluate_multi_grid_sell_targets(
             "hit_l1": False,
             "hit_indiv_grid": False,
             "hit_wma_grad": False,
+            "overnight_indiv_locked": False,
         }
 
     active_l1 = has_active_l1_bucket(valid)
+    upper_start_idx = 1 if active_l1 else 0
+    overnight_lock = bool(is_overnight_session and len(valid) > upper_start_idx)
     sold_idx_set: Set[int] = set()
     floor_candidates: List[float] = []
     hit_l1 = False
@@ -725,7 +729,7 @@ def evaluate_multi_grid_sell_targets(
             )
             / 100.0
         )
-        if lp >= min_l1_target_p:
+        if lp >= min_l1_target_p and not overnight_lock:
             sold_idx_set.add(0)
             floor_candidates.append(min_l1_target_p)
             hit_l1 = True
@@ -740,7 +744,9 @@ def evaluate_multi_grid_sell_targets(
         )
         wma_target_p = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
 
-        if wma_target_p > 0.0 and lp >= wma_target_p:
+        if (wma_target_p > 0.0 and lp >= wma_target_p
+                and (not overnight_lock or not active_l1
+                     or lp >= round(valid[0].book_price, 2))):
             for k in range(upper_start_idx, len(valid)):
                 sold_idx_set.add(k)
             floor_candidates.append(wma_target_p)
@@ -748,7 +754,7 @@ def evaluate_multi_grid_sell_targets(
             if active_l1 and lp >= round(valid[0].book_price, 2):
                 sold_idx_set.add(0)
                 floor_candidates.append(round(valid[0].book_price, 2))
-        else:
+        elif not overnight_lock:
             for k in range(upper_start_idx, len(valid)):
                 bk = valid[k]
                 bk_target_p = (
@@ -763,16 +769,29 @@ def evaluate_multi_grid_sell_targets(
                     floor_candidates.append(bk_target_p)
                     hit_indiv_grid = True
 
+    # Case 83: 실제 매도 조건이 차단된 경우에만 잠금 상태를 표시한다.
+    if overnight_lock and not sold_idx_set:
+        blocked_l1 = active_l1 and lp >= math.ceil(
+            (valid[0].book_price * (1.0 + rise_l1_pct / 100.0) - 1e-9) * 100.0
+        ) / 100.0
+        blocked_upper = any(
+            lp >= math.ceil((b.book_price * (1.0 + rise_upper_pct / 100.0) - 1e-9) * 100.0) / 100.0
+            for b in valid[upper_start_idx:]
+        )
+        blocked_wma = wma_target_p > 0.0 and lp >= wma_target_p
+        overnight_lock = bool(blocked_l1 or blocked_upper or blocked_wma)
+
     if not sold_idx_set:
         return {
             "should_sell": False,
             "sold_indices": [],
             "sell_qty": 0,
             "min_floor_price": 0.0,
-            "reason_tag": "NONE",
+            "reason_tag": "HOLD_OVERNIGHT_WMA_LOCK" if overnight_lock else "NONE",
             "hit_l1": False,
             "hit_indiv_grid": False,
             "hit_wma_grad": False,
+            "overnight_indiv_locked": overnight_lock,
         }
 
     sorted_indices = sorted(sold_idx_set)
@@ -803,6 +822,7 @@ def evaluate_multi_grid_sell_targets(
         "hit_l1": hit_l1,
         "hit_indiv_grid": hit_indiv_grid,
         "hit_wma_grad": hit_wma_grad,
+        "overnight_indiv_locked": False,
     }
 
 
@@ -1276,6 +1296,14 @@ def run_quant_engine_tdd() -> bool:
         and res_part["hit_l1"]
         and res_part["hit_indiv_grid"]
     ), f"TDD 실패(Case 71/72 부분 다중익절): {res_part}"
+
+    # Case 83: 오버나이트 상단 보유 시 개별 익절 잠금 / 통합이평 졸업 / 1층 단독 예외
+    locked = evaluate_multi_grid_sell_targets(test_grid, 81.90, is_overnight_session=True)
+    assert not locked["should_sell"] and locked["overnight_indiv_locked"] and locked["reason_tag"] == "HOLD_OVERNIGHT_WMA_LOCK", locked
+    graduated = evaluate_multi_grid_sell_targets(test_grid, 86.25, is_overnight_session=True)
+    assert graduated["should_sell"] and graduated["sold_indices"] == [0, 1, 2, 3] and graduated["sell_qty"] == 40 and graduated["hit_wma_grad"] and graduated["reason_tag"] == "SELL_ALL_GRAD", graduated
+    solo = evaluate_multi_grid_sell_targets(test_grid[:1], 81.25, is_overnight_session=True)
+    assert solo["should_sell"] and solo["sold_indices"] == [0] and solo["sell_qty"] == 10 and solo["reason_tag"] == "SELL_L1_ONLY", solo
 
     # 1층과 2층이 팔린 후 남은 [GRID_L3($85), GRID_L4($90)] -> relabel_upper_grid_tiers 호출 시 [GRID_L2($85), GRID_L3($90)] (1층 공석!)
     rem_uppers = relabel_upper_grid_tiers(test_grid[2:])
