@@ -1,6 +1,7 @@
 <!doctype html>
 <!-- 사무실 상황판 · 사무실 v1.0.56 (2026-10-28) · 주문·승인은 텔레그램 · 웹에서 하는 일은 '서버 정리 실행' 하나 · 데이터: /api/board -->
 <!-- 사무실 (초안 · 버전은 Muse 가 부여): 상황판 첫 탭에 '스나이퍼 매매 그림'(/sniper-picture) 링크 한 줄 추가 · /api/board 내용은 그대로 -->
+<!-- 사무실 (초안 · 버전은 Muse 가 부여): 스나이퍼룸 탭 새로 추가(팬딩룸처럼) · 그림 페이지를 iframe으로 안에 표시 · /api/board 내용·주문 기능 변경 없음 -->
 <!-- 사무실 v1.0.59: 팬딩룸 가격표 모음에 매일 가격표 포함 · 기간·마지막 추가 시각 -->
 <!-- 사무실 v1.0.56: 신호등에 이름·켜진 시각 · 매매방·미팅룸 탭 삭제 · 팬딩룸(과거 가격표 수·저장 위치) · 서버실 '서버 정리 실행' 버튼 -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -44,7 +45,7 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
   <div class="top"><div><h1>사무실 상황판</h1><div class="sub" id="when">불러오는 중…</div></div>
   <div class="tools"><button id="reload" type="button">새로고침</button><button id="logout" type="button">나가기</button></div></div>
   <nav id="tabs">
-    <button data-t="home" class="on">상황판</button><button data-t="fanding">팬딩룸</button>
+    <button data-t="home" class="on">상황판</button><button data-t="fanding">팬딩룸</button><button data-t="sniper">스나이퍼룸</button>
     <button data-t="server">서버실</button><button data-t="log">기록실</button>
   </nav>
 </header>
@@ -61,6 +62,12 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
       <p class="note">가격표 이미지는 판독만 하고 지우며, 판독 결과만 위 파일에 하루 한 줄씩 쌓입니다. 서버에만 있고 GitHub 에는 올라가지 않습니다.</p></div>
     <div class="card"><h2>하남 컴 (PC 감시)</h2><dl class="kv" id="pcKv"></dl></div>
     <p class="note">자세한 진단·재판독은 팬딩 봇 /진단 · /재판독.</p>
+  </section>
+  <section id="sniper">
+    <div class="card"><h2>스나이퍼 매매 그림</h2>
+      <p class="note">보기 전용 · 주문·승인·설정 변경은 텔레그램 2번 스나이퍼에서만 합니다.</p>
+      <iframe src="/sniper-picture" style="width:100%;height:900px;border:0" title="스나이퍼 매매 그림"></iframe>
+      <p class="note">그림이 안 보이면 <a href="/sniper-picture" style="color:var(--accent)">그림 페이지로 직접 열기</a></p></div>
   </section>
   <section id="server">
     <div class="card care" id="careCard"><h2>서버 정리</h2><dl class="kv" id="careKv"></dl>
