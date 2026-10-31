@@ -11,7 +11,8 @@
 #    toss_api.py 소스에서 safe_float·safe_int 와 숫자 상수만 AST 로 꺼내 가짜 toss_api 를 잠깐 끼워 quant_engine 을 읽는다.
 #    (원본 소스 그대로 · 실행되는 것은 그 함수·상수뿐 · 네트워크·파일 쓰기 없음)
 #  · 읽는 곳: <스나이퍼 폴더>/soxl_stratum_ledger_<폴더명>.json  (기본 /home/gieokkim/toss_sniper, 환경변수 SNIPER_PICTURE_DIR 로 변경)
-#            선택: /var/lib/bot-office/sniper_snapshot.json (현재가 — 스나이퍼 쪽에서 쓰는 코드가 아직 없음 → 지금은 항상 '현재가 미확인')
+#            선택: <스나이퍼 폴더>/sniper_snapshot.json (현재가 — 스나이퍼 main 루프가 60초마다 씀, 사무실이 이미 읽을 수 있음)
+#            선택(구 경로): /var/lib/bot-office/sniper_snapshot.json (스나이퍼 폴더 파일이 없을 때만 확인)
 #  · 없는 것은 지어내지 않는다: 과거 매도 목록(원장에 없음) · 환율(서버 파일에 없음) · 실시간 현재가(메모리에만 있음)
 # ==========================================================
 import ast, importlib.util, json, math, os, sys, time, types
@@ -22,6 +23,7 @@ from zoneinfo import ZoneInfo
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 SNIPER_DIR = Path(os.environ.get("SNIPER_PICTURE_DIR", "/home/gieokkim/toss_sniper"))
 SNAPSHOT = R / "var/lib/bot-office/sniper_snapshot.json"
+SNAPSHOT_SNIPER = SNIPER_DIR / "sniper_snapshot.json"
 SNAPSHOT_MAX_AGE = 180            # 초 — 이보다 오래된 현재가는 '미확인' 으로 본다
 KST = timezone(timedelta(hours=9))
 EST_TZ = ZoneInfo("America/New_York")
@@ -104,18 +106,24 @@ def _mtime(f):
 
 
 def _snapshot_price(now_ts):
-    """스나이퍼가 남긴 현재가 스냅샷(선택). 없거나 오래됐으면 (None, 이유)."""
-    try:
-        d = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
-        p, at = float(d.get("live_price")), float(d.get("at"))
-    except (OSError, ValueError, TypeError):
-        return None, "no_snapshot"
-    if not (p > 0) or not math.isfinite(p):
-        return None, "bad_snapshot"
-    age = now_ts - at
-    if age > SNAPSHOT_MAX_AGE or age < -30:
-        return None, "stale_snapshot"
-    return round(p, 4), ""
+    """스나이퍼가 남긴 현재가 스냅샷(선택). 없거나 오래됐으면 (None, 이유).
+    확인 순서: 스나이퍼 폴더 파일 먼저, 없으면 구 경로(/var/lib) 파일. 둘 다 오래됐으면 오래된 쪽 이유를 돌려준다."""
+    last_note = "no_snapshot"
+    for path in (SNAPSHOT_SNIPER, SNAPSHOT):
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            p, at = float(d.get("live_price")), float(d.get("at"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not (p > 0) or not math.isfinite(p):
+            last_note = "bad_snapshot"
+            continue
+        age = now_ts - at
+        if age > SNAPSHOT_MAX_AGE or age < -30:
+            last_note = "stale_snapshot"
+            continue
+        return round(p, 4), ""
+    return None, last_note
 
 
 def _session(now_est):

@@ -112,6 +112,10 @@ NORMAL_LOOP_INTERVAL_SEC: float = 1.50
 FAST_SHIELD_LOOP_INTERVAL_SEC: float = 0.40
 KRW_PER_USD_DEFAULT: float = 1380.0
 
+# 그림용 현재가 스냅샷 (매매 로직과 무관 · 사무실 그림이 읽는 파일)
+PICTURE_SNAPSHOT_INTERVAL_SEC: float = 60.0
+_PICTURE_SNAPSHOT_LAST: float = 0.0
+
 # Case 68: [💵 기준 시드머니($) 설정] 버튼 클릭 후 일반 숫자 입력을 허용하는 유효 시간(초)
 SEED_INPUT_PROMPT_TIMEOUT_SEC: float = 300.0
 
@@ -2837,6 +2841,39 @@ def _evaluate_fast_shield_mode(
     return False
 
 
+def _write_picture_snapshot(live_p: float) -> None:
+    """사무실 그림용 현재가 스냅샷을 스나이퍼 폴더에 남긴다 (60초 간격, 원자적 쓰기, 644).
+    이미 루프에서 받아온 현재가만 쓰며, 새로 API를 부르지 않는다. 매매 로직과 무관하고,
+    쓰기에 실패해도 예외를 삼켜 매매에 영향을 주지 않는다. 주말휴장 루프에서는 호출되지 않는다."""
+    global _PICTURE_SNAPSHOT_LAST
+    try:
+        p = safe_float(live_p, 0.0)
+        if not (p > 0.0):
+            return
+        now = time.time()
+        if now - _PICTURE_SNAPSHOT_LAST < PICTURE_SNAPSHOT_INTERVAL_SEC:
+            return
+        _PICTURE_SNAPSHOT_LAST = now
+        from pathlib import Path as _Path
+
+        path = _Path(__file__).resolve().parent / "sniper_snapshot.json"
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(
+            json.dumps(
+                {"live_price": round(float(p), 4), "at": now, "symbol": TARGET_SYMBOL},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o644)
+        except OSError:
+            pass
+    except Exception:
+        pass
+
+
 async def main_sniper_loop(context: SniperAppContext) -> None:
     while not context.shutdown_event.is_set():
         now_est = datetime.now(EST_TZ)
@@ -3000,6 +3037,11 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 live_p=safe_float(
                     context.latest_prices.get(TARGET_SYMBOL), 0.0
                 ),
+            )
+
+            # 그림용 현재가 스냅샷 (이미 받아온 현재가만, 매매 판정 뒤, 실패해도 무시)
+            _write_picture_snapshot(
+                safe_float(context.latest_prices.get(TARGET_SYMBOL), 0.0)
             )
 
         except asyncio.CancelledError:
