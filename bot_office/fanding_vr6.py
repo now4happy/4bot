@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.2.1)
+# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.3.0)
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
+#  2.3.0 (2026-10-31) 날짜 대조 강화 (P 날짜 오독과 같은 문제 방지): 진행일과 표 기간 시작이 정확히 일치해야 하고,
+#    기간은 시작+11일(보통 월~다음 주 금) 기준으로 10~12일만 통과. 1차 날짜가 기대와 다르고 2차 날짜가 기대와
+#    일치하며 숫자(최소·최대·기준·줄)가 모두 같으면 2차 날짜로 정정하고, 아니면 자동주문을 막고 날짜 불일치를 알림에 표시.
+#    주문·배수·계좌·환전 로직은 바꾸지 않음. 수동 주문 버튼은 그대로 (점검 실패를 보고 직접 확인 후 누를 수 있음).
 #  2.2.1 (2026-10-29) 버튼 글자에서 'VR6' 빼기 (사용자 요청): 📝 주문표 💱 환전 🤖 자동 켜짐/꺼짐 📐 배수 🩺 진단 🔄 재판독 🛠 도구 🏠 처음
 #    · 🛠 도구: 📋 받은 표 📅 일정 ⏭ 지금 진행 ❓ 도움말 ⬅️ 메뉴 · P 와 같은 글자는 fanding_trade.route_shared 가 지금 메뉴 기준으로
 #      /vr6… 명령으로 바꿔서 넘김 · 새 명령 /vr6도구 · /vr6자동전환 · 예전 'VR6' 글자 버튼도 그대로 동작
@@ -40,7 +44,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -454,6 +458,20 @@ def table_dates(p, ref):
         return None, None
 
 
+def expected_period(cycle):
+    """진행일 기준 기대 표 기간: 시작=진행일(월요일), 끝=진행일+11일(다음 주 금요일)."""
+    ref = _d(cycle)
+    return ref, ref + timedelta(days=11)
+
+
+def _plan_numbers(p):
+    """날짜를 제외한 판독 숫자만: 2차 판독으로 날짜를 정정할 때 숫자 일치 여부를 본다."""
+    return (p.get("min_value"), p.get("max_value"), p.get("buy_base_qty"), p.get("buy_base_pool"),
+            p.get("sell_base_qty"), p.get("sell_base_pool"),
+            tuple((x["qty"], x["price"], x["pool"]) for x in p.get("buys", [])),
+            tuple((x["qty"], x["price"], x["pool"]) for x in p.get("sells", [])))
+
+
 # ---------------------------------------------------------- 시간 계산
 def _hm(s):
     h, m = str(s).split(":")
@@ -569,11 +587,12 @@ def run_checks(plan, st, now):
     if not s:
         add(False, "표의 기간(시작~끝 날짜)을 못 읽음")
     else:
-        ref = _d(plan["cycle"])
-        gap = abs((_d(s) - ref).days)
-        add(gap <= 7, f"표 기간 {s}~{e} · 진행일 {plan['cycle']} 과 {gap}일 차이" + ("" if gap <= 7 else " → 다른 회차 표?"))
-        span = (_d(e) - _d(s)).days
-        add(4 <= span <= 16, f"기간 길이 {span}일 (보통 11일: 월~다음 주 금)")
+        exp_s, exp_e = expected_period(plan["cycle"])
+        if plan.get("date_corrected"):
+            add(True, f"표 기간 날짜 정정됨: 1차 판독 날짜와 달라 2차 판독 날짜로 바로잡음 (기대 {exp_s}~{exp_e})")
+        add(s == exp_s.isoformat(), f"표 기간 시작 {s} (기대 {exp_s} · 진행일과 일치)" + ("" if s == exp_s.isoformat() else " → 날짜 오독 의심, 자동주문 안 함"))
+        span = (_d(e) - _d(s)).days if e else -1
+        add(10 <= span <= 12, f"표 기간 {s}~{e} · 길이 {span}일 (기대 {exp_s}~{exp_e}, 보통 11일)" + ("" if 10 <= span <= 12 else " → 기간이 기대와 다름"))
         add(bool(plan.get("order_start")), f"첫 발주일 {plan.get('order_start')} (미국 날짜)" if plan.get("order_start")
             else "표 기간 안에 예약 마감 전인 날이 남지 않음")
     add(1 <= k <= 50, f"배수 ×{k}")
@@ -703,11 +722,29 @@ def build_plan(tg, cycle, now=None):
     except Exception as e:
         print("VR6 확인 판독 실패:", e, flush=True)
         second, ai2 = None, ""
+    # P 날짜 오독과 같은 경우: 1차 날짜가 기대와 다르고, 2차 날짜가 기대와 일치하며 숫자까지 같으면 2차 날짜로 정정한다.
+    # 숫자가 다르거나 2차 날짜도 기대와 다르면 정정하지 않고, 아래 날짜 점검에서 자동주문을 막는다.
+    date_corrected = False
+    if second:
+        exp_s, exp_e = expected_period(cycle)
+        exp_md = (f"{exp_s.month:02d}-{exp_s.day:02d}", f"{exp_e.month:02d}-{exp_e.day:02d}")
+        first_md = (first.get("start_md"), first.get("end_md"))
+        second_md = (second.get("start_md"), second.get("end_md"))
+        if first_md != exp_md and second_md == exp_md and _plan_numbers(first) == _plan_numbers(second):
+            first = dict(first, start_md=second["start_md"], end_md=second["end_md"])
+            date_corrected = True
+            replay("vr6_date_crosscheck", "corrected", "second_date_expected_numbers_agree",
+                   event_type="decision", cycle=cycle, first_date="-".join(first_md),
+                   second_date="-".join(second_md), expected="-".join(exp_md), first_ai=ai1, second_ai=ai2)
+        elif first_md != second_md:
+            replay("vr6_date_crosscheck", "mismatch", "first_second_date_differ",
+                   event_type="decision", cycle=cycle, first_date="-".join(first_md),
+                   second_date="-".join(second_md), expected="-".join(exp_md), first_ai=ai1, second_ai=ai2)
     agree = bool(second) and core(first) == core(second)
     with locked() as st:
         start, end = table_dates(first, _d(cycle))
         o_start = first_order_day(start, end, now, st) if start else None
-        plan = {"cycle": cycle, "img": n, "parsed": first, "reads_agree": agree, "ai": [ai1, ai2],
+        plan = {"cycle": cycle, "img": n, "parsed": first, "reads_agree": agree, "date_corrected": date_corrected, "ai": [ai1, ai2],
                 "mult": int(st["multiplier"]), "start": start.isoformat() if start else "",
                 "end": end.isoformat() if end else "", "order_start": o_start.isoformat() if o_start else "",
                 "status": "pending", "orders": [], "ver": int((old or {}).get("ver", 0)) + 1, "alarm_sent": False,
