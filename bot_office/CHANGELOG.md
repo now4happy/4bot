@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.0.72 · 2026-10-31 19:47 (KST)
+- 파일: sniper_picture.html
+- 내용: 스나이퍼 매매 그림 계단식 v4: 바 길이=주수, 주수는 층 표시 밑, 맨 위 보유·손익
+- 브랜치: staging
+
 ## v1.0.71 · 2026-10-31 17:50 (KST)
 - 파일: board.html, server.py, sniper_picture.html, sniper_picture.py
 - 내용: 스나이퍼 매매 그림: 텔레그램 메뉴 + 사무실 그림 페이지/API (상단 1개층 밤 잠김 수정 포함)
