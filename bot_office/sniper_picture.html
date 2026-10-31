@@ -1,6 +1,6 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v4 · 사용자 승인 시안) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
-<!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 표시 밑 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v7 · 상단 2열 승인 시안) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 표시 밑, 칸 안 흰색, 상단 2열 -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
 <style>
@@ -19,6 +19,9 @@ main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin-bottom:10px}
 .profit{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
 .profit .big{font-size:20px;font-weight:700;letter-spacing:-.4px}.profit .sm{font-size:12.5px;color:var(--muted)}
+.top2{display:flex;gap:12px}.top2 .col{flex:1;min-width:0}.top2 .col+.col{border-left:1px solid var(--line);padding-left:12px}
+.top2 .big{font-size:28px;font-weight:700;letter-spacing:-.4px}.top2 .sm{font-size:12.5px;color:var(--muted)}.top2 .line{font-size:13.5px;margin-top:4px}
+.gray{color:var(--muted)}
 .pos{color:var(--ok)}.neg{color:var(--bad)}
 .legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--muted);margin:2px 2px 8px}
 .lrow{display:flex;align-items:flex-start;gap:8px;border-top:1px solid var(--line);padding:8px 0 6px}.lrow:first-of-type{border-top:0}
@@ -27,8 +30,8 @@ main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
 .tier{font-size:13.5px;font-weight:700}
 .tierqty{font-size:12.5px;color:var(--muted)}
 .barwrap{flex:1;min-width:0}
-.bar{display:flex;height:34px;border:2px solid #1f3530;border-radius:6px;overflow:hidden;background:var(--card)}
-.cell{flex:none;border-right:1px solid #1f3530}
+.bar{display:flex;height:34px;border:2px solid #1f3530;border-radius:6px;overflow:hidden;background:#fff}
+.cell{flex:none;background:#fff;border-right:1px solid #1f3530}
 .cell:last-child{border-right:0}
 .prices{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:2px}
 .lp{font-size:11.5px;color:var(--muted);margin:1px 2px 0;overflow-wrap:anywhere}
@@ -43,7 +46,7 @@ main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
 <main>
   <div class="status" id="status">불러오는 중…</div>
   <div class="flag" id="flag" hidden></div>
-  <div class="card"><div class="profit" id="profit"></div><div class="hold" id="hold"></div></div>
+  <div class="card"><div class="top2" id="top2"></div></div>
   <div class="card">
     <div class="legend"><span>바 길이 = 주수 · 위층일수록 오른쪽 시작</span><span>● 산 가격</span><span>▶ 1층 목표 +1.5%</span><span>◆ 개별 목표 +1.0%</span><span>■ 통합이평 +1.0%</span><span>✓ 도달 · 🔒 잠김</span></div>
     <div id="pic" aria-label="층별 가격 그림"></div>
@@ -123,7 +126,7 @@ main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
   function render(d){
     lastData=d;
     var st=$('status'),fl=$('flag');
-    if(!d.ok){st.className='status err';st.textContent=ERR[d.error]||('불러오기 실패: '+(d.error||'?'));fl.hidden=true;$('pic').textContent='';$('wma').textContent='';$('profit').textContent='';$('hold').textContent='';$('notes').textContent='';return}
+    if(!d.ok){st.className='status err';st.textContent=ERR[d.error]||('불러오기 실패: '+(d.error||'?'));fl.hidden=true;$('pic').textContent='';$('wma').textContent='';$('top2').textContent='';$('notes').textContent='';return}
     var lp=d.price.live;
     st.className='status';st.textContent='';
     var b=document.createElement('b');b.textContent='SOXL · '+d.session.name+' ('+d.session.hm+' ET)';st.appendChild(b);
@@ -133,16 +136,30 @@ main{max-width:520px;margin:0 auto;padding:10px 12px 36px}
     if(d.session.weekend_closed)msgs.push('🛑 주말휴장');
     if(d.engine){if(d.engine.should_sell)msgs.push('⚡ 지금 매도 조건 충족: '+d.engine.sell_tiers.join('·')+'층');
       else if(d.engine.overnight_indiv_locked)msgs.push('🔒 밤 시간 · 개별 매도 잠김 (통합이평 졸업만 가능)')}
-    if(!lp)msgs.push('현재가를 알 수 없어 지금 가격선·미실현 손익은 숨겼어요');
+    if(!lp)msgs.push('현재가를 알 수 없어 수익률은 —, 미실현은 현재가 미확인으로 표시돼요');
     fl.hidden=!msgs.length;fl.textContent=msgs.join(' · ');
-    var r=d.realized,P=$('profit');P.textContent='';
-    var l=document.createElement('div');var s1=document.createElement('div');s1.className='sm';s1.textContent='판 이익 · 누적 실현(세후)';var s2=document.createElement('div');s2.className='big '+cls(r.cumulative_net_usd);s2.textContent=sg(r.cumulative_net_usd);l.appendChild(s1);l.appendChild(s2);
-    var rr=document.createElement('div');rr.className='sm';rr.style.textAlign='right';rr.textContent='매도 '+r.sell_events+'회 (이익 '+r.win_events+') · '+r.sold_shares+'주'+(r.daily_net_usd?' · 오늘 '+sg(r.daily_net_usd):'');
-    P.appendChild(l);P.appendChild(rr);
+    var r=d.realized,h=d.holding,T2=$('top2');T2.textContent='';
+    var left=el('div','col');
+    left.appendChild(el('div','sm','판 이익 · 누적 실현(세후)'));
+    left.appendChild(el('div','big '+cls(r.cumulative_net_usd),sg(r.cumulative_net_usd)));
+    left.appendChild(el('div','line','매도 '+r.sell_events+'회 (이익 '+r.win_events+')'));
+    left.appendChild(el('div','line','매도한 주식 '+r.sold_shares+'주'));
+    var right=el('div','col');
+    right.appendChild(el('div','sm','지금 보유 · 수익률'));
+    if(h.shares>0&&h.unrealized_pct!=null){
+      right.appendChild(el('div','big '+cls(h.unrealized_pct),((h.unrealized_pct>=0?'+':'')+h.unrealized_pct.toFixed(2)+'%')));
+      right.appendChild(el('div','line','보유 '+h.shares+'주 · 평단 '+usd(h.avg_price)));
+      right.appendChild(el('div','line','투자금 '+usd(h.shares*h.avg_price)+' · 미실현 '+sg(h.unrealized_usd)));
+    } else if(h.shares>0){
+      right.appendChild(el('div','big gray','—'));
+      right.appendChild(el('div','line','보유 '+h.shares+'주 · 평단 '+usd(h.avg_price)));
+      var inv=el('div','line','투자금 '+usd(h.shares*h.avg_price)+' · ');inv.appendChild(el('span','gray','현재가 미확인'));right.appendChild(inv);
+    } else {
+      right.appendChild(el('div','big gray','—'));
+      right.appendChild(el('div','line','보유 없음'));
+    }
+    T2.appendChild(left);T2.appendChild(right);
     draw(d);
-    var h=d.holding,H=$('hold');
-    if(h.shares>0){H.textContent='현재 보유 '+h.shares+'주 ('+h.tiers_count+'개층) · 평단 '+usd(h.avg_price)+' · 투자금 '+usd(h.shares*h.avg_price)+' · 미실현 '+(h.unrealized_usd==null?'현재가 미확인':sg(h.unrealized_usd)+' ('+(h.unrealized_pct>=0?'+':'')+h.unrealized_pct.toFixed(2)+'%)')}
-    else H.textContent='보유 없음';
     var n=[];n.push('달러($) 기준 · '+d.fx.note+'.');
     n.push('비율·척도 무시: 위층일수록 오른쪽에서 시작하고, 바 길이는 주수예요. 전체가 틀을 넘으면 전체를 같은 비율로 줄여요.');
     if(!r.history_available)n.push('개별 과거 매도(언제·어느 층·얼마에)는 원장에 목록이 없어 표시하지 않아요. 누적 실현 이익만 보여 줘요.');
