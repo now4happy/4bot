@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
 # 사무실 (초안 · 버전은 Muse 가 부여): 스나이퍼 매매 그림 추가 — GET /sniper-picture (페이지) · GET /api/sniper-picture (데이터), 둘 다 로그인 필요·보기 전용
+# 사무실 스나이퍼룸 iframe 허용: /sniper-picture 만 같은 주소(SAMEORIGIN) 프레임 허용, 그 외 페이지는 DENY 유지 (외부 사이트 클릭재킹 차단 유지)
 #   · 로그인 안 된 /sniper-picture 는 /login 으로, /api/sniper-picture 는 401. /api/board 와 첫 화면 규칙은 그대로
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
@@ -79,12 +80,14 @@ class Handler(BaseHTTPRequestHandler):
         super().setup(); self.connection.settimeout(8)
     def log_message(self, *_): pass
     def secure(self): return self.headers.get('X-Forwarded-Proto','') == 'https'
-    def send(self, status, body, kind='application/json; charset=utf-8', cookie=None):
+    def send(self, status, body, kind='application/json; charset=utf-8', cookie=None, frame_self=False):
         if not isinstance(body, bytes): body=json.dumps(body,ensure_ascii=False).encode()
         self.send_response(status)
+        frame_opt = 'SAMEORIGIN' if frame_self else 'DENY'
+        frame_anc = "'self'" if frame_self else "'none'"
         for k,v in {'Content-Type':kind,'Content-Length':str(len(body)), 'Cache-Control':'no-store',
             'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
-            'X-Frame-Options':'DENY', 'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"}.items():
+            'X-Frame-Options':frame_opt, 'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors "+frame_anc+"; base-uri 'none'; form-action 'self'"}.items():
             self.send_header(k,v)
         if cookie: self.send_header('Set-Cookie',cookie)
         self.end_headers(); self.wfile.write(body)
@@ -116,7 +119,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 return self.send(500,{'error':'board_failed','detail':type(error).__name__})
         # SNIPER_PICTURE_V1: 2번 스나이퍼 매매 그림 (보기 전용 · 위 로그인 검사를 그대로 통과한 요청만 여기 도착)
-        if route=='/sniper-picture' and (ROOT/'sniper_picture.html').exists(): return self.send(200,(ROOT/'sniper_picture.html').read_bytes(),'text/html; charset=utf-8')
+        # 스나이퍼룸 iframe용: 같은 주소 프레임만 허용 (그 외 페이지는 DENY 유지)
+        if route=='/sniper-picture' and (ROOT/'sniper_picture.html').exists(): return self.send(200,(ROOT/'sniper_picture.html').read_bytes(),'text/html; charset=utf-8',frame_self=True)
         if route=='/api/sniper-picture':
             try:
                 import sniper_picture
