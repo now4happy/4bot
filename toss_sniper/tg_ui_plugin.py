@@ -150,7 +150,7 @@ def _format_case67_quota_badge(summary: Dict[str, Any]) -> str:
 
 def _read_office_picture_url() -> str:
     """
-    📈 매매 그림 메뉴용: 사무실 홈페이지의 스나이퍼 매매 그림 주소를 만든다 (읽기 전용).
+    📈 현황판 메뉴용: 사무실 홈페이지의 스나이퍼 현황판 주소를 만든다 (읽기 전용).
     사무실 주소는 서버 파일 /etc/bot-office/office_url (사무실 비서가 관리) 의 첫 줄 — 읽을 수 없거나 주소 모양이 아니면 빈 문자열.
     """
     path = os.environ.get("BOT_OFFICE_URL_FILE", "/etc/bot-office/office_url")
@@ -181,7 +181,7 @@ def _build_main_reply_keyboard() -> Dict[str, Any]:
                 {"text": "🚀 시스템 업데이트"},
             ],
             [
-                {"text": "📈 매매 그림"},
+                {"text": "📈 현황판"},
             ],
         ],
         "resize_keyboard": True,
@@ -253,7 +253,7 @@ def build_start_schedule_message(
         "──────────────",
         "📡 /avwap : 실시간 스나이퍼 레이더",
         "📜 /sync : 지층 지시서",
-        "📈 /picture : 매매 그림 (사무실 홈페이지)",
+        "📈 /picture : 현황판 (사무실 홈페이지)",
         "⚙️ /settlement : 전술 제어반",
         "       (작동 ON/OFF · 시드머니 설정)",
         "",
@@ -829,13 +829,13 @@ class TelegramCommandController:
         )
 
     async def _send_picture_link(self, chat_id: str) -> None:
-        """📈 매매 그림: 사무실 홈페이지 그림 페이지를 여는 버튼을 보낸다 (주문·설정 기능 없음, 로그인은 사무실에서)."""
+        """📈 현황판: 사무실 홈페이지 현황판 페이지를 여는 버튼을 보낸다 (주문·설정 기능 없음, 로그인은 사무실에서)."""
         url = _read_office_picture_url()
         if not url:
             await self.send_message(
                 chat_id=chat_id,
                 text=(
-                    "📈 <b>[매매 그림]</b> 사무실 주소를 아직 몰라요.\n"
+                    "📈 <b>[현황판]</b> 사무실 주소를 아직 몰라요.\n"
                     "7번 비서의 🔗 사무실 주소(/주소)로 확인해 주세요."
                 ),
             )
@@ -843,11 +843,11 @@ class TelegramCommandController:
         await self.send_message(
             chat_id=chat_id,
             text=(
-                "📈 <b>[스나이퍼 매매 그림]</b>\n"
+                "📈 <b>[스나이퍼 현황판]</b>\n"
                 "산 곳 · 판 이익 · 지금 보유 · 팔 목표를 한 화면에 (로그인 필요)"
             ),
             reply_markup={
-                "inline_keyboard": [[{"text": "📈 매매 그림 열기", "url": url}]]
+                "inline_keyboard": [[{"text": "📈 현황판 열기", "url": url}]]
             },
         )
 
@@ -1147,7 +1147,7 @@ class TelegramCommandController:
             await self._render_and_send_avwap(chat_id=chat_id)
             return
 
-        if first_token == "/picture" or text == "📈 매매 그림":
+        if first_token == "/picture" or text == "📈 현황판":
             await self._send_picture_link(chat_id=chat_id)
             return
 
