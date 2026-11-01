@@ -1,4 +1,4 @@
-successfully downloaded text file (SHA: 27f8181c3c28560d51e2757abb22aa9fa1655fd9)
+<!-- 사무실 (초안 · 버전은 Muse 가 부여): 마인드맵 탭 삭제 · 탭 순서 상황판·스나이퍼룸·팬딩룸·서버실·기록실 · 오늘 할 일 카드와 주문 안내 문구 삭제 · 첫 줄 안내 문구 삭제 · /api/board 내용 변경 없음 (신호등 순서는 office_board.py에서) -->
 <!-- 사무실 (초안 · 버전은 Muse 가 부여): 마인드맵 탭 새로 추가 · 생각의 연결 마인드맵 v1.3 페이지를 iframe으로 안에 표시 · /api/board 내용·주문 기능 변경 없음 -->
 <!doctype html>
 <!-- 사무실 상황판 · 사무실 v1.0.56 (2026-10-28) · 주문·승인은 텔레그램 · 웹에서 하는 일은 '서버 정리 실행' 하나 · 데이터: /api/board -->
@@ -47,15 +47,19 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
   <div class="top"><div><h1>사무실 상황판</h1><div class="sub" id="when">불러오는 중…</div></div>
   <div class="tools"><button id="reload" type="button">새로고침</button><button id="logout" type="button">나가기</button></div></div>
   <nav id="tabs">
-    <button data-t="home" class="on">상황판</button><button data-t="fanding">팬딩룸</button><button data-t="sniper">스나이퍼룸</button>
-    <button data-t="server">서버실</button><button data-t="log">기록실</button><button data-t="mindmap">마인드맵</button>
+    <button data-t="home" class="on">상황판</button><button data-t="sniper">스나이퍼룸</button><button data-t="fanding">팬딩룸</button>
+    <button data-t="server">서버실</button><button data-t="log">기록실</button>
   </nav>
 </header>
 <main>
   <section id="home" class="on">
     <div class="card"><h2>봇 신호등</h2><div class="lights" id="lights"></div></div>
-    <div class="card"><h2>오늘 할 일</h2><div id="todo"></div></div>
-    <p class="note">주문·승인·설정 변경은 텔레그램(5·6·7번)에서만 합니다. 이 화면에서 실행하는 일은 서버실의 '서버 정리' 하나뿐입니다.</p>
+  </section>
+  <section id="sniper">
+    <div class="card"><h2>스나이퍼 매매 그림</h2>
+      <p class="note">보기 전용 · 주문·승인·설정 변경은 텔레그램 2번 스나이퍼에서만 합니다.</p>
+      <iframe src="/sniper-picture" style="width:100%;height:900px;border:0" title="스나이퍼 매매 그림"></iframe>
+      <p class="note">그림이 안 보이면 <a href="/sniper-picture" style="color:var(--accent)">그림 페이지로 직접 열기</a></p></div>
   </section>
   <section id="fanding">
     <div class="card"><h2>오늘 가격표</h2><dl class="kv" id="fdKv"></dl></div>
@@ -64,19 +68,6 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
     <div class="card"><h2>하남 컴 (PC 감시)</h2><dl class="kv" id="pcKv"></dl></div>
     <p class="note">자세한 진단·재판독은 팬딩 봇 /진단 · /재판독.</p>
   </section>
-  <section id="sniper">
-    <div class="card"><h2>스나이퍼 매매 그림</h2>
-      <p class="note">보기 전용 · 주문·승인·설정 변경은 텔레그램 2번 스나이퍼에서만 합니다.</p>
-      <iframe src="/sniper-picture" style="width:100%;height:900px;border:0" title="스나이퍼 매매 그림"></iframe>
-      <p class="note">그림이 안 보이면 <a href="/sniper-picture" style="color:var(--accent)">그림 페이지로 직접 열기</a></p></div>
-  </section>
-  <section id="mindmap">
-    <div class="card"><h2>생각의 연결 마인드맵</h2>
-      <p class="note">보기 전용 · 생각의 연결 전체 흐름을 한눈에 보는 상황판 성격의 페이지입니다. 매매·주문 기능과 무관합니다.</p>
-      <iframe src="/thought-mindmap" style="width:100%;height:900px;border:0" title="생각의 연결 마인드맵"></iframe>
-      <p class="note">지도가 안 보이면 <a href="/thought-mindmap" style="color:var(--accent)">지도 페이지로 직접 열기</a></p></div>
-  </section>
-
   <section id="server">
     <div class="card care" id="careCard"><h2>서버 정리</h2><dl class="kv" id="careKv"></dl>
       <button class="bigbtn" id="careBtn" type="button">서버 정리 실행</button><div class="msg" id="careMsg"></div></div>
@@ -123,9 +114,6 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
       g.appendChild(el('div','name',s.name));
       g.appendChild(el('div','meta',s.active==='active'?('켜짐 '+(s.since_kst||'?')+(s.version?' · '+s.version:'')):('멈춤 ('+s.active+')')));
       c.appendChild(g);L.appendChild(c)});
-    var T=$('todo');T.textContent='';
-    if(!d.todo.length)T.appendChild(row('ok','할 일 없음 — 모두 정상',''));
-    d.todo.forEach(function(t){T.appendChild(row(t.level,t.text,''))});
     var OL=$('officeList');OL.textContent='';
     d.services.filter(function(s){return s.room==='office'}).forEach(function(s){OL.appendChild(row(lvl(s.active),s.name,svcMeta(s),s.version))});
     var f=d.fanding;
