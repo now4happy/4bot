@@ -26,7 +26,7 @@
 #                       팬딩 파일이 바뀌어도 비서를 괜히 다시 시작하지 않음 (5번 팬딩 서비스는 그대로 다시 시작)
 #  · 사무실 v1.0.80 (2026-11-01): alert-hub/ 폴더 파일은 업데이터 적용 대상이 아니므로 classify에서 거부하지 않고 넘김
 #                       (보관만, 실제 설치는 서버 직접 — 다른 봇 업데이트가 같이 막히지 않게 함)
-#  · 사무실 vNEXT (2026-11-01): 업데이터 시작 때 alert-hub가 설치 안 돼 있으면 자동 설치 시도
+#  · 사무실 v1.0.81 (2026-11-01): 업데이터 시작 때 alert-hub가 설치 안 돼 있으면 자동 설치 시도
 #                       (venv·.env·테스트·cron, 기존 .env·cron은 건드리지 않음, 실패해도 봇 업데이트는 계속)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
