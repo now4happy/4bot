@@ -26,6 +26,8 @@
 #                       팬딩 파일이 바뀌어도 비서를 괜히 다시 시작하지 않음 (5번 팬딩 서비스는 그대로 다시 시작)
 #  · 사무실 v1.0.80 (2026-11-01): alert-hub/ 폴더 파일은 업데이터 적용 대상이 아니므로 classify에서 거부하지 않고 넘김
 #                       (보관만, 실제 설치는 서버 직접 — 다른 봇 업데이트가 같이 막히지 않게 함)
+#  · 사무실 vNEXT (2026-11-01): 업데이터 시작 때 alert-hub가 설치 안 돼 있으면 자동 설치 시도
+#                       (venv·.env·테스트·cron, 기존 .env·cron은 건드리지 않음, 실패해도 봇 업데이트는 계속)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -49,6 +51,12 @@ KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
          "toss_dca.service": "3번 토스 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
+# alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
+HUB_DIR = os.path.join(REPO, "alert-hub")
+HUB_VENV = os.path.join(HUB_DIR, ".venv")
+HUB_PY = os.path.join(HUB_VENV, "bin", "python")
+HUB_PIP = os.path.join(HUB_VENV, "bin", "pip")
+HUB_BOT_NAMES = "1번 한투 라오어,2번 토스 스나이퍼,3번 토스 적립,4번 빗썸 적립,8번 사무실 비서,5번 팬딩 가격표,6번 업데이트 비서:1500,7번 비서"
 OWNER = pwd.getpwuid(os.stat(REPO).st_uid)
 try:   # 2번 스나이퍼 원작자 새 버전 알림 부품 (알림 전용 · 없어도 비서는 정상 작동)
     import sniper_upstream as SU
@@ -953,11 +961,111 @@ def handle(st, upd):
                 say("✅ 새로 올라온 수정이 없습니다.")
  
  
+def _run_as_owner(*a, timeout=120):
+    cmd = list(a)
+    if os.geteuid() == 0 and OWNER.pw_uid != 0:
+        cmd = ["runuser", "-u", OWNER.pw_name, "--"] + cmd
+    return sh(*cmd, timeout=timeout)
+
+
+def _hub_cron_present():
+    try:
+        if os.path.exists("/etc/cron.d/alert-hub"):
+            return "alert_hub watchdog" in open("/etc/cron.d/alert-hub", encoding="utf-8").read()
+    except Exception:
+        pass
+    return False
+
+
+def _hub_installed():
+    return (os.path.isfile(HUB_PY)
+            and os.path.isfile(os.path.join(HUB_DIR, ".env"))
+            and _hub_cron_present())
+
+
+def hub_install():
+    """alert-hub가 아직 설치 안 돼 있으면 한 번만 설치 시도. 이미 설치됐거나 폴더가 없으면 None.
+    실패해도 예외를 밖으로 던지지 않고 실패 문장을 반환한다. 비밀값은 반환 문장에 넣지 않는다."""
+    try:
+        if not os.path.isfile(os.path.join(HUB_DIR, "alert_hub", "__init__.py")):
+            return None
+        if _hub_installed():
+            return None
+        if not CFG.get("token") or not CFG.get("chat_id"):
+            return "alert-hub 설치 실패: 서버 텔레그램 설정(token/chat_id)이 없어 .env를 만들지 않았습니다"
+        if not os.path.isfile(HUB_PY):
+            rc, out = _run_as_owner("python3", "-m", "venv", HUB_VENV, timeout=300)
+            if rc != 0 or not os.path.isfile(HUB_PY):
+                return "alert-hub 설치 실패: venv 만들기 실패 (" + out[-200:] + ")"
+        rc, out = _run_as_owner(HUB_PIP, "install", "-e", HUB_DIR, timeout=300)
+        if rc != 0:
+            return "alert-hub 설치 실패: pip install 실패 (" + out[-200:] + ")"
+        env_path = os.path.join(HUB_DIR, ".env")
+        if not os.path.isfile(env_path):
+            try:
+                tpl = open(os.path.join(HUB_DIR, ".env.example"), encoding="utf-8").read()
+            except Exception as e:
+                return "alert-hub 설치 실패: .env.example 읽기 실패 (" + type(e).__name__ + ")"
+            lines = []
+            for line in tpl.splitlines():
+                if line.startswith("TELEGRAM_BOT_TOKEN="):
+                    lines.append("TELEGRAM_BOT_TOKEN=" + str(CFG.get("token")))
+                elif line.startswith("TELEGRAM_CHAT_ID="):
+                    lines.append("TELEGRAM_CHAT_ID=" + str(CFG.get("chat_id")))
+                elif line.startswith("HUB_BOT_NAMES="):
+                    lines.append("HUB_BOT_NAMES=" + HUB_BOT_NAMES)
+                else:
+                    lines.append(line)
+            with open(env_path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+            try:
+                os.chmod(env_path, 0o600)
+                if os.geteuid() == 0:
+                    os.chown(env_path, OWNER.pw_uid, OWNER.pw_gid)
+            except Exception:
+                pass
+        rc, out = _run_as_owner(HUB_PY, "-m", "unittest", "discover", "-s", os.path.join(HUB_DIR, "tests"), "-t", HUB_DIR, timeout=300)
+        if rc != 0:
+            return "alert-hub 설치 실패: 테스트 실패 (cron을 넣지 않았습니다) (" + out[-200:] + ")"
+        rc, out = _run_as_owner(HUB_PY, "-m", "alert_hub", "test", timeout=120)
+        if rc != 0:
+            return "alert-hub 설치 실패: 테스트 메시지 전송 실패 (cron을 넣지 않았습니다) (" + out[-200:] + ")"
+        _, tz_out = sh("timedatectl", timeout=30)
+        if "Asia/Seoul" in tz_out:
+            briefing = "0 8 * * *"
+        elif "UTC" in tz_out:
+            briefing = "0 23 * * *"
+        else:
+            briefing = None
+        cron_lines = [
+            "*/10 * * * * " + OWNER.pw_name + " cd " + HUB_DIR + " && .venv/bin/python -m alert_hub watchdog >> data/watchdog.log 2>&1",
+        ]
+        if briefing:
+            cron_lines.append(briefing + " " + OWNER.pw_name + " cd " + HUB_DIR + " && .venv/bin/python -m alert_hub briefing >> data/briefing.log 2>&1")
+        try:
+            with open("/etc/cron.d/alert-hub", "w", encoding="utf-8") as fh:
+                fh.write("\n".join(cron_lines) + "\n")
+            os.chmod("/etc/cron.d/alert-hub", 0o644)
+        except Exception as e:
+            return "alert-hub 설치 실패: cron 파일 쓰기 실패 (" + type(e).__name__ + ")"
+        extra = "" if briefing else " (서버 시간대를 몰라 브리핑 cron은 넣지 않았습니다)"
+        return "alert-hub 설치 완료: venv·.env·테스트·cron" + extra
+    except Exception as e:
+        return "alert-hub 설치 실패: " + type(e).__name__ + " (" + str(e)[:200] + ")"
+
+
 def main():
     st = load(STATE, {})
     if git("rev-parse", "-q", "--verify", "refs/remotes/origin/staging")[0]:
         git("push", "-q", "origin", "HEAD:staging")   # 처음 한 번: staging 브랜치 만들기
     DC.monitor(sys.modules[__name__])
+    try:
+        hub_result = hub_install()
+        if hub_result:
+            print("alert-hub 자동 설치:", hub_result, flush=True)
+            say("🔔 <b>alert-hub 자동 설치</b>\n▫️ " + esc(hub_result))
+    except Exception as e:
+        print("alert-hub 자동 설치 오류:", type(e).__name__, e, flush=True)
     last = 0.0
     offset = st.get("offset")
     while True:
