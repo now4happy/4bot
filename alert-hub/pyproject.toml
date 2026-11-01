@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alert-hub"
+version = "1.0.0"
+description = "자동매매 봇 알림 허브: 긴급은 즉시, 나머지는 모아서 하루 한 번 브리핑"
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.setuptools]
+packages = ["alert_hub"]

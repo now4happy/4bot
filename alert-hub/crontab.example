@@ -1,0 +1,14 @@
+# 서버에서 `crontab -e` 를 열어 아래 두 줄을 붙여 넣으세요.
+# /home/USER/alert-hub 는 실제 설치 경로로 바꾸세요.
+#
+# ⚠️ 먼저 서버 시간대를 확인하세요:  timedatectl | grep "Time zone"
+#    구글 클라우드 서버는 보통 UTC 입니다. cron 은 '서버 시간' 기준으로 돕니다.
+#    한국시간 아침 8시 = UTC 전날 23시  ->  "0 23 * * *"
+#    서버가 이미 Asia/Seoul 이면            ->  "0 8 * * *"
+#    (브리핑 안에 표시되는 시각은 서버 시간대와 상관없이 .env 의 HUB_TZ 기준입니다)
+
+# 10분마다: 멈춘 봇 찾기 + 못 보낸 긴급 알림 재전송 + 오래된 기록 정리
+*/10 * * * * cd /home/USER/alert-hub && .venv/bin/python -m alert_hub watchdog >> data/watchdog.log 2>&1
+
+# 하루 한 번: 브리핑 (아래는 서버가 UTC 일 때의 한국시간 08:00)
+0 23 * * * cd /home/USER/alert-hub && .venv/bin/python -m alert_hub briefing >> data/briefing.log 2>&1
