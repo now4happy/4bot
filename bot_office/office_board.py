@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_board.py   (사무실 v1.0.59 · 2026-10-29)
+# FILE: /opt/bot-office/office_board.py   (사무실 v1.0.60 · 2026-11-01)
+#  · 사무실 v1.0.60: 상황판 표시만 5번 사무실 비서 → 8번 사무실 비서로 변경 (서비스·기능 변경 없음, 통합 아님)
 #  · 사무실 v1.0.59: 팬딩룸 가격표 모음 = 과거 수집 + 매일 받는 가격표(날짜 기준 중복 없이) · 기간(가장 옛날~최근)·마지막 추가 시각
 #    (과거 수집은 옛날 쪽으로 쌓여 '최근 날짜'가 안 바뀌어 멈춘 것처럼 보이던 문제)
 #  · 사무실 v1.0.56: 신호등에 이름·켜진 시각 · 매매방·미팅룸 제외 · 팬딩룸에 과거 가격표 수·저장 위치 · 서버 정리(bot-server-care) 상태
@@ -15,7 +16,7 @@ import json, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "v1.0.59"
+VERSION = "v1.0.60"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
 KST = timezone(timedelta(hours=9))
@@ -26,7 +27,7 @@ SERVICES = [
     ("trade", "2번 토스 스나이퍼", "toss_sniper.service"),
     ("trade", "3번 토스 적립", "toss_dca.service"),
     ("trade", "4번 빗썸 적립", "bithumb_bot.service"),
-    ("office", "5번 사무실 비서", "bot-office.service"),
+    ("office", "8번 사무실 비서", "bot-office.service"),
     ("office", "5번 팬딩 가격표", "bot-office-fanding.service"),
     ("office", "6번 업데이트 비서", "bot-updater.service"),
     ("office", "7번 비서(브리핑·PC감시)", "bot-office-secretary.service"),
