@@ -22,6 +22,32 @@ import math
 import functools
 
 from scheduler_core import is_market_open, get_budget_allocation
+
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
 from order_executor import execute_order_list
 from state_io_manager import read_avwap_state_sync, _atomic_write_json_sync
 
@@ -330,6 +356,7 @@ async def scheduled_early_regular_trade(context):
                     if chat_id:
                         try:
                             await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text=f"🚨 <b>[{t}] 스케줄러 처리 중 오류 발생. 스킵합니다.</b>\n<code>{html.escape(str(e))}</code>", parse_mode='HTML'), timeout=15.0)
+                            _hub_alert("1번 한투 라오어", "critical", f"[{t}] 스케줄러 처리 중 오류 발생. 스킵합니다.")
                         except Exception: pass
 
             if not loop_fully_successful:
@@ -343,6 +370,7 @@ async def scheduled_early_regular_trade(context):
                 if attempt > 1 and chat_id: 
                     try:
                         await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 장전을 완수했습니다!</b>", parse_mode='HTML'), timeout=15.0)
+                        _hub_alert("1번 한투 라오어", "warning", f"[통신 복구] {attempt}번째 재시도 끝에 장전을 완수했습니다.")
                     except Exception: pass
                 return 
         except asyncio.TimeoutError:
@@ -391,12 +419,14 @@ async def scheduled_early_regular_trade(context):
             if attempt != 1 and attempt % 5 == 0 and chat_id:
                 try:
                     await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 10초 뒤 재시도합니다! 🛡️", parse_mode='HTML'), timeout=15.0)
+                    _hub_alert("1번 한투 라오어", "warning", "[API 통신 지연 감지] 한투 서버 불안정. 10초 뒤 재시도합니다.")
                 except Exception: pass
             await asyncio.sleep(RETRY_DELAY)
 
     if chat_id:
         try:
             await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text="🚨 <b>[긴급 에러] 17:05 스케줄 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML'), timeout=15.0)
+            _hub_alert("1번 한투 라오어", "critical", "[긴급 에러] 17:05 스케줄 통신 복구 최종 실패. 수동 점검 요망.")
         except Exception: pass
 
 
@@ -723,6 +753,7 @@ async def scheduled_regular_trade_delayed(context):
                     if chat_id:
                         try:
                             await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text=f"🚨 <b>[{t}] 스케줄러 처리 중 오류 발생. 스킵합니다.</b>\n<code>{html.escape(str(e))}</code>", parse_mode='HTML'), timeout=15.0)
+                            _hub_alert("1번 한투 라오어", "critical", f"[{t}] 스케줄러 처리 중 오류 발생. 스킵합니다.")
                         except Exception: pass
 
             if not loop_fully_successful:
@@ -736,6 +767,7 @@ async def scheduled_regular_trade_delayed(context):
                 if attempt > 1 and chat_id: 
                     try:
                         await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 장전/이관을 완수했습니다!</b>", parse_mode='HTML'), timeout=15.0)
+                        _hub_alert("1번 한투 라오어", "warning", f"[통신 복구] {attempt}번째 재시도 끝에 장전/이관을 완수했습니다.")
                     except Exception: pass
                 return 
         except asyncio.TimeoutError:
@@ -783,10 +815,12 @@ async def scheduled_regular_trade_delayed(context):
             if attempt != 1 and attempt % 5 == 0 and chat_id:
                 try:
                     await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 10초 뒤 재시도합니다! 🛡️", parse_mode='HTML'), timeout=15.0)
+                    _hub_alert("1번 한투 라오어", "warning", "[API 통신 지연 감지] 한투 서버 불안정. 10초 뒤 재시도합니다.")
                 except Exception: pass
             await asyncio.sleep(RETRY_DELAY)
 
     if chat_id:
         try:
             await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text="🚨 <b>[긴급 에러] V-REV 실전 전송/이관 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML'), timeout=15.0)
+            _hub_alert("1번 한투 라오어", "critical", "[긴급 에러] V-REV 실전 전송/이관 통신 복구 최종 실패. 수동 점검 요망.")
         except Exception: pass

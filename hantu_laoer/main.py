@@ -92,6 +92,32 @@ if not all([TELEGRAM_TOKEN, APP_KEY, APP_SECRET, CANO, ADMIN_CHAT_ID]):
 
 est_zone = ZoneInfo('America/New_York')
 
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
+
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error("🚨 [Global Error] Exception while handling an update:", exc_info=context.error)
 
@@ -106,6 +132,7 @@ async def scheduled_volatility_scan(context):
         try:
             if context.job and context.job.chat_id:
                 await context.bot.send_message(chat_id=context.job.chat_id, text="⚠️ <b>[시스템 경고] 달력 API 통신 타임아웃!</b>\n▫️ 평일 강제 개장(Fail-Open) 로직이 가동되었습니다.", parse_mode='HTML')
+                _hub_alert("1번 한투 라오어", "warning", "[시스템 경고] 달력 API 통신 타임아웃, 평일 강제 개장 로직 가동.")
         except Exception: pass
     except Exception as e:
         logging.error(f"⚠️ [volatility_scan] 달력 API 에러. 평일 강제 개장 처리합니다: {e}")
@@ -116,6 +143,7 @@ async def scheduled_volatility_scan(context):
             if context.job and context.job.chat_id:
                 safe_err = html.escape(str(e))
                 await context.bot.send_message(chat_id=context.job.chat_id, text=f"⚠️ <b>[시스템 경고] 달력 API 통신 에러!</b>\n▫️ 사유: {safe_err}\n▫️ 평일 강제 개장(Fail-Open) 로직이 가동되었습니다.", parse_mode='HTML')
+                _hub_alert("1번 한투 라오어", "warning", "[시스템 경고] 달력 API 통신 에러, 평일 강제 개장 로직 가동.")
         except Exception: pass
         
     if not is_open:
