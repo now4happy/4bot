@@ -1779,6 +1779,7 @@ class _AdaptiveTelegramBridge:
             if safe_body
             else f"<b>{safe_title}</b>"
         )
+        _hub_alert("2번 토스 스나이퍼", "warning" if "⚠️" in title else "info", f"{title} {body}")
         if self.bot_token and self.chat_id:
             return await self.send_message(
                 text=msg, chat_id=self.chat_id, reply_markup=reply_markup

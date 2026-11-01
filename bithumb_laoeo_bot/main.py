@@ -277,12 +277,12 @@ def method2_daily_step(coin, krw_bal, acc, today_str):
     if ok:
         state["last_action_type"][coin] = "SMA매수" if direction == "up" else "SMA매도"
         save_json(STATE_FILE, state)
-        send_panel(f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수", [[{"text":"💰 상황판","callback_data":"balance"}]])
+        send_panel(f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수", [[{"text":"💰 상황판","callback_data":"balance"}]]); _hub_alert("4번 빗썸 적립", "info", f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수")
         if direction == "up":
             krw_bal -= size
     else:
         _decide(coin, "method2_order", "failed", "order_failed_or_unknown", daily=True)
-        send_panel(f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다.", [[{"text":"💰 상황판","callback_data":"balance"}]])
+        send_panel(f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다.", [[{"text":"💰 상황판","callback_data":"balance"}]]); _hub_alert("4번 빗썸 적립", "critical", f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다.")
     return krw_bal
 
 def trading_monitor_loop():
@@ -317,7 +317,7 @@ def trading_monitor_loop():
                 if req_krw > 0 and krw_bal < req_krw and (time.time() - float(state.get("last_low_bal_ts", 0)) >= 1800):
                     state["last_low_bal_ts"] = time.time(); save_json(STATE_FILE, state)
                     RL.ev("decision", "low_krw_alert", "ok", None, actor="scheduler", audit_ref=RL.audit("low_krw", need=req_krw, have=krw_bal))
-                    send_panel(f"⚠️ [빗썸 잔액 부족 ({BOT_VERSION})]\n• 필요: {req_krw:,.0f}원 / 보유: {krw_bal:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                    send_panel(f"⚠️ [빗썸 잔액 부족 ({BOT_VERSION})]\n• 필요: {req_krw:,.0f}원 / 보유: {krw_bal:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("4번 빗썸 적립", "critical", f"빗썸 잔액 부족: 필요 {req_krw:,.0f}원 / 보유 {krw_bal:,.0f}원")
                 tp1, sr = float(config.get("target_profit_pct", 10.0)), float(config.get("sell_ratio_pct", 20.0))
                 for coin, base_amt in list(config.get("coins", {}).items()):
                     if base_amt <= 0 and coin_method(coin) != 2: continue
@@ -345,11 +345,11 @@ def trading_monitor_loop():
                                 # 통신 오류(응답 없음)는 체결됐을 수 있으므로 같은 단계를 다시 매도하지 않음
                                 state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = "확인필요"
                                 save_json(STATE_FILE, state); add_history(coin, f"⚠️{target_stg}차익절 응답없음", sell_res[:60])
-                                send_panel(f"⚠️ [{coin} {target_stg}차 익절 주문 응답 없음]\n• 체결됐을 수 있어 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요.\n• 사유: {sell_res[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); continue
+                                send_panel(f"⚠️ [{coin} {target_stg}차 익절 주문 응답 없음]\n• 체결됐을 수 있어 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요.\n• 사유: {sell_res[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("4번 빗썸 적립", "critical", f"{coin} {target_stg}차 익절 주문 응답 없음"); continue
                             if ok:
                                 state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = f"{target_stg}차익절"
                                 save_json(STATE_FILE, state); add_history(coin, f"🎯{target_stg}차익절", f"{prof_pct:+.2f}% ({sr:.0f}% 매도)")
-                                send_panel(f"🎉 [{coin} {target_stg}차 익절 완료] {prof_pct:+.2f}%", [[{"text": "💰 상황판", "callback_data": "balance"}]]); continue
+                                send_panel(f"🎉 [{coin} {target_stg}차 익절 완료] {prof_pct:+.2f}%", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("4번 빗썸 적립", "info", f"{coin} {target_stg}차 익절 완료 {prof_pct:+.2f}%"); continue
                     if state["last_action_date"].get(coin) == today_str: _decide(coin, "buy", "skipped", "done_today", daily=True)
                     elif now.hour < config.get("buy_hour", 19): _decide(coin, "buy", "skipped", "before_buy_hour", daily=True, buy_hour=config.get("buy_hour", 19))
                     if state["last_action_date"].get(coin) != today_str and now.hour >= config.get("buy_hour", 19):
@@ -370,20 +370,20 @@ def trading_monitor_loop():
                                 state["cycle_days"] = s_days
                                 save_json(STATE_FILE, state); add_history(coin, "🛒정기매수", f"{buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
                                 RL.ev("state_change", "buy_day", "ok", None, actor="scheduler", coin_ref=RL.ref(coin), day_after=state["buy_days"][coin], cycle_day_after=s_days[coin])
-                                send_panel(f"✅ [{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원 ({prof_pct:+.2f}%)", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                                send_panel(f"✅ [{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원 ({prof_pct:+.2f}%)", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("4번 빗썸 적립", "info", f"{coin} 19:00 정기매수 완료 {buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
                             elif isinstance(res_json, str):
                                 # 통신 오류(응답 없음)는 체결됐을 수 있으므로 오늘은 다시 매수하지 않음 (중복 매수 방지)
                                 state["last_action_date"][coin], state["last_action_type"][coin] = today_str, "확인필요"
                                 save_json(STATE_FILE, state); add_history(coin, "⚠️정기매수 응답없음", f"{buy_amt:,.0f}원 · {res_json[:60]}")
                                 RL.ev("state_change", "no_reorder_today", "ok", None, actor="scheduler", coin_ref=RL.ref(coin), why="order_no_response")
-                                send_panel(f"⚠️ [{coin} 정기매수 주문 응답 없음] {buy_amt:,.0f}원\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요. (체결 안 됐으면 내일 정상 매수)\n• 사유: {res_json[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                                send_panel(f"⚠️ [{coin} 정기매수 주문 응답 없음] {buy_amt:,.0f}원\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요. (체결 안 됐으면 내일 정상 매수)\n• 사유: {res_json[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("4번 빗썸 적립", "critical", f"{coin} 정기매수 주문 응답 없음 {buy_amt:,.0f}원")
                             else:
                                 fk = f"fail_{today_str}_{coin}"
-                                if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 실패] {res_json}", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                                if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 실패] {res_json}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("4번 빗썸 적립", "critical", f"{coin} 매수 실패")
                         elif now.minute >= 15:
                             _decide(coin, "buy", "skipped", "krw_insufficient", _snap(coin, buy_krw=buy_amt, krw_balance=krw_bal) if RL.once(f"{coin}|krw_snap") else None, daily=True)
                             fk = f"fail_{today_str}_{coin}"
-                            if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 미진행] 원화 부족", [[{"text": "💰 상황판", "callback_data": "balance"}]])
+                            if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 미진행] 원화 부족", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("4번 빗썸 적립", "critical", f"{coin} 매수 미진행 원화 부족")
         except Exception as e: RL.err("scheduler_pass", e, event_type="decision", reason="accounts_unavailable" if "잔고 조회 실패" in str(e) else None)
         finally: RL.set_cid("")
         runtime_info["count"] += 1; time.sleep(60)

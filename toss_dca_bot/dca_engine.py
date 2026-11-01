@@ -13,6 +13,32 @@ from zoneinfo import ZoneInfo
 
 from toss_api import TossApiClient, GlobalThrottle
 
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
+
 KST_TZ = ZoneInfo("Asia/Seoul")
 EST_TZ = ZoneInfo("America/New_York")
 
@@ -314,6 +340,7 @@ async def execute_stock_dca_step(
                         f"▫️ 필요 금액: <code>${order_amt:,.2f}</code> | 주문가능 USD: <code>${bp:,.2f}</code>"
                     )
                     await bot.send_message(chat_id=chat_id, text=warn, parse_mode="HTML")
+                    _hub_alert("3번 토스 적립", "critical", warn)
                     return warn
                 res = await client.place_us_fractional_buy(symbol, order_amt, idem_key)
                 order_desc = f"소수점 시장가 매수 <code>${order_amt:,.2f}</code>"
@@ -326,6 +353,7 @@ async def execute_stock_dca_step(
                         f"▫️ 필요 금액: <code>₩{est_cost:,.0f} ({order_qty}주)</code> | 가능 원화: <code>₩{bp:,.0f}</code>"
                     )
                     await bot.send_message(chat_id=chat_id, text=warn, parse_mode="HTML")
+                    _hub_alert("3번 토스 적립", "critical", warn)
                     return warn
                 res = await client.place_kr_integer_order(symbol, "BUY", order_qty, idem_key)
                 order_desc = f"시장가 매수 <code>{order_qty}주</code> (약 ₩{est_cost:,.0f})"
@@ -380,6 +408,7 @@ async def execute_stock_dca_step(
             await DcaConfigManager.save(cfg)
 
         await bot.send_message(chat_id=chat_id, text=report, parse_mode="HTML")
+        _hub_alert("3번 토스 적립", "info", report)
         return report
 
     except Exception as e:
@@ -388,4 +417,5 @@ async def execute_stock_dca_step(
             f"▫️ 사유: <code>{str(e)}</code>"
         )
         await bot.send_message(chat_id=chat_id, text=err_msg, parse_mode="HTML")
+        _hub_alert("3번 토스 적립", "critical", err_msg)
         return err_msg
