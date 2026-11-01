@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.1 · 2026-11-01 18:38 (KST)
+- 파일: bot_updater.py
+- 내용: feat: watchdog 무소식 경고 대응 — 2번 신호 위치 + hub 권한 + 8번 대리 신호
+- 브랜치: staging
+
 ## v1.1.0 · 2026-11-01 14:47 (KST)
 - 파일: bot_updater.py, fanding_trade.py, office_secretary.py, pc_monitor.py, server.py
 - 내용: feat: alert-hub 연동 1차 — 전 봇 하트비트 + 사무실·팬딩 자율 알림
