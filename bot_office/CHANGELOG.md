@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.2 · 2026-11-01 21:54 (KST)
+- 파일: board.html, server.py, thought_mindmap.html
+- 내용: feat: 상황판 마인드맵 탭 추가 (생각의 연결 v1.3, 보기 전용)
+- 브랜치: staging
+
 ## v1.1.1 · 2026-11-01 18:38 (KST)
 - 파일: bot_updater.py
 - 내용: feat: watchdog 무소식 경고 대응 — 2번 신호 위치 + hub 권한 + 8번 대리 신호
