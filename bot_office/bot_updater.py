@@ -24,7 +24,7 @@
 #                       ② STATUS.md 를 쓸 때 사무실 상황판용 복사본 /var/lib/bot-office/status.md (읽기 전용 0644) 도 남김
 #  · 사무실 v1.0.64 (2026-10-29): 7번 비서 재시작 목록에서 fanding_trade.py 제외 — 비서는 팬딩 코드를 쓰지 않음(10-26 V4에서 분리).
 #                       팬딩 파일이 바뀌어도 비서를 괜히 다시 시작하지 않음 (5번 팬딩 서비스는 그대로 다시 시작)
-#  · 사무실 vNEXT (2026-11-01): alert-hub/ 폴더 파일은 업데이터 적용 대상이 아니므로 classify에서 거부하지 않고 넘김
+#  · 사무실 v1.0.80 (2026-11-01): alert-hub/ 폴더 파일은 업데이터 적용 대상이 아니므로 classify에서 거부하지 않고 넘김
 #                       (보관만, 실제 설치는 서버 직접 — 다른 봇 업데이트가 같이 막히지 않게 함)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
