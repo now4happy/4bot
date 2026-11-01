@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.0.16 · 2026-11-01 10:27 (KST)
+- 파일: plugin_updater.py, quant_engine.py, sniper_exit_plugin.py, sniper_plugin.py, toss_api.py
+- 내용: feat: 2번 토스 스나이퍼 Case 84·85·86 이식 보완본 (상황판 8번 적용 뒤)
+- 브랜치: staging
+
 ## v1.0.15 · 2026-10-31 20:38 (KST)
 - 파일: main.py, tg_ui_plugin.py
 - 내용: 텔레그램 매매 그림 표현을 현황판으로, 상황판 맨밑 보기 전용 링크 제거
