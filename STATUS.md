@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-01 10:48 (KST) · 계기: 업데이트 적용 (staging: feat: 업데이터 alert-hub 폴더 무시 처리 (다른 봇 업데이트 차단 방지))
+- 갱신: 2026-11-01 10:54 (KST) · 계기: 업데이트 적용 (staging: feat: alert-hub 폴더 보관 (업데이터 무시 적용 뒤, 이름 8번))
 
 ## 봇별 현재 상태
 
@@ -20,7 +20,7 @@
 - 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (10-30 10:38 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (10-31 13:13 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
-- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (10-29 14:17 KST부터)
+- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-01 10:49 KST부터)
 - 실패 상태로 남은 서비스·타이머: `bot-office-inventory.service`
 - 디스크 사용: 73% (남은 2.7GB)
 
