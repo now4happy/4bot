@@ -1,5 +1,10 @@
 # 1번 한투 라오어 변경 기록
 
+## v1.0.3 · 2026-11-01 17:16 (KST)
+- 파일: main.py, scheduler_regular.py
+- 내용: feat: alert-hub 연동 3차 — 1번 한투 자율 알림
+- 브랜치: staging
+
 ## v1.0.2 · 2026-11-01 14:47 (KST)
 - 파일: scheduler_sniper.py
 - 내용: feat: alert-hub 연동 1차 — 전 봇 하트비트 + 사무실·팬딩 자율 알림
