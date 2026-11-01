@@ -2903,6 +2903,8 @@ def _write_picture_snapshot(live_p: float) -> None:
 
 async def main_sniper_loop(context: SniperAppContext) -> None:
     while not context.shutdown_event.is_set():
+        # alert-hub 하트비트 (2번 v1.1.2, 2026-11-01): 메인 루프 매 바퀴(주말 대기 포함) 신호 · DB 기록은 30초에 1번 · 실패해도 매매 계속
+        _hub_beat('2번 토스 스나이퍼')
         now_est = datetime.now(EST_TZ)
         hm = now_est.hour * 100 + now_est.minute
 

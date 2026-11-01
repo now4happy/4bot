@@ -33,6 +33,10 @@
 #  · 사무실 v1.1.0 (2026-11-01): alert-hub 연동 1차 — 전 봇 하트비트 + 사무실·팬딩 자율 알림 hub 복사 (기존 전송·매매 로직 무변경)
 #  · 사무실 v1.0.82 (2026-11-01): 버전 숫자 최대 9 굴림 — 마지막 숫자가 9를 넘으면 중간을 올리고 마지막을 0으로
 #                       (예: 1.0.81 다음은 1.1.0, 1.1.9 다음은 1.2.0, 1.9.9 다음은 2.0.0)
+#  · 사무실 v1.1.1 (2026-11-01): watchdog 무소식 경고 대응 — ① 업데이터 시작 때마다(이미 설치돼 있어도) hub 데이터 폴더 0777,
+#                       hub.db·hub.db-wal·hub.db-shm 0666 으로 정리 (다른 계정으로 도는 봇도 신호를 쓸 수 있게 · best-effort · 예외 없음)
+#                       ② 8번 사무실 비서 대리 신호 — 사무실 웹(127.0.0.1:8765/healthz)이 200이면 60초에 1번 hub에 신호
+#                          (bot-office.service 의 ProtectHome 보호로 server.py 가 hub 폴더를 못 볼 수 있어서 · 웹 코드·유닛 무변경)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -1097,6 +1101,54 @@ def hub_install():
         return "alert-hub 설치 실패: " + type(e).__name__ + " (" + str(e)[:200] + ")"
 
 
+def hub_data_perm_repair():
+    """hub 데이터 폴더 0777, hub.db(+ -wal·-shm) 0666 으로 정리. 시작할 때마다, 이미 설치돼 있어도 실행.
+    봇마다 다른 계정으로 돌 수 있는데, sqlite(WAL)는 DB 파일과 폴더 둘 다 쓸 수 있어야 신호를 기록한다.
+    HUB_DIR/data 안의 이 세 파일만 다룬다 (심볼릭 링크는 건드리지 않음). 예외를 밖으로 던지지 않고, 비밀값은 다루지 않는다.
+    반환: 결과 한 줄 (폴더가 없으면 None)"""
+    try:
+        data_dir = os.path.join(HUB_DIR, "data")
+        if not os.path.isdir(data_dir) or os.path.islink(data_dir):
+            return None
+        changed, failed = [], []
+        targets_ = [(data_dir, 0o777)] + [(os.path.join(data_dir, n), 0o666) for n in ("hub.db", "hub.db-wal", "hub.db-shm")]
+        for p, mode in targets_:
+            try:
+                if not os.path.exists(p) or os.path.islink(p):
+                    continue
+                if (os.stat(p).st_mode & 0o777) != mode:
+                    os.chmod(p, mode)
+                    changed.append(os.path.basename(p) + "=" + oct(mode)[2:])
+            except Exception as e:
+                failed.append(os.path.basename(p) + ":" + type(e).__name__)
+        return ("hub 권한 정리: " + (", ".join(changed) if changed else "바꿀 것 없음")
+                + (" · 실패 " + ", ".join(failed) if failed else ""))
+    except Exception as e:
+        return "hub 권한 정리 오류: " + type(e).__name__
+
+
+OFFICE_HEALTH_URL = "http://127.0.0.1:8765/healthz"
+_office_beat_at = [0.0]
+
+
+def office_beat_proxy(every=60.0):
+    """8번 사무실 비서 대리 신호: 사무실 웹이 healthz 에 200으로 답하면 hub에 신호 (60초에 1번).
+    bot-office.service 는 ProtectHome 보호로 /home 아래 hub 를 못 볼 수 있어, 보호 없는 업데이터가 대신 기록한다.
+    웹이 답하지 않으면 신호를 보내지 않는다 → watchdog 가 무소식을 알린다. 예외를 밖으로 던지지 않는다."""
+    try:
+        now = time.time()
+        if 0 <= now - _office_beat_at[0] < every:
+            return
+        _office_beat_at[0] = now
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 내부 주소는 프록시 없이 직접
+        with opener.open(OFFICE_HEALTH_URL, timeout=3) as r:
+            ok = r.status == 200
+        if ok:
+            _hub_beat('8번 사무실 비서')
+    except Exception:
+        pass
+
+
 def main():
     st = load(STATE, {})
     if git("rev-parse", "-q", "--verify", "refs/remotes/origin/staging")[0]:
@@ -1109,10 +1161,17 @@ def main():
             say("🔔 <b>alert-hub 자동 설치</b>\n▫️ " + esc(hub_result))
     except Exception as e:
         print("alert-hub 자동 설치 오류:", type(e).__name__, e, flush=True)
+    try:   # 설치 여부와 상관없이 시작할 때마다 (설치 직후 만들어진 DB 도 포함)
+        perm_result = hub_data_perm_repair()
+        if perm_result:
+            print(perm_result, flush=True)
+    except Exception as e:
+        print("hub 권한 정리 오류:", type(e).__name__, flush=True)
     last = 0.0
     offset = st.get("offset")
     while True:
         _hub_beat('6번 업데이트 비서')
+        office_beat_proxy()
         if time.time() - last >= CHECK_EVERY:
             last = time.time()
             try:
