@@ -30,6 +30,8 @@
 #                       (venv·.env·테스트·cron, 기존 .env·cron은 건드리지 않음, 실패해도 봇 업데이트는 계속)
 #  · 사무실 vNEXT (2026-11-01): hub 자동 설치의 unittest를 hub 폴더 안에서 실행하도록 고침
 #                       (절대 경로 -s/-t 조합은 tests 폴더를 import할 수 없어 실패했음)
+#  · 사무실 vNEXT (2026-11-01): 버전 숫자 최대 9 굴림 — 마지막 숫자가 9를 넘으면 중간을 올리고 마지막을 0으로
+#                       (예: 1.0.81 다음은 1.1.0, 1.1.9 다음은 1.2.0, 1.9.9 다음은 2.0.0)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -643,7 +645,14 @@ def bump_versions(units, old_head):
             om = re.search(r"""BOT_VERSION\s*=\s*["']([^"']+)""", old) if rc == 0 else None
             cur = f"v{m.group(2)}.{m.group(3)}" + (f".{m.group(4)}" if m.group(4) else "")
             if om and om.group(1) == cur:
-                cur = f"v{m.group(2)}.{m.group(3)}.{int(m.group(4) or 0) + 1}"
+                _x, _y, _z = int(m.group(2)), int(m.group(3)), int(m.group(4) or 0)
+                if _z < 9:
+                    _x, _y, _z = _x, _y, _z + 1
+                elif _y < 9:
+                    _x, _y, _z = _x, _y + 1, 0
+                else:
+                    _x, _y, _z = _x + 1, 0, 0
+                cur = f"v{_x}.{_y}.{_z}"
                 open(p, "w", encoding="utf-8").write(src[:m.start()] + m.group(1) + cur + m.group(5) + src[m.end():])
             out[u] = cur
     return out
@@ -671,10 +680,15 @@ def fill_vnext(files, ver, office=False):
 
 
 def next_tag(prefix):
+    """버전 숫자 최대 9 굴림: 마지막이 9를 넘으면 중간을 올리고 마지막을 0으로, 중간도 9를 넘으면 앞을 올림."""
     _, tags = git("tag", "-l", f"{prefix}-v*")
     nums = [tuple(map(int, m.groups())) for t in tags.split() if (m := re.fullmatch(re.escape(prefix) + r"-v(\d+)\.(\d+)\.(\d+)", t))]
     x, y, z = max(nums, default=(1, 0, 0))
-    return f"v{x}.{y}.{z + 1}"
+    if z < 9:
+        return f"v{x}.{y}.{z + 1}"
+    if y < 9:
+        return f"v{x}.{y + 1}.0"
+    return f"v{x + 1}.0.0"
  
  
 def healthy(unit):
