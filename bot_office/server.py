@@ -2,6 +2,7 @@
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
 # 사무실 (초안 · 버전은 Muse 가 부여): 스나이퍼 매매 그림 추가 — GET /sniper-picture (페이지) · GET /api/sniper-picture (데이터), 둘 다 로그인 필요·보기 전용
 # 사무실 스나이퍼룸 iframe 허용: /sniper-picture 만 같은 주소(SAMEORIGIN) 프레임 허용, 그 외 페이지는 DENY 유지 (외부 사이트 클릭재킹 차단 유지)
+# 사무실 (초안 · 버전은 Muse 가 부여): 생각의 연결 마인드맵 탭 추가 — GET /thought-mindmap (페이지), 로그인 필요·보기 전용
 #   · 로그인 안 된 /sniper-picture 는 /login 으로, /api/sniper-picture 는 401. /api/board 와 첫 화면 규칙은 그대로
 # 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
@@ -134,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
         if route=='/healthz': return self.send(200,{'ok':True})
         if route=='/login': return self.send(200,(ROOT/'login.html').read_bytes(),'text/html; charset=utf-8')
         if not self.session():
-            if route in ('/','/sniper-picture'):
+            if route in ('/','/sniper-picture','/thought-mindmap'):
                 self.send_response(303);self.send_header('Location','/login');self.send_header('Content-Length','0');self.end_headers();return
             return self.send(401,{'error':'login_required'})
         if route in ('/', '/board') and (ROOT/'board.html').exists(): return self.send(200,(ROOT/'board.html').read_bytes(),'text/html; charset=utf-8')
@@ -147,6 +148,9 @@ class Handler(BaseHTTPRequestHandler):
         # SNIPER_PICTURE_V1: 2번 스나이퍼 매매 그림 (보기 전용 · 위 로그인 검사를 그대로 통과한 요청만 여기 도착)
         # 스나이퍼룸 iframe용: 같은 주소 프레임만 허용 (그 외 페이지는 DENY 유지)
         if route=='/sniper-picture' and (ROOT/'sniper_picture.html').exists(): return self.send(200,(ROOT/'sniper_picture.html').read_bytes(),'text/html; charset=utf-8',frame_self=True)
+        # THOUGHT_MINDMAP_V1: 생각의 연결 마인드맵 v1.3 (보기 전용 · 위 로그인 검사를 그대로 통과한 요청만 여기 도착)
+        # 마인드맵 탭 iframe용: 같은 주소 프레임만 허용 (그 외 페이지는 DENY 유지)
+        if route=='/thought-mindmap' and (ROOT/'thought_mindmap.html').exists(): return self.send(200,(ROOT/'thought_mindmap.html').read_bytes(),'text/html; charset=utf-8',frame_self=True)
         if route=='/api/sniper-picture':
             try:
                 import sniper_picture
