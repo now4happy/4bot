@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.1.0 · 2026-11-01 14:47 (KST)
+- 파일: main.py
+- 내용: feat: alert-hub 연동 1차 — 전 봇 하트비트 + 사무실·팬딩 자율 알림
+- 브랜치: staging
+
 ## v1.0.16 · 2026-11-01 10:27 (KST)
 - 파일: plugin_updater.py, quant_engine.py, sniper_exit_plugin.py, sniper_plugin.py, toss_api.py
 - 내용: feat: 2번 토스 스나이퍼 Case 84·85·86 이식 보완본 (상황판 8번 적용 뒤)

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from toss_api import TossApiClient
 from dca_engine import DcaConfigManager, execute_stock_dca_step
 
-BOT_VERSION = "v4.3.5"
+BOT_VERSION = "v4.3.6"
 # v4.3.5 (2026-10-28): 재생 로그 추가 — 버튼·명령(user_event) / 매매 판단(decision) / 주문·외부 호출(external_call)
 #                     / 설정 변경(state_change) / 보낸 메시지(user_visible) 를 logs/ 에 한 줄 JSON 으로. 금액·종목은 감사 로그에만.
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")

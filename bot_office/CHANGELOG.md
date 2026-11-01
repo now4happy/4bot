@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.0 · 2026-11-01 14:47 (KST)
+- 파일: bot_updater.py, fanding_trade.py, office_secretary.py, pc_monitor.py, server.py
+- 내용: feat: alert-hub 연동 1차 — 전 봇 하트비트 + 사무실·팬딩 자율 알림
+- 브랜치: staging
+
 ## v1.0.82 · 2026-11-01 14:33 (KST)
 - 파일: bot_updater.py
 - 내용: feat: 버전 숫자 최대 9 굴림 + hub 테스트 고침
