@@ -884,6 +884,8 @@ def calc_sell_realized_pnl(
     sold_qty: int,
     sell_exec_price: float,
     sold_actual_cost_usd: float,
+    actual_sell_fees_usd: Optional[float] = None,
+    round_trip_fee_rate_pct: Optional[float] = None,
 ) -> Dict[str, float]:
     """
     매도 체결 수량(sold_qty), 실제 체결 단가(sell_exec_price), 매도 지층들의 실제 매수 원금 합계(sold_actual_cost_usd)를
@@ -904,9 +906,18 @@ def calc_sell_realized_pnl(
 
     proceeds = round(float(q_int) * exec_p, 4)
     gross_pnl = round(proceeds - actual_cost, 4)
-    fee_usd = round(
-        ((actual_cost + proceeds) * 0.5) * (ROUND_TRIP_FEE_RATE_PCT / 100.0), 4
-    )
+    effective_pct = (round_trip_fee_rate_pct if round_trip_fee_rate_pct is not None
+                     else ROUND_TRIP_FEE_RATE_PCT)
+    # Corrected 2026-11-01: execution.commission on a SELL order is the sell leg
+    # only, not the round trip. Using it alone would under-deduct the buy leg
+    # (about half the old fee). Total = sell actual + buy-leg estimate from the
+    # synced one-way rate (effective_pct / 200). If Toss later proves the
+    # execution commission already covers the round trip, remove the buy leg.
+    if actual_sell_fees_usd is not None:
+        buy_leg_usd = round(actual_cost * (effective_pct / 200.0), 4)
+        fee_usd = round(max(0.0, actual_sell_fees_usd) + buy_leg_usd, 4)
+    else:
+        fee_usd = round(((actual_cost + proceeds) * 0.5) * (effective_pct / 100.0), 4)
     net_pnl = round(gross_pnl - fee_usd, 4)
     net_rate_pct = (
         round((net_pnl / actual_cost) * 100.0, 4) if actual_cost > 0.0 else 0.0

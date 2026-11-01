@@ -321,6 +321,38 @@ def purge_deprecated_legacy_files(
 # ---------------------------------------------------------------------------
 # [핵심 2] 4배수 선제 스냅 및 마크다운 펜스 자동 치유기 (_auto_heal_indentation_glitches)
 # ---------------------------------------------------------------------------
+def _auto_heal_fstring_brace_typo(filepath: str) -> bool:
+    """Repair only a proven f-string identifier closing-brace typo, never arbitrary >."""
+    import re
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            source = f.read()
+        try:
+            ast.parse(source, filename=filepath)
+            return False
+        except SyntaxError as exc:
+            if "f-string" not in str(exc):
+                return False
+        # Corrected 2026-11-01: also heal a typo closed by } or a quote (e.g. f"{slug>}")
+        # and a dotted attribute (e.g. f"{obj.attr>}"). The gates above already require
+        # (a) the file to fail parsing, (b) an f-string error, (c) the repaired file to parse,
+        # so a legitimate ">" comparison (which parses) is never touched here.
+        pattern = re.compile(r"(\{[a-zA-Z_][a-zA-Z_0-9]*(?:\.[a-zA-Z_][a-zA-Z_0-9]*)*)>(?=[./_\-}\"'\)\],:; ])")
+        repaired = pattern.sub(r"\1}", source)
+        if repaired == source:
+            return False
+        ast.parse(repaired, filename=filepath)
+        with GlobalThrottle.get_file_lock(filepath):
+            import shutil
+            shutil.copy2(filepath, filepath + ".pre_fstring_heal.bak")
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(repaired)
+        logger.warning("f-string brace typo repaired in %s; backup retained", filepath)
+        return True
+    except (OSError, SyntaxError, UnicodeError):
+        return False
+
+
 def _auto_heal_indentation_glitches(
     filepath: str, max_passes: int = 6
 ) -> bool:
@@ -509,6 +541,7 @@ def verify_all_modules_compile(
             continue
 
         _auto_heal_indentation_glitches(fpath)
+        _auto_heal_fstring_brace_typo(fpath)
 
         try:
             py_compile.compile(fpath, doraise=True)

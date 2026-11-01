@@ -1175,6 +1175,106 @@ class TossApiClient:
         self._fx_cache_rate: float = KRW_PER_USD_DEFAULT
         self._fx_cache_mono: float = 0.0
 
+    async def get_us_commission_rate(self) -> Optional[float]:
+        """Return account US one-way rate as fraction (0.0007 = 0.07%).
+
+        Corrected 2026-11-01: the real /api/v1/commissions response shape was NOT
+        verified in the repo or in public docs, so this parser is defensive:
+        - searches "result" (the _request wrapper for a top-level list) and
+          market-keyed dicts ({"US": {...}}) in addition to data/items/commissions/results;
+        - normalises units: a value < 0.01 is a fraction, 0.01 <= value < 1.0 is
+          a percent (0.07 -> 0.0007). A value >= 1.0 is rejected and falls back
+          to the legacy rate, rather than being multiplied into a 14% fee.
+        If the real response proves different, fix this parser first; do not
+        stage a rate that has not been confirmed against a real GET call.
+        """
+        def _normalize(raw: Any) -> Optional[float]:
+            try:
+                rate = float(raw)
+            except (TypeError, ValueError):
+                return None
+            if 0.0 <= rate < 0.01:
+                return rate
+            if 0.01 <= rate < 1.0:
+                return rate / 100.0
+            return None
+
+        def _find_us(obj: Any) -> Optional[float]:
+            if isinstance(obj, list):
+                for item in obj:
+                    value = _find_us(item)
+                    if value is not None:
+                        return value
+            if isinstance(obj, dict):
+                market = str(obj.get("market") or obj.get("country") or "").upper()
+                if market in ("US", "USA", "UNITED_STATES"):
+                    for key in ("commissionRate", "commission_rate", "rate"):
+                        if key in obj:
+                            value = _normalize(obj[key])
+                            if value is not None:
+                                return value
+                for key in ("US", "USA", "UNITED_STATES"):
+                    if isinstance(obj.get(key), dict):
+                        value = _find_us(obj[key])
+                        if value is not None:
+                            return value
+                for key in ("data", "items", "commissions", "results", "result"):
+                    if key in obj:
+                        value = _find_us(obj[key])
+                        if value is not None:
+                            return value
+            return None
+
+        def _count_rates(obj: Any) -> int:
+            count = 0
+            if isinstance(obj, list):
+                return sum(_count_rates(item) for item in obj)
+            if isinstance(obj, dict):
+                for key in ("commissionRate", "commission_rate", "rate"):
+                    if key in obj and _normalize(obj[key]) is not None:
+                        count += 1
+                for value in obj.values():
+                    count += _count_rates(value)
+            return count
+
+        try:
+            response = await self._request("GET", "/api/v1/commissions", require_account=True)
+            value = _find_us(response)
+            if value is None and _count_rates(response) == 1:
+                # Single-rate response with no market tag: it can only be this
+                # account's commission. Any multi-rate response without a US tag
+                # is ambiguous and must NOT be guessed.
+                value = _find_us(response) if False else None
+                # Re-scan for the single rate value directly.
+                def _single(obj: Any) -> Optional[float]:
+                    # Only a market-less single rate may be assumed to be this
+                    # account's rate. A rate tagged KR (or any non-US market)
+                    # must never be mistaken for the US rate.
+                    if isinstance(obj, list):
+                        for item in obj:
+                            v = _single(item)
+                            if v is not None:
+                                return v
+                    if isinstance(obj, dict):
+                        market = str(obj.get("market") or obj.get("country") or "").upper()
+                        if market and market not in ("US", "USA", "UNITED_STATES"):
+                            return None
+                        for key in ("commissionRate", "commission_rate", "rate"):
+                            if key in obj:
+                                v = _normalize(obj[key])
+                                if v is not None:
+                                    return v
+                        for v in obj.values():
+                            r = _single(v)
+                            if r is not None:
+                                return r
+                    return None
+                value = _single(response)
+            return value
+        except Exception:
+            logger.warning("US commission rate lookup failed", exc_info=True)
+            return None
+
     def _assert_real_order_symbol(self, symbol: str) -> str:
         sym = str(symbol or "").upper().strip()
         if sym not in self.REAL_ALLOWED_SYMBOLS:

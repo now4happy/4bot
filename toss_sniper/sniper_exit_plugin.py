@@ -608,6 +608,23 @@ async def execute_bulletproof_sell_sweep(
             return {"status": "SWEEP_FAILED", "symbol": sym, "error": str(exc)}
 
 
+def _extract_sell_fees_usd(exec_obj: Any) -> Optional[float]:
+    """Sell-leg fees from an order execution object, or None if unknown.
+
+    Corrected 2026-11-01: commission alone is enough (tax may be absent or
+    named secFee). Requiring both commission AND tax, as the draft did, silently
+    discarded a real sell commission whenever the tax field was missing.
+    """
+    if not isinstance(exec_obj, dict) or "commission" not in exec_obj:
+        return None
+    tax = 0.0
+    if "tax" in exec_obj:
+        tax = safe_float(exec_obj.get("tax"), 0.0)
+    elif "secFee" in exec_obj:
+        tax = safe_float(exec_obj.get("secFee"), 0.0)
+    return safe_float(exec_obj.get("commission"), 0.0) + tax
+
+
 # ---------------------------------------------------------------------------
 # [핵심 2] 실물 매도 FILLED 정산 · 세후 순익 복리 산입 · 1~12층 순수 원가 보존 · 양방향 쉴드 각인 (Case 69, 70, 71)
 # ---------------------------------------------------------------------------
@@ -616,6 +633,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     filled_qty: int,
     avg_fill_price: float,
     sell_mode: str,
+    actual_sell_fees_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     🎯 1 ~ 🎯 4 & Case 19, 59, 60, 61, 65, 69, 70, 71:
@@ -632,6 +650,23 @@ async def _commit_filled_sell_and_reanchor_ledger(
     3) 🚨 [Case 61, Case 65, Case 69 & Case 70 매도/0주 싸이클 종료 후 60.0초 타임쉴드 & 15.0초 그레이스 쉴드 동시 각인]
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
+    # Corrected 2026-11-01: the draft synced only once, ever. Refresh at most
+    # once a day so a changed account tier is picked up, and never block a sell
+    # on a sync failure (fall back to the previous / legacy rate).
+    _synced_at = safe_float(st.get("us_commission_rate_synced_at"), 0.0)
+    if st.get("round_trip_fee_rate_pct") is None or (time.time() - _synced_at > 86400.0):
+        try:
+            one_way = await context.api.get_us_commission_rate()
+            if one_way is not None:
+                await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    us_commission_rate=one_way,
+                    round_trip_fee_rate_pct=one_way * 200.0,
+                    us_commission_rate_synced_at=time.time(),
+                )
+                st = context.ledger.get_state(TARGET_SYMBOL)
+        except Exception:
+            logger.warning("Commission sync unavailable; using legacy settlement", exc_info=True)
     buckets = buckets_from_dicts(st.get("buckets", []))
     fill_p = round(max(0.01, safe_float(avg_fill_price, 0.01)), 4)
     q_filled = max(1, safe_int(filled_qty, 1))
@@ -749,6 +784,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
         sold_qty=sold_q,
         sell_exec_price=fill_p,
         sold_actual_cost_usd=sold_actual_cost,
+        actual_sell_fees_usd=actual_sell_fees_usd,
+        round_trip_fee_rate_pct=st.get("round_trip_fee_rate_pct"),
     )
     gross_pnl = pnl_info["gross_pnl_usd"]
     fee_usd = pnl_info["fee_usd"]
@@ -933,6 +970,7 @@ async def sync_pending_sell_order_plugin(
                 filled_qty=eff_q,
                 avg_fill_price=eff_p,
                 sell_mode=sell_mode,
+                actual_sell_fees_usd=_extract_sell_fees_usd(exec_obj),
             )
 
         if ord_status in ("CANCELED", "REJECTED") and filled_q == 0:
@@ -979,6 +1017,7 @@ async def sync_pending_sell_order_plugin(
                     filled_qty=(f_qty if f_qty > 0 else ordered_qty),
                     avg_fill_price=(f_avg if f_avg > 0.0 else target_p),
                     sell_mode=sell_mode,
+                    actual_sell_fees_usd=_extract_sell_fees_usd(f_exec),
                 )
 
         eval_epoch = mark_sell_monitor_60s_cycle_shield(

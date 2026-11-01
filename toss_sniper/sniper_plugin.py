@@ -58,6 +58,13 @@ from toss_api import (
 
 logger = logging.getLogger("toss_sniper.sniper_plugin")
 
+
+def is_late_regular_new_cycle_cutoff_window(now_est=None):
+    """15:30 inclusive to 16:00 exclusive, New York exchange local time."""
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    return dt.weekday() < 5 and (dt.hour == 15 and dt.minute >= 30)
+
+
 # 순수 현재가 지정가 매수 주문 발주 후 미체결 최대 대기 시간(초) — 상향 추격 정정 없이 60초 미체결 시 안전 취소
 BUY_ORDER_MAX_WAIT_SEC: float = 60.0
 
@@ -619,6 +626,8 @@ async def execute_seed_protected_buy_gate_plugin(
     # -> 0주 싸이클 종료 후 60.0초 타임쉴드 경과 확인 완료 뒤 실시간 현재가를 직접 조회하여 '현재가 지정가(LIMIT)'로 1층 산입!
     # -----------------------------------------------------------------------
     if is_zero_shares:
+        if is_late_regular_new_cycle_cutoff_window(dt_now):
+            return {"status": "HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF"}
         async with context.in_memory_ordering_lock:
             async with context.dual_strike_mutex:
                 st_now = context.ledger.get_state(TARGET_SYMBOL)
@@ -793,6 +802,10 @@ async def execute_seed_protected_buy_gate_plugin(
             anchor_price=anchor_p,
             l2_book_price=upper_wma_p,
         )
+
+        if (reentry_sig.get("signal_type") == "BREAKOUT_RELOAD"
+                and is_late_regular_new_cycle_cutoff_window(dt_now)):
+            return {"status": "HOLD_LATE_SESSION_BREAKOUT_CUTOFF"}
 
         # 고점 부근 어정쩡한 횡보 구간(-1.00% < chg < +1.00%)이면 매수를 패스하여 데드캣 이중 소진 차단!
         if not bool(reentry_sig.get("should_buy")):
