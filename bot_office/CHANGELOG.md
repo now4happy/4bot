@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.3 · 2026-11-01 22:54 (KST)
+- 파일: board.html, office_board.py
+- 내용: feat: 상황판 정리 — 마인드맵 탭 삭제·탭 순서·신호등 번호순·오늘 할 일 삭제 (사무실 v1.0.61)
+- 브랜치: staging
+
 ## v1.1.2 · 2026-11-01 21:54 (KST)
 - 파일: board.html, server.py, thought_mindmap.html
 - 내용: feat: 상황판 마인드맵 탭 추가 (생각의 연결 v1.3, 보기 전용)
