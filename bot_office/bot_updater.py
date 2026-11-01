@@ -28,6 +28,8 @@
 #                       (보관만, 실제 설치는 서버 직접 — 다른 봇 업데이트가 같이 막히지 않게 함)
 #  · 사무실 v1.0.81 (2026-11-01): 업데이터 시작 때 alert-hub가 설치 안 돼 있으면 자동 설치 시도
 #                       (venv·.env·테스트·cron, 기존 .env·cron은 건드리지 않음, 실패해도 봇 업데이트는 계속)
+#  · 사무실 vNEXT (2026-11-01): hub 자동 설치의 unittest를 hub 폴더 안에서 실행하도록 고침
+#                       (절대 경로 -s/-t 조합은 tests 폴더를 import할 수 없어 실패했음)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -1024,7 +1026,7 @@ def hub_install():
                     os.chown(env_path, OWNER.pw_uid, OWNER.pw_gid)
             except Exception:
                 pass
-        rc, out = _run_as_owner(HUB_PY, "-m", "unittest", "discover", "-s", os.path.join(HUB_DIR, "tests"), "-t", HUB_DIR, timeout=300)
+        rc, out = _run_as_owner("sh", "-c", "cd " + HUB_DIR + " && " + HUB_PY + " -m unittest discover -s tests", timeout=300)
         if rc != 0:
             return "alert-hub 설치 실패: 테스트 실패 (cron을 넣지 않았습니다) (" + out[-200:] + ")"
         rc, out = _run_as_owner(HUB_PY, "-m", "alert_hub", "test", timeout=120)
