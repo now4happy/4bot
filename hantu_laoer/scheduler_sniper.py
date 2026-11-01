@@ -29,6 +29,32 @@ from scheduler_core import is_market_open
 from assassin_ledger import AssassinLedger
 from global_throttle import GlobalThrottle # 🚨 전역 통제소
 
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
+
 def _safe_float(val):
     try:
         f_val = float(str(val or 0.0).replace(',', ''))
@@ -172,6 +198,7 @@ async def _retry_api(func, *args, timeout=45.0, default=None, **kwargs):
     return default
 
 async def scheduled_sniper_monitor(context):
+    _hub_beat('1번 한투 라오어')
     job = getattr(context, 'job', None)
     app_data = getattr(job, 'data', {}) if job else {}
     if not isinstance(app_data, dict): app_data = {}

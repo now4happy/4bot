@@ -30,12 +30,39 @@
 #                       (venv·.env·테스트·cron, 기존 .env·cron은 건드리지 않음, 실패해도 봇 업데이트는 계속)
 #  · 사무실 v1.0.82 (2026-11-01): hub 자동 설치의 unittest를 hub 폴더 안에서 실행하도록 고침
 #                       (절대 경로 -s/-t 조합은 tests 폴더를 import할 수 없어 실패했음)
+#  · 사무실 vNEXT (2026-11-01): alert-hub 연동 1차 — 전 봇 하트비트 + 사무실·팬딩 자율 알림 hub 복사 (기존 전송·매매 로직 무변경)
 #  · 사무실 v1.0.82 (2026-11-01): 버전 숫자 최대 9 굴림 — 마지막 숫자가 9를 넘으면 중간을 올리고 마지막을 0으로
 #                       (예: 1.0.81 다음은 1.1.0, 1.1.9 다음은 1.2.0, 1.9.9 다음은 2.0.0)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
+
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
  
 REPO = os.environ.get("U_REPO", "/home/gieokkim")
 TG_CFG = os.environ.get("U_TG", "/etc/bot-office/telegram.json")
@@ -1085,6 +1112,7 @@ def main():
     last = 0.0
     offset = st.get("offset")
     while True:
+        _hub_beat('6번 업데이트 비서')
         if time.time() - last >= CHECK_EVERY:
             last = time.time()
             try:

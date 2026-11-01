@@ -90,6 +90,32 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
+
 VERSION = "1.10.3"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
@@ -1291,6 +1317,7 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     sheet["notice_pending"] = not bool(sheet["msg_id"])
     if not sheet["notice_pending"]:
         sheet["notice_sent_at"] = now_kst().isoformat()
+        _hub_alert('5번 팬딩 가격표','info',text)
     return not sheet["notice_pending"]
 
 
@@ -1321,6 +1348,7 @@ def process_inbox(tg):
             print(f"가격표 처리 오류({n}번째):", type(e).__name__, e, flush=True)
             if n == 1 and meta.get("mode") != "history":
                 tg.send("⚠️ <b>팬딩 서버 판독 단계 실패</b>\n이미지 수신은 완료됐지만 AI 처리 실패. 2분 뒤 재시도합니다. /판독 · /진단 확인")
+                _hub_alert('5번 팬딩 가격표','warning','팬딩 서버 판독 단계 실패: 이미지 수신 완료, AI 처리 실패, 2분 뒤 재시도')
             if n < 5:                                 # 2분 뒤 다시 (Gemini 일시 장애 대비)
                 meta.update(tries=n, retry_at=time.time() + 120, last_error=str(e)[:200])
                 mf.write_text(json.dumps(meta, ensure_ascii=False))
@@ -1329,6 +1357,7 @@ def process_inbox(tg):
             if meta.get("mode") != "history":
                 tg.send(f"🚨 <b>팬딩 가격표 처리 실패</b> (5번 시도)\n{html.escape(str(e))[:300]}\n"
                         "윈도우 PC에서 <code>py fanding_fetch.py send</code> 로 다시 보내거나 가격표를 직접 확인해 주세요.")
+                _hub_alert('5번 팬딩 가격표','critical','팬딩 가격표 처리 실패 (5번 시도)')
         f.unlink(missing_ok=True)
         mf.unlink(missing_ok=True)
         if meta.get("mode") != "history":
@@ -1723,6 +1752,7 @@ def loop():
             tg.send(f"👋 <b>팬딩 봇 연결 완료</b> (v{VERSION})\n앞으로 팬딩 가격표 알림·주문 버튼은 여기로 와요.\n" + HELP_TEXT)
             save(HOME / "tg_offset.json", {"hello": True})
     while True:
+        _hub_beat('5번 팬딩 가격표')
         try:
             process_inbox(tg)
             recovery_tick(tg)

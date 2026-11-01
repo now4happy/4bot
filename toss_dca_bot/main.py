@@ -7,6 +7,32 @@ STEP_KEYS = ("s_day", "s_mode", "s_target_days", "last_exec_date", "sold_stage",
 
 # ---------------------------------------------------------------- v4.3.5 재생 로그 도우미 (매매 동작은 그대로)
 import re, signal
+
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
 CB_PREFIX = ("trade_on_", "trade_off_", "detail_", "setday_", "setamt_", "next_pause_", "next_sell_", "next_buy2_", "slist_")
 
 def _snap(sym, s, **vals):
@@ -361,6 +387,7 @@ async def scheduler_loop(client: TossApiClient):
     n_pass = 0
     while True:
         n_pass += 1; RL.count("scheduler_tick"); RL.tick()
+        _hub_beat('3번 토스 적립')
         try:
             now_kst, now_est = datetime.now(KST_TZ), datetime.now(EST_TZ)
             if runtime_info.get("date") != now_kst.strftime("%Y-%m-%d"):

@@ -19,6 +19,32 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent
 AUTH_PATH = Path(os.environ.get('BOT_OFFICE_AUTH', '/etc/bot-office/auth.json'))
 UNITS = ('han4384tubot.service', 'bithumb_bot.service', 'toss_sniper.service', 'toss_dca.service')
@@ -204,6 +230,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200,{'ok':True},cookie='office_session='+token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800'+('; Secure' if self.secure() else ''))
 
 if __name__=='__main__':
+    try:
+        def _hub_beat_loop():
+            while True:
+                _hub_beat('8번 사무실 비서')
+                time.sleep(60)
+        threading.Thread(target=_hub_beat_loop, daemon=True).start()
+    except Exception:
+        pass
     server=ThreadingHTTPServer(('127.0.0.1',8765),Handler)
     server.daemon_threads=True
     server.serve_forever()

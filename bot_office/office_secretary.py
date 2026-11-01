@@ -14,6 +14,32 @@
 # ==========================================================
 import html, json, os, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
+try:
+    import sys as _hub_sys
+    _HUB_ROOT = "/home/gieokkim/alert-hub"
+    if _HUB_ROOT not in _hub_sys.path:
+        _hub_sys.path.insert(0, _HUB_ROOT)
+    from alert_hub.notify import heartbeat as _hub_heartbeat, notify as _hub_notify
+except Exception:
+    _hub_heartbeat = None
+    _hub_notify = None
+
+def _hub_beat(bot):
+    try:
+        if _hub_heartbeat:
+            _hub_heartbeat(bot)
+    except Exception:
+        pass
+
+def _hub_alert(bot, level, text):
+    try:
+        if _hub_notify:
+            import re as _hub_re
+            _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
+    except Exception:
+        pass
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -335,6 +361,7 @@ def main():
     offset = st.get("offset")
     print("사무실 비서 대화 담당 시작", flush=True)
     while True:
+        _hub_beat('7번 비서')
         try:
             import pc_monitor
             pc_monitor.tick(tg)
