@@ -5,6 +5,12 @@
 - 사무실 v1.0.47 (2026-10-28): ① 토스 토큰 공유 연결 복구(10/27 다른 업로드로 지워졌던 것) — 2·3번 봇과 같은 토큰 사용
   ② 스나이퍼 현 장부 {"SOXL": {...}} 읽기 복구 ③ 간결 브리핑에 '토스 달러 확인'(2번 다음 1회분 + 3번 미국 적립 vs 보유 달러)
   ④ 봇 5개·서버 상태 한 줄 요약 (이상 있으면 기존처럼 상세)
+- 사무실 vNEXT (2026-11-02): '토스 달러 확인'을 현재 매매법 기준으로 다시 계산 (읽기 전용 · 주문·환전 없음)
+  ① 2번 스나이퍼 다음 1회 = 주수 × 매수가 (1회분 예산 그대로가 아님). toss_sniper 코드와 같은 식:
+     1회분 예산·Case 67 이중 캡핑(compute_golden8_quota_qty), 장부 가용현금·왕복 수수료(resolve_affordable_buy_qty),
+     0주 첫 진입 / 1층 공석 재장전 / 신저가 추매 갈래(sniper_plugin), 매수가능금액 0.2% 안전버퍼
+  ② 3번 적립은 실제 주문하는 main.py 규칙(+1%↑ ½, 오늘 완료·익절일 매수 없음)  ③ 조회 실패·가동 OFF는 0으로 두지 않고 '합산 제외' 표시
+  ④ 부족하면 내역(2번·3번 분리·보유 달러·부족액)과 함께 🚨 표시, 스나이퍼 당일 추가 매수 상한은 따로 (부족 판정 제외)
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
@@ -142,6 +148,14 @@ class Toss:
         items = (self._get(f"/api/v1/holdings?symbol={urllib.parse.quote(sym)}") or {}).get("items") or []
         it = items[0] if items and isinstance(items[0], dict) else {}
         return float(it.get("quantity") or 0), float(it.get("averagePurchasePrice") or 0), float(it.get("lastPrice") or 0)
+
+    def price(self, sym):
+        """현재가 — 3번 적립 toss_api.get_current_price 와 같은 /api/v1/prices. 값이 없으면 오류 (0으로 바꾸지 않음)"""
+        rows = self._get(f"/api/v1/prices?symbols={urllib.parse.quote(sym)}", account=False) or []
+        p = num(rows[0].get("lastPrice")) if isinstance(rows, list) and rows and isinstance(rows[0], dict) else 0.0
+        if p <= 0:
+            raise ValueError("현재가 없음")
+        return p
 
 
 # ------------------------------------------------------------------ 빗썸 (읽기 전용)
@@ -465,34 +479,188 @@ def sniper_ledger():
     return (best[1], best[2]) if best else (None, {})
 
 
+# ------------------------------------------------------------------ 2번 스나이퍼 다음 1회 (현재 매매법 · 원장 읽기 전용)
+# toss_sniper 코드(main 2026-11-01)의 식을 그대로 옮김. 원장 파일은 읽기만 한다.
+#  · 1회분 예산·목표 주수 = quant_engine.compute_golden8_quota_qty (Case 67: min(예산÷실제 매수가, 예산÷기준가))
+#  · 매수 가능 주수       = quant_engine.resolve_affordable_buy_qty (예산 상한 → 가용현금 → 매수가×(1+왕복 수수료))
+#  · 매수 갈래·매수가     = sniper_plugin.execute_seed_protected_buy_gate_plugin (0주 첫 진입 / 1층 공석 재장전 / 신저가 추매)
+#  · 토스 매수가능금액 0.2% 안전버퍼 = sniper_plugin 의 get_buying_power_usd(safety_buffer_pct=0.2)
+# 필요 달러는 '주수 × 매수가'. 1회분 예산 자체·자투리 절약금·예상 매도 대금은 필요 달러에도 보유 달러에도 더하지 않는다.
+# 수수료: 매수 주수 계산(resolve_affordable_buy_qty)은 toss_api 상수 ROUND_TRIP_FEE_RATE_PCT 를 쓴다.
+#   Case 86 계좌별 동기화 수수료(원장 round_trip_fee_rate_pct)는 매도 정산(calc_sell_realized_pnl)에만 쓰이므로 여기선 안 씀.
+SNIPER_BP_BUFFER_PCT = 0.2
+SNIPER_CONST_FALLBACK = {"ROUND_TRIP_FEE_RATE_PCT": 0.14, "PORTION_RATIO_LOCKED": 0.08}   # main 2026-11-01 toss_api.py 값
+
+
+def sniper_constants():
+    """toss_sniper/toss_api.py 의 상수를 실행하지 않고 글자로만 읽는다 → (값, 안내). 못 읽은 값은 main 기준값 + 안내."""
+    import ast
+    vals = {}
+    try:
+        body = ast.parse((SNIPER_DIR / "toss_api.py").read_text(encoding="utf-8")).body
+    except (OSError, SyntaxError, ValueError):
+        body = []
+    for node in body:
+        tgt = node.target if isinstance(node, ast.AnnAssign) else (
+            node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else None)
+        if isinstance(tgt, ast.Name) and tgt.id in SNIPER_CONST_FALLBACK and node.value is not None:
+            try:
+                vals[tgt.id] = float(ast.literal_eval(node.value))
+            except (ValueError, TypeError, SyntaxError):
+                pass
+    note = "" if len(vals) == len(SNIPER_CONST_FALLBACK) else "스나이퍼 상수 확인 실패 → main 기준값(수수료 0.14%·8%) 사용"
+    return {k: vals.get(k, v) for k, v in SNIPER_CONST_FALLBACK.items()}, note
+
+
+def _int(value):
+    """toss_api.safe_int 과 같음: 정수 근처면 반올림, 아니면 내림"""
+    f = num(value)
+    return int(round(f)) if abs(f - round(f)) < 1e-6 else int(math.floor(f))
+
+
+def _cents_floor(p):
+    return math.floor((p + 1e-9) * 100.0) / 100.0
+
+
+def golden8_target_qty(anchor_price, equity, seed, mode, exec_price, ratio):
+    """= quant_engine.compute_golden8_quota_qty → (목표 주수, 1회분 예산).
+    COMP_08PCT: 예산 = max(기준시드, 원가 기준 총자산) × 8% / FIXED_800: 예산 = 기준시드 × 8%"""
+    seed = max(100.0, seed)
+    budget = round((seed if mode == "FIXED_800" else max(seed, equity)) * ratio, 4)
+    qty = max(1, int(math.floor((budget + 1e-9) / max(0.01, anchor_price))))
+    if exec_price is not None and exec_price > 0:   # Case 67: 실제 매수가 기준 예산 상한 주수로 한 번 더 캡핑
+        qty = min(max(1, int(math.floor((budget + 1e-9) / max(0.01, exec_price)))), qty)
+    return qty, budget
+
+
+def affordable_buy_qty(target_qty, price, free_cash, broker_bp, budget, fee_pct):
+    """= quant_engine.resolve_affordable_buy_qty → (매수 주수, 주수 × 매수가). 수수료 포함 1주 값보다 현금이 적으면 0주."""
+    qty = max(0, int(target_qty))
+    if qty <= 0 or price <= 0:
+        return 0, 0.0
+    if budget is not None and budget > 0:
+        qty = min(max(1, int(math.floor((budget + 1e-9) / price))), qty)
+    cash = max(0.0, free_cash)
+    if broker_bp is not None and broker_bp >= 0:
+        cash = min(cash, broker_bp)
+    unit = price * (1.0 + fee_pct / 100.0)
+    if cash < unit:
+        return 0, 0.0
+    qty = max(0, min(qty, int(math.floor((cash + 1e-9) / unit))))
+    return qty, (round(qty * price, 4) if qty > 0 else 0.0)
+
+
+def _sniper_buckets(raw):
+    """= quant_engine.StratumBucket.from_dict (순수 원가: 단가 = 실제 원가 ÷ 주수). 앞쪽(0번)이 1층"""
+    out = []
+    for b in raw if isinstance(raw, list) else []:
+        if not isinstance(b, dict) or _int(b.get("qty")) <= 0:
+            continue
+        q = _int(b.get("qty"))
+        p = num(b.get("book_price"), num(b.get("buy_price"), 0.0))
+        cost = num(b.get("actual_cost_usd"), num(b.get("book_invested_usd"), q * max(0.0, p)))
+        if cost <= 0 and p > 0:
+            cost = q * p
+        if cost <= 0:
+            continue
+        cost, tag = round(cost, 4), str(b.get("lot_type") or "QUOTA_L1").upper().strip()
+        out.append({"qty": q, "cost": cost, "price": round(cost / q, 4), "lots": max(1, _int(b.get("lot_count"))),
+                    "upper": tag == "MERGED_UPPER" or (tag.startswith("GRID_L") and tag != "GRID_L1")})
+    return out
+
+
+def sniper_next_buy(led, live_price, consts):
+    """2번 스나이퍼 '다음 1회' 매수 계산. led = 원장 SOXL dict(읽기만), live_price = SOXL 현재가(실패면 None).
+    state: ok | no_cash(장부 가용현금이 수수료 포함 1주보다 적음 → 스나이퍼가 사지 않음) | off | pending(미체결 주문) | unavailable
+    ok: qty·price(매수가)·order_usd(주수×매수가)·need_usd(수수료·0.2% 안전버퍼까지 넣어 '있어야 할 매수가능금액')
+    갈래가 조건부(재장전·추매)면 조건이 맞는 순간의 가격으로 계산하고, 두 갈래가 가능하면 큰 쪽을 쓴다."""
+    if not isinstance(led, dict) or not led:
+        return {"state": "unavailable", "why": "원장(JSON) 없음"}
+    if not bool(led.get("is_active", True)):
+        return {"state": "off"}
+    if "initial_seed_usd" not in led or "free_cash_usd" not in led:
+        return {"state": "unavailable", "why": "원장에 기준시드·가용현금 없음"}
+    ratio, fee = consts["PORTION_RATIO_LOCKED"], consts["ROUND_TRIP_FEE_RATE_PCT"]
+    seed, free = max(100.0, num(led.get("initial_seed_usd"))), max(0.0, num(led.get("free_cash_usd")))
+    buckets = _sniper_buckets(led.get("buckets"))
+    equity = free + sum(b["cost"] for b in buckets)   # 원가 기준 총자산 (시장 평가액 아님)
+    mode = "COMP_08PCT"   # 스나이퍼는 원장을 읽을 때 portion_mode 를 COMP_08PCT 로 고정 (toss_api.py 원장 정규화)
+    raw_mode = str(led.get("portion_mode") or mode).upper().strip()
+    base = {"free": round(free, 2), "fee": fee, "note": "" if raw_mode == mode else f"원장 표기 {raw_mode} → 스나이퍼는 COMP_08PCT로 계산"}
+    if str(led.get("buy_order_id") or "").strip():   # 이미 낸 주문이 '다음 1회' (따로 또 세지 않음)
+        q, p = max(1, _int(led.get("ordered_qty"))), num(led.get("buy_price"))
+        return dict(base, state="pending", qty=q, price=p, order_usd=round(q * p, 2))
+    live = _cents_floor(live_price) if live_price and live_price > 0 else None
+    anchor = num(led.get("anchor_price"))
+    if not buckets:   # 0주 → 60초 타임쉴드 뒤 현재가 지정가로 첫 1층 (15:30~16:00 ET 엔 새 사이클 진입 안 함)
+        if live is None:
+            return dict(base, state="unavailable", why="SOXL 현재가 조회 불가")
+        branch, cond = "첫 1층 진입", f"0주 → 현재가 ${live:,.2f} 지정가"
+        cands = [(max(0.01, live), anchor if anchor > 0 else max(0.01, live))]
+    elif buckets[0]["upper"]:   # 1층 공석(상단만 보유) → 10분 게이트 눌림 -1% 또는 돌파 +1% 때만 재장전
+        uq = sum(b["qty"] for b in buckets)
+        wma = round(round(sum(b["cost"] for b in buckets), 4) / uq, 4) if uq else 0.0
+        ref = round(anchor if anchor > 0 else (wma if wma > 0 else (live or 0.0)), 4)
+        if ref <= 0:
+            return dict(base, state="unavailable", why="재장전 기준가 없음")
+        pull, brk = round(ref * 0.99, 2), round(ref * 1.01, 2)
+        branch = "1층 재장전"
+        chg = (live_price - ref) / ref * 100.0 if live is not None else 0.0
+        if live is not None and (chg <= -1.0 or chg >= 1.0):
+            cands, cond = [(max(0.01, live), ref)], f"현재가 ${live:,.2f}가 이미 조건 충족 ({chg:+.2f}%)"
+        else:
+            cands = [(pull, ref), (brk, ref)]
+            cond = f"조건부: ${pull:,.2f} 이하 또는 ${brk:,.2f} 이상 (돌파는 15:30~16:00 ET 제외)"
+    else:   # 활성 1층 → 기억저가 대비 4단 와이드 신저가 추매 (지정가 = min(현재가, 조건가))
+        lots = sum(b["lots"] for b in buckets)
+        drop = -1.0 if lots <= 4 else (-2.0 if lots <= 8 else (-3.5 if lots <= 10 else -5.5))
+        b0 = buckets[0]["price"]
+        a = num(led.get("anchor_price"), b0)
+        ref = min([x for x in (b0, a, num(led.get("cycle_min_buy_price"), a)) if x > 0] or [b0])
+        trig = _cents_floor(ref * (1.0 + drop / 100.0))
+        branch = "신저가 추매"
+        chg = (live_price - ref) / ref * 100.0 if live is not None and ref > 0 else 0.0
+        if live is not None and chg <= drop:
+            cands, cond = [(max(0.01, min(live, trig)), ref)], f"현재가 ${live:,.2f}가 이미 조건 충족 ({chg:+.2f}%)"
+        else:
+            cands = [(max(0.01, trig), ref)]
+            cond = f"조건부: ${trig:,.2f} 이하 (기억저가 ${ref:,.2f}의 {drop:.1f}% · 보유 {lots}회차)"
+    best = None
+    for px, ref_p in cands:
+        tq, budget = golden8_target_qty(ref_p, equity, seed, mode, px, ratio)
+        q, spent = affordable_buy_qty(tq, px, free, None, budget, fee)   # 장부 가용현금 한도 (토스 잔고와 따로)
+        cur = {"qty": q, "price": px, "anchor": ref_p, "budget": budget, "target": tq, "order_usd": round(spent, 2)}
+        if best is None or (cur["order_usd"], px) > (best["order_usd"], best["price"]):
+            best = cur
+    res = dict(base, branch=branch, cond=cond, **best)
+    if best["qty"] <= 0:
+        return dict(res, state="no_cash", unit=round(best["price"] * (1.0 + fee / 100.0), 2))
+    # 스나이퍼가 이 주수를 사려면: 매수가능금액 × (1 − 0.2%) ≥ 주수 × 매수가 × (1 + 왕복 수수료)
+    # (+0.0001: 스나이퍼가 버퍼 적용 금액을 소수 4자리로 반올림하는 만큼 — 1센트 경계에서 1주 모자라는 것 방지)
+    need = (best["qty"] * best["price"] * (1.0 + fee / 100.0) + 0.0001) / (1.0 - SNIPER_BP_BUFFER_PCT / 100.0)
+    return dict(res, state="ok", need_usd=math.ceil(need * 100.0 - 1e-6) / 100.0)
+
+
+def sniper_qty_with_bp(sn, usd):
+    """지금 토스 매수가능금액(usd)으로 스나이퍼가 실제 살 주수 (sniper_plugin 과 같이 0.2% 버퍼 적용)"""
+    bp = round(max(0.0, usd) * (1.0 - SNIPER_BP_BUFFER_PCT / 100.0), 4)
+    return affordable_buy_qty(sn["target"], sn["price"], sn["free"], bp, sn["budget"], sn["fee"])[0]
+
+
 def sniper_plan():
-    """인피니트 스노우볼 v6.0(SOXL 순수 롱) 기준 필요 달러 → (최소, 최대, 상세 줄).
-    1회분 = 코어자산의 8%, 코어자산 = max(기준시드, 가용현금+투입원가-예비수혈금). 예비수혈은 최대 +6회분.
-    추매는 10분 게이트·신저가 조건이라 하루 횟수 상한이 없어 '최대'는 장부 가용현금 전액으로 본다."""
+    """(호환용 — 지금 브리핑 build() 는 쓰지 않는 section_money 전용) → (다음 1회 필요, 장부 가용현금까지, 상세 줄).
+    계산은 sniper_next_buy() 와 같다. 계산 못 하면 0이 아니라 '합산 제외'라고 줄에 적는다."""
     _, led = sniper_ledger()
-    if not led:
-        return 0.0, 0.0, ["↳ 스나이퍼 원장(JSON)을 찾지 못해 계산 보류 · 확인 필요"]
-    if led.get("is_active") is False:
-        return 0.0, 0.0, ["↳ 가동 OFF → 0"]
-    seed, free = num(led.get("initial_seed_usd")), num(led.get("free_cash_usd"))
-    invested = num(led.get("actual_invested_usd")) or sum(num(b.get("actual_cost_usd")) for b in (led.get("buckets") or []) if isinstance(b, dict))
-    injected = num(led.get("injected_reserve_usd"))
-    has_reserve = "used_reserve_portions_cnt" in led   # 예비 수혈은 v6.0 장부에만 있음 (현재 v3.0 은 없음)
-    left = max(0, 6 - int(num(led.get("used_reserve_portions_cnt"))))
-    core = max(seed, free + invested - injected)
-    portion = round(core * 0.08, 4)
-    if portion <= 0:
-        return 0.0, 0.0, ["↳ 기준시드/원장 값 없음 → 계산 보류 · 확인 필요"]
-    lines = [f"↳ 1회분 <b>${portion:,.2f}</b> (코어자산 ${core:,.2f}의 8%)",
-             f"↳ 장부 가용현금 ${free:,.2f} · 기준시드 ${seed:,.2f}"]
-    if free < portion * 0.30:
-        lines.append("↳ 🚨 가용현금이 1회분의 30% 미만 → 시드고갈, 자투리 매수 차단")
-        need_min = need_max = 0.0
-    else:
-        need_min, need_max = min(portion, free), free
-    if has_reserve:
-        lines.append(f"↳ 예비 수혈 +{left}회분 가능 (최대 ${left * portion:,.2f} · 토스 계좌에 입금돼 있으면 자동)")
-    return need_min, need_max, lines
+    consts, _ = sniper_constants()
+    try:
+        live = Toss().price("SOXL")
+    except Exception:
+        live = None
+    sn = sniper_next_buy(led, live, consts)
+    if sn["state"] != "ok":
+        return 0.0, 0.0, [f"↳ 2번 다음 1회 계산 안 됨({html.escape(str(sn.get('why') or sn['state']))}) → 합산 제외"]
+    return sn["need_usd"], max(sn["need_usd"], sn["free"]), [
+        f"↳ {sn['branch']} {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f} ({sn['cond']})"]
 
 
 SEEN = R / "var/lib/bot-office/briefing-calendar/seen.json"
@@ -635,46 +803,167 @@ def section_money(now):
     return summary + [""] + lines, tips
 
 
-def dca_us_need(toss, now):
-    """3번 적립의 다음 미국 세션 매수 예정 달러 (section_money 와 같은 규칙) → (금액, 상세)"""
-    cfg = load(TOSS_DIR / "dca_config.json", {})
-    day = us_session(now.astimezone(EST)).isoformat()
-    need, det = 0.0, []
-    if not cfg.get("is_master_active", True):
-        return 0.0, det
+def dca_plan(toss, cfg, us_day, kr_day):
+    """3번 적립 다음 세션 매수 예정 — 실제 주문하는 toss_dca_bot/main.py execute_100day_step 과 같은 규칙.
+    (dca_engine.evaluate_dca_decision·profit_lock 경로는 tg_controller.py 전용이고 main.py 는 부르지 않음)
+    · 전체 전원 OFF / 종목 OFF / 오늘 완료(last_exec_date) / pause·sell·decision → 매수 없음
+    · 익절 구간(tp1 이상 1차 · tp1×2 이상 2차, 아직 안 했으면)이면 그날은 익절 매도만 하고 매수 없음
+    · 수익률 +1.0% 이상(평단·보유 있음) → 기준금액 ½, 그 외 1배. 국내는 max(1, 금액÷현재가)주 × 현재가
+    · 잔고·가격 조회 실패 종목은 0으로 두지 않고 fail 로 빼서 표시
+    → {"master": bool, "USD": {...}, "KRW": {...}} — 통화마다 need(합계) · buy · skip · fail · note"""
+    out = {c: {"need": 0.0, "buy": [], "skip": [], "fail": [], "note": []} for c in ("USD", "KRW")}
+    out["master"] = bool(cfg.get("is_master_active", True))
+    if not out["master"]:
+        return out
+    tp1, sr = num(cfg.get("tp1_pct", 10.0), 10.0), num(cfg.get("sr_pct", 20.0), 20.0)
     for sym, s in (cfg.get("stocks") or {}).items():
-        if (not isinstance(s, dict) or not s.get("enabled", True) or s.get("s_mode", "buy_1") not in ("buy_1", "buy_2")
-                or s.get("currency") == "KRW" or s.get("last_exec_date") == day):
+        if not isinstance(s, dict) or not s.get("enabled", True):
             continue
-        base, half = float(s.get("base_amount") or 40.0), False
+        is_kr = s.get("currency") == "KRW"
+        cur_code = "KRW" if is_kr else "USD"
+        o, day = out[cur_code], (kr_day if is_kr else us_day).isoformat()
+        sym_t = html.escape(str(sym))
+        if s.get("last_exec_date") == day:
+            o["skip"].append(f"{sym_t} 완료")
+            continue
+        mode = s.get("s_mode", "buy_1")
+        if mode == "decision" and _int(s.get("s_day", 0)) < _int(s.get("s_target_days", 100)):
+            mode = "buy_1"   # main.py ensure_stock_cycle 과 같음
+        if mode not in ("buy_1", "buy_2"):
+            continue
+        base = num(s.get("base_amount", 100000.0 if is_kr else 40.0))
         try:
-            q, avg, price = toss.holding(sym)
-            half = q > 0 and avg > 0 and price > 0 and (price / avg - 1) * 100 >= 1.0
+            qty, avg, cur = toss.holding(sym)
+            if is_kr and cur <= 0:
+                cur = toss.price(sym)
         except Exception:
-            pass
-        amt = base / 2 if half else base
-        need += amt; det.append(f"{sym} ${amt:,.0f}{'(½)' if half else ''}")
-    return need, det
+            o["fail"].append(f"{sym_t} 잔고 조회 불가(1배면 {money(base, cur_code)})")
+            continue
+        if qty <= 0 and s.get("has_held"):
+            o["skip"].append(f"{sym_t} 잔고 0주(목록 제외 예정)")
+            continue
+        prof = (cur - avg) / avg * 100 if avg > 0 and cur > 0 else 0.0
+        sold = _int(s.get("sold_stage", 0)) if prof >= tp1 else 0
+        stage = 1 if (tp1 <= prof < tp1 * 2 and sold < 1) else (2 if (tp1 * 2 <= prof < tp1 * 3 and sold < 2) else 0)
+        sell_q = (min(int(qty), max(1, int(round(qty * sr / 100.0)))) if is_kr else round(qty * sr / 100.0, 4)) if stage else 0
+        if qty > 0 and avg > 0 and stage and sell_q > 0:
+            o["skip"].append(f"{sym_t} 익절 {stage}차 예정({prof:+.1f}%)")
+            continue
+        half = avg > 0 and qty > 0 and prof >= 1.0
+        amt = base / 2.0 if half else base
+        cost = max(1, int(amt // cur)) * cur if is_kr else amt
+        o["need"] += cost
+        o["buy"].append(f"{sym_t} {money(cost, cur_code)}({'½' if half else '1배'})")
+        if s.get("profit_lock"):
+            o["note"].append(sym_t)
+    return out
 
 
 def section_dollar_check(now=None):
-    """토스 달러 한 줄 확인: 2번 다음 1회분 + 3번 미국 적립 vs 토스 보유 달러. 부족하면 얼마 환전할지까지"""
+    """토스 달러 확인 — 2번 스나이퍼 다음 1회 + 3번 미국 적립 예정 vs 토스 USD 매수가능금액 (읽기 전용, 주문·환전 없음)
+    · 부족 = (2번 다음 1회[수수료·0.2% 안전버퍼 포함] + 3번 미국 적립) − 토스 USD 매수가능금액. 2·3번이 같은 계좌면 보유 달러는 1번만 뺀다.
+    · 조회 불가·가동 OFF 항목은 0으로 두지 않고 합산에서 빼며 그 사실을 표시한다.
+    · 2번 당일 추가 매수(재장전·추매는 조건 충족 때만)는 상한만 따로 보여 주고 부족 판정에 넣지 않는다.
+    · 예상 매도 대금은 넣지 않는다 (체결돼 원장·잔고에 반영된 현금만)."""
     now = now or datetime.now(timezone.utc)
-    toss = Toss()
-    sn_min, _, _ = sniper_plan()
+    toss, other, excluded = Toss(), Toss(SNIPER_DIR), []
+    us_day, kr_day = us_session(now.astimezone(EST)), kr_session(now.astimezone(KST))
     try:
-        us_need, det = dca_us_need(toss, now)
         usd = toss.buying_power("USD")
     except Exception as e:
-        return [f"💵 토스 달러 확인: 조회 실패 ({html.escape(type(e).__name__)})"]
-    need = sn_min + us_need
-    parts = f"2번 1회분 ${sn_min:,.2f} + 3번 적립 ${us_need:,.2f}"
+        usd = None
+        excluded.append(f"토스 보유 달러({html.escape(type(e).__name__)})")
+    # 2·3번은 같은 토스 키·같은 BROKERAGE 계좌를 쓰는 구조(toss_token_share.py). 다르면 경고만 하고 같은 계좌로 합산
+    acct = ("" if other.cid and other.cid == toss.cid and other.sec == toss.sec else
+            " · ⚠️ 2번 토스 인증 확인 불가 — 같은 계좌로 보고 합산" if not other.cid else
+            " · ⚠️ 2번·3번 토스 인증이 달라 같은 계좌 합산이 맞는지 확인 필요")
+    lines = [f"💵 <b>토스 달러 확인</b> · 미국장 {us_day.strftime('%m/%d')}" + acct]
+
+    # 2번 스나이퍼 다음 1회
+    consts, const_note = sniper_constants()
+    _, led = sniper_ledger()
+    live = None
+    if led and bool(led.get("is_active", True)):
+        try:
+            live = toss.price("SOXL")
+        except Exception:
+            live = None
+    sn = sniper_next_buy(led, live, consts)
+    sn_need = 0.0
+    if sn["state"] == "ok":
+        sn_need = sn["need_usd"]
+        lines.append(f"🎯 2번 다음 1회 · {sn['branch']}: {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f}")
+        lines.append(f"   ↳ {sn['cond']}" + (" · 현재가 조회 불가→조건가 기준" if live is None else ""))
+        lines.append(f"   ↳ 1회분 예산 ${sn['budget']:,.2f} · 수수료·안전버퍼 포함 필요 ${sn_need:,.2f}")
+        if usd is not None:
+            now_q = sniper_qty_with_bp(sn, usd)
+            if now_q < sn["qty"]:
+                lines.append("   ↳ 지금 보유 달러로는 " + (f"{now_q}주만 가능" if now_q else "매수 불가(0주)"))
+    elif sn["state"] == "no_cash":
+        lines.append(f"🎯 2번 다음 1회: 매수 불가 — 장부 가용현금 ${sn['free']:,.2f}가 수수료 포함 1주 ${sn['unit']:,.2f}보다 적음"
+                     " (달러를 넣어도 스나이퍼는 사지 않음 · 합산 제외)")
+    elif sn["state"] == "off":
+        lines.append("🎯 2번 스나이퍼: 가동 OFF → 매수 없음 (합산 제외)")
+    elif sn["state"] == "pending":
+        lines.append(f"🎯 2번: 미체결 매수 {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f} 진행 중")
+        excluded.append("2번 미체결 주문(보유 달러에서 이미 빠졌을 수 있음)")
+    else:
+        lines.append("🎯 2번 다음 1회: 계산 불가")
+        excluded.append(f"2번 {html.escape(str(sn.get('why') or '계산 불가'))}")
+    for n in (sn.get("note"), const_note):
+        if n:
+            lines.append("   ↳ " + html.escape(n))
+
+    # 3번 적립
+    cfg = load(TOSS_DIR / "dca_config.json", None)
+    if isinstance(cfg, dict):
+        dca = dca_plan(toss, cfg, us_day, kr_day)
+    else:
+        dca = {"master": True, **{c: {"need": 0.0, "buy": [], "skip": [], "fail": [], "note": []} for c in ("USD", "KRW")}}
+        excluded.append("3번 적립 설정 파일 읽기 실패")
+    U, K = dca["USD"], dca["KRW"]
+    if not dca["master"]:
+        lines.append("🔁 3번 적립: 전체 전원 OFF → 매수 없음 (합산 제외)")
+    else:
+        lines.append(f"🔁 3번 적립 미국 {len(U['buy'])}종목: ${U['need']:,.2f}"
+                     + (f" [{', '.join(U['buy'])}]" if U["buy"] else " (예정 없음)"))
+        if U["skip"]:
+            lines.append("   ↳ 매수 없음: " + ", ".join(U["skip"]))
+        if U["note"]:
+            lines.append("   ↳ profit_lock 표시(" + ", ".join(U["note"]) + ")는 실제 주문 코드가 읽지 않아 매수로 셈")
+        excluded += [f"3번 {f}" for f in U["fail"]]
+
+    total = round(sn_need + U["need"], 2)
+    sn_part = (f"2번 ${sn_need:,.2f}" if sn["state"] == "ok" else
+               {"off": "2번 OFF", "no_cash": "2번 매수 불가"}.get(sn["state"], "2번 합산 제외"))
+    dca_part = f"3번 ${U['need']:,.2f}" if dca["master"] else "3번 OFF"
+    lines.append(f"🧾 당일 예정 합계 ${total:,.2f} ({sn_part} + {dca_part}) · 보유 "
+                 + (f"${usd:,.2f}" if usd is not None else "조회 불가"))
     if usd is None:
-        return [f"💵 토스 달러 확인: 보유 조회 실패 · 필요 ${need:,.2f} ({parts})"]
-    if usd + 0.005 < need:
-        return [f"🚨 <b>토스 달러 ${need - usd:,.2f} 부족</b> — 필요 ${need:,.2f} ({parts}) · 보유 ${usd:,.2f}",
-                "   ↳ 미국장 전에 토스에서 환전해 주세요."]
-    return [f"✅ 토스 달러 충분 — 필요 ${need:,.2f} ({parts}) · 보유 ${usd:,.2f}"]
+        lines.append("❔ 보유 달러를 몰라 부족 여부 판정 보류")
+    elif usd + 0.005 < total:
+        lines.append(f"🚨 <b>토스 달러 ${total - usd:,.2f} 부족</b> — 미국장 전에 토스에서 환전해 주세요")
+    else:
+        lines.append(("✅ 계산된 항목 기준 충분" if excluded else "✅ 토스 달러 충분") + f" (여유 ${usd - total:,.2f})")
+    if sn["state"] == "ok":
+        extra = max(0.0, sn["free"] + U["need"] - usd) if usd is not None else 0.0
+        lines.append(f"➕ 2번 당일 추가 매수(조건 충족 때만 · 부족 판정 제외): 1회당 최대 ${sn['budget']:,.2f}"
+                     f" · 장부 가용현금 ${sn['free']:,.2f}까지" + (f" → 다 쓰려면 약 ${extra:,.2f} 더" if extra > 0.005 else ""))
+
+    # 국내 적립 (원화 — 달러 합산에 넣지 않음)
+    if dca["master"] and (K["buy"] or K["fail"]):
+        line = f"🇰🇷 3번 국내 적립 {kr_day.strftime('%m/%d')}: {K['need']:,.0f}원" + (f" [{', '.join(K['buy'])}]" if K["buy"] else "")
+        if K["need"] > 0:
+            try:
+                krw = toss.buying_power("KRW")
+                line += f" · 토스 원화 {K['need'] - krw:,.0f}원 부족" if krw < K["need"] else " · 원화 충분"
+            except Exception:
+                line += " · 원화 잔액 조회 불가"
+        lines.append(line + " (달러 합산 제외)")
+        excluded += [f"3번 {f}" for f in K["fail"]]
+    if excluded:
+        lines.append("⚠️ 합산 제외(조회 불가 등): " + "; ".join(excluded) + " → 실제 필요액은 더 클 수 있음")
+    return lines
 
 
 def status_one_line():
