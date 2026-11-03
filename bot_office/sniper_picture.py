@@ -2,6 +2,7 @@
 # ==========================================================
 # FILE: /opt/bot-office/sniper_picture.py   (초안 · 버전 번호는 Muse 가 기존 표기에 맞춰 부여)
 # 2번 토스 스나이퍼 매매 그림 데이터 (/api/sniper-picture · 로그인 필요 · 보기 전용)
+# 사무실 vNEXT (2026-11-03): v2.0.0 현황판 — 본 그리드 그대로 + 서브 그리드 별도 섹션 + 예비수혈 경고 + 골든포켓 조건부 표시 (읽기 전용)
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
 #  · 계산을 새로 만들지 않는다: toss_sniper/quant_engine.py 의 원본 함수를 그대로 부른다.
@@ -31,7 +32,7 @@ _CACHE = {"at": 0.0, "data": None}
 _ENGINE = {}
 
 _NEEDED_NAMES = {"DEFAULT_INITIAL_SEED_USD", "PORTION_RATIO_LOCKED", "REANCHOR_NET_BUFFER_MULT",
-                 "ROUND_TRIP_FEE_RATE_PCT", "MAX_GRID_TIERS_7"}
+                 "ROUND_TRIP_FEE_RATE_PCT", "MAX_GRID_TIERS_7", "EST_TZ"}  # v2.0.0 quant_engine 이 toss_api 에서 EST_TZ 를 직접 import 함
 
 
 def _engine():
@@ -51,7 +52,7 @@ def _engine():
             elif isinstance(node, ast.Assign) and any(getattr(t, "id", "") in _NEEDED_NAMES for t in node.targets):
                 keep.append(node)
         stub = types.ModuleType("toss_api")
-        stub.__dict__.update({"math": math, "Any": object, "Dict": dict, "List": list, "Optional": object})
+        stub.__dict__.update({"math": math, "Any": object, "Dict": dict, "List": list, "Optional": object, "ZoneInfo": ZoneInfo})
         exec(compile(ast.Module(body=keep, type_ignores=[]), "toss_api(subset)", "exec"), stub.__dict__)
         if not (hasattr(stub, "safe_float") and hasattr(stub, "safe_int")):
             raise ImportError("safe_* missing")
@@ -198,6 +199,52 @@ def build(state, live_price=None, now_est=None, price_note=""):
     for t in tiers:
         t["reached"] = bool(known and t["target"] and lp >= t["target"])
 
+    # 서브 그리드 (v2.0.0): 본 그리드와 별도 섹션. 본 층 번호와 섞지 않는다.
+    sub_buckets = summary.get("sub_buckets") or []
+    sub_active_l1 = bool(summary.get("has_sub_active_l1")) and bool(sub_buckets)
+    sub_tiers, sub_targets = [], []
+    for i, b in enumerate(sub_buckets):
+        is_l1 = sub_active_l1 and i == 0
+        no = (i + 1) if sub_active_l1 else (i + 2)
+        pct = rise_l1 if is_l1 else rise_up
+        tgt = summary.get("sub_l1_target_price") if is_l1 else _ceil_target(b.book_price, rise_up)
+        sub_tiers.append({"tier": no, "kind": "l1" if is_l1 else "upper", "qty": int(b.qty), "price": round(b.book_price, 4),
+                          "lot_count": int(b.lot_count), "lot_type": b.lot_type, "target": tgt, "target_pct": pct})
+    sub_upper = [x for x in sub_tiers if x["kind"] == "upper"]
+    if sub_active_l1 and sub_tiers:
+        sub_targets.append({"kind": "l1", "price": sub_tiers[0]["target"], "pct": rise_l1, "tiers": [sub_tiers[0]["tier"]], "locked": False})
+    if len(sub_upper) > 1:
+        wma_t = float(summary.get("sub_upper_wma_target_price") or 0.0)
+        for x in sub_upper:
+            sub_targets.append({"kind": "indiv", "price": x["target"], "pct": rise_up, "tiers": [x["tier"]], "locked": False})
+        if wma_t > 0:
+            sub_targets.append({"kind": "wma", "price": wma_t, "pct": rise_up, "tiers": [x["tier"] for x in sub_upper], "locked": False,
+                                "avg_price": float(summary.get("sub_upper_wma_price") or 0.0)})
+    for x in sub_targets:
+        x["reached"] = bool(known and x["price"] > 0 and lp >= x["price"])
+    for x in sub_tiers:
+        x["reached"] = bool(known and x["target"] and lp >= x["target"])
+    sub_status = {"enabled": bool(summary.get("sub_grid_enabled", True)), "has_buckets": bool(sub_buckets),
+                  "frozen_days": int(summary.get("sub_consec_frozen_days") or 0),
+                  "frozen_trigger": int(summary.get("sub_frozen_days_trigger") or 5),
+                  "cap_reached": bool(summary.get("sub_cap_reached")),
+                  "triggered": bool(summary.get("is_sub_grid_triggered")),
+                  "shares": int(summary.get("sub_held_shares") or 0),
+                  "invested_usd": round(float(summary.get("actual_invested_sub_usd") or 0.0), 2)}
+    reserve = {"injected_usd": round(float(summary.get("injected_reserve_usd") or 0.0), 2),
+               "used_portions": int(summary.get("used_reserve_portions_cnt") or 0),
+               "avail_portions": int(summary.get("avail_reserve_portions") or 0),
+               "max_portions": int(summary.get("max_reserve_portions") or 6),
+               "waiting_deposit": bool(summary.get("waiting_reserve_deposit")),
+               "required_deposit_usd": round(float(summary.get("required_reserve_deposit_usd") or 0.0), 2)}
+    golden = {"active": bool(summary.get("has_golden_pocket")),
+              "mode": str(summary.get("golden_allin_mode") or "NONE"),
+              "qty": int(summary.get("golden_pocket_qty") or 0),
+              "price": round(float(summary.get("golden_pocket_price") or 0.0), 4),
+              "cost_usd": round(float(summary.get("golden_pocket_cost_usd") or 0.0), 2),
+              "target_price": round(float(summary.get("golden_pocket_target_price") or 0.0), 4),
+              "gain_pct": round(float(summary.get("golden_pocket_gain_pct") or 0.0), 2)}
+
     engine = None
     if known and buckets:
         ev = qe.evaluate_multi_grid_sell_targets(buckets, lp, rise_l1_pct=rise_l1, rise_upper_pct=rise_up,
@@ -210,6 +257,7 @@ def build(state, live_price=None, now_est=None, price_note=""):
     holding = {"shares": held, "tiers_count": len(buckets), "has_active_l1": active_l1,
                "avg_price": round(float(summary.get("actual_avg_price") or 0.0), 4) if held else None,
                "invested_usd": round(float(summary.get("actual_invested_usd") or 0.0), 2) if held else None,
+               "sub_shares": int(summary.get("sub_held_shares") or 0), "total_shares": int(summary.get("held_shares") or 0) + int(summary.get("sub_held_shares") or 0),
                # 현재가를 모르면 미실현 손익은 계산하지 않는다 (quant_engine 은 모르면 평단으로 대신 계산해 0 이 나옴 → 거짓 0 방지)
                "unrealized_usd": round(float(summary.get("unrealized_pnl_usd") or 0.0), 2) if (held and known) else None,
                "unrealized_pct": round(float(summary.get("unrealized_rate_pct") or 0.0), 2) if (held and known) else None}
@@ -222,7 +270,7 @@ def build(state, live_price=None, now_est=None, price_note=""):
             "observed_kst": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"), "est_time": now_est.strftime("%m-%d %H:%M ET"),
             "session": sess, "is_active": bool(state.get("is_active", True)),
             "price": {"live": round(lp, 4) if known else None, "note": "" if known else (price_note or "no_snapshot")},
-            "tiers": tiers, "targets": targets, "holding": holding, "realized": realized, "engine": engine,
+            "tiers": tiers, "targets": targets, "sub_tiers": sub_tiers, "sub_targets": sub_targets, "sub": sub_status, "reserve": reserve, "golden": golden, "holding": holding, "realized": realized, "engine": engine,
             "fx": {"krw_per_usd": None, "note": "환율 미확인 · 달러만 표시"}}
 
 
