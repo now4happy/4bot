@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: defense_plugin.py
+# MODIFIED: defense_plugin.py · Case 78 세션 경계 선취소-후정산 선별 이식 (2번 v1.1.3, 2026-11-03)
 순수 롱(SOXL) 오버나이트 7층 골디락스 멀티 그리드(1층 공격수 + 2 ~ 6층 개별 완충층 + 통합 7층 본대) 지층관리 스나이퍼 전용 (Step 02 / 02):
 1) 🚨 [Case 66 봇 주문 진행 중 가로채기 차단 및 미결 매수/매도 즉시 정산 가드]
    원장에 미결 매수(buy_order_id) 또는 미결 매도(sell_order_id)가 존재할 때 reconcile 모듈이 호출되면,
@@ -22,6 +22,9 @@
    relock_stratum_on_bot_resume() 함수를 정식 제공하여 AST 심볼 임포트 무결성 100% 충족!
 5) 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 및 당일 시드보호 패스 카운터(daily_seed_protect_pass_cnt) 롤오버 ·
    16:00 EST 일일 결산 · 17:00 EST 일일 GC 및 3중 금고 스냅샷 백업(Case 68)
+6) 🛡️ [Case 78 선별 이식 · 2번 v1.1.3] 04:00 / 16:00 EST 잔류 주문 취소 직후, 원장에 남은 미결 매수/매도 주문을
+   기존 sync_pending_*_order_plugin() 으로 한 번 조회해 취소 전 부분/전량 체결분을 정식 정산한 뒤 주문번호를 비운다.
+   (원작 force_settle 인자는 가져오지 않음 · 조회가 아직 PENDING 이면 종전처럼 주문번호만 비우고 화해 로직에 맡김)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 72 완벽 준수
 """
 
@@ -530,6 +533,32 @@ async def relock_stratum_on_bot_resume(
 # ---------------------------------------------------------------------------
 # [핵심 2] 04:00 ~ 04:06 EST 프리장 개장 초기 호가 안정화 · 일일 카운터 롤오버 및 전일 미체결 청소
 # ---------------------------------------------------------------------------
+async def _case78_settle_after_cancel(
+    context: Any,
+    holdings: Dict[str, Dict[str, Any]],
+    prices: Dict[str, float],
+    dt_now: datetime,
+    tag: str,
+) -> None:
+    """Case 78 선별 이식: 세션 경계 취소 직후 미결 주문 체결분을 기존 sync 함수로 정산 (주문 새로 내지 않음)."""
+    st_c = context.ledger.get_state(TARGET_SYMBOL)
+    if str(st_c.get("sell_order_id") or "").strip():
+        try:
+            await sync_pending_sell_order_plugin(
+                context=context, holdings=holdings, prices=prices, now_est=dt_now
+            )
+        except Exception as exc:
+            logger.warning("%s 미결 매도 후정산 예외(종전 방식으로 진행): %s", tag, exc)
+    st_c = context.ledger.get_state(TARGET_SYMBOL)
+    if str(st_c.get("buy_order_id") or "").strip():
+        try:
+            await sync_pending_buy_order_plugin(
+                context=context, holdings=holdings, prices=prices, now_est=dt_now
+            )
+        except Exception as exc:
+            logger.warning("%s 미결 매수 후정산 예외(종전 방식으로 진행): %s", tag, exc)
+
+
 async def execute_0400_premarket_stabilization_plugin(
     context: Any,
     holdings: Dict[str, Dict[str, Any]],
@@ -562,6 +591,8 @@ async def execute_0400_premarket_stabilization_plugin(
     canceled_cnt = await context.api.cancel_all_open_orders(
         symbol=TARGET_SYMBOL
     )
+    # Case 78 선별 이식: 취소 직후 체결분 정산 → 그 다음 주문번호 정리 (2번 v1.1.3)
+    await _case78_settle_after_cancel(context, holdings, prices, dt_now, "04:00 EST")
     await context.ledger.update_state(
         TARGET_SYMBOL,
         buy_order_id="",
@@ -619,6 +650,8 @@ async def execute_1600_daily_closing_settlement_plugin(
         return {"status": "CLOSING_REPORT_ALREADY_SENT", "date": today_str}
 
     await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
+    # Case 78 선별 이식: 취소 직후 체결분 정산 → 그 다음 주문번호 정리 (2번 v1.1.3)
+    await _case78_settle_after_cancel(context, holdings, prices, dt_now, "16:00 EST")
     updated_st = await context.ledger.update_state(
         TARGET_SYMBOL,
         buy_order_id="",
