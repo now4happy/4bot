@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.7 · 2026-11-03 17:32 (KST)
+- 파일: fanding_trade.py
+- 내용: 팬딩 미국 휴장일 반영: fanding_trade 1.11.0 (작업 기록 포함)
+- 브랜치: staging
+
 ## v1.1.6 · 2026-11-03 16:25 (KST)
 - 파일: sniper_picture.html, sniper_picture.py
 - 내용: 사무실 현황판 v2.0.0 서브 그리드·수혈·골든포켓 표시
