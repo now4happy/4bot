@@ -15,6 +15,10 @@
   ① 본 그리드 1회분 = 순수 코어 자산(가용현금+본·서브·골든포켓 원가−예비수혈금, 기준시드 하한) × 8%, 수수료는 원장 계좌 수수료
   ② 서브 그리드 1회분(4%, 본 0.5회분 보호예수 뒤 유휴현금, 최대 4회분) — 대상이 아니면 '대상 아님'으로 따로 표시
   ③ 예비수혈은 필요액에 더하지 않고 경고로만 (2·3번 같은 계좌) · 골든포켓은 모드가 켜졌을 때만 조건부 표시
+- 사무실 vNEXT (2026-11-04): 브리핑 간결화 — 형식만 변경 (계산·주문·조회 로직 그대로)
+  ① 통합 잔액 블록 대신 '필요 금액' 표 1개 (고정폭 <pre>, 머리말 계좌·보유·필요 1번, 숫자+아이콘, 범례 1번)
+  ② 토스(달러·원화)·메리츠(P·VR6)는 이름 1번에 두 줄로 묶음 · 메리츠 보유는 추정 달러만, 필요는 '–'
+  ③ 시장 일정은 평일 휴장일만 표시 (진행 중·예정 문구 없음) · 조회 실패는 휴장으로 단정하지 않고 전달 노트로
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
@@ -311,10 +315,9 @@ def _meritz_brief_token_cache(label, shared_token, keys_path):
     return private
 
 
-def meritz_lines():
+def meritz_fetch():
     """메리츠 P·VR6 별도 외화잔고 조회 (읽기 전용) [MERITZ_BAL_V4].
-    USD 추정(estm_frcr_amt)과 예수금(frcr_amt)을 모두 표시하며 계좌/통화 합산 금지.
-    """
+    → [(label, by_currency dict | None, 실패 사유 | None)] · 계좌/통화 합산 금지."""
     here = str(Path(__file__).resolve().parent)
     if here not in sys.path:
         sys.path.insert(0, here)
@@ -326,10 +329,9 @@ def meritz_lines():
          R / "var/lib/bot-office/fanding/meritz_vr6_token.json"),
     )
     for label, keys_path, shared_token in accounts:
-        prefix = f"🏛 메리츠 {label}"
         try:
             if not keys_path.is_file():
-                result.append(f"{prefix} | 조회 불가 (계좌 키 없음)")
+                result.append((label, None, "계좌 키 없음"))
                 continue
             import meritz_client
             private_token = _meritz_brief_token_cache(label, shared_token, keys_path)
@@ -345,17 +347,7 @@ def meritz_lines():
                     cur = str(item.get("crcd", "")).strip().upper()
                     if cur in ("USD", "KRW") and cur not in by_currency:
                         by_currency[cur] = item
-
-            def amount(cur, field):
-                try:
-                    return money(balance_value(by_currency[cur][field]), cur)
-                except (KeyError, ValueError, TypeError, OverflowError):
-                    return "조회 불가"
-
-            estimated, deposited = amount("USD", "estm_frcr_amt"), amount("USD", "frcr_amt")
-            result.append(f"{prefix} | 추정 예수금 USD {estimated} (앱 기준) · 예수금 {deposited}")
-            if "KRW" in by_currency:
-                result.append(f"   ↳ KRW {amount('KRW', 'frcr_amt')}")
+            result.append((label, by_currency, None))
         except Exception as e:
             # API 에러 응답에는 키·토큰 내용이 섞일 수 있어 메시지는 버리고 형식만 쓴다.
             if isinstance(e, PermissionError):
@@ -364,7 +356,34 @@ def meritz_lines():
                 reason = "잔고 응답 형식 오류"
             else:
                 reason = f"조회 오류 ({type(e).__name__})"
+            result.append((label, None, reason))
+    return result
+
+
+def _meritz_amount(by_currency, cur, field):
+    try:
+        return balance_value(by_currency[cur][field])
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return None
+
+
+def meritz_lines(fetched=None):
+    """💰 잔액 메뉴용 표시 (문구는 v1.1.5 그대로). USD 추정(estm_frcr_amt)과 예수금(frcr_amt) 모두 표시."""
+    result = []
+    for label, by_currency, reason in (meritz_fetch() if fetched is None else fetched):
+        prefix = f"🏛 메리츠 {label}"
+        if by_currency is None:
             result.append(f"{prefix} | 조회 불가 ({html.escape(reason[:80])})")
+            continue
+
+        def amount(cur, field):
+            v = _meritz_amount(by_currency, cur, field)
+            return money(v, cur) if v is not None else "조회 불가"
+
+        estimated, deposited = amount("USD", "estm_frcr_amt"), amount("USD", "frcr_amt")
+        result.append(f"{prefix} | 추정 예수금 USD {estimated} (앱 기준) · 예수금 {deposited}")
+        if "KRW" in by_currency:
+            result.append(f"   ↳ KRW {amount('KRW', 'frcr_amt')}")
     return result
 
 
@@ -1038,7 +1057,7 @@ def dca_plan(toss, cfg, us_day, kr_day):
     return out
 
 
-def section_dollar_check(now=None):
+def section_dollar_check(now=None, info=None):
     """토스 달러 확인 — 2번 스나이퍼 다음 1회 + 3번 미국 적립 예정 vs 토스 USD 매수가능금액 (읽기 전용, 주문·환전 없음)
     · 부족 = (2번 다음 1회[수수료·0.2% 안전버퍼 포함] + 3번 미국 적립) − 토스 USD 매수가능금액. 2·3번이 같은 계좌면 보유 달러는 1번만 뺀다.
     · 조회 불가·가동 OFF 항목은 0으로 두지 않고 합산에서 빼며 그 사실을 표시한다.
@@ -1057,6 +1076,11 @@ def section_dollar_check(now=None):
             " · ⚠️ 2번 토스 인증 확인 불가 — 같은 계좌로 보고 합산" if not other.cid else
             " · ⚠️ 2번·3번 토스 인증이 달라 같은 계좌 합산이 맞는지 확인 필요")
     lines = [f"💵 <b>토스 달러 확인</b> · 미국장 {us_day.strftime('%m/%d')}" + acct]
+    warn, state, note = [], [], []   # vNEXT: 간결 표 아래에 쓸 줄 (문구·계산은 그대로, 위치만 분류)
+
+    def _keep(bucket, text):
+        lines.append(text)
+        bucket.append(text)
 
     # 2번 스나이퍼 다음 1회 — 본 그리드 + 서브 그리드 (v2.0.0)
     consts, const_note = sniper_constants()
@@ -1078,7 +1102,7 @@ def section_dollar_check(now=None):
         lines.append(f"   ↳ 1회분 예산 ${sn['budget']:,.2f} (순수 코어 자산 ${sn['core']:,.2f}) · 수수료 {sn['fee']:.2f}%·안전버퍼 포함 필요 ${sn_need:,.2f}")
         if sn["guard"] == "reserve":
             unalloc = (usd - sn["free"]) if usd is not None else None
-            lines.append(f"   ↳ 💉 장부 가용현금 ${sn['free']:,.2f} < 30% 가드 ${sn['min_req']:,.2f} → 계좌 여유 달러에서 +{sn['inj_portions']}회분"
+            _keep(warn, f"   ↳ 💉 장부 가용현금 ${sn['free']:,.2f} < 30% 가드 ${sn['min_req']:,.2f} → 계좌 여유 달러에서 +{sn['inj_portions']}회분"
                          f"(${sn['inj_usd']:,.2f}) 수혈 후 매수 (수혈은 필요액에 따로 더하지 않음)"
                          + ("" if unalloc is None or unalloc > 0 else " · 지금 계좌 여유 달러 없음 → 입금 전엔 매수 보류"))
         if usd is not None:
@@ -1088,18 +1112,18 @@ def section_dollar_check(now=None):
     elif sn["state"] == "deposit_wait":
         unalloc = max(0.0, usd - sn["free"]) if usd is not None else 0.0
         rec = max(sn["budget"], sn["inj_portions"] * sn["budget"] - unalloc)
-        lines.append(f"🎯 2번 본 그리드: 시드고갈 · 예비수혈 {sn['used_res']}/{max_res}회분 소진 → 입금 대기 (매수 없음 · 합산 제외)")
-        lines.append(f"   ↳ {sn['branch']} 최소 필요 현금 ${sn['min_req']:,.2f} · 스나이퍼 권장 입금 약 ${rec:,.2f}")
+        _keep(state, f"🎯 2번 본 그리드: 시드고갈 · 예비수혈 {sn['used_res']}/{max_res}회분 소진 → 입금 대기 (매수 없음 · 합산 제외)")
+        _keep(state, f"   ↳ {sn['branch']} 최소 필요 현금 ${sn['min_req']:,.2f} · 스나이퍼 권장 입금 약 ${rec:,.2f}")
     elif sn["state"] == "no_cash":
-        lines.append(f"🎯 2번 본 그리드 다음 1회: 매수 불가 — 장부 가용현금 ${sn['free']:,.2f}가 수수료 포함 1주 ${sn['unit']:,.2f}보다 적음"
+        _keep(state, f"🎯 2번 본 그리드 다음 1회: 매수 불가 — 장부 가용현금 ${sn['free']:,.2f}가 수수료 포함 1주 ${sn['unit']:,.2f}보다 적음"
                      " (합산 제외)")
     elif sn["state"] == "off":
-        lines.append("🎯 2번 스나이퍼: 가동 OFF → 매수 없음 (합산 제외)")
+        _keep(state, "🎯 2번 스나이퍼: 가동 OFF → 매수 없음 (합산 제외)")
     elif sn["state"] == "pending":
-        lines.append(f"🎯 2번{' 서브' if sn.get('sub') else ''}: 미체결 매수 {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f} 진행 중")
+        _keep(state, f"🎯 2번{' 서브' if sn.get('sub') else ''}: 미체결 매수 {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f} 진행 중")
         excluded.append("2번 미체결 주문(보유 달러에서 이미 빠졌을 수 있음)")
     else:
-        lines.append("🎯 2번 본 그리드 다음 1회: 계산 불가")
+        _keep(state, "🎯 2번 본 그리드 다음 1회: 계산 불가")
         excluded.append(f"2번 {html.escape(str(sn.get('why') or '계산 불가'))}")
     if sn["state"] not in ("off", "pending"):
         if sb["state"] == "ok":
@@ -1110,22 +1134,22 @@ def section_dollar_check(now=None):
         elif sb["state"] == "target_no":
             lines.append(f"🧩 2번 서브 그리드: 대상 아님 ({html.escape(sb['why'])})")
         elif sb["state"] == "no_cash":
-            lines.append(f"🧩 2번 서브 그리드 · {sb['branch']}: 유휴현금 ${sb['idle']:,.2f}이 최소 ${sb['min_req']:,.2f}보다 적어 매수 없음 (합산 제외)")
+            _keep(note, f"🧩 2번 서브 그리드 · {sb['branch']}: 유휴현금 ${sb['idle']:,.2f}이 최소 ${sb['min_req']:,.2f}보다 적어 매수 없음 (합산 제외)")
         else:
             excluded.append(f"2번 서브 {html.escape(str(sb.get('why') or '계산 불가'))}")
     if led and bool(led.get("is_active", True)):
         used = max(0, int(num(led.get("used_reserve_portions_cnt"))))
         if used < max_res or num(led.get("injected_reserve_usd")) > 0:
-            lines.append(f"⚠️ 2번 예비수혈: 시드 고갈 때 토스 계좌 여유 달러를 최대 {max_res - used}회분 더 씀"
+            _keep(warn, f"⚠️ 2번 예비수혈: 시드 고갈 때 토스 계좌 여유 달러를 최대 {max_res - used}회분 더 씀"
                          f" (사용 {used}/{max_res} · 누적 ${num(led.get('injected_reserve_usd')):,.2f}, 0주 졸업 때 상환)"
                          " — 2·3번 같은 계좌라 3번 적립용 달러까지 쓸 수 있음 (보유 달러는 한 번만 뺌)")
         gmode = str(led.get("golden_allin_mode") or consts["DEFAULT_GOLDEN_ALLIN_MODE"]).upper().strip()
         if gmode != "NONE":
-            lines.append(f"🌟 2번 골든포켓 {html.escape(gmode)} 켜짐: 07:00~07:50 EST·RSI≤19 때 그 시간 필요액 = 가용 현금 전액"
+            _keep(warn, f"🌟 2번 골든포켓 {html.escape(gmode)} 켜짐: 07:00~07:50 EST·RSI≤19 때 그 시간 필요액 = 가용 현금 전액"
                          f"(장부 ${num(led.get('free_cash_usd')):,.2f}) · 평소 합계엔 미포함")
     for n in (sn.get("note"), const_note):
         if n:
-            lines.append("   ↳ " + html.escape(n))
+            _keep(note, "   ↳ " + html.escape(n))
 
     # 3번 적립
     cfg = load(TOSS_DIR / "dca_config.json", None)
@@ -1136,14 +1160,14 @@ def section_dollar_check(now=None):
         excluded.append("3번 적립 설정 파일 읽기 실패")
     U, K = dca["USD"], dca["KRW"]
     if not dca["master"]:
-        lines.append("🔁 3번 적립: 전체 전원 OFF → 매수 없음 (합산 제외)")
+        _keep(state, "🔁 3번 적립: 전체 전원 OFF → 매수 없음 (합산 제외)")
     else:
         lines.append(f"🔁 3번 적립 미국 {len(U['buy'])}종목: ${U['need']:,.2f}"
                      + (f" [{', '.join(U['buy'])}]" if U["buy"] else " (예정 없음)"))
         if U["skip"]:
-            lines.append("   ↳ 매수 없음: " + ", ".join(U["skip"]))
+            _keep(note, "   ↳ 매수 없음: " + ", ".join(U["skip"]))
         if U["note"]:
-            lines.append("   ↳ profit_lock 표시(" + ", ".join(U["note"]) + ")는 실제 주문 코드가 읽지 않아 매수로 셈")
+            _keep(note, "   ↳ profit_lock 표시(" + ", ".join(U["note"]) + ")는 실제 주문 코드가 읽지 않아 매수로 셈")
         excluded += [f"3번 {f}" for f in U["fail"]]
 
     total = round(sn_need + sb_need + U["need"], 2)
@@ -1177,6 +1201,10 @@ def section_dollar_check(now=None):
         excluded += [f"3번 {f}" for f in K["fail"]]
     if excluded:
         lines.append("⚠️ 합산 제외(조회 불가 등): " + "; ".join(excluded) + " → 실제 필요액은 더 클 수 있음")
+    if info is not None:   # vNEXT 표시용 — 위에서 계산한 값을 그대로 넘김 (새 계산 없음)
+        info.update(usd=usd, total=total, sn_part=sn_part, dca_part=dca_part, master=dca["master"],
+                    krw_need=K["need"], acct=acct.strip(" ·"), warn=warn, state=state, note=note,
+                    excluded=list(excluded), toss=toss)
     return lines
 
 
@@ -1310,13 +1338,132 @@ def with_separators(lines):
     return "\n".join(out)
 
 
-def build(now=None):
-    """간결 브리핑: 계좌별 USD/KRW 잔액과 이상 봇만 표시한다."""
-    out = section_balances().splitlines()
+# ------------------------------------------------------------------ vNEXT 필요 금액 표 (형식만)
+ICON_NEED, ICON_OK = "🚨", "😌"   # 범례: 🚨 충전 필요 / 😌 충분
+DASH = "-"   # 고정폭 표 안에서는 ASCII 하이픈 (en dash '–'는 글꼴마다 폭이 달라 줄이 어긋남)
+
+
+def disp_width(text, hangul=2.0):
+    """고정폭 칸 수: 전각(W/F) hangul 칸(기본 2), 나머지 1칸, 결합 문자 0칸.
+    hangul 값을 바꿔 폰 글꼴(한글 ≈1.5~1.9칸)에서도 줄이 맞는지 검증할 때 쓴다."""
+    import unicodedata
+    w = 0.0
+    for ch in text:
+        if unicodedata.combining(ch):
+            continue
+        w += hangul if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
+
+
+def _pad(text, width, right=False):
+    gap = " " * max(0, int(round(width - disp_width(text))))
+    return gap + text if right else text + gap
+
+
+def _cell(value, cur):
+    """표 칸은 ASCII 만 (한글 폭이 폰마다 달라 숫자 열이 어긋나지 않게). 통화는 구분 칸(USD·KRW)에 적는다."""
+    if value is None:
+        return DASH
+    return f"${value:,.2f}" if cur == "USD" else f"{value:,.0f}"
+
+
+def _icon(have, need):
+    if have is None or need is None:
+        return ""
+    return ICON_NEED if have + 0.005 < need else ICON_OK
+
+
+def need_table(groups):
+    """groups = [(계좌, [(구분, 보유 칸, 필요 칸, 아이콘), ...]), ...] → 고정폭 줄 목록 (HTML 이스케이프 전).
+    · 머리말 '계좌 보유 필요'는 맨 위 1번. 계좌 이름은 묶음마다 1번, 그 아래 구분 줄(USD·KRW·P·VR6)을 묶는다.
+    · 숫자 줄은 왼쪽부터 ASCII 만 써서 어느 글꼴에서도 열이 맞는다. 아이콘은 줄 끝(정렬 밖)."""
+    rows = [(sub, have, need, icon) for _, items in groups for sub, have, need, icon in items]
+    w_sub = max([len(r[0]) for r in rows] + [0])
+    w_label = max(int(disp_width("계좌")), 2 + w_sub)
+    w_have = max([len(r[1]) for r in rows] + [int(disp_width("보유"))])
+    w_need = max([len(r[2]) for r in rows] + [int(disp_width("필요"))])
+    # 머리말 여백은 한글 1.75칸 기준(폰 ≈1.5칸 ~ PC 2칸의 가운데)으로 잡아 어느 글꼴에서도 어긋남을 줄인다.
+    h = 1.75
+    end_have = w_label + 1 + w_have
+    end_need = end_have + 1 + w_need
+    gap1 = max(1, int(round(end_have - 2 * h - 2 * h)))
+    gap2 = max(1, int(round(end_need - end_have - 2 * h)))
+    out = ["계좌" + " " * gap1 + "보유" + " " * gap2 + "필요"]
+    for name, items in groups:
+        out.append(name)
+        for sub, have, need, icon in items:
+            out.append(("  " + sub.ljust(w_label - 2) + " " + have.rjust(w_have) + " " + need.rjust(w_need)
+                        + (" " + icon if icon else "")).rstrip())
+    return out
+
+
+def _lt(text):
+    """태그 없는 문장의 < > 만 이스케이프 (이미 들어간 &amp; 등은 그대로)."""
+    return str(text).replace("<", "&lt;").replace(">", "&gt;")
+
+
+def section_need(now, notes):
+    """💰 필요 금액 — 토스 달러 필요액은 section_dollar_check(v1.1.5 계산) 결과를 그대로 쓴다."""
+    info = {}
+    section_dollar_check(now, info)
+    toss = info["toss"]
+    usd, total = info["usd"], info["total"]
+    if usd is None:
+        notes.append("토스 달러 보유 조회 실패 → 충전 필요 판정 보류")
     try:
-        out += [""] + section_dollar_check(now)
+        krw = toss.buying_power("KRW")
+    except Exception as e:
+        krw = None
+        notes.append(f"토스 원화 보유 조회 실패({html.escape(type(e).__name__)})")
+    krw_need = info["krw_need"] if info["master"] else None
+    groups = [("토스", [("USD", _cell(usd, "USD"), _cell(total, "USD"), _icon(usd, total)),
+                        ("KRW", _cell(krw, "KRW"), _cell(krw_need, "KRW"), _icon(krw, krw_need))])]
+
+    meritz = []
+    for label, by_currency, reason in meritz_fetch():
+        est = _meritz_amount(by_currency, "USD", "estm_frcr_amt") if by_currency is not None else None
+        if est is None:
+            notes.append(f"메리츠 {label} 보유 조회 실패" + (f"({html.escape(str(reason)[:60])})" if reason else ""))
+        meritz.append((label, _cell(est, "USD"), DASH, ""))
+    groups.append(("메리츠", meritz))
+    notes.append("메리츠 필요: 계산식 없음 → '-' (지어내지 않음)")
+
+    try:
+        kis_krw = kis_balances().get("KRW")
     except Exception:
-        out += ["", "💵 토스 달러 확인: 계산 실패"]
+        kis_krw = None
+    if kis_krw is None:
+        notes.append("한투 원화: 잔고를 못 받아 0원으로 표시 (표의 KRW 0)")
+    groups.append(("한투", [("KRW", _cell(kis_krw or 0.0, "KRW"), DASH, "")]))
+
+    try:
+        bt = balance_value(bithumb_accounts().get("KRW", {}).get("balance"))
+    except Exception:
+        bt = None
+        notes.append("빗썸 원화 보유 조회 실패")
+    groups.append(("빗썸", [("KRW", _cell(bt, "KRW"), DASH, "")]))
+
+    table = need_table(groups)
+    out = ["💰 <b>필요 금액</b>", "<pre>" + "\n".join(html.escape(x, quote=False) for x in table) + "</pre>",
+           f"{ICON_NEED} 충전 필요 · {ICON_OK} 충분 · KRW 단위 원",
+           "🧾 토스 달러 필요 = " + info["sn_part"] + " + " + info["dca_part"]]
+    out += [_lt(x.strip()) for x in info["state"] + info["warn"]]
+    if info["acct"]:
+        notes.append(info["acct"])
+    notes += [_lt(x.strip().removeprefix("↳ ")) for x in info["note"]]
+    if info["excluded"]:
+        notes.append("토스 달러 합산 제외: " + "; ".join(info["excluded"]) + " → 실제 필요액은 더 클 수 있음")
+    return out
+
+
+def build(now=None, notes=None):
+    """간결 브리핑 (vNEXT): 필요 금액 표 · 봇 한 줄 · 이상 봇 · 전달 노트."""
+    notes = list(notes or [])
+    try:
+        out = section_need(now, notes)
+    except Exception as e:
+        out = ["💰 <b>필요 금액</b>", "계산 실패"]
+        notes.append(f"필요 금액 계산 실패({html.escape(type(e).__name__)})")
     try:
         out += ["", status_one_line()]
         bot_lines, _ = section_bots()
@@ -1324,6 +1471,8 @@ def build(now=None):
             out.extend(bot_lines)
     except Exception:
         out.extend(["", "⚠️ <b>봇 상태</b>", "🔴 상태 조회 실패"])
+    if notes:
+        out += ["", "📝 <b>전달 노트</b>"] + ["· " + n for n in notes]
     return with_separators(out)
 
 
@@ -1331,8 +1480,40 @@ def message_chunks(text, limit=3500):
     """Keep complete formatted lines; exceptionally long lines become escaped text."""
     def length(value):
         return len(value.encode("utf-16-le")) // 2
-    lines = []
+    # vNEXT: <pre>…</pre> 고정폭 블록은 한 덩어리로 다룬다 (메시지 사이에서 끊기면 HTML 이 깨짐).
+    # 한 블록이 limit 를 넘으면 줄 단위로 나눠 각 조각을 다시 <pre>…</pre> 로 감싼다.
+    units, block = [], None
     for line in text.splitlines():
+        if block is None and line.startswith("<pre>") and not line.endswith("</pre>"):
+            block = [line]
+        elif block is not None:
+            block.append(line)
+            if line.endswith("</pre>"):
+                units.append(block)
+                block = None
+        else:
+            units.append(line)
+    if block is not None:   # 닫히지 않은 블록은 평소 줄로 되돌림
+        units.extend(block)
+    lines = []
+    for unit in units:
+        if isinstance(unit, list):
+            whole = "\n".join(unit)
+            if length(whole) <= limit:
+                lines.append(whole)
+                continue
+            body = "\n".join(unit)[len("<pre>"):-len("</pre>")].split("\n")
+            piece = []
+            for row in body:
+                trial = "<pre>" + "\n".join(piece + [row]) + "</pre>"
+                if piece and length(trial) > limit:
+                    lines.append("<pre>" + "\n".join(piece) + "</pre>")
+                    piece = []
+                piece.append(row[:limit - 11])
+            if piece:
+                lines.append("<pre>" + "\n".join(piece) + "</pre>")
+            continue
+        line = unit
         if length(line) <= limit:
             lines.append(line)
             continue
@@ -1461,12 +1642,12 @@ def scheduled_run(now=None):
         kr = cache.get("kr")
         # Same calendar date as KST: the US session opening tonight, not NY's previous day.
         us = None if day.year not in US_CLOSED else day.strftime("%m-%d") not in US_CLOSED[day.year].split()
-        lines = ["📅 <b>주식시장 일정 · " + day.isoformat() + "</b>"]
-        lines += ["🇰🇷 한국장: " + kr_label(kr, now),
-                  "🇺🇸 미국장: " + ("휴장" if us is False else "정규장 예정" if us is True else "일정 확인 불가 (달력 갱신 필요)"),
-                  "▫️ 미국장은 오늘 밤 시작할 미국 현지 같은 날짜의 정규장 기준",
-                  "▫️ 정규장 일정 안내 · 거래봇/빗썸 실행 조건은 변경하지 않음"]
-        if (kr is not True or us is not True) and not cache.get("notice_sent"):
+        # vNEXT: 평일 휴장일만 알린다 (진행 중·예정 문구 없음). 조회 실패는 휴장으로 단정하지 않고 전달 노트로.
+        closed = (["🇰🇷 한국장 휴장"] if kr is False else []) + (["🇺🇸 미국장 휴장 (오늘 밤 정규장)"] if us is False else [])
+        notes = (["한국장 일정 조회 실패(한국투자) → 휴장 여부 미확인"] if kr is None else []) + \
+                (["미국장 일정 확인 불가(달력 갱신 필요) → 휴장 여부 미확인"] if us is None else [])
+        lines = (["📅 <b>휴장 · " + day.isoformat() + "</b>"] + closed) if closed else []
+        if closed and not cache.get("notice_sent"):
             if send("\n".join(lines)):
                 cache["notice_sent"] = True
                 tmp = path.with_suffix(".tmp")
@@ -1475,7 +1656,7 @@ def scheduled_run(now=None):
         if kr is False and us is False:
             print("양 시장 휴장: 일반 브리핑 생략")
             return
-        text = "\n".join(lines[:3]) + "\n" + SEP + "\n" + build()
+        text = ("\n".join(lines) + "\n" + SEP + "\n" if lines else "") + build(notes=notes)
         sent = send(text)
         print("전송 결과:", sent)
         if sent:
