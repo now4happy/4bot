@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.1.4 · 2026-11-03 16:01 (KST)
+- 파일: defense_plugin.py, main.py, plugin_updater.py, quant_engine.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py, tg_ui_plugin.py, toss_api.py
+- 내용: 2번 스나이퍼 v2.0.0 원작 d7b3a66 이식
+- 브랜치: staging
+
 ## v1.1.3 · 2026-11-03 12:44 (KST)
 - 파일: defense_plugin.py
 - 내용: 2번 스나이퍼 Case 78 선별 이식 (v1.1.3)
