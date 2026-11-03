@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.6 · 2026-11-03 16:25 (KST)
+- 파일: sniper_picture.html, sniper_picture.py
+- 내용: 사무실 현황판 v2.0.0 서브 그리드·수혈·골든포켓 표시
+- 브랜치: staging
+
 ## v1.1.5 · 2026-11-03 16:18 (KST)
 - 파일: office_briefing.py
 - 내용: 사무실 vNEXT 토스 달러 확인 v2.0.0 매매법
