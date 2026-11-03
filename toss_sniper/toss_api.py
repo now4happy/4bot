@@ -1,73 +1,53 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: toss_api.py
-인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 &
-SOXL 단일 롱 7-Tier 순수 멀티 그리드(1층 공격수 + 2~6층 개별 완충층 + 통합 7층 본대) 폴더별 3중 지층 원장(SoxlStratumLedger) 코어 모듈 (Step 02 / 06)
-- 제1헌법: 모든 파일 I/O 및 네트워크 통신의 asyncio.to_thread 비동기 격리 + GlobalThrottle 중앙 통제
-- 제2헌법: 기동 시 GET /api/v1/accounts 1회 호출로 BROKERAGE accountSeq 메모리 락온 및 X-Tossinvest-Account 자동 주입
-- 제3헌법 ~ 제6헌법 및 Case 01 ~ 72 전수 락온 · Case 82 윗꼬리 포착 이식:
-  1) REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단)
-  2) get_holdings_map_with_status, get_candles_1m, get_candles_1d, get_current_prices_batch,
-     get_orderbook, get_buying_power_usd, get_sellable_quantity, create_order, modify_order,
-     cancel_order, get_order_detail, get_open_orders, get_usd_krw_rate 등 전 메서드 100% 정식 구현!
-  3) 미국 주식 주문 정정(/modify) 시 quantity 필드 원천 배제(400 us-modify-quantity-not-supported 차단) 및
-     주문 취소(/cancel) 시 빈 JSON 객체 {} 전송 강제(HTTP 415 차단)
-  4) 🚨 [Case 68 폴더 위치(base_dir) 기반 멀티 봇 자동 식별 격리 & 3중 원장 금고 & 시드 $100 변조 방어]
-     - "/home/pipiosToss" 고정 경로 하드코딩 100% 영구 소각 -> 오직 실행 파일이 위치한 폴더(base_dir)의 .env 만 로드
-     - 폴더명(folder_slug) 기반 ① 고유 원장(soxl_stratum_ledger_<폴더명>.json), ② 호환 원장(soxl_stratum_ledger.json),
-       ③ 실시간 백업 금고(ledger_backups/soxl_stratum_ledger_<폴더명>.bak.json) 3중 원자적 동기화 및 기존 데이터 무손실 자동 이관
-  5) 🚨 [Case 65, Case 69 & Case 70 양방향·주기 60초 타임쉴드 시각 영속화 및 순수 원가 무결성 강제]
-     - last_buy_fill_ts, last_sell_fill_ts, last_cycle_end_ts, last_sell_gate_eval_ts 원장 영속화
-  6) 🚨 [NEW · Case 71 & Case 72 최종 확정 챔피언 🔥 03_7G_PURE_10_01 : 1층 ~ 7층 순수 원가 골디락스 멀티 그리드
-     (MAX_GRID_TIERS_7 = 7 : 1층 공격수 + 2~6층 개별 완충층 + 통합 7층 본대) & 정적 싸이클 최저가 잠금(STATIC_CYCLE_MIN)]
-     - 모든 보유 지층(1층 ~ 7층)의 book_price == actual_avg_price 및 book_invested_usd == actual_cost_usd 순수 실물 원가 100% 보존!
-     - AST 심볼 하위 호환을 위해 MAX_GRID_TIERS_12 = 7 별칭을 동시 제공하며, 다중 그리드 동시 매도 인덱스(pending_sell_indices) 탑재!
-  7) [Case 82] 최근 체결 5초 윗꼬리 고가 조회 추가 (기존 매도 지정가/토큰/계좌/주문 정책 변경 없음)
+# MODIFIED: toss_api.py (원작 toss_api_core.py + 원작 toss_api.py 병합)
+# 4bot 2번 v2.0.0 (2026-11-03): 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 코어 상수 · 폴더 격리 · 디스크 자가 치유 ·
+GlobalThrottle 동시성 통제 및 SOXL 7-Tier 골디락스 본 그리드(구 2층 + 구 7층 통합 중간층 재배치 & 최고 도달 회차 단차 잠금 · Case 87) /
+스위치 없는 100% 기본 상시 적용(Default ON) 3-Tier 서브 그리드(4.0% 정량 · 구 1층 + 구 3층 양끝 합병 & 최대 4회분[16%] 상한 캡 & 0.5회분 보호예수 · Case 88) /
+독립 골든포켓 3중 원장(SoxlStratumLedger) 코어 모듈 (Part 1 / 2 · Step 01 / 13)
+- 역할:
+  1) 제4헌법 EST 단일 타임존 및 최종 확정 챔피언(Case 01 ~ Case 88 · 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON]) 전역 상수 락온
+  2) 안전한 수치 형변환(safe_float, safe_int), 36자 멱등성 키 생성기(generate_client_order_id),
+     4xx 비재시도 예외(_NonRetryableApiError) 및 계좌별 미국 주식 수수료율 런타임 캐시 동기화기(Case 86)
+  3) 폴더 위치(base_dir) 기반 자동 식별기(get_bot_base_dir, get_folder_slug, resolve_folder_isolated_ledger_paths),
+     격리 환경변수 로더(_load_env_files_into_environ) 및 클라우드 VM 디스크 고갈(Errno 28) 자가 치유기(emergency_free_disk_space_sync · Case 68, Case 75, Case 85)
+  4) 제1헌법 동기/비동기 양방향 호환 _HybridFileLock 및 GlobalThrottle 중앙 통제소(Case 06, Case 20)
+  5) SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT & cycle_ratchet_max_lots 단차 잠금 · Case 87) ·
+     Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & sub_ratchet_max_lots & SUB_MAX_TOTAL_LOTS_4 캡 · Case 88) 및
+     독립 골든포켓(GoldenAllInPocket) 폴더별 3중 안전 지층 원장(SoxlStratumLedger · Case 58 ~ Case 88)
 """
 
 from __future__ import annotations
 
 import asyncio
+import errno
 import glob
 import json
 import logging
 import math
 import os
 import re
+import shutil
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-from zoneinfo import ZoneInfo
+from typing import Any, Dict, List, Optional, Tuple
 
 try:  # [🔗토스 토큰 공유 HOOK] 2번·3번·브리핑이 같은 토큰을 같이 씀 (없으면 원작 그대로)
     import toss_token_share as _TTS
 except Exception:
     _TTS = None
+from zoneinfo import ZoneInfo
 
-logger = logging.getLogger("toss_sniper.toss_api")
+logger = logging.getLogger("toss_sniper.toss_api_core")
 
 # ---------------------------------------------------------------------------
-# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 챔피언 (🔥 03_7G_PURE_10_01 · Case 72) 전역 상수
+# [핵심 상수] 제4헌법 EST 단일 타임존 & 최종 확정 진화 챔피언 (Case 72 ~ 88) 전역 상수
 # ---------------------------------------------------------------------------
 EST_TZ = ZoneInfo("America/New_York")
 KST_TZ = ZoneInfo("Asia/Seoul")
-
-def is_sniper_trading_time(hm: int) -> bool:
-    """ET 데이마켓 20:00~03:59 + 기존 04:07~16:00. 애프터장은 유지."""
-    return 0 <= hm <= 359 or 407 <= hm <= 1600 or 2000 <= hm <= 2359
-
-
-def is_sniper_weekend_closed(now_est: datetime) -> bool:
-    dt = now_est.astimezone(EST_TZ)
-    wd = dt.weekday()
-    hm = dt.hour * 100 + dt.minute
-    return (wd == 4 and hm >= 1700) or wd == 5 or (wd == 6 and hm < 2000)
-
 
 TARGET_SYMBOL: str = "SOXL"
 REAL_ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
@@ -77,14 +57,61 @@ DEFAULT_INITIAL_SEED_USD: float = 10000.0
 PORTION_RATIO_LOCKED: float = 0.08
 BASE_MAX_LOTS_8PCT: int = 12
 
-# NEW [Case 72]: 골디락스 7-Layer (1층 공격수 + 2~6층 개별 완충층 + 통합 7층 본대) 상수 락온
+# Case 72 & Case 87: 골디락스 7-Layer (1층 공격수 + 2 ~ 7층 완충/중간합병 그리드) 상수 락온
 # (타 모듈 AST 임포트 무결성 100% 호환을 위해 MAX_GRID_TIERS_12 도 7 로 동시 매핑)
 MAX_GRID_TIERS_7: int = 7
 MAX_GRID_TIERS: int = 7
 MAX_GRID_TIERS_12: int = 7
 
+# [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 7층 만석 초과(8층 발생) 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드]
+DEFAULT_GRID_MERGE_MODE: str = "L2_L7_MERGE_SORT"
+
+# NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
+SUB_GRID_DEFAULT_ENABLED: bool = True
+SUB_FROZEN_DAYS_TRIGGER: int = 5
+SUB_PORTION_RATIO_4PCT: float = 0.04
+SUB_MAX_TIERS_3: int = 3
+SUB_MAX_TIERS: int = 3
+SUB_MAX_TOTAL_LOTS_4: int = 4
+SUB_MAX_TOTAL_LOTS: int = 4
+SUB_RESERVE_MAIN_PORTIONS: float = 0.5
+SUB_MERGE_MODE_L1_L3: str = "SUB_L1_L3_MERGE"
+DEFAULT_SUB_MERGE_MODE: str = "SUB_L1_L3_MERGE"
+SUB_UNLOCK_FROZEN_DAYS_10: int = 10
+SUB_UNLOCK_DROP_FROM_L1_PCT: float = 10.0
+
+# Case 76: 🔓 06_STEP2X_15PCT_C20 3중 안전문 기반 조건부 스텝업 저가 해금 전역 상수 락온
+DEFAULT_UNLOCK_MODE: str = "STEP2X_15PCT_C20"
+STEP_UP_2X_MIN_REBOUND_MULT: float = 2.0
+STEP_UP_2X_MAX_TIERS: int = 2
+STEP_UP_2X_MIN_CASH_RATIO: float = 0.20
+STEP_UP_2X_DROP_PCT: float = 15.0
+
+# Case 77: 💉 05_RESV_6P_GUARD30 (30% 자투리 1주 승격 방지 가드 & 최대 +6회분 온디맨드 예비시드 자동 수혈) 상수 락온
+MAX_RESERVE_PORTIONS: int = 6
+MIN_DIP_BUDGET_RATIO: float = 0.30
+MIN_DIP_VS_L1_RATIO: float = 0.30
+RESERVE_DEPOSIT_TOLERANCE_RATIO: float = 0.95
+
+# [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 가용시드 100% 전액 추가매수 상수]
+# 기본값은 "NONE" (OFF) 으로 락온하여 QuantEngine TDD 정합성 100% 보장
+GOLDEN_ALLIN_MODES: Tuple[str, ...] = (
+    "NONE",
+    "POCKET_ALLIN",
+    "GRID_L1_ALLIN",
+)
+DEFAULT_GOLDEN_ALLIN_MODE: str = "NONE"
+GOLDEN_WINDOW_START_HM: int = 700
+GOLDEN_WINDOW_END_HM: int = 750
+GOLDEN_RSI_MAX_THRESHOLD: float = 19.0
+GOLDEN_POCKET_RISE_PCT: float = 1.50
+
+# [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)]
+NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
+
 LOCKED_BUY_INTERVAL_MIN: int = 10
 LOCKED_SELL_INTERVAL_MIN: int = 1
+DEFAULT_US_COMMISSION_RATE: float = 0.0007
 ROUND_TRIP_FEE_RATE: float = 0.0014
 ROUND_TRIP_FEE_RATE_PCT: float = 0.14
 REANCHOR_NET_BUFFER_MULT: float = 0.994
@@ -92,9 +119,14 @@ KRW_PER_USD_DEFAULT: float = 1380.0
 
 TOSS_OPENAPI_BASE_URL: str = "https://openapi.tossinvest.com"
 
+# Case 86: 계좌별 런타임 왕복 수수료율(%) 동적 캐시
+_RUNTIME_FEE_LOCK = threading.RLock()
+_RUNTIME_US_COMMISSION_RATE: float = DEFAULT_US_COMMISSION_RATE
+_RUNTIME_ROUND_TRIP_FEE_RATE_PCT: float = ROUND_TRIP_FEE_RATE_PCT
+
 
 # ---------------------------------------------------------------------------
-# [유틸리티] 안전한 수치 형변환 (ZeroDivision / NaN / inf / null 방어 — Case 03, 23)
+# [유틸리티] 안전한 수치 형변환 및 런타임 수수료율 동기화기 (Case 03, 23, 86)
 # ---------------------------------------------------------------------------
 def safe_float(val: Any, default: float = 0.0) -> float:
     if val is None or isinstance(val, bool):
@@ -128,6 +160,73 @@ def safe_int(val: Any, default: int = 0) -> int:
         )
     except Exception:
         return int(default)
+
+
+def _read_env_us_commission_rates() -> Tuple[float, float]:
+    """
+    # [Case 86 : 환경변수(.env) 기반 미국 주식 수수료율 폴백 로더]:
+    US_COMMISSION_RATE (소수 비율, 예: 0.0007 또는 0.001) 또는
+    ROUND_TRIP_FEE_RATE_PCT (%, 예: 0.14 또는 0.20)가 .env 에 설정된 경우 이를 우선 폴백값으로 반환한다.
+    """
+    env_one = safe_float(os.environ.get("US_COMMISSION_RATE"), 0.0)
+    env_rt = safe_float(os.environ.get("ROUND_TRIP_FEE_RATE_PCT"), 0.0)
+    if 0.0 < env_one <= 0.01:
+        one_r = round(env_one, 6)
+        rt_p = (
+            round(env_rt, 4)
+            if (0.0 < env_rt <= 2.0)
+            else round(one_r * 200.0, 4)
+        )
+        return one_r, rt_p
+    if 0.0 < env_rt <= 2.0:
+        rt_p = round(env_rt, 4)
+        one_r = round((rt_p / 100.0) * 0.5, 6)
+        return one_r, rt_p
+    return DEFAULT_US_COMMISSION_RATE, ROUND_TRIP_FEE_RATE_PCT
+
+
+def get_runtime_us_commission_rate() -> float:
+    """
+    현재 프로세스에 락온된 미국 주식 편도 수수료율(소수 비율, 예: 0.0007 또는 0.001)을 반환한다.
+    """
+    with _RUNTIME_FEE_LOCK:
+        return _RUNTIME_US_COMMISSION_RATE
+
+
+def get_runtime_round_trip_fee_rate_pct() -> float:
+    """
+    현재 프로세스에 락온된 미국 주식 왕복 수수료율(%, 예: 0.14 또는 0.20)을 반환한다.
+    """
+    with _RUNTIME_FEE_LOCK:
+        return _RUNTIME_ROUND_TRIP_FEE_RATE_PCT
+
+
+def set_runtime_round_trip_fee_rate_pct(
+    round_trip_pct: float,
+    us_commission_rate: Optional[float] = None,
+) -> float:
+    """
+    GET /api/v1/commissions 또는 원장에서 확인된 계좌별 왕복 수수료율(%)을 런타임 메모리에 동기화한다.
+    """
+    global _RUNTIME_US_COMMISSION_RATE, _RUNTIME_ROUND_TRIP_FEE_RATE_PCT
+    clean_rt = safe_float(round_trip_pct, ROUND_TRIP_FEE_RATE_PCT)
+    if clean_rt <= 0.0 or clean_rt > 2.0:
+        clean_rt = ROUND_TRIP_FEE_RATE_PCT
+    clean_rt = round(clean_rt, 4)
+
+    if us_commission_rate is not None:
+        clean_one = safe_float(us_commission_rate, DEFAULT_US_COMMISSION_RATE)
+        if clean_one <= 0.0 or clean_one > 0.01:
+            clean_one = round((clean_rt / 100.0) * 0.5, 6)
+        else:
+            clean_one = round(clean_one, 6)
+    else:
+        clean_one = round((clean_rt / 100.0) * 0.5, 6)
+
+    with _RUNTIME_FEE_LOCK:
+        _RUNTIME_US_COMMISSION_RATE = clean_one
+        _RUNTIME_ROUND_TRIP_FEE_RATE_PCT = clean_rt
+        return _RUNTIME_ROUND_TRIP_FEE_RATE_PCT
 
 
 def generate_client_order_id(prefix: str = "SNIPER") -> str:
@@ -168,7 +267,7 @@ class _NonRetryableApiError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# [Case 68] 폴더 위치(base_dir) 기반 자동 식별기 및 격리 환경변수 로더
+# [Case 68, Case 75 & Case 85] 폴더 위치(base_dir) 기반 자동 식별기 · 격리 환경변수 로더 · 디스크 자가 치유기
 # ("/home/pipiosToss" 고정 경로 하드코딩 100% 영구 소각)
 # ---------------------------------------------------------------------------
 def get_bot_base_dir(explicit_dir: Optional[str] = None) -> str:
@@ -202,7 +301,7 @@ def resolve_folder_isolated_ledger_paths(
     explicit_filepath: Optional[str] = None,
 ) -> Tuple[str, str, str, str]:
     """
-    🚨 Case 68 [폴더별 3중 안전 원장 경로 결정기]:
+    🚨 Case 68 & Case 85 [폴더별 3중 안전 원장 경로 결정기]:
     단일 서버 내 여러 폴더에서 다중 봇을 운영할 때 각 폴더 위치를 기준으로:
     1) primary_path : <base_dir>/soxl_stratum_ledger_<folder_slug>.json (Git 추적 면역 폴더 고유 원장)
     2) legacy_path  : <base_dir>/soxl_stratum_ledger.json (하위 호환 미러 원장)
@@ -231,12 +330,81 @@ def resolve_folder_isolated_ledger_paths(
     return primary_path, legacy_path, backup_path, folder_slug
 
 
+def emergency_free_disk_space_sync(
+    base_dir: Optional[str] = None,
+    keep_backup_days: int = 7,
+    remove_pycache: bool = True,
+) -> int:
+    """
+    # [Case 75 : 디스크 고갈(Errno 28 · No space left on device) 원천 방어 및 고아 파일 자가 치유기]:
+    1) target_dir 및 ledger_backups/ 내에 남아 있는 모든 고아 임시 파일
+       (*.tmp.*, *.restore.tmp.*, *.ack.tmp.*, *.heal.tmp)을 즉시 삭제한다.
+    2) remove_pycache=True 일 때 target_dir/__pycache__ 내의 *.pyc, *.pyo 바이트코드 캐시를 청소하여
+       디스크 블록 및 Inode 고갈을 방지한다.
+    3) ledger_backups/ 내 일일 스냅샷(soxl_stratum_ledger_*_20*.json)이 keep_backup_days 개수를 초과하면
+       오래된 스냅샷부터 자동 정리한다.
+    반환값: 삭제된 파일/디렉토리 총 개수
+    """
+    target_dir = get_bot_base_dir(base_dir)
+    backup_dir = os.path.join(target_dir, "ledger_backups")
+    removed_cnt = 0
+
+    tmp_patterns = (
+        os.path.join(target_dir, "*.tmp.*"),
+        os.path.join(target_dir, ".*.tmp.*"),
+        os.path.join(target_dir, "*.heal.tmp"),
+        os.path.join(backup_dir, "*.tmp.*"),
+        os.path.join(backup_dir, ".*.tmp.*"),
+    )
+    for pat in tmp_patterns:
+        for fp in glob.glob(pat):
+            try:
+                if os.path.isfile(fp):
+                    os.remove(fp)
+                    removed_cnt += 1
+            except Exception:
+                pass
+
+    if remove_pycache:
+        pycache_dir = os.path.join(target_dir, "__pycache__")
+        if os.path.isdir(pycache_dir):
+            try:
+                shutil.rmtree(pycache_dir, ignore_errors=True)
+                removed_cnt += 1
+            except Exception:
+                for pyc_fp in glob.glob(os.path.join(pycache_dir, "*")):
+                    try:
+                        os.remove(pyc_fp)
+                        removed_cnt += 1
+                    except Exception:
+                        pass
+
+    if os.path.isdir(backup_dir):
+        try:
+            snap_pat = os.path.join(
+                backup_dir, "soxl_stratum_ledger_*_20*.json"
+            )
+            snaps = sorted(glob.glob(snap_pat))
+            keep_n = max(2, safe_int(keep_backup_days, 7))
+            if len(snaps) > keep_n:
+                for old_fp in snaps[: len(snaps) - keep_n]:
+                    try:
+                        os.remove(old_fp)
+                        removed_cnt += 1
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    return removed_cnt
+
+
 def _load_env_files_into_environ(
     base_dir: Optional[str] = None,
     override_existing: bool = False,
 ) -> str:
     """
-    🚨 Case 68:
+    🚨 Case 68 & Case 86:
     "/home/pipiosToss" 고정 경로 폴백을 100% 폐기하고, 오직 해당 봇이 위치한 폴더(target_dir)의
     .env 및 설정 JSON 파일만 로드하여 폴더 간 환경변수 교차 오염을 원천 차단한다.
     """
@@ -279,6 +447,8 @@ def _load_env_files_into_environ(
             except Exception:
                 pass
 
+    env_one, env_rt = _read_env_us_commission_rates()
+    set_runtime_round_trip_fee_rate_pct(env_rt, us_commission_rate=env_one)
     return target_dir
 
 
@@ -327,6 +497,7 @@ class GlobalThrottle:
 
     GROUP_INTERVALS: Dict[str, float] = {
         "AUTH": 0.50,
+        "ACCOUNT": 0.25,
         "ORDER": 0.18,
         "ORDER_HISTORY": 0.15,
         "ORDER_INFO": 0.15,
@@ -367,20 +538,26 @@ class GlobalThrottle:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] SOXL 단일 롱 7-Tier 순수 멀티 그리드 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 72)
+# [핵심 2] SOXL 단일 롱 7-Tier 본 그리드(L2_L7_MERGE_SORT) · Default-ON 3-Tier 서브 그리드(SUB_L1_L3_MERGE & CAP4L) · 골든포켓 폴더별 3중 안전 지층 원장 (SoxlStratumLedger — Case 68 ~ 88)
 # ---------------------------------------------------------------------------
 class SoxlStratumLedger:
     """
-    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 72:
+    🎯 1 ~ 🎯 5 & Case 02, 05, 06, 58 ~ 88:
     현재 봇이 위치한 폴더(`base_dir`)를 기준으로:
     ① 폴더 고유 원장(`soxl_stratum_ledger_<folder_slug>.json` — Git 덮어쓰기 100% 면역)
     ② 표준 호환 원장(`soxl_stratum_ledger.json` — 기존 코드 및 외부 도구 호환 미러)
     ③ 실시간 백업 금고(`ledger_backups/soxl_stratum_ledger_<folder_slug>.bak.json`)
-    3곳에 SOXL 1~7층 순수 멀티 그리드 지층(1층 공격수 + 2~6층 개별 완충층 + 통합 7층 본대),
-    가용 현금 시드(free_cash_usd), 정적 잠금 사이클 최저 매수가(cycle_min_buy_price),
-    양방향·주기 60초 타임쉴드 시각(last_buy_fill_ts, last_sell_fill_ts, last_cycle_end_ts, last_sell_gate_eval_ts),
-    다중 그리드 매도 대기 인덱스(pending_sell_indices), 누적 세후 실현수익금 및 자투리 절약금을
-    원자적(.tmp -> os.replace)으로 동시 영속화한다.
+    3곳에 SOXL 1 ~ 7층 순수 멀티 그리드 본 지층(`buckets` · `grid_merge_mode = "L2_L7_MERGE_SORT"`),
+    본 그리드 사이클 최고 도달 회차 잠금(`cycle_ratchet_max_lots` · Case 87),
+    🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 1 ~ 3층 서브 그리드(`sub_buckets` · `sub_merge_mode = "SUB_L1_L3_MERGE"` ·
+    최대 누적 4회분 상한 캡 · 본/서브 연속 무매매 동결일 `main_consec_frozen_days` / `sub_consec_frozen_days` · Case 88),
+    황금시간대 선택 모드(`golden_allin_mode`, 기본값 `"NONE"` [OFF]) 및
+    독립 골든포켓(`golden_pocket`), 가용 현금 시드(`free_cash_usd`), 계좌별 미국 주식 수수료율(`us_commission_rate`, `round_trip_fee_rate_pct`),
+    정적 잠금/조건부 스텝업 사이클 최저 매수가(`cycle_min_buy_price` / `sub_cycle_min_buy_price`),
+    💉 05_RESV_6P_GUARD30 예비시드 수혈 잔액 · 사용 회분 · 시드고갈 입금 대기 플래그 · 단 1회 입금 알림 영구 래치,
+    🎯 Case 78 현재 본/서브 1층 목표 정량 주수(`l1_target_quota_qty` / `sub_l1_target_quota_qty`), 양방향·주기 60초 타임쉴드 시각,
+    다중 그리드(본+서브) 및 골든포켓 매도 대기 정보, 기정산 주문 ID 링버퍼, 누적 세후 실현수익금 및 자투리 절약금을
+    Dirty-Check 적용 후 원자적(.tmp -> os.replace)으로 동시 영속화한다.
     """
 
     ALLOWED_SYMBOLS: Tuple[str, ...] = ("SOXL",)
@@ -413,6 +590,10 @@ class SoxlStratumLedger:
         self._mem_lock = threading.RLock()
         self._last_known_valid_seed: float = self._read_env_initial_seed()
         self._data: Dict[str, Dict[str, Any]] = {}
+        # Case 75: 기동 시 잔류 고아 .tmp 파일 선제 청소(바이트코드 캐시는 런타임 중 유지)
+        emergency_free_disk_space_sync(
+            base_dir=self.base_dir, keep_backup_days=14, remove_pycache=False
+        )
         self._load_sync()
 
     @staticmethod
@@ -427,6 +608,17 @@ class SoxlStratumLedger:
             if val > 100.0:
                 return round(val, 4)
         return DEFAULT_INITIAL_SEED_USD
+
+    @staticmethod
+    def _empty_golden_pocket_dict() -> Dict[str, Any]:
+        return {
+            "qty": 0,
+            "book_price": 0.0,
+            "book_invested_usd": 0.0,
+            "actual_cost_usd": 0.0,
+            "entry_ts": 0.0,
+            "order_date": "",
+        }
 
     @classmethod
     def _resolve_safe_initial_seed(
@@ -478,6 +670,7 @@ class SoxlStratumLedger:
             if initial_seed >= 100.0
             else DEFAULT_INITIAL_SEED_USD
         )
+        env_one_rate, env_rt_pct = _read_env_us_commission_rates()
         return {
             "symbol": TARGET_SYMBOL,
             "folder_slug": str(folder_slug or "default_bot"),
@@ -485,18 +678,73 @@ class SoxlStratumLedger:
             "initial_seed_usd": clean_seed,
             "seed_explicitly_set_100": False,
             "free_cash_usd": clean_seed,
+            # [Case 86]: 계좌별 미국 주식 편도 수수료율(소수) 및 왕복 수수료율(%) 영속화 필드 (.env 폴백 지원)
+            "us_commission_rate": env_one_rate,
+            "round_trip_fee_rate_pct": env_rt_pct,
             "portion_mode": "COMP_08PCT",
             "threshold_mode": "WIDE_RUNWAY",
             "reentry_mode": "HYBRID_PULL_OR_BRK",
+            # [Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치 모드 락온]
+            "grid_merge_mode": DEFAULT_GRID_MERGE_MODE,
+            # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상태 필드]
+            "sub_grid_enabled": SUB_GRID_DEFAULT_ENABLED,
+            "sub_merge_mode": SUB_MERGE_MODE_L1_L3,
+            "sub_max_tiers": SUB_MAX_TIERS_3,
+            "sub_max_total_lots": SUB_MAX_TOTAL_LOTS_4,
+            "sub_buckets": [],
+            "sub_anchor_price": 0.0,
+            "sub_cycle_min_buy_price": 0.0,
+            "sub_ratchet_max_lots": 0,
+            "sub_l1_target_quota_qty": 0,
+            "main_consec_frozen_days": 0,
+            "sub_consec_frozen_days": 0,
+            "last_frozen_eval_date": "",
+            "sub_last_evaluated_buy_bucket_id": -1,
+            "sub_last_evaluated_date": today_est,
+            "last_sub_reentry_eval_ts": 0.0,
+            "last_sub_buy_fill_ts": 0.0,
+            "last_sub_sell_fill_ts": 0.0,
+            "last_sub_cycle_end_ts": 0.0,
+            "pending_sub_sell_indices": [],
+            "pending_sub_step_up_min_price": 0.0,
+            "sub_buy_events": 0,
+            "sub_buy_shares": 0,
+            "daily_sub_buy_cnt": 0,
+            "daily_sub_buy_events": 0,
+            "sub_sell_events": 0,
+            "sub_sold_shares": 0,
+            "daily_sub_sell_cnt": 0,
+            "daily_sub_sell_events": 0,
+            "sub_merge_events": 0,
+            "sub_merged_indiv_escape_cnt": 0,
+            "sub_unlock_events": 0,
+            "daily_sub_unlock_events": 0,
+            "sub_completed_cycles": 0,
+            "sub_realized_gross_usd": 0.0,
+            "sub_realized_fee_usd": 0.0,
+            "sub_realized_net_usd": 0.0,
+            "daily_sub_realized_net_usd": 0.0,
+            "daily_main_buy_cnt": 0,
+            "daily_main_sell_cnt": 0,
+            # Case 76: 🔓 06_STEP2X_15PCT_C20 조건부 스텝업 저가 해금 모드 락온
+            "unlock_mode": DEFAULT_UNLOCK_MODE,
+            # [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 (기본값 "NONE" [OFF])
+            "golden_allin_mode": DEFAULT_GOLDEN_ALLIN_MODE,
+            "golden_pocket": cls._empty_golden_pocket_dict(),
+            "last_golden_allin_date": "",
             "buy_interval_min": LOCKED_BUY_INTERVAL_MIN,
             "sell_interval_min": LOCKED_SELL_INTERVAL_MIN,
-            # MODIFIED [Case 72]: 7-Layer (1층 공격수 + 2~6층 개별 완충층 + 통합 7층 본대) 기본값 락온
+            # Case 72: 7-Layer 골디락스 멀티 그리드 기본값 락온
             "max_grid_tiers": MAX_GRID_TIERS_7,
             "buckets": [],
             "anchor_price": 0.0,
             "cycle_min_buy_price": 0.0,
+            # [Case 87 : 사이클 최고 도달 회차 기반 4단 와이드 단차 풀림 잠금 필드]
+            "cycle_ratchet_max_lots": 0,
             "ratchet_anchor_price": 0.0,
             "cycle_reanchor_credit_usd": 0.0,
+            # [Case 78 : 현재 1층의 목표 정량 주수 (부분 체결 시 미체결 잔량 계산 및 1.5초 모니터 재대기용)]
+            "l1_target_quota_qty": 0,
             "buy_order_id": "",
             "sell_order_id": "",
             "client_order_id": "",
@@ -505,14 +753,34 @@ class SoxlStratumLedger:
             "target_sell_price": 0.0,
             "pending_portion_budget": 0.0,
             "pending_lot_type": "",
+            # Case 76: 스텝업 해금 추매 주문 발주 중 대기 스텝업 기준가 (체결 시 cycle_min_buy_price 갱신용)
+            "pending_step_up_min_price": 0.0,
             "pending_sell_mode": "",
             "pending_sell_indices": [],
+            # [Case 80]: 매도 주문 발주 중 포함된 독립 골든포켓 수량
+            "pending_sell_pocket_qty": 0,
+            # 봇 자동 정산 완료된 orderId 링버퍼(최근 50개) — 수동 체결 역추적 시 중복 정산 방지
+            "last_settled_order_ids": [],
             "last_modify_mono": 0.0,
             "entry_ts": 0.0,
             "last_buy_fill_ts": 0.0,
             "last_sell_fill_ts": 0.0,
             "last_cycle_end_ts": 0.0,
             "last_sell_gate_eval_ts": 0.0,
+            # Case 73: 상단 2~7층 보유 중 1층 공석 전용 60초(1분) 주기 재장전 타임쉴드 시각 영속화
+            "last_reentry_eval_ts": 0.0,
+            # Case 77: 💉 05_RESV_6P_GUARD30 온디맨드 예비시드 수혈 · 상환 · 단 1회 입금 알림 영구 래치 필드
+            "used_reserve_portions_cnt": 0,
+            "injected_reserve_usd": 0.0,
+            "total_reserve_injected_cnt": 0,
+            "daily_reserve_injected_cnt": 0,
+            "cumulative_reserve_repaid_usd": 0.0,
+            "dust_guard_blocked_cnt": 0,
+            "daily_dust_guard_blocked_cnt": 0,
+            "waiting_reserve_deposit": False,
+            "waiting_reserve_deposit_alert_sent": False,
+            "required_reserve_deposit_usd": 0.0,
+            "last_reserve_check_ts": 0.0,
             "last_evaluated_buy_bucket_id": -1,
             "last_evaluated_date": today_est,
             "logical_date": today_est,
@@ -521,6 +789,16 @@ class SoxlStratumLedger:
             "total_buy_events": 0,
             "total_buy_shares": 0,
             "daily_buy_events": 0,
+            # Case 76: STEP2X_15PCT_C20 조건부 스텝업 해금 매수 누적/당일 카운터
+            "cond_unlock_buy_events": 0,
+            "daily_unlock_buy_events": 0,
+            # [Case 80]: 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 및 골든포켓 익절/수익 통계
+            "golden_allin_buy_events": 0,
+            "daily_golden_allin_buy_events": 0,
+            "golden_pocket_sell_cnt": 0,
+            "daily_golden_pocket_sell_cnt": 0,
+            "golden_realized_net_usd": 0.0,
+            "daily_golden_realized_net_usd": 0.0,
             "extra_13plus_buy_events": 0,
             "seed_protect_pass_cnt": 0,
             "daily_seed_protect_pass_cnt": 0,
@@ -547,21 +825,28 @@ class SoxlStratumLedger:
     @staticmethod
     def _is_upper_grid_tag(lot_type_str: str) -> bool:
         tag = str(lot_type_str or "").upper().strip()
-        if tag == "MERGED_UPPER":
+        if tag in ("MERGED_UPPER", "SUB_MERGED"):
             return True
         if tag.startswith("GRID_L") and tag != "GRID_L1":
+            return True
+        if tag.startswith("SUB_L") and tag != "SUB_L1":
             return True
         return False
 
     @classmethod
     def _enforce_7tier_cap_on_dict_buckets(
-        cls, clean_buckets: List[Dict[str, Any]]
+        cls,
+        clean_buckets: List[Dict[str, Any]],
+        merge_mode: str = DEFAULT_GRID_MERGE_MODE,
     ) -> List[Dict[str, Any]]:
         """
-        # NEW [Case 72]:
-        구 12-Layer 등에서 이관된 원장에 7개 층 초과 버킷이 존재할 경우,
-        활성 1층과 2~6층(5개 개별 완충층)은 그대로 보존하고 7층 이상 초과분만
-        '통합 7층 본대(GRID_L7)'로 무손실 가중평균 병합하여 7-Layer 규격을 100% 보장한다.
+        # [Case 72 & Case 87 : 👑 06_L2L7_RATCHET_8PCT — 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치]:
+        본 그리드 원장에 7개 층 초과(상단 6개 초과) 버킷이 존재할 경우:
+        1) merge_mode == "L2_L7_MERGE_SORT" (기본 챔피언) 이고 상단 지층 후보가 3개 이상일 때:
+           - 최하단 상단층인 uppers[0] (구 1층 -> 새 2층 후보)은 합병하지 않고 그대로 보존하여 Case 73 역전 차단 상한 가드를 사수한다.
+           - 두 번째 상단층인 low_b = uppers[1] (구 2층)과 최상단층인 high_b = uppers[-1] (구 7층)을 가중평균 통합(Case 53 상한 하드 캡핑 적용)한 뒤,
+             전체 상단 6개 지층 후보를 단가(book_price) 오름차순으로 정렬하여 중간층에 재배치한다!
+        2) 상단 지층들을 GRID_L2 ~ GRID_L7 로 정규화하여 7-Layer 규격을 100% 보장한다.
         """
         if not clean_buckets:
             return []
@@ -577,25 +862,73 @@ class SoxlStratumLedger:
             uppers = list(clean_buckets[:])
 
         max_upper_cnt = MAX_GRID_TIERS_7 - 1  # 6개 (GRID_L2 ~ GRID_L7)
-        if len(uppers) > max_upper_cnt:
-            kept = uppers[: max_upper_cnt - 1]
-            overflow = uppers[max_upper_cnt - 1 :]
-            tot_q = sum(safe_int(b.get("qty"), 0) for b in overflow)
-            tot_ac = round(
-                sum(safe_float(b.get("actual_cost_usd"), 0.0) for b in overflow),
-                4,
-            )
-            tot_lc = sum(max(1, safe_int(b.get("lot_count"), 1)) for b in overflow)
-            pure_p = round(max(0.01, tot_ac / float(max(1, tot_q))), 4)
-            merged_top = {
-                "qty": max(1, tot_q),
-                "book_price": pure_p,
-                "book_invested_usd": tot_ac,
-                "actual_cost_usd": tot_ac,
-                "lot_count": max(1, tot_lc),
-                "lot_type": f"GRID_L{MAX_GRID_TIERS_7}",
-            }
-            uppers = kept + [merged_top]
+        m_mode = str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
+
+        while len(uppers) > max_upper_cnt:
+            if m_mode == "L2_L7_MERGE_SORT" and len(uppers) >= 3:
+                kept_lowest_upper = [uppers[0]]
+                low_b = uppers[1]
+                high_b = uppers[-1]
+                middle_rest = uppers[2:-1]
+
+                q_low = max(1, safe_int(low_b.get("qty"), 1))
+                q_high = max(1, safe_int(high_b.get("qty"), 1))
+                tot_q = q_low + q_high
+                tot_ac = round(
+                    safe_float(low_b.get("actual_cost_usd"), 0.0)
+                    + safe_float(high_b.get("actual_cost_usd"), 0.0),
+                    4,
+                )
+                tot_lc = max(1, safe_int(low_b.get("lot_count"), 1)) + max(
+                    1, safe_int(high_b.get("lot_count"), 1)
+                )
+                overall_book_avg = (
+                    float(q_low) * safe_float(low_b.get("book_price"), 0.0)
+                    + float(q_high) * safe_float(high_b.get("book_price"), 0.0)
+                ) / float(max(1, tot_q))
+                raw_p = max(0.01, tot_ac / float(max(1, tot_q)))
+                pure_p = round(
+                    min(raw_p, overall_book_avg)
+                    if overall_book_avg > 0.0
+                    else raw_p,
+                    4,
+                )
+                merged_b = {
+                    "qty": max(1, tot_q),
+                    "book_price": pure_p,
+                    "book_invested_usd": tot_ac,
+                    "actual_cost_usd": tot_ac,
+                    "lot_count": max(1, tot_lc),
+                    "lot_type": f"GRID_L{MAX_GRID_TIERS_7}",
+                }
+                uppers = kept_lowest_upper + middle_rest + [merged_b]
+                uppers.sort(
+                    key=lambda b: round(safe_float(b.get("book_price"), 0.0), 4)
+                )
+            else:
+                kept = uppers[: max_upper_cnt - 1]
+                overflow = uppers[max_upper_cnt - 1 :]
+                tot_q = sum(safe_int(b.get("qty"), 0) for b in overflow)
+                tot_ac = round(
+                    sum(
+                        safe_float(b.get("actual_cost_usd"), 0.0)
+                        for b in overflow
+                    ),
+                    4,
+                )
+                tot_lc = sum(
+                    max(1, safe_int(b.get("lot_count"), 1)) for b in overflow
+                )
+                pure_p = round(max(0.01, tot_ac / float(max(1, tot_q))), 4)
+                merged_top = {
+                    "qty": max(1, tot_q),
+                    "book_price": pure_p,
+                    "book_invested_usd": tot_ac,
+                    "actual_cost_usd": tot_ac,
+                    "lot_count": max(1, tot_lc),
+                    "lot_type": f"GRID_L{MAX_GRID_TIERS_7}",
+                }
+                uppers = kept + [merged_top]
 
         relabeled_uppers: List[Dict[str, Any]] = []
         for idx, b in enumerate(uppers):
@@ -606,21 +939,165 @@ class SoxlStratumLedger:
 
         return l1_list + relabeled_uppers
 
+    @classmethod
+    def _enforce_sub_3tier_cap_on_dict_buckets(
+        cls,
+        clean_sub_buckets: List[Dict[str, Any]],
+        merge_mode: str = SUB_MERGE_MODE_L1_L3,
+    ) -> List[Dict[str, Any]]:
+        """
+        # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 만석 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
+        서브 그리드 원장에 3개 층 초과(상단 2개 초과) 버킷이 존재할 경우:
+        1) merge_mode == "SUB_L1_L3_MERGE" 이고 상단 지층 후보가 3개 이상일 때:
+           - 최하단 상단층 후보인 low_b = uppers[0] (서브 구 1층)과 최상단층 후보인 high_b = uppers[-1] (서브 구 3층)을
+             원자적 가중평균 통합(Case 53 상한 하드 캡핑 적용)하고, 보존된 중간 구 2층(uppers[1:-1])과 함께
+             단가(book_price) 오름차순으로 정렬하여 재배치한다!
+        2) 서브 상단 지층들을 GRID_L2, GRID_L3 로 정규화하여 3-Layer 규격을 100% 보장한다.
+        """
+        if not clean_sub_buckets:
+            return []
+
+        has_active_l1 = not cls._is_upper_grid_tag(
+            str(clean_sub_buckets[0].get("lot_type") or "")
+        )
+        if has_active_l1:
+            l1_list = [clean_sub_buckets[0]]
+            uppers = list(clean_sub_buckets[1:])
+        else:
+            l1_list = []
+            uppers = list(clean_sub_buckets[:])
+
+        max_upper_cnt = SUB_MAX_TIERS_3 - 1  # 2개 (GRID_L2 ~ GRID_L3)
+        m_mode = str(merge_mode or SUB_MERGE_MODE_L1_L3).upper().strip()
+
+        while len(uppers) > max_upper_cnt:
+            if m_mode == "SUB_L1_L3_MERGE" and len(uppers) >= 3:
+                low_b = uppers[0]
+                high_b = uppers[-1]
+                middle_rest = uppers[1:-1]
+
+                q_low = max(1, safe_int(low_b.get("qty"), 1))
+                q_high = max(1, safe_int(high_b.get("qty"), 1))
+                tot_q = q_low + q_high
+                tot_ac = round(
+                    safe_float(low_b.get("actual_cost_usd"), 0.0)
+                    + safe_float(high_b.get("actual_cost_usd"), 0.0),
+                    4,
+                )
+                tot_lc = max(1, safe_int(low_b.get("lot_count"), 1)) + max(
+                    1, safe_int(high_b.get("lot_count"), 1)
+                )
+                overall_book_avg = (
+                    float(q_low) * safe_float(low_b.get("book_price"), 0.0)
+                    + float(q_high) * safe_float(high_b.get("book_price"), 0.0)
+                ) / float(max(1, tot_q))
+                raw_p = max(0.01, tot_ac / float(max(1, tot_q)))
+                pure_p = round(
+                    min(raw_p, overall_book_avg)
+                    if overall_book_avg > 0.0
+                    else raw_p,
+                    4,
+                )
+                merged_b = {
+                    "qty": max(1, tot_q),
+                    "book_price": pure_p,
+                    "book_invested_usd": tot_ac,
+                    "actual_cost_usd": tot_ac,
+                    "lot_count": max(1, tot_lc),
+                    "lot_type": f"GRID_L{SUB_MAX_TIERS_3}",
+                }
+                uppers = middle_rest + [merged_b]
+                uppers.sort(
+                    key=lambda b: round(safe_float(b.get("book_price"), 0.0), 4)
+                )
+            else:
+                kept = uppers[: max_upper_cnt - 1]
+                overflow = uppers[max_upper_cnt - 1 :]
+                tot_q = sum(safe_int(b.get("qty"), 0) for b in overflow)
+                tot_ac = round(
+                    sum(
+                        safe_float(b.get("actual_cost_usd"), 0.0)
+                        for b in overflow
+                    ),
+                    4,
+                )
+                tot_lc = sum(
+                    max(1, safe_int(b.get("lot_count"), 1)) for b in overflow
+                )
+                pure_p = round(max(0.01, tot_ac / float(max(1, tot_q))), 4)
+                merged_top = {
+                    "qty": max(1, tot_q),
+                    "book_price": pure_p,
+                    "book_invested_usd": tot_ac,
+                    "actual_cost_usd": tot_ac,
+                    "lot_count": max(1, tot_lc),
+                    "lot_type": f"GRID_L{SUB_MAX_TIERS_3}",
+                }
+                uppers = kept + [merged_top]
+
+        relabeled_uppers: List[Dict[str, Any]] = []
+        for idx, b in enumerate(uppers):
+            tier_no = min(SUB_MAX_TIERS_3, idx + 2)
+            b_copy = dict(b)
+            b_copy["lot_type"] = f"GRID_L{tier_no}"
+            relabeled_uppers.append(b_copy)
+
+        return l1_list + relabeled_uppers
+
+    @classmethod
+    def _sanitize_golden_pocket_dict(
+        cls, raw_pocket: Any
+    ) -> Dict[str, Any]:
+        """
+        # [Case 69, Case 71 & Case 80 : 독립 골든포켓(golden_pocket) 순수 실물 원가 정규화기]:
+        golden_pocket 의 qty > 0 일 때 book_price == actual_avg_price 및
+        book_invested_usd == actual_cost_usd 를 100% 일치시켜 원가 훼손을 원천 차단한다.
+        """
+        if not isinstance(raw_pocket, dict):
+            return cls._empty_golden_pocket_dict()
+        q = safe_int(raw_pocket.get("qty"), 0)
+        if q <= 0:
+            return cls._empty_golden_pocket_dict()
+        raw_p = safe_float(
+            raw_pocket.get("book_price"),
+            safe_float(raw_pocket.get("buy_price"), 0.0),
+        )
+        raw_bi = safe_float(
+            raw_pocket.get("book_invested_usd"), float(q) * max(0.0, raw_p)
+        )
+        ac = safe_float(raw_pocket.get("actual_cost_usd"), raw_bi)
+        if ac <= 0.0 and raw_p > 0.0:
+            ac = float(q) * raw_p
+        if ac <= 0.0:
+            return cls._empty_golden_pocket_dict()
+        clean_cost = round(max(0.01 * float(q), ac), 4)
+        pure_p = round(max(0.01, clean_cost / float(q)), 4)
+        return {
+            "qty": q,
+            "book_price": pure_p,
+            "book_invested_usd": clean_cost,
+            "actual_cost_usd": clean_cost,
+            "entry_ts": round(
+                max(0.0, safe_float(raw_pocket.get("entry_ts"), 0.0)), 4
+            ),
+            "order_date": str(raw_pocket.get("order_date") or "").strip(),
+        }
     def _sanitize_and_enforce_identity(
         self, raw_st: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        🚨 Case 63, Case 64, Case 68, Case 69, Case 70, Case 71 & Case 72:
+        🚨 Case 63, Case 64, Case 67, Case 68, Case 69, Case 70, Case 71, Case 72, Case 73, Case 74, Case 76, Case 77, Case 78, Case 80, Case 86, Case 87 & Case 88:
         1) buy_interval_min = 10, sell_interval_min = 1, max_grid_tiers = 7 (MAX_GRID_TIERS_7),
-           portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY" 를 강제 동기화한다.
-        2) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
-        3) 🛡️ [Case 69, Case 71 & Case 72 순수 실물 원가 100% 보존 강제 (리앵커링 원가 차감 영구 폐기)]:
-           - 모든 보유 지층(1층 ~ 7층)의 장부 단가(book_price)와 장부 투자금(book_invested_usd)을
-             순수 실물 매수 원가(actual_avg_price = ac / q, actual_cost_usd = ac)와 100% 일치시켜,
-             리앵커링 차감이나 이동평균 희석으로 인한 조기 손절 착시를 물리적으로 원천 봉쇄한다!
-           - cycle_reanchor_credit_usd = 0.0 으로 항상 고정한다.
-        4) 회계 항등식(free_cash_usd = max(0.0, initial_seed_usd + cumulative_realized_net_usd - actual_invested))을
-           항상 정밀 유지한다.
+           portion_mode = "COMP_08PCT", threshold_mode = "WIDE_RUNWAY",
+           grid_merge_mode = "L2_L7_MERGE_SORT", unlock_mode = "STEP2X_15PCT_C20",
+           sub_grid_enabled = True (Default ON), sub_merge_mode = "SUB_L1_L3_MERGE",
+           sub_max_tiers = 3, sub_max_total_lots = 4 를 강제 동기화하고,
+           golden_allin_mode 는 GOLDEN_ALLIN_MODES ("NONE", "POCKET_ALLIN", "GRID_L1_ALLIN") 중 하나로 검증한다(기본값 "NONE").
+        2) 계좌별 미국 주식 수수료율(us_commission_rate, round_trip_fee_rate_pct)을 유효 범위(왕복 0.01% ~ 2.00%)로 정규화하고
+           런타임 메모리 캐시에 동기화한다.
+        3) 시드머니 결측 또는 0.0 유입 시 $100.0 으로 변조되지 않도록 _resolve_safe_initial_seed() 를 적용한다.
+        4) 🛡️ [Case 69, Case 71, Case 72, Case 80, Case 87 & Case 88 순수 실물 원가 100% 보존 및 본/서브 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 강제]
+        5) 💉 [Case 77, Case 80 & Case 88 온디맨드 예비시드 수혈 잔액(injected_reserve_usd) · 본 그리드 · 서브 그리드 · 골든포켓 투입원금 통합 회계 항등식]
         """
         st = self._default_symbol_state(
             folder_slug=self.folder_slug,
@@ -637,6 +1114,125 @@ class SoxlStratumLedger:
         st["portion_mode"] = "COMP_08PCT"
         st["threshold_mode"] = "WIDE_RUNWAY"
         st["reentry_mode"] = "HYBRID_PULL_OR_BRK"
+        st["grid_merge_mode"] = DEFAULT_GRID_MERGE_MODE
+        st["unlock_mode"] = DEFAULT_UNLOCK_MODE
+        st["sub_grid_enabled"] = True
+        st["sub_merge_mode"] = SUB_MERGE_MODE_L1_L3
+        st["sub_max_tiers"] = SUB_MAX_TIERS_3
+        st["sub_max_total_lots"] = SUB_MAX_TOTAL_LOTS_4
+
+        st["cond_unlock_buy_events"] = max(
+            0, safe_int(st.get("cond_unlock_buy_events"), 0)
+        )
+        st["daily_unlock_buy_events"] = max(
+            0, safe_int(st.get("daily_unlock_buy_events"), 0)
+        )
+
+        # [Case 86]: 계좌별 미국 주식 수수료율 정규화 및 런타임 캐시 동기화
+        env_one_fb, env_rt_fb = _read_env_us_commission_rates()
+        raw_us_comm = safe_float(st.get("us_commission_rate"), env_one_fb)
+        if raw_us_comm <= 0.0 or raw_us_comm > 0.01:
+            raw_us_comm = env_one_fb
+        raw_rt_pct = safe_float(
+            st.get("round_trip_fee_rate_pct"),
+            round(raw_us_comm * 200.0, 4),
+        )
+        if raw_rt_pct <= 0.0 or raw_rt_pct > 2.0:
+            raw_rt_pct = (
+                round(raw_us_comm * 200.0, 4)
+                if (0.0 < raw_us_comm <= 0.01)
+                else env_rt_fb
+            )
+        st["us_commission_rate"] = round(raw_us_comm, 6)
+        st["round_trip_fee_rate_pct"] = round(raw_rt_pct, 4)
+        set_runtime_round_trip_fee_rate_pct(
+            st["round_trip_fee_rate_pct"],
+            us_commission_rate=st["us_commission_rate"],
+        )
+
+        # [Case 80]: 황금시간대 전액매수 모드 검증 (기본값 "NONE" [OFF]) 및 통계 정규화
+        raw_g_mode = (
+            str(st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE)
+            .upper()
+            .strip()
+        )
+        if raw_g_mode not in GOLDEN_ALLIN_MODES:
+            raw_g_mode = DEFAULT_GOLDEN_ALLIN_MODE
+        st["golden_allin_mode"] = raw_g_mode
+        st["last_golden_allin_date"] = str(
+            st.get("last_golden_allin_date") or ""
+        ).strip()
+        st["golden_allin_buy_events"] = max(
+            0, safe_int(st.get("golden_allin_buy_events"), 0)
+        )
+        st["daily_golden_allin_buy_events"] = max(
+            0, safe_int(st.get("daily_golden_allin_buy_events"), 0)
+        )
+        st["golden_pocket_sell_cnt"] = max(
+            0, safe_int(st.get("golden_pocket_sell_cnt"), 0)
+        )
+        st["daily_golden_pocket_sell_cnt"] = max(
+            0, safe_int(st.get("daily_golden_pocket_sell_cnt"), 0)
+        )
+        st["golden_realized_net_usd"] = round(
+            safe_float(st.get("golden_realized_net_usd"), 0.0), 4
+        )
+        st["daily_golden_realized_net_usd"] = round(
+            safe_float(st.get("daily_golden_realized_net_usd"), 0.0), 4
+        )
+
+        clean_pocket = self._sanitize_golden_pocket_dict(
+            st.get("golden_pocket")
+        )
+        st["golden_pocket"] = clean_pocket
+        pocket_qty = safe_int(clean_pocket.get("qty"), 0)
+        pocket_cost = round(
+            safe_float(clean_pocket.get("actual_cost_usd"), 0.0), 4
+        )
+
+        # Case 77: 예비시드 수혈·상환·자투리차단 카운터 및 단 1회 입금 알림 래치 정규화
+        inj_res_usd = round(
+            max(0.0, safe_float(st.get("injected_reserve_usd"), 0.0)), 4
+        )
+        raw_used_p = safe_int(st.get("used_reserve_portions_cnt"), 0)
+        if inj_res_usd <= 0.0:
+            inj_res_usd = 0.0
+            used_res_p = 0
+        else:
+            used_res_p = max(
+                1, min(MAX_RESERVE_PORTIONS, raw_used_p if raw_used_p > 0 else 1)
+            )
+        st["injected_reserve_usd"] = inj_res_usd
+        st["used_reserve_portions_cnt"] = used_res_p
+        st["total_reserve_injected_cnt"] = max(
+            0, safe_int(st.get("total_reserve_injected_cnt"), 0)
+        )
+        st["daily_reserve_injected_cnt"] = max(
+            0, safe_int(st.get("daily_reserve_injected_cnt"), 0)
+        )
+        st["cumulative_reserve_repaid_usd"] = round(
+            max(0.0, safe_float(st.get("cumulative_reserve_repaid_usd"), 0.0)),
+            4,
+        )
+        st["dust_guard_blocked_cnt"] = max(
+            0, safe_int(st.get("dust_guard_blocked_cnt"), 0)
+        )
+        st["daily_dust_guard_blocked_cnt"] = max(
+            0, safe_int(st.get("daily_dust_guard_blocked_cnt"), 0)
+        )
+        st["waiting_reserve_deposit"] = bool(
+            st.get("waiting_reserve_deposit", False)
+        )
+        st["waiting_reserve_deposit_alert_sent"] = bool(
+            st.get("waiting_reserve_deposit_alert_sent", False)
+        )
+        st["required_reserve_deposit_usd"] = round(
+            max(0.0, safe_float(st.get("required_reserve_deposit_usd"), 0.0)),
+            2,
+        )
+        st["last_reserve_check_ts"] = round(
+            max(0.0, safe_float(st.get("last_reserve_check_ts"), 0.0)), 4
+        )
 
         init_seed = self._resolve_safe_initial_seed(
             st, fallback_seed=self._last_known_valid_seed
@@ -650,6 +1246,7 @@ class SoxlStratumLedger:
         )
         st["cumulative_realized_net_usd"] = cum_net
 
+        # 본 그리드(buckets) 순수 원가 정규화 및 7층 캡 강제
         raw_buckets = st.get("buckets")
         clean_buckets: List[Dict[str, Any]] = []
         if isinstance(raw_buckets, list):
@@ -687,17 +1284,183 @@ class SoxlStratumLedger:
                         }
                     )
 
-        clean_buckets = self._enforce_7tier_cap_on_dict_buckets(clean_buckets)
+        clean_buckets = self._enforce_7tier_cap_on_dict_buckets(
+            clean_buckets, merge_mode=st["grid_merge_mode"]
+        )
         st["buckets"] = clean_buckets
         st["cycle_reanchor_credit_usd"] = 0.0
 
-        if not clean_buckets:
-            st["last_sell_gate_eval_ts"] = 0.0
-            st["pending_sell_indices"] = []
+        # NEW [Case 88 : 3층 서브 그리드(sub_buckets) 순수 원가 정규화 및 3층 SUB_L1_L3_MERGE 캡 강제]
+        raw_sub_buckets = st.get("sub_buckets")
+        clean_sub_buckets: List[Dict[str, Any]] = []
+        if isinstance(raw_sub_buckets, list):
+            for sb in raw_sub_buckets:
+                if isinstance(sb, dict) and safe_int(sb.get("qty"), 0) > 0:
+                    sq = max(1, safe_int(sb.get("qty"), 1))
+                    sbp_raw = round(
+                        max(0.01, safe_float(sb.get("book_price"), 0.01)), 4
+                    )
+                    sbi_raw = round(
+                        max(
+                            0.01 * sq,
+                            safe_float(
+                                sb.get("book_invested_usd"), sq * sbp_raw
+                            ),
+                        ),
+                        4,
+                    )
+                    sac = round(
+                        max(
+                            0.01 * sq,
+                            safe_float(sb.get("actual_cost_usd"), sbi_raw),
+                        ),
+                        4,
+                    )
+                    slc = max(1, safe_int(sb.get("lot_count"), 1))
+                    slt = (
+                        str(sb.get("lot_type") or "SUB_REENTRY_1FL")
+                        .upper()
+                        .strip()
+                    )
+                    spure_avg_p = round(max(0.01, sac / float(sq)), 4)
+                    clean_sub_buckets.append(
+                        {
+                            "qty": sq,
+                            "book_price": spure_avg_p,
+                            "book_invested_usd": round(sac, 4),
+                            "actual_cost_usd": round(sac, 4),
+                            "lot_count": slc,
+                            "lot_type": slt,
+                        }
+                    )
+
+        clean_sub_buckets = self._enforce_sub_3tier_cap_on_dict_buckets(
+            clean_sub_buckets, merge_mode=st["sub_merge_mode"]
+        )
+        st["sub_buckets"] = clean_sub_buckets
+
+        # [Case 87 & Case 88 : 본 그리드 및 서브 그리드 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금 정합성 강제]
+        held_lots_now = sum(
+            max(1, safe_int(b.get("lot_count"), 1)) for b in clean_buckets
+        )
+        raw_ratchet_lots = max(
+            0, safe_int(st.get("cycle_ratchet_max_lots"), 0)
+        )
+
+        sub_held_lots_now = sum(
+            max(1, safe_int(sb.get("lot_count"), 1))
+            for sb in clean_sub_buckets
+        )
+        raw_sub_ratchet_lots = max(
+            0, safe_int(st.get("sub_ratchet_max_lots"), 0)
+        )
+
+        raw_settled_ids = st.get("last_settled_order_ids")
+        if isinstance(raw_settled_ids, list):
+            clean_oids: List[str] = []
+            for x in raw_settled_ids:
+                sx = str(x or "").strip()
+                if sx and sx not in clean_oids:
+                    clean_oids.append(sx)
+            st["last_settled_order_ids"] = clean_oids[-50:]
         else:
+            st["last_settled_order_ids"] = []
+
+        has_pending_buy = bool(str(st.get("buy_order_id") or "").strip())
+        has_pending_sell = bool(str(st.get("sell_order_id") or "").strip())
+        raw_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
+        raw_sub_target_q = max(
+            0, safe_int(st.get("sub_l1_target_quota_qty"), 0)
+        )
+        pending_lot_tag = (
+            str(st.get("pending_lot_type") or "").upper().strip()
+        )
+        is_pending_sub_buy = pending_lot_tag.startswith("SUB_")
+
+        if pocket_qty > 0 and has_pending_sell:
+            st["pending_sell_pocket_qty"] = max(
+                0,
+                min(
+                    pocket_qty,
+                    safe_int(st.get("pending_sell_pocket_qty"), 0),
+                ),
+            )
+        else:
+            st["pending_sell_pocket_qty"] = 0
+
+        # MODIFIED [Case 60, Case 87 & Case 88 : 본 그리드 0주 시 cycle_min_buy_price 및 cycle_ratchet_max_lots 동시 초기화 강제]
+        if not clean_buckets:
+            st["cycle_ratchet_max_lots"] = 0
+            st["cycle_min_buy_price"] = 0.0
+            st["main_consec_frozen_days"] = 0
+            st["last_sell_gate_eval_ts"] = 0.0
+            st["last_reentry_eval_ts"] = 0.0
+            st["pending_sell_indices"] = []
+            st["pending_step_up_min_price"] = 0.0
+            st["l1_target_quota_qty"] = (
+                raw_target_q
+                if (
+                    has_pending_buy
+                    and not is_pending_sub_buy
+                    and pending_lot_tag != "GOLDEN_POCKET"
+                )
+                else 0
+            )
+        else:
+            st["cycle_ratchet_max_lots"] = max(held_lots_now, raw_ratchet_lots)
+            st["main_consec_frozen_days"] = max(
+                0, safe_int(st.get("main_consec_frozen_days"), 0)
+            )
             st["last_sell_gate_eval_ts"] = round(
                 max(0.0, safe_float(st.get("last_sell_gate_eval_ts"), 0.0)), 4
             )
+            has_active_l1 = not self._is_upper_grid_tag(
+                str(clean_buckets[0].get("lot_type") or "")
+            )
+            if has_active_l1:
+                st["last_reentry_eval_ts"] = 0.0
+                cur_l1_q = max(1, safe_int(clean_buckets[0].get("qty"), 1))
+                if (
+                    has_pending_buy
+                    and not is_pending_sub_buy
+                    and pending_lot_tag not in ("", "TOPUP_1FL", "GOLDEN_POCKET")
+                ):
+                    ord_q_pending = max(0, safe_int(st.get("ordered_qty"), 0))
+                    st["l1_target_quota_qty"] = (
+                        raw_target_q
+                        if raw_target_q > 0
+                        else (
+                            ord_q_pending if ord_q_pending > 0 else cur_l1_q
+                        )
+                    )
+                else:
+                    st["l1_target_quota_qty"] = max(cur_l1_q, raw_target_q)
+            else:
+                st["last_reentry_eval_ts"] = round(
+                    max(0.0, safe_float(st.get("last_reentry_eval_ts"), 0.0)),
+                    4,
+                )
+                st["l1_target_quota_qty"] = (
+                    raw_target_q
+                    if (
+                        has_pending_buy
+                        and not is_pending_sub_buy
+                        and pending_lot_tag != "GOLDEN_POCKET"
+                    )
+                    else 0
+                )
+
+            if has_pending_buy and not is_pending_sub_buy:
+                st["pending_step_up_min_price"] = round(
+                    max(
+                        0.0,
+                        safe_float(st.get("pending_step_up_min_price"), 0.0),
+                    ),
+                    4,
+                )
+            else:
+                st["pending_step_up_min_price"] = 0.0
+
             raw_p_idx = st.get("pending_sell_indices")
             if isinstance(raw_p_idx, list):
                 valid_idx = sorted(
@@ -711,12 +1474,166 @@ class SoxlStratumLedger:
             else:
                 st["pending_sell_indices"] = []
 
-        actual_inv = round(
+        # NEW [Case 88 : 서브 그리드 상태 정합성 강제]
+        if not clean_sub_buckets:
+            st["sub_ratchet_max_lots"] = 0
+            st["sub_cycle_min_buy_price"] = 0.0
+            st["sub_consec_frozen_days"] = 0
+            st["last_sub_reentry_eval_ts"] = 0.0
+            st["pending_sub_sell_indices"] = []
+            st["pending_sub_step_up_min_price"] = 0.0
+            st["sub_l1_target_quota_qty"] = (
+                raw_sub_target_q if (has_pending_buy and is_pending_sub_buy) else 0
+            )
+        else:
+            st["sub_ratchet_max_lots"] = max(
+                sub_held_lots_now, raw_sub_ratchet_lots
+            )
+            st["sub_consec_frozen_days"] = max(
+                0, safe_int(st.get("sub_consec_frozen_days"), 0)
+            )
+            has_sub_active_l1 = not self._is_upper_grid_tag(
+                str(clean_sub_buckets[0].get("lot_type") or "")
+            )
+            if has_sub_active_l1:
+                st["last_sub_reentry_eval_ts"] = 0.0
+                cur_sub_l1_q = max(
+                    1, safe_int(clean_sub_buckets[0].get("qty"), 1)
+                )
+                if (
+                    has_pending_buy
+                    and is_pending_sub_buy
+                    and pending_lot_tag != "SUB_TOPUP_1FL"
+                ):
+                    ord_q_pending = max(0, safe_int(st.get("ordered_qty"), 0))
+                    st["sub_l1_target_quota_qty"] = (
+                        raw_sub_target_q
+                        if raw_sub_target_q > 0
+                        else (
+                            ord_q_pending
+                            if ord_q_pending > 0
+                            else cur_sub_l1_q
+                        )
+                    )
+                else:
+                    st["sub_l1_target_quota_qty"] = max(
+                        cur_sub_l1_q, raw_sub_target_q
+                    )
+            else:
+                st["last_sub_reentry_eval_ts"] = round(
+                    max(
+                        0.0,
+                        safe_float(st.get("last_sub_reentry_eval_ts"), 0.0),
+                    ),
+                    4,
+                )
+                st["sub_l1_target_quota_qty"] = (
+                    raw_sub_target_q
+                    if (has_pending_buy and is_pending_sub_buy)
+                    else 0
+                )
+
+            if has_pending_buy and is_pending_sub_buy:
+                st["pending_sub_step_up_min_price"] = round(
+                    max(
+                        0.0,
+                        safe_float(
+                            st.get("pending_sub_step_up_min_price"), 0.0
+                        ),
+                    ),
+                    4,
+                )
+            else:
+                st["pending_sub_step_up_min_price"] = 0.0
+
+            raw_sub_p_idx = st.get("pending_sub_sell_indices")
+            if isinstance(raw_sub_p_idx, list):
+                valid_sub_idx = sorted(
+                    {
+                        safe_int(x, -1)
+                        for x in raw_sub_p_idx
+                        if 0 <= safe_int(x, -1) < len(clean_sub_buckets)
+                    }
+                )
+                st["pending_sub_sell_indices"] = valid_sub_idx
+            else:
+                st["pending_sub_sell_indices"] = []
+
+        # 서브 그리드 누적/당일 카운터 정규화
+        st["sub_buy_events"] = max(0, safe_int(st.get("sub_buy_events"), 0))
+        st["sub_buy_shares"] = max(0, safe_int(st.get("sub_buy_shares"), 0))
+        st["daily_sub_buy_cnt"] = max(
+            0, safe_int(st.get("daily_sub_buy_cnt"), 0)
+        )
+        st["daily_sub_buy_events"] = max(
+            0, safe_int(st.get("daily_sub_buy_events"), 0)
+        )
+        st["sub_sell_events"] = max(0, safe_int(st.get("sub_sell_events"), 0))
+        st["sub_sold_shares"] = max(0, safe_int(st.get("sub_sold_shares"), 0))
+        st["daily_sub_sell_cnt"] = max(
+            0, safe_int(st.get("daily_sub_sell_cnt"), 0)
+        )
+        st["daily_sub_sell_events"] = max(
+            0, safe_int(st.get("daily_sub_sell_events"), 0)
+        )
+        st["sub_merge_events"] = max(
+            0, safe_int(st.get("sub_merge_events"), 0)
+        )
+        st["sub_merged_indiv_escape_cnt"] = max(
+            0, safe_int(st.get("sub_merged_indiv_escape_cnt"), 0)
+        )
+        st["sub_unlock_events"] = max(
+            0, safe_int(st.get("sub_unlock_events"), 0)
+        )
+        st["daily_sub_unlock_events"] = max(
+            0, safe_int(st.get("daily_sub_unlock_events"), 0)
+        )
+        st["sub_completed_cycles"] = max(
+            0, safe_int(st.get("sub_completed_cycles"), 0)
+        )
+        st["sub_realized_gross_usd"] = round(
+            safe_float(st.get("sub_realized_gross_usd"), 0.0), 4
+        )
+        st["sub_realized_fee_usd"] = round(
+            safe_float(st.get("sub_realized_fee_usd"), 0.0), 4
+        )
+        st["sub_realized_net_usd"] = round(
+            safe_float(st.get("sub_realized_net_usd"), 0.0), 4
+        )
+        st["daily_sub_realized_net_usd"] = round(
+            safe_float(st.get("daily_sub_realized_net_usd"), 0.0), 4
+        )
+        st["daily_main_buy_cnt"] = max(
+            0, safe_int(st.get("daily_main_buy_cnt"), 0)
+        )
+        st["daily_main_sell_cnt"] = max(
+            0, safe_int(st.get("daily_main_sell_cnt"), 0)
+        )
+
+        # 🚨 [Case 77, Case 80 & Case 88 통합 회계 항등식(Accounting Identity) 강제]
+        actual_inv_buckets = round(
             sum(safe_float(b["actual_cost_usd"], 0.0) for b in clean_buckets),
             4,
         )
+        actual_inv_sub = round(
+            sum(
+                safe_float(sb["actual_cost_usd"], 0.0)
+                for sb in clean_sub_buckets
+            ),
+            4,
+        )
+        actual_inv_total = round(
+            actual_inv_buckets + actual_inv_sub + pocket_cost, 4
+        )
         realized_equity = max(0.0, init_seed + cum_net)
-        st["free_cash_usd"] = round(max(0.0, realized_equity - actual_inv), 4)
+        total_pool_equity = realized_equity + inj_res_usd
+        st["free_cash_usd"] = round(
+            max(0.0, total_pool_equity - actual_inv_total), 4
+        )
+
+        if not st["waiting_reserve_deposit"]:
+            st["required_reserve_deposit_usd"] = 0.0
+
         st["updated_at"] = datetime.now(EST_TZ).isoformat()
         return st
 
@@ -726,24 +1643,63 @@ class SoxlStratumLedger:
             return None
         if TARGET_SYMBOL in loaded and isinstance(loaded[TARGET_SYMBOL], dict):
             return dict(loaded[TARGET_SYMBOL])
-        if "buckets" in loaded or "initial_seed_usd" in loaded:
+        if (
+            "buckets" in loaded
+            or "sub_buckets" in loaded
+            or "initial_seed_usd" in loaded
+        ):
             return dict(loaded)
         return None
+
+    @staticmethod
+    def _is_state_materially_equal(
+        st_a: Optional[Dict[str, Any]],
+        st_b: Optional[Dict[str, Any]],
+    ) -> bool:
+        """
+        # [Case 75 : 원장 Dirty-Check 비교기]:
+        두 원장 상태 딕셔너리에서 매 호출마다 바뀌는 타임스탬프("updated_at")만 제외하고
+        나머지 모든 실질 필드가 100% 동일한지 판별한다.
+        """
+        if not isinstance(st_a, dict) or not isinstance(st_b, dict):
+            return False
+        cmp_a = {k: v for k, v in st_a.items() if k != "updated_at"}
+        cmp_b = {k: v for k, v in st_b.items() if k != "updated_at"}
+        return cmp_a == cmp_b
 
     @staticmethod
     def _score_ledger_state(
         st: Dict[str, Any],
     ) -> Tuple[int, int, int, float, str]:
         """
-        🚨 Case 68 [다중 원장 상태 비교 자가 치유 스코어링]:
-        폴더 내 3개 원장 후보(고유 원장 · 실시간 백업 금고 · 호환 원장) 중
-        실수로 초기화된 빈 파일 대신 실제 매매 데이터를 보유한 최적 원장을 선택하기 위한 우선순위 튜플.
+        🚨 Case 68, Case 77, Case 80 & Case 88 [다중 원장 상태 비교 자가 치유 스코어링]:
+        폴더 내 3개 원장 후보 중 실제 매매 데이터(본 그리드 + 서브 그리드 + 골든포켓)를 보유한 최적 원장을 선택하기 위한 우선순위 튜플.
         """
         buckets = (
             st.get("buckets") if isinstance(st.get("buckets"), list) else []
         )
-        total_qty = sum(
-            safe_int(b.get("qty"), 0) for b in buckets if isinstance(b, dict)
+        sub_buckets = (
+            st.get("sub_buckets")
+            if isinstance(st.get("sub_buckets"), list)
+            else []
+        )
+        gp = (
+            st.get("golden_pocket")
+            if isinstance(st.get("golden_pocket"), dict)
+            else {}
+        )
+        total_qty = (
+            sum(
+                safe_int(b.get("qty"), 0)
+                for b in buckets
+                if isinstance(b, dict)
+            )
+            + sum(
+                safe_int(sb.get("qty"), 0)
+                for sb in sub_buckets
+                if isinstance(sb, dict)
+            )
+            + max(0, safe_int(gp.get("qty"), 0))
         )
         has_pending_ord = bool(
             str(st.get("buy_order_id") or "").strip()
@@ -754,6 +1710,11 @@ class SoxlStratumLedger:
         trade_cnt = (
             safe_int(st.get("total_buy_events"), 0)
             + safe_int(st.get("total_sell_events"), 0)
+            + safe_int(st.get("sub_buy_events"), 0)
+            + safe_int(st.get("sub_sell_events"), 0)
+            + safe_int(st.get("cond_unlock_buy_events"), 0)
+            + safe_int(st.get("golden_allin_buy_events"), 0)
+            + safe_int(st.get("total_reserve_injected_cnt"), 0)
             + safe_int(st.get("reanchor_cnt"), 0)
         )
         seed_val = safe_float(st.get("initial_seed_usd"), 0.0)
@@ -761,7 +1722,8 @@ class SoxlStratumLedger:
 
         realized_metric = round(
             abs(safe_float(st.get("cumulative_realized_net_usd"), 0.0))
-            + safe_float(st.get("cumulative_leftover_saved_usd"), 0.0),
+            + safe_float(st.get("cumulative_leftover_saved_usd"), 0.0)
+            + safe_float(st.get("injected_reserve_usd"), 0.0),
             4,
         )
         updated_str = str(st.get("updated_at") or "")
@@ -788,12 +1750,7 @@ class SoxlStratumLedger:
 
     def _load_sync(self) -> None:
         """
-        🚨 Case 68 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 자가 치유]:
-        1) primary_filepath (`soxl_stratum_ledger_<폴더명>.json`)
-        2) backup_filepath  (`ledger_backups/soxl_stratum_ledger_<폴더명>.bak.json`)
-        3) legacy_filepath  (`soxl_stratum_ledger.json`)
-        3개 파일을 모두 검사하여 가장 풍부하고 유효한 상태를 가진 원장을 채택한 뒤,
-        즉시 3개 경로 모두에 원자적으로 동기화 저장한다.
+        🚨 Case 68, Case 75, Case 80, Case 85, Case 86, Case 87 & Case 88 [기존 soxl_stratum_ledger.json 100% 무손실 자동 이관 & 3중 금고 Dirty-Check 자가 치유]:
         """
         with GlobalThrottle.get_file_lock(self.primary_filepath):
             with GlobalThrottle.get_file_lock(self.legacy_filepath):
@@ -840,64 +1797,172 @@ class SoxlStratumLedger:
                         safe_int(b.get("qty"), 0)
                         for b in sanitized.get("buckets", [])
                     )
+                    held_l = sum(
+                        max(1, safe_int(b.get("lot_count"), 1))
+                        for b in sanitized.get("buckets", [])
+                    )
+                    ratchet_l = safe_int(
+                        sanitized.get("cycle_ratchet_max_lots"), 0
+                    )
+                    sub_q = sum(
+                        safe_int(sb.get("qty"), 0)
+                        for sb in sanitized.get("sub_buckets", [])
+                    )
+                    sub_l = sum(
+                        max(1, safe_int(sb.get("lot_count"), 1))
+                        for sb in sanitized.get("sub_buckets", [])
+                    )
+                    gp_q = safe_int(
+                        (sanitized.get("golden_pocket") or {}).get("qty"), 0
+                    )
                     logger.info(
-                        "📂 [Case 68~72 폴더별 3중 7층 골디락스 그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 보유=%d주(%d개층) · 고유원장=%s",
+                        "📂 [Case 68~88 폴더별 3중 7층 본그리드 + Default-ON 3층 서브그리드 원장 락온 완료] 폴더=[%s] · 채택소스=%s · 시드=$%.2f · 왕복수수료=%.2f%% · 본그리드=%d주(%d개층·보유%d/잠금%d회차) · 서브그리드=%d주(%d개층·%d/%d회분) · 골든포켓=%d주(모드=%s) · 예비수혈=%d/%d회분($%.2f) · 고유원장=%s",
                         self.folder_slug,
                         best_label,
                         safe_float(sanitized.get("initial_seed_usd"), 10000.0),
+                        safe_float(
+                            sanitized.get("round_trip_fee_rate_pct"),
+                            ROUND_TRIP_FEE_RATE_PCT,
+                        ),
                         held_q,
                         len(sanitized.get("buckets", [])),
+                        held_l,
+                        ratchet_l,
+                        sub_q,
+                        len(sanitized.get("sub_buckets", [])),
+                        sub_l,
+                        SUB_MAX_TOTAL_LOTS_4,
+                        gp_q,
+                        str(
+                            sanitized.get("golden_allin_mode")
+                            or DEFAULT_GOLDEN_ALLIN_MODE
+                        ),
+                        safe_int(sanitized.get("used_reserve_portions_cnt"), 0),
+                        MAX_RESERVE_PORTIONS,
+                        safe_float(sanitized.get("injected_reserve_usd"), 0.0),
                         os.path.basename(self.primary_filepath),
                     )
 
-    @staticmethod
+    @classmethod
     def _atomic_write_json_sync(
-        target_path: str, payload: Dict[str, Any]
-    ) -> None:
-        parent_dir = os.path.dirname(target_path)
-        if parent_dir and not os.path.isdir(parent_dir):
-            os.makedirs(parent_dir, exist_ok=True)
-        tmp_path = (
-            f"{target_path}.tmp.{os.getpid()}.{threading.get_ident()}"
-        )
-        try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, target_path)
-        except Exception as exc:
-            logger.error("원장 원자적 저장 예외(%s): %s", target_path, exc)
+        cls,
+        target_path: str,
+        payload: Dict[str, Any],
+        force_write: bool = False,
+    ) -> bool:
+        """
+        # [Case 05, Case 68 & Case 75]:
+        Dirty-Check 후 실질 데이터 변경이 있을 때만 원자적(.tmp -> os.replace)으로 기록하고,
+        ENOSPC(Errno 28) 감지 시 즉시 고아 파일·캐시를 청소 후 재시도한다.
+        """
+        if not target_path:
+            return False
+
+        new_soxl = cls._extract_raw_soxl_dict(payload)
+        if (
+            not force_write
+            and new_soxl is not None
+            and os.path.isfile(target_path)
+        ):
             try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+                with open(target_path, "r", encoding="utf-8") as rf:
+                    existing_loaded = json.load(rf)
+                existing_soxl = cls._extract_raw_soxl_dict(existing_loaded)
+                if cls._is_state_materially_equal(existing_soxl, new_soxl):
+                    return False
             except Exception:
                 pass
 
-    def _save_sync_unlocked(self) -> None:
-        """
-        🚨 Case 05 & Case 68:
-        1) 폴더 고유 원장 (`soxl_stratum_ledger_<folder_slug>.json`)
-        2) 호환 미러 원장 (`soxl_stratum_ledger.json`)
-        3) 실시간 백업 금고 (`ledger_backups/soxl_stratum_ledger_<folder_slug>.bak.json`)
-        3곳 모두 원자적(.tmp -> os.replace)으로 동시 기록한다.
-        """
+        parent_dir = os.path.dirname(os.path.abspath(target_path))
+        base_search_dir = (
+            os.path.dirname(parent_dir)
+            if os.path.basename(parent_dir) == "ledger_backups"
+            else parent_dir
+        )
+
+        for attempt in range(2):
+            if parent_dir and not os.path.isdir(parent_dir):
+                try:
+                    os.makedirs(parent_dir, exist_ok=True)
+                except OSError as os_err:
+                    if os_err.errno == errno.ENOSPC and attempt == 0:
+                        emergency_free_disk_space_sync(
+                            base_dir=base_search_dir,
+                            keep_backup_days=3,
+                            remove_pycache=True,
+                        )
+                        continue
+                    return False
+
+            tmp_path = (
+                f"{target_path}.tmp.{os.getpid()}.{threading.get_ident()}"
+            )
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, target_path)
+                return True
+            except OSError as os_err:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+                if os_err.errno == errno.ENOSPC and attempt == 0:
+                    freed_cnt = emergency_free_disk_space_sync(
+                        base_dir=base_search_dir,
+                        keep_backup_days=3,
+                        remove_pycache=True,
+                    )
+                    logger.warning(
+                        "🧹 [Case 75 디스크 공간 부족(Errno 28) 감지 -> 긴급 자가 치유 실행] 삭제된 고아/캐시/구백업=%d개 · 원장 저장 재시도(%s)",
+                        freed_cnt,
+                        os.path.basename(target_path),
+                    )
+                    continue
+                logger.error(
+                    "원장 원자적 저장 OS 예외(%s): %s", target_path, os_err
+                )
+                return False
+            except Exception as exc:
+                logger.error("원장 원자적 저장 예외(%s): %s", target_path, exc)
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+                return False
+
+        return False
+
+    def _save_sync_unlocked(self, force_write: bool = False) -> None:
         payload = {TARGET_SYMBOL: self._data[TARGET_SYMBOL]}
-        self._atomic_write_json_sync(self.primary_filepath, payload)
+        self._atomic_write_json_sync(
+            self.primary_filepath, payload, force_write=force_write
+        )
         if os.path.abspath(self.legacy_filepath) != os.path.abspath(
             self.primary_filepath
         ):
-            self._atomic_write_json_sync(self.legacy_filepath, payload)
-        self._atomic_write_json_sync(self.backup_filepath, payload)
+            self._atomic_write_json_sync(
+                self.legacy_filepath, payload, force_write=force_write
+            )
+        self._atomic_write_json_sync(
+            self.backup_filepath, payload, force_write=force_write
+        )
 
     def create_daily_backup_snapshot_sync(
         self, logical_date: Optional[str] = None, keep_days: int = 14
     ) -> str:
         """
-        Case 68 [일일 날짜별 스냅샷 금고 보관]:
-        17:00 EST 일일 GC 또는 장 마감 결산 시 `ledger_backups/soxl_stratum_ledger_<folder_slug>_YYYY-MM-DD.json`
-        파일을 생성하고 오래된 스냅샷(최근 14개 초과분)을 자동 정리한다.
+        Case 68 & Case 75 [일일 날짜별 스냅샷 금고 보관 및 고아 파일 청소]:
         """
+        emergency_free_disk_space_sync(
+            base_dir=self.base_dir,
+            keep_backup_days=max(3, safe_int(keep_days, 14)),
+            remove_pycache=False,
+        )
         dt_str = str(
             logical_date or datetime.now(EST_TZ).strftime("%Y-%m-%d")
         ).strip()
@@ -908,22 +1973,10 @@ class SoxlStratumLedger:
         with GlobalThrottle.get_file_lock(self.primary_filepath):
             with self._mem_lock:
                 payload = {TARGET_SYMBOL: self._data[TARGET_SYMBOL]}
-                self._atomic_write_json_sync(snap_path, payload)
+                self._atomic_write_json_sync(
+                    snap_path, payload, force_write=False
+                )
 
-        try:
-            pattern = os.path.join(
-                self.backup_dir,
-                f"soxl_stratum_ledger_{self.folder_slug}_20*.json",
-            )
-            files = sorted(glob.glob(pattern))
-            if len(files) > max(3, keep_days):
-                for old_fp in files[: len(files) - max(3, keep_days)]:
-                    try:
-                        os.remove(old_fp)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
         return snap_path
 
     async def create_daily_backup_snapshot(
@@ -934,11 +1987,6 @@ class SoxlStratumLedger:
         )
 
     def recover_from_backup_vault_sync(self) -> Optional[Dict[str, Any]]:
-        """
-        Case 68:
-        백업 금고(`backup_filepath` 또는 최신 일일 스냅샷)에서 유효한 지층(`buckets`)이나
-        시드/수익 데이터가 존재하면 읽어와 반환한다.
-        """
         cand_paths = [self.backup_filepath, self.primary_filepath]
         try:
             pattern = os.path.join(
@@ -953,11 +2001,32 @@ class SoxlStratumLedger:
             raw_d = self._load_candidate_file_sync(fp)
             if isinstance(raw_d, dict):
                 b_list = raw_d.get("buckets")
-                if isinstance(b_list, list) and sum(
-                    safe_int(b.get("qty"), 0)
-                    for b in b_list
-                    if isinstance(b, dict)
-                ) > 0:
+                sub_list = raw_d.get("sub_buckets")
+                gp_obj = (
+                    raw_d.get("golden_pocket")
+                    if isinstance(raw_d.get("golden_pocket"), dict)
+                    else {}
+                )
+                b_qty = (
+                    sum(
+                        safe_int(b.get("qty"), 0)
+                        for b in b_list
+                        if isinstance(b, dict)
+                    )
+                    if isinstance(b_list, list)
+                    else 0
+                )
+                sub_qty = (
+                    sum(
+                        safe_int(sb.get("qty"), 0)
+                        for sb in sub_list
+                        if isinstance(sb, dict)
+                    )
+                    if isinstance(sub_list, list)
+                    else 0
+                )
+                gp_qty = max(0, safe_int(gp_obj.get("qty"), 0))
+                if (b_qty + sub_qty + gp_qty) > 0:
                     return self._sanitize_and_enforce_identity(raw_d)
         return None
 
@@ -985,8 +2054,9 @@ class SoxlStratumLedger:
         with GlobalThrottle.get_file_lock(self.primary_filepath):
             with GlobalThrottle.get_file_lock(self.legacy_filepath):
                 with self._mem_lock:
+                    prev_st = self._data.get(sym)
                     cur = dict(
-                        self._data.get(sym)
+                        prev_st
                         or self._default_symbol_state(
                             folder_slug=self.folder_slug,
                             initial_seed=self._last_known_valid_seed,
@@ -1001,8 +2071,11 @@ class SoxlStratumLedger:
                         )
                     cur.update(kwargs)
                     sanitized = self._sanitize_and_enforce_identity(cur)
-                    self._data[sym] = sanitized
-                    self._save_sync_unlocked()
+                    if not self._is_state_materially_equal(prev_st, sanitized):
+                        self._data[sym] = sanitized
+                        self._save_sync_unlocked(force_write=False)
+                    else:
+                        self._data[sym] = sanitized
                     return json.loads(json.dumps(sanitized))
 
     async def update_state(
@@ -1012,18 +2085,45 @@ class SoxlStratumLedger:
             self.update_state_sync, symbol, **kwargs
         )
 
+    async def cycle_golden_allin_mode(
+        self, target_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        st = self.get_state(TARGET_SYMBOL)
+        cur_m = (
+            str(st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE)
+            .upper()
+            .strip()
+        )
+        if target_mode is not None:
+            req_m = str(target_mode).upper().strip()
+            if req_m in ("OFF", "NONE", "0", "FALSE"):
+                next_m = "NONE"
+            elif req_m in ("POCKET", "POCKET_ALLIN", "1"):
+                next_m = "POCKET_ALLIN"
+            elif req_m in ("GRID", "GRID_L1", "GRID_L1_ALLIN", "2"):
+                next_m = "GRID_L1_ALLIN"
+            elif req_m in GOLDEN_ALLIN_MODES:
+                next_m = req_m
+            else:
+                next_m = DEFAULT_GOLDEN_ALLIN_MODE
+        else:
+            try:
+                cur_idx = GOLDEN_ALLIN_MODES.index(cur_m)
+                next_m = GOLDEN_ALLIN_MODES[
+                    (cur_idx + 1) % len(GOLDEN_ALLIN_MODES)
+                ]
+            except ValueError:
+                next_m = "POCKET_ALLIN"
+        return await self.update_state(
+            TARGET_SYMBOL, golden_allin_mode=next_m
+        )
+
     async def reset_stratum_only(
         self,
         symbol: str = TARGET_SYMBOL,
         new_seed_usd: Optional[float] = None,
         preserve_realized_profit: bool = True,
     ) -> Dict[str, Any]:
-        """
-        🚨 Case 02, Case 65, Case 69, Case 70, Case 71 & Case 72:
-        /reset 또는 /reset_seed 명령 시 지층 큐(buckets), 기준가, 기억된 최저가, 리앵커링 크레딧,
-        다중 그리드 매도 대기 인덱스(pending_sell_indices), 매도 모니터 검문 시각(last_sell_gate_eval_ts),
-        미체결 주문 ID를 원자적으로 0점 초기화하고, 0주 싸이클 종료 타임쉴드(last_sell_fill_ts, last_cycle_end_ts)를 각인한다.
-        """
         sym = self._assert_allowed_symbol(symbol)
         st = self.get_state(sym)
         if new_seed_usd is not None and safe_float(new_seed_usd, 0.0) >= 100.0:
@@ -1043,13 +2143,33 @@ class SoxlStratumLedger:
             initial_seed_usd=round(init_seed, 4),
             cumulative_realized_net_usd=round(cum_net, 4),
             buckets=[],
+            sub_buckets=[],
+            golden_pocket=self._empty_golden_pocket_dict(),
             anchor_price=0.0,
             cycle_min_buy_price=0.0,
+            cycle_ratchet_max_lots=0,
             ratchet_anchor_price=0.0,
             cycle_reanchor_credit_usd=0.0,
+            l1_target_quota_qty=0,
+            sub_anchor_price=0.0,
+            sub_cycle_min_buy_price=0.0,
+            sub_ratchet_max_lots=0,
+            sub_l1_target_quota_qty=0,
+            main_consec_frozen_days=0,
+            sub_consec_frozen_days=0,
+            used_reserve_portions_cnt=0,
+            injected_reserve_usd=0.0,
+            waiting_reserve_deposit=False,
+            waiting_reserve_deposit_alert_sent=False,
+            required_reserve_deposit_usd=0.0,
+            last_reserve_check_ts=0.0,
             last_sell_fill_ts=now_reset_ts,
             last_cycle_end_ts=now_reset_ts,
+            last_sub_sell_fill_ts=now_reset_ts,
+            last_sub_cycle_end_ts=now_reset_ts,
             last_sell_gate_eval_ts=0.0,
+            last_reentry_eval_ts=0.0,
+            last_sub_reentry_eval_ts=0.0,
             buy_order_id="",
             sell_order_id="",
             client_order_id="",
@@ -1058,9 +2178,14 @@ class SoxlStratumLedger:
             target_sell_price=0.0,
             pending_portion_budget=0.0,
             pending_lot_type="",
+            pending_step_up_min_price=0.0,
+            pending_sub_step_up_min_price=0.0,
             pending_sell_mode="",
             pending_sell_indices=[],
+            pending_sub_sell_indices=[],
+            pending_sell_pocket_qty=0,
             last_evaluated_buy_bucket_id=-1,
+            sub_last_evaluated_buy_bucket_id=-1,
         )
 
     async def set_initial_seed_usd(
@@ -1099,6 +2224,20 @@ class SoxlStratumLedger:
             TARGET_SYMBOL,
             logical_date=str(logical_date),
             daily_buy_events=0,
+            daily_unlock_buy_events=0,
+            daily_sub_buy_cnt=0,
+            daily_sub_buy_events=0,
+            daily_sub_sell_cnt=0,
+            daily_sub_sell_events=0,
+            daily_sub_unlock_events=0,
+            daily_sub_realized_net_usd=0.0,
+            daily_main_buy_cnt=0,
+            daily_main_sell_cnt=0,
+            daily_golden_allin_buy_events=0,
+            daily_golden_pocket_sell_cnt=0,
+            daily_golden_realized_net_usd=0.0,
+            daily_reserve_injected_cnt=0,
+            daily_dust_guard_blocked_cnt=0,
             daily_sell_events=0,
             daily_indiv_grid_sell_cnt=0,
             daily_wma_grad_sell_cnt=0,
@@ -1106,8 +2245,12 @@ class SoxlStratumLedger:
             daily_reanchor_cnt=0,
             daily_leftover_saved_usd=0.0,
             daily_realized_net_usd=0.0,
-            # 매수 게이트는 자체 날짜/세션 키로 전환한다. ET 자정에
-            # 진행 중인 데이마켓 버킷까지 초기화하면 같은 버킷을 재평가한다.
+            last_evaluated_buy_bucket_id=-1,
+            last_evaluated_date=str(logical_date),
+            sub_last_evaluated_buy_bucket_id=-1,
+            sub_last_evaluated_date=str(logical_date),
+            last_reentry_eval_ts=0.0,
+            last_sub_reentry_eval_ts=0.0,
         )
 
 
@@ -1116,14 +2259,54 @@ StratumLedger = SoxlStratumLedger
 AssassinLedger = SoxlStratumLedger
 
 
+# ======================================================================
+# [4bot 단일파일 병합] 아래는 원작 toss_api.py (Part 2/2) — 원작 toss_api_core.py (Part 1/2) 위에 이어 붙임
+# ======================================================================
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: toss_api.py
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 토스증권 Open API (v1.2.14) 방탄 통신 통제소 (Part 2 / 2 · Step 02 / 13)
+- 역할:
+  1) toss_api_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 포함)·유틸리티·폴더격리·디스크치유·
+     GlobalThrottle·SoxlStratumLedger 심볼을 명시적으로 재익스포트(Facade Re-export)하여 타 모듈 AST 심볼 임포트 무결성 100% 보장
+  2) 제1헌법 ~ 제6헌법 및 API.txt (v1.2.14) 100% 준수 TossApiClient 구현:
+     - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (POST /oauth2/token)
+     - 종합매매 계좌(BROKERAGE) accountSeq 자동 락온 및 X-Tossinvest-Account 헤더 원자적 주입 (GET /api/v1/accounts)
+     - 계좌별 미국 주식(US) 실제 매매 수수료율 조회·락온 및 일시 통신 실패 시 원장/런타임 수수료율 보존 폴백 (GET /api/v1/commissions · Case 86)
+     - REAL_ALLOWED_SYMBOLS = ("SOXL",) 단일 롱 화이트리스트 물리적 강제 (인버스 숏 SOXS 원천 차단 · Case 09)
+     - 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 5.0초 내 유효 체결 최고가 추출기 (get_recent_wick_high_price · Case 82)
+     - 토스 CLOSED 주문 원장 역추적기 (probe_latest_manual_fill_price : 실측 수수료 commission + tax 추출 포함 · Case 19, Case 63, Case 86, Case 88)
+     - 모든 파일/네트워크 I/O 의 asyncio.to_thread 비동기 격리 및 GlobalThrottle 중앙 통제
+"""
+
+# [4bot 단일파일 병합] 원작 분할 임포트 제거: toss_api_core
+
+import asyncio
+import json
+import logging
+import math
+import os
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+# [4bot 단일파일 병합] 원작 분할 임포트 제거: toss_api_core
+
+logger = logging.getLogger("toss_sniper.toss_api")
+
+
 # ---------------------------------------------------------------------------
-# [핵심 3] 토스증권 Open API v1.2.14 방탄 클라이언트 (TossApiClient)
+# [핵심] 토스증권 Open API v1.2.14 방탄 클라이언트 (TossApiClient)
 # ---------------------------------------------------------------------------
 class TossApiClient:
     """
     🏛️ 제1헌법 ~ 제6헌법 & API.txt (v1.2.14) 100% 완벽 구현:
     - OAuth2 토큰 자동 발급 및 만료 전 선제 갱신 (`POST /oauth2/token`)
     - 종합매매 계좌(`BROKERAGE`) `accountSeq` 자동 락온 및 `X-Tossinvest-Account` 헤더 원자적 주입 (`GET /api/v1/accounts`)
+    - 계좌별 미국 주식(`US`) 매매 수수료율 조회 및 왕복 수수료율 자동 락온 (`GET /api/v1/commissions` · `Case 86`)
     - `REAL_ALLOWED_SYMBOLS = ("SOXL",)` 외 제3종목(SOXS 등) 주문 물리적 차단 (`Case 09`)
     - 외부 패키지(`httpx`/`aiohttp`) 유무에 영향받지 않는 표준 `urllib.request` + `asyncio.to_thread` 방탄 비동기 엔진
     """
@@ -1172,108 +2355,17 @@ class TossApiClient:
         self.account_seq: Optional[int] = None
         self._account_lock: asyncio.Lock = asyncio.Lock()
 
+        # [Case 86]: 하드코딩 0.0007/0.14 대신 원장 또는 .env 로부터 런타임에 동기화된 수수료율로 초기화
+        self.us_commission_rate: float = get_runtime_us_commission_rate()
+        self.round_trip_fee_rate_pct: float = (
+            get_runtime_round_trip_fee_rate_pct()
+        )
+        self._commission_locked: bool = False
+        self._commission_lock: asyncio.Lock = asyncio.Lock()
+        self.last_probed_manual_fee_usd: float = 0.0
+
         self._fx_cache_rate: float = KRW_PER_USD_DEFAULT
         self._fx_cache_mono: float = 0.0
-
-    async def get_us_commission_rate(self) -> Optional[float]:
-        """Return account US one-way rate as fraction (0.0007 = 0.07%).
-
-        Corrected 2026-11-01: the real /api/v1/commissions response shape was NOT
-        verified in the repo or in public docs, so this parser is defensive:
-        - searches "result" (the _request wrapper for a top-level list) and
-          market-keyed dicts ({"US": {...}}) in addition to data/items/commissions/results;
-        - normalises units: a value < 0.01 is a fraction, 0.01 <= value < 1.0 is
-          a percent (0.07 -> 0.0007). A value >= 1.0 is rejected and falls back
-          to the legacy rate, rather than being multiplied into a 14% fee.
-        If the real response proves different, fix this parser first; do not
-        stage a rate that has not been confirmed against a real GET call.
-        """
-        def _normalize(raw: Any) -> Optional[float]:
-            try:
-                rate = float(raw)
-            except (TypeError, ValueError):
-                return None
-            if 0.0 <= rate < 0.01:
-                return rate
-            if 0.01 <= rate < 1.0:
-                return rate / 100.0
-            return None
-
-        def _find_us(obj: Any) -> Optional[float]:
-            if isinstance(obj, list):
-                for item in obj:
-                    value = _find_us(item)
-                    if value is not None:
-                        return value
-            if isinstance(obj, dict):
-                market = str(obj.get("market") or obj.get("country") or "").upper()
-                if market in ("US", "USA", "UNITED_STATES"):
-                    for key in ("commissionRate", "commission_rate", "rate"):
-                        if key in obj:
-                            value = _normalize(obj[key])
-                            if value is not None:
-                                return value
-                for key in ("US", "USA", "UNITED_STATES"):
-                    if isinstance(obj.get(key), dict):
-                        value = _find_us(obj[key])
-                        if value is not None:
-                            return value
-                for key in ("data", "items", "commissions", "results", "result"):
-                    if key in obj:
-                        value = _find_us(obj[key])
-                        if value is not None:
-                            return value
-            return None
-
-        def _count_rates(obj: Any) -> int:
-            count = 0
-            if isinstance(obj, list):
-                return sum(_count_rates(item) for item in obj)
-            if isinstance(obj, dict):
-                for key in ("commissionRate", "commission_rate", "rate"):
-                    if key in obj and _normalize(obj[key]) is not None:
-                        count += 1
-                for value in obj.values():
-                    count += _count_rates(value)
-            return count
-
-        try:
-            response = await self._request("GET", "/api/v1/commissions", require_account=True)
-            value = _find_us(response)
-            if value is None and _count_rates(response) == 1:
-                # Single-rate response with no market tag: it can only be this
-                # account's commission. Any multi-rate response without a US tag
-                # is ambiguous and must NOT be guessed.
-                value = _find_us(response) if False else None
-                # Re-scan for the single rate value directly.
-                def _single(obj: Any) -> Optional[float]:
-                    # Only a market-less single rate may be assumed to be this
-                    # account's rate. A rate tagged KR (or any non-US market)
-                    # must never be mistaken for the US rate.
-                    if isinstance(obj, list):
-                        for item in obj:
-                            v = _single(item)
-                            if v is not None:
-                                return v
-                    if isinstance(obj, dict):
-                        market = str(obj.get("market") or obj.get("country") or "").upper()
-                        if market and market not in ("US", "USA", "UNITED_STATES"):
-                            return None
-                        for key in ("commissionRate", "commission_rate", "rate"):
-                            if key in obj:
-                                v = _normalize(obj[key])
-                                if v is not None:
-                                    return v
-                        for v in obj.values():
-                            r = _single(v)
-                            if r is not None:
-                                return r
-                    return None
-                value = _single(response)
-            return value
-        except Exception:
-            logger.warning("US commission rate lookup failed", exc_info=True)
-            return None
 
     def _assert_real_order_symbol(self, symbol: str) -> str:
         sym = str(symbol or "").upper().strip()
@@ -1369,7 +2461,6 @@ class TossApiClient:
                 "Accept": "application/json",
             }
 
-            # [🔗토스 토큰 공유 HOOK] 다른 봇이 받아 둔 토큰이 있으면 그대로 쓰고, 없을 때만 1번 발급
             _sh = None
             if _TTS is not None:
                 try:
@@ -1460,6 +2551,73 @@ class TossApiClient:
 
             self.account_seq = 1
             return self.account_seq
+
+    async def get_commissions(self) -> List[Dict[str, Any]]:
+        """
+        # [API.txt v1.2.14 정식 규격 & Case 86]:
+        GET /api/v1/commissions (X-Tossinvest-Account 헤더 포함)를 호출하여
+        현재 계좌의 시장별(KR, US) 매매 수수료율 배열을 반환한다.
+        """
+        try:
+            res = await self._request(
+                method="GET",
+                path="/api/v1/commissions",
+                require_account=True,
+                rate_group="ORDER_INFO",
+            )
+            items = res.get("result") if isinstance(res, dict) else []
+            if isinstance(items, list):
+                return [c for c in items if isinstance(c, dict)]
+        except Exception as exc:
+            logger.debug("get_commissions 조회 폴백 사용: %s", exc)
+        return []
+
+    async def ensure_us_commission_rate(
+        self, force_refresh: bool = False
+    ) -> Tuple[float, float]:
+        """
+        # [Case 86 : 계좌별 미국 주식 실제 수수료율 자동 락온 및 일시 조회 실패 시 원장/런타임 수수료율 보존]:
+        GET /api/v1/commissions 를 호출하여 "marketCountry": "US" 항목의 "commissionRate" (소수 비율)를 추출한다.
+        - 예: pipiosToss 계좌("0.0007") -> 편도 0.0007 (0.07%) / 왕복 0.14% 자동 락온
+        - 예: wonToss 계좌("0.001")     -> 편도 0.0010 (0.10%) / 왕복 0.20% 자동 락온
+        - 일시 통신 장애로 빈 배열이 반환될 경우 하드코딩 0.14% 로 덮어쓰지 않고
+          런타임 메모리(원장 또는 .env)에 보존된 수수료율을 그대로 유지하여 반환한다!
+        반환값: (us_commission_rate_decimal, round_trip_fee_rate_pct)
+        """
+        if not force_refresh and self._commission_locked:
+            return self.us_commission_rate, self.round_trip_fee_rate_pct
+
+        async with self._commission_lock:
+            if not force_refresh and self._commission_locked:
+                return self.us_commission_rate, self.round_trip_fee_rate_pct
+
+            items = await self.get_commissions()
+            found_us_rate = 0.0
+            for it in items:
+                mkt = str(it.get("marketCountry") or "").upper().strip()
+                if mkt == "US":
+                    r_val = safe_float(it.get("commissionRate"), 0.0)
+                    if 0.0 < r_val <= 0.01:
+                        found_us_rate = round(r_val, 6)
+                        break
+
+            if found_us_rate > 0.0:
+                rt_pct = round(found_us_rate * 200.0, 4)
+                self.us_commission_rate = found_us_rate
+                self.round_trip_fee_rate_pct = rt_pct
+                self._commission_locked = True
+                set_runtime_round_trip_fee_rate_pct(
+                    rt_pct, us_commission_rate=found_us_rate
+                )
+                return self.us_commission_rate, self.round_trip_fee_rate_pct
+
+            # API 일시 조회 실패 시 런타임(원장/.env)에 보존된 수수료율 동기화 반환
+            rt_fallback = get_runtime_round_trip_fee_rate_pct()
+            one_fallback = get_runtime_us_commission_rate()
+            if 0.0 < one_fallback <= 0.01 and 0.0 < rt_fallback <= 2.0:
+                self.us_commission_rate = one_fallback
+                self.round_trip_fee_rate_pct = rt_fallback
+            return self.us_commission_rate, self.round_trip_fee_rate_pct
 
     async def _request(
         self,
@@ -1590,7 +2748,7 @@ class TossApiClient:
         return {}
 
     # -----------------------------------------------------------------------
-    # [Market Data 그룹] 현재가 · 호가 · 1분봉/일봉 차트 (API.txt v1.2.14)
+    # [Market Data 그룹] 현재가 · 호가 · 최근체결 · 윗꼬리 체결최고가 · 1분봉/일봉 차트 (API.txt v1.2.14)
     # -----------------------------------------------------------------------
     async def get_current_prices_batch(
         self, symbols: Iterable[str] = (TARGET_SYMBOL,)
@@ -1628,57 +2786,56 @@ class TossApiClient:
         p_map = await self.get_current_prices_batch((symbol,))
         return safe_float(p_map.get(str(symbol).upper().strip()), 0.0)
 
-    @staticmethod
-    def _case82_trade_timestamp_epoch(value: Any) -> float:
-        """Case 82: 숫자 epoch(ms 포함) 또는 ISO8601 시각을 초 단위로 해석한다."""
-        if value is None or isinstance(value, bool):
-            return 0.0
-        if isinstance(value, (int, float)):
-            parsed = safe_float(value, 0.0)
-            return parsed / 1000.0 if parsed > 1e12 else max(0.0, parsed)
-        text_value = str(value).strip()
-        if not text_value:
-            return 0.0
-        try:
-            parsed = float(text_value)
-            if math.isfinite(parsed):
-                return parsed / 1000.0 if parsed > 1e12 else max(0.0, parsed)
-        except (TypeError, ValueError):
-            pass
-        try:
-            dt = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
-            # 시각대 없는 ISO 시각은 기존 봇의 America/New_York 기준으로 처리.
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=EST_TZ)
-            return max(0.0, dt.timestamp())
-        except (TypeError, ValueError, OverflowError):
-            return 0.0
-
     async def get_recent_trades(
-        self, symbol: str = TARGET_SYMBOL, count: int = 15
+        self, symbol: str = TARGET_SYMBOL, count: int = 50
     ) -> List[Dict[str, Any]]:
-        """Case 82: 계좌 헤더 없이 /api/v1/trades 에서 최대 50건 조회한다."""
-        q_count = max(1, min(50, safe_int(count, 15)))
+        """
+        # [API.txt v1.2.14 & Case 80, Case 82]:
+        GET /api/v1/trades?symbol=SOXL&count=50
+        """
+        q_cnt = max(1, min(50, safe_int(count, 50)))
         try:
             res = await self._request(
                 method="GET",
                 path="/api/v1/trades",
                 params={
                     "symbol": str(symbol or TARGET_SYMBOL).upper().strip(),
-                    "count": q_count,
+                    "count": q_cnt,
                 },
                 require_account=False,
                 rate_group="MARKET_DATA",
             )
-            records = res.get("result") if isinstance(res, dict) else []
-            if isinstance(records, dict):
-                records = records.get("trades", [])
-            if not isinstance(records, list):
-                return []
-            return [record for record in records if isinstance(record, dict)]
+            items = res.get("result") if isinstance(res, dict) else []
+            if isinstance(items, list):
+                return [t for t in items if isinstance(t, dict)]
+        except Exception as exc:
+            logger.debug("get_recent_trades 예외(묵음): %s", exc)
+        return []
+
+    @staticmethod
+    def _parse_iso_timestamp_to_epoch(ts_val: Any) -> float:
+        if ts_val is None or isinstance(ts_val, bool):
+            return 0.0
+        if isinstance(ts_val, (int, float)):
+            f_ts = safe_float(ts_val, 0.0)
+            if f_ts > 1e12:
+                return f_ts / 1000.0
+            return max(0.0, f_ts)
+        s = str(ts_val).strip()
+        if not s:
+            return 0.0
+        try:
+            if s.endswith("Z") or s.endswith("z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=EST_TZ)
+            return float(dt.timestamp())
         except Exception:
-            # 시장 데이터 조회 실패로 기존 매도 감시 루프를 멈추지 않는다.
-            return []
+            num_ts = safe_float(s, 0.0)
+            if num_ts > 1e12:
+                return num_ts / 1000.0
+            return max(0.0, num_ts)
 
     async def get_recent_wick_high_price(
         self,
@@ -1687,27 +2844,55 @@ class TossApiClient:
         min_after_ts: float = 0.0,
         count: int = 15,
     ) -> Tuple[float, float]:
-        """Case 82: 최근 5초(서버시차 +2초 허용)의 유효 체결 최고가/시각."""
-        try:
-            trades = await self.get_recent_trades(symbol=symbol, count=count)
-            now_ts = time.time()
-            window = max(0.0, safe_float(lookback_sec, 5.0))
-            after_ts = max(0.0, safe_float(min_after_ts, 0.0))
-            best_price, best_ts = 0.0, 0.0
-            for trade in trades:
-                price = safe_float(trade.get("price"), 0.0)
-                volume = safe_float(trade.get("volume"), 0.0)
-                ts = self._case82_trade_timestamp_epoch(trade.get("timestamp"))
-                if price <= 0.0 or volume <= 0.0 or ts <= after_ts:
-                    continue
-                age = now_ts - ts
-                if age < -2.0 or age > window:
-                    continue
-                if price > best_price or (price == best_price and ts > best_ts):
-                    best_price, best_ts = price, ts
-            return best_price, best_ts
-        except Exception:
+        """
+        # [Case 82 : 1분봉 윗꼬리(Upper-Wick) 슈팅 포착용 최근 체결 최고가 추출기 (서버 시차 -5.0s 허용)]:
+        """
+        trades = await self.get_recent_trades(
+            symbol=symbol, count=max(1, min(50, safe_int(count, 15)))
+        )
+        if not trades:
             return 0.0, 0.0
+
+        now_epoch = time.time()
+        max_age = max(1.0, safe_float(lookback_sec, 5.0))
+        after_cut = max(0.0, safe_float(min_after_ts, 0.0))
+
+        best_price: float = 0.0
+        best_ts: float = 0.0
+
+        for t in trades:
+            if not isinstance(t, dict):
+                continue
+            p = safe_float(t.get("price"), 0.0)
+            if p <= 0.0:
+                continue
+            vol = safe_float(t.get("volume"), 1.0)
+            if vol <= 0.0:
+                continue
+
+            t_epoch = self._parse_iso_timestamp_to_epoch(
+                t.get("timestamp")
+                or t.get("dt")
+                or t.get("dateTime")
+                or t.get("time")
+            )
+            if t_epoch <= 0.0:
+                continue
+
+            if after_cut > 0.0 and t_epoch <= (after_cut + 1e-6):
+                continue
+
+            age_sec = now_epoch - t_epoch
+            if age_sec > max_age or age_sec < -5.0:
+                continue
+
+            if p > best_price or (
+                abs(p - best_price) < 1e-9 and t_epoch > best_ts
+            ):
+                best_price = p
+                best_ts = t_epoch
+
+        return round(best_price, 4), round(best_ts, 4)
 
     async def get_orderbook(
         self, symbol: str = TARGET_SYMBOL
@@ -1763,6 +2948,37 @@ class TossApiClient:
                 return min(prices)
         return safe_float(fallback_price, 0.0)
 
+    @staticmethod
+    def _parse_candle_page_result(
+        res: Any,
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        if not isinstance(res, dict):
+            if isinstance(res, list):
+                return [c for c in res if isinstance(c, dict)], None
+            return [], None
+
+        r_obj = res.get("result") if "result" in res else res
+        if isinstance(r_obj, list):
+            return [c for c in r_obj if isinstance(c, dict)], None
+        if isinstance(r_obj, dict):
+            candles = (
+                r_obj.get("candles")
+                if r_obj.get("candles") is not None
+                else (
+                    r_obj.get("items")
+                    if r_obj.get("items") is not None
+                    else r_obj.get("data")
+                )
+            )
+            next_before = r_obj.get("nextBefore")
+            c_list = (
+                [c for c in candles if isinstance(c, dict)]
+                if isinstance(candles, list)
+                else []
+            )
+            return c_list, (str(next_before).strip() if next_before else None)
+        return [], None
+
     async def get_candles(
         self,
         symbol: str = TARGET_SYMBOL,
@@ -1771,37 +2987,57 @@ class TossApiClient:
         before: Optional[str] = None,
         adjusted: bool = True,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """
-        GET /api/v1/candles (interval ∈ {"1m", "1d"}, count ≤ 200)
-        """
+        sym_clean = str(symbol or TARGET_SYMBOL).upper().strip()
+        intv_clean = str(interval or "1m").strip()
         q_cnt = max(1, min(200, safe_int(count, 100)))
         params: Dict[str, Any] = {
-            "symbol": str(symbol or TARGET_SYMBOL).upper().strip(),
-            "interval": str(interval or "1m"),
+            "symbol": sym_clean,
+            "interval": intv_clean,
             "count": q_cnt,
             "adjusted": bool(adjusted),
         }
         if before:
-            params["before"] = str(before)
+            params["before"] = str(before).strip()
 
-        res = await self._request(
-            method="GET",
-            path="/api/v1/candles",
-            params=params,
-            require_account=False,
-            rate_group="MARKET_DATA_CHART",
-        )
-        r_obj = res.get("result") if isinstance(res, dict) else {}
-        if not isinstance(r_obj, dict):
-            return [], None
-        candles = r_obj.get("candles")
-        next_before = r_obj.get("nextBefore")
-        c_list = (
-            [c for c in candles if isinstance(c, dict)]
-            if isinstance(candles, list)
-            else []
-        )
-        return c_list, (str(next_before) if next_before else None)
+        try:
+            res = await self._request(
+                method="GET",
+                path="/api/v1/candles",
+                params=params,
+                require_account=False,
+                rate_group="MARKET_DATA_CHART",
+            )
+            c_list, next_b = self._parse_candle_page_result(res)
+            if c_list:
+                return c_list, next_b
+        except Exception as exc:
+            logger.debug(
+                "get_candles 1차 호출 폴백 전환(%s, %s, before=%s): %s",
+                sym_clean,
+                intv_clean,
+                before,
+                exc,
+            )
+
+        if not before:
+            fb_params: Dict[str, Any] = {
+                "symbol": sym_clean,
+                "interval": intv_clean,
+                "count": min(100, q_cnt),
+            }
+            try:
+                res_fb = await self._request(
+                    method="GET",
+                    path="/api/v1/candles",
+                    params=fb_params,
+                    require_account=False,
+                    rate_group="MARKET_DATA_CHART",
+                )
+                return self._parse_candle_page_result(res_fb)
+            except Exception as exc2:
+                logger.debug("get_candles 2차 폴백 예외(묵음): %s", exc2)
+
+        return [], None
 
     async def get_candles_1m(
         self,
@@ -1809,40 +3045,68 @@ class TossApiClient:
         total_count: int = 300,
         adjusted: bool = True,
     ) -> List[Dict[str, Any]]:
-        """
-        GET /api/v1/candles (interval="1m") 를 nextBefore 페이지네이션으로 호출하여
-        최대 total_count(기본 300)개의 1분봉 리스트를 반환한다.
-        """
         target_cnt = max(1, min(600, safe_int(total_count, 300)))
         collected: List[Dict[str, Any]] = []
-        seen_ts = set()
+        seen_ts: Set[str] = set()
         before_cursor: Optional[str] = None
         max_pages = max(1, int(math.ceil(target_cnt / 200.0)) + 1)
 
-        try:
-            for _ in range(max_pages):
-                rem = max(1, min(200, target_cnt - len(collected) + 1))
+        for page_idx in range(max_pages):
+            rem = max(1, min(200, target_cnt - len(collected) + 1))
+            try:
                 batch, next_b = await self.get_candles(
                     symbol=symbol,
                     interval="1m",
-                    count=rem,
+                    count=(200 if page_idx == 0 and target_cnt >= 100 else rem),
                     before=before_cursor,
                     adjusted=adjusted,
                 )
-                if not batch:
-                    break
-                for c in batch:
-                    ts_str = str(c.get("timestamp") or "")
-                    if ts_str and ts_str not in seen_ts:
-                        seen_ts.add(ts_str)
-                        collected.append(c)
-                if not next_b or len(collected) >= target_cnt:
-                    break
-                before_cursor = next_b
-        except Exception as exc:
-            logger.debug("get_candles_1m 조회 예외: %s", exc)
+            except Exception as exc:
+                logger.debug(
+                    "get_candles_1m 페이지(%d) 조회 예외(기수집 %d봉 보존): %s",
+                    page_idx,
+                    len(collected),
+                    exc,
+                )
+                break
 
-        collected.sort(key=lambda x: str(x.get("timestamp") or ""))
+            if not batch:
+                break
+
+            added_in_page = 0
+            for c in batch:
+                if not isinstance(c, dict):
+                    continue
+                ts_str = str(
+                    c.get("timestamp")
+                    or c.get("dt")
+                    or c.get("dateTime")
+                    or c.get("time")
+                    or ""
+                ).strip()
+                if ts_str and ts_str not in seen_ts:
+                    seen_ts.add(ts_str)
+                    collected.append(c)
+                    added_in_page += 1
+
+            if (
+                not next_b
+                or next_b == before_cursor
+                or added_in_page == 0
+                or len(collected) >= target_cnt
+            ):
+                break
+            before_cursor = next_b
+
+        collected.sort(
+            key=lambda x: str(
+                x.get("timestamp")
+                or x.get("dt")
+                or x.get("dateTime")
+                or x.get("time")
+                or ""
+            )
+        )
         if len(collected) > target_cnt:
             collected = collected[-target_cnt:]
         return collected
@@ -1853,9 +3117,6 @@ class TossApiClient:
         count: int = 10,
         adjusted: bool = True,
     ) -> List[Dict[str, Any]]:
-        """
-        GET /api/v1/candles (interval="1d") 일봉 데이터를 조회한다.
-        """
         try:
             batch, _ = await self.get_candles(
                 symbol=symbol,
@@ -1873,9 +3134,6 @@ class TossApiClient:
     # [Market Info 그룹] USD/KRW 환율 및 미국 장 캘린더 (API.txt v1.2.14)
     # -----------------------------------------------------------------------
     async def get_usd_krw_rate(self) -> float:
-        """
-        GET /api/v1/exchange-rate?baseCurrency=USD&quoteCurrency=KRW (60초 캐시)
-        """
         now_m = time.monotonic()
         if (
             self._fx_cache_rate > 0.0
@@ -1912,9 +3170,6 @@ class TossApiClient:
     async def get_us_market_calendar(
         self, date_str: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        GET /api/v1/market-calendar/US
-        """
         params: Dict[str, Any] = {}
         if date_str:
             params["date"] = str(date_str)
@@ -1955,10 +3210,6 @@ class TossApiClient:
     async def get_holdings_map_with_status(
         self, symbol: Optional[str] = None
     ) -> Tuple[Dict[str, Dict[str, Any]], bool]:
-        """
-        🚨 Case 03:
-        GET /api/v1/holdings 를 호출하여 (holdings_map, fetch_ok) 튜플을 반환한다.
-        """
         out_map: Dict[str, Dict[str, Any]] = {
             TARGET_SYMBOL: self._empty_holding_dict(TARGET_SYMBOL)
         }
@@ -2137,7 +3388,7 @@ class TossApiClient:
         return 0
 
     # -----------------------------------------------------------------------
-    # [Order & Order History 그룹] 주문 생성 · 정정 · 취소 · 상세/목록 조회
+    # [Order & Order History 그룹] 주문 생성 · 정정 · 취소 · 상세/목록 조회 · 수동체결 역추적
     # -----------------------------------------------------------------------
     @staticmethod
     def _format_us_limit_price(price: float) -> str:
@@ -2160,7 +3411,7 @@ class TossApiClient:
         enforce_daymarket_block: bool = False,
     ) -> Dict[str, Any]:
         """
-        🎯 5 & 제5헌법 & Case 09, 18:
+        🎯 5 & 제5헌법 & Case 01, 09, 18, 79:
         POST /api/v1/orders (오직 SOXL LIMIT 지정가 주문만 허용)
         """
         sym = self._assert_real_order_symbol(symbol)
@@ -2168,15 +3419,14 @@ class TossApiClient:
         if clean_side not in ("BUY", "SELL"):
             raise ValueError(f"유효하지 않은 주문 방향: {clean_side}")
 
-        # 매도도 동일 세션을 검문한다. 기존 인자는 호출 호환성을 위해 유지.
-        if enforce_daymarket_block or clean_side == "SELL":
+        if enforce_daymarket_block and clean_side == "BUY":
             now_est = datetime.now(EST_TZ)
             hm = now_est.hour * 100 + now_est.minute
-            if not is_sniper_trading_time(hm) or is_sniper_weekend_closed(now_est):
+            if now_est.weekday() >= 5 or not (407 <= hm <= 1600):
                 raise _NonRetryableApiError(
                     422,
                     "outside-active-window",
-                    f"데이마켓/기존 운용시간 외 주문 차단 (현재 {hm:04d} ET)",
+                    f"평일 04:07 ~ 16:00 EST 외 매수 차단 (현재 요일={now_est.weekday()}, {hm:04d} EST)",
                 )
 
         qty_int = max(1, safe_int(quantity, 1))
@@ -2212,12 +3462,6 @@ class TossApiClient:
         order_type: str = "LIMIT",
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """
-        🎯 5 (토스 US 주식 정정 규격 엄수):
-        POST /api/v1/orders/{orderId}/modify
-        미국 주식 주문 정정 시 `quantity` 를 전달하면 `400 us-modify-quantity-not-supported` 에러가 발생하므로
-        오직 `orderType` 과 `price` 만 전송한다.
-        """
         oid = str(order_id or "").strip()
         if not oid:
             raise ValueError("modify_order: order_id 가 비어 있습니다.")
@@ -2237,10 +3481,6 @@ class TossApiClient:
         return r_obj if isinstance(r_obj, dict) else {}
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
-        """
-        🎯 5 (HTTP 415 원천 방어):
-        POST /api/v1/orders/{orderId}/cancel 호출 시 반드시 빈 JSON 객체 `{}` 를 전송한다.
-        """
         oid = str(order_id or "").strip()
         if not oid:
             return {}
@@ -2257,9 +3497,6 @@ class TossApiClient:
     async def get_order_detail(
         self, order_id: str
     ) -> Optional[Dict[str, Any]]:
-        """
-        GET /api/v1/orders/{orderId}
-        """
         oid = str(order_id or "").strip()
         if not oid:
             return None
@@ -2279,9 +3516,6 @@ class TossApiClient:
     async def get_open_orders(
         self, symbol: str = TARGET_SYMBOL
     ) -> List[Dict[str, Any]]:
-        """
-        GET /api/v1/orders?status=OPEN&symbol=SOXL
-        """
         params: Dict[str, Any] = {"status": "OPEN"}
         if symbol:
             params["symbol"] = str(symbol).upper().strip()
@@ -2303,6 +3537,111 @@ class TossApiClient:
         except Exception as exc:
             logger.debug("미체결 주문 목록 조회 예외: %s", exc)
         return []
+
+    async def get_closed_orders(
+        self, symbol: str = TARGET_SYMBOL, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, Any] = {
+            "status": "CLOSED",
+            "limit": max(1, min(100, safe_int(limit, 20))),
+        }
+        if symbol:
+            params["symbol"] = str(symbol).upper().strip()
+        try:
+            res = await self._request(
+                method="GET",
+                path="/api/v1/orders",
+                params=params,
+                require_account=True,
+                rate_group="ORDER_HISTORY",
+            )
+            r_obj = res.get("result") if isinstance(res, dict) else {}
+            if isinstance(r_obj, dict) and isinstance(
+                r_obj.get("orders"), list
+            ):
+                return [
+                    o for o in r_obj["orders"] if isinstance(o, dict)
+                ]
+        except Exception as exc:
+            logger.debug("종료 주문 목록 조회(/api/v1/orders?status=CLOSED) 예외: %s", exc)
+        return []
+
+    async def probe_latest_manual_fill_price(
+        self,
+        side: str,
+        target_qty: int,
+        settled_order_ids: Iterable[str] = (),
+        fallback_price: float = 0.0,
+        symbol: str = TARGET_SYMBOL,
+    ) -> Tuple[float, List[str]]:
+        """
+        # [Case 19, Case 63, Case 86 & Case 88 수동 매수·매도 실체결가 및 실측 수수료 역추적기]:
+        """
+        target_side = str(side or "SELL").upper().strip()
+        need_q = max(1, safe_int(target_qty, 1))
+        settled_set: Set[str] = {
+            str(x).strip() for x in (settled_order_ids or ()) if str(x).strip()
+        }
+        fb_p = round(max(0.0, safe_float(fallback_price, 0.0)), 4)
+        self.last_probed_manual_fee_usd = 0.0
+
+        closed_list = await self.get_closed_orders(symbol=symbol, limit=30)
+        if not closed_list:
+            return fb_p, []
+
+        acc_qty = 0
+        acc_val = 0.0
+        acc_fee = 0.0
+        matched_ids: List[str] = []
+
+        for ord_item in closed_list:
+            if not isinstance(ord_item, dict):
+                continue
+            oid = str(ord_item.get("orderId") or "").strip()
+            if not oid or oid in settled_set:
+                continue
+            o_side = str(ord_item.get("side") or "").upper().strip()
+            if o_side != target_side:
+                continue
+
+            ord_status = str(ord_item.get("status") or "").upper().strip()
+            if ord_status and ord_status not in (
+                "FILLED",
+                "PARTIAL_FILLED",
+                "CANCELED",
+            ):
+                continue
+
+            exec_obj = (
+                ord_item.get("execution")
+                if isinstance(ord_item.get("execution"), dict)
+                else {}
+            )
+            f_qty = safe_int(exec_obj.get("filledQuantity"), 0)
+            f_avg = safe_float(exec_obj.get("averageFilledPrice"), 0.0)
+            if f_qty <= 0 or f_avg <= 0.0:
+                continue
+
+            take_q = min(need_q - acc_qty, f_qty)
+            if take_q <= 0:
+                break
+            acc_qty += take_q
+            acc_val += float(take_q) * f_avg
+
+            f_comm = max(0.0, safe_float(exec_obj.get("commission"), 0.0))
+            f_tax = max(0.0, safe_float(exec_obj.get("tax"), 0.0))
+            if (f_comm + f_tax) > 0.0:
+                ratio_q = float(take_q) / float(max(1, f_qty))
+                acc_fee += (f_comm + f_tax) * ratio_q
+
+            matched_ids.append(oid)
+            if acc_qty >= need_q:
+                break
+
+        if acc_qty > 0 and acc_val > 0.0:
+            self.last_probed_manual_fee_usd = round(acc_fee, 4)
+            return round(acc_val / float(acc_qty), 4), matched_ids
+        return fb_p, []
 
     async def find_latest_open_order_id(
         self, symbol: str = TARGET_SYMBOL, side: Optional[str] = None
@@ -2334,3 +3673,7 @@ class TossApiClient:
 
     async def close(self) -> None:
         return None
+
+
+# 하위 호환 별칭
+TossInvestApiClient = TossApiClient
