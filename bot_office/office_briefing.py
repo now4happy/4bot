@@ -15,7 +15,7 @@
   ① 본 그리드 1회분 = 순수 코어 자산(가용현금+본·서브·골든포켓 원가−예비수혈금, 기준시드 하한) × 8%, 수수료는 원장 계좌 수수료
   ② 서브 그리드 1회분(4%, 본 0.5회분 보호예수 뒤 유휴현금, 최대 4회분) — 대상이 아니면 '대상 아님'으로 따로 표시
   ③ 예비수혈은 필요액에 더하지 않고 경고로만 (2·3번 같은 계좌) · 골든포켓은 모드가 켜졌을 때만 조건부 표시
-- 사무실 vNEXT (2026-11-04): 브리핑 간결화 — 형식만 변경 (계산·주문·조회 로직 그대로)
+- 사무실 v1.1.8 (2026-11-04): 브리핑 간결화 — 형식만 변경 (계산·주문·조회 로직 그대로)
   ① 통합 잔액 블록 대신 '필요 금액' 표 1개 (고정폭 <pre>, 머리말 계좌·보유·필요 1번, 숫자+아이콘, 범례 1번)
   ② 토스(달러·원화)·메리츠(P·VR6)는 이름 1번에 두 줄로 묶음 · 메리츠 보유는 추정 달러만, 필요는 '–'
   ③ 시장 일정은 평일 휴장일만 표시 (진행 중·예정 문구 없음) · 조회 실패는 휴장으로 단정하지 않고 전달 노트로
@@ -1076,7 +1076,7 @@ def section_dollar_check(now=None, info=None):
             " · ⚠️ 2번 토스 인증 확인 불가 — 같은 계좌로 보고 합산" if not other.cid else
             " · ⚠️ 2번·3번 토스 인증이 달라 같은 계좌 합산이 맞는지 확인 필요")
     lines = [f"💵 <b>토스 달러 확인</b> · 미국장 {us_day.strftime('%m/%d')}" + acct]
-    warn, state, note = [], [], []   # vNEXT: 간결 표 아래에 쓸 줄 (문구·계산은 그대로, 위치만 분류)
+    warn, state, note = [], [], []   # v1.1.8: 간결 표 아래에 쓸 줄 (문구·계산은 그대로, 위치만 분류)
 
     def _keep(bucket, text):
         lines.append(text)
@@ -1201,7 +1201,7 @@ def section_dollar_check(now=None, info=None):
         excluded += [f"3번 {f}" for f in K["fail"]]
     if excluded:
         lines.append("⚠️ 합산 제외(조회 불가 등): " + "; ".join(excluded) + " → 실제 필요액은 더 클 수 있음")
-    if info is not None:   # vNEXT 표시용 — 위에서 계산한 값을 그대로 넘김 (새 계산 없음)
+    if info is not None:   # v1.1.8 표시용 — 위에서 계산한 값을 그대로 넘김 (새 계산 없음)
         info.update(usd=usd, total=total, sn_part=sn_part, dca_part=dca_part, master=dca["master"],
                     krw_need=K["need"], acct=acct.strip(" ·"), warn=warn, state=state, note=note,
                     excluded=list(excluded), toss=toss)
@@ -1338,7 +1338,7 @@ def with_separators(lines):
     return "\n".join(out)
 
 
-# ------------------------------------------------------------------ vNEXT 필요 금액 표 (형식만)
+# ------------------------------------------------------------------ v1.1.8 필요 금액 표 (형식만)
 ICON_NEED, ICON_OK = "🚨", "😌"   # 범례: 🚨 충전 필요 / 😌 충분
 DASH = "-"   # 고정폭 표 안에서는 ASCII 하이픈 (en dash '–'는 글꼴마다 폭이 달라 줄이 어긋남)
 
@@ -1457,7 +1457,7 @@ def section_need(now, notes):
 
 
 def build(now=None, notes=None):
-    """간결 브리핑 (vNEXT): 필요 금액 표 · 봇 한 줄 · 이상 봇 · 전달 노트."""
+    """간결 브리핑 (v1.1.8): 필요 금액 표 · 봇 한 줄 · 이상 봇 · 전달 노트."""
     notes = list(notes or [])
     try:
         out = section_need(now, notes)
@@ -1480,7 +1480,7 @@ def message_chunks(text, limit=3500):
     """Keep complete formatted lines; exceptionally long lines become escaped text."""
     def length(value):
         return len(value.encode("utf-16-le")) // 2
-    # vNEXT: <pre>…</pre> 고정폭 블록은 한 덩어리로 다룬다 (메시지 사이에서 끊기면 HTML 이 깨짐).
+    # v1.1.8: <pre>…</pre> 고정폭 블록은 한 덩어리로 다룬다 (메시지 사이에서 끊기면 HTML 이 깨짐).
     # 한 블록이 limit 를 넘으면 줄 단위로 나눠 각 조각을 다시 <pre>…</pre> 로 감싼다.
     units, block = [], None
     for line in text.splitlines():
@@ -1642,7 +1642,7 @@ def scheduled_run(now=None):
         kr = cache.get("kr")
         # Same calendar date as KST: the US session opening tonight, not NY's previous day.
         us = None if day.year not in US_CLOSED else day.strftime("%m-%d") not in US_CLOSED[day.year].split()
-        # vNEXT: 평일 휴장일만 알린다 (진행 중·예정 문구 없음). 조회 실패는 휴장으로 단정하지 않고 전달 노트로.
+        # v1.1.8: 평일 휴장일만 알린다 (진행 중·예정 문구 없음). 조회 실패는 휴장으로 단정하지 않고 전달 노트로.
         closed = (["🇰🇷 한국장 휴장"] if kr is False else []) + (["🇺🇸 미국장 휴장 (오늘 밤 정규장)"] if us is False else [])
         notes = (["한국장 일정 조회 실패(한국투자) → 휴장 여부 미확인"] if kr is None else []) + \
                 (["미국장 일정 확인 불가(달력 갱신 필요) → 휴장 여부 미확인"] if us is None else [])

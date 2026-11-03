@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.8 · 2026-11-04 03:30 (KST)
+- 파일: office_briefing.py
+- 내용: staging에서 업데이터 거부 파일 제거: docs/log 검증 스크립트(.py)는 서버 적용 대상이 아님, office_briefing.py + VERIFY.md만 남김
+- 브랜치: staging
+
 ## v1.1.7 · 2026-11-03 17:32 (KST)
 - 파일: fanding_trade.py
 - 내용: 팬딩 미국 휴장일 반영: fanding_trade 1.11.0 (작업 기록 포함)
