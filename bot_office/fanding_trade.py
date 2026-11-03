@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.10.3)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.11.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -63,6 +63,9 @@
 # 1.10.2: 날짜 오독 때 다른 AI로 날짜·주문 핵심 숫자 교차 확인, 불일치 시 주문 제외
 #         · 이미지+필요 종가일/글+필요 종가일 알림 1회, 새 요청 ID 재판독 허용
 # 1.10.3: PC v1.5.4의 1차 실패 대기/09:00 단 1회/영구 정지 게이트; 주문 로직 불변
+# 1.11.0 (사무실 vNEXT): 미국 휴장일 반영 — 필요 종가일·다음 주문일이 휴장일(주말 포함)을 건너뜀
+#        · US_CLOSED 표(office_briefing.py와 동일, NYSE 공식) + is_trading_day() · 조기 마감일은 장 열린 날
+#        · 평일 동작 그대로, 네트워크 조회 없음 · 표에 없는 연도는 주말만 건너뜀
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -216,20 +219,39 @@ def hm(s):
     return int(h), int(m)
 
 
+# 미국 정규장 휴장일 (조기 마감일은 장이 열린 날이라 넣지 않음)
+# 출처: NYSE Group 2026·2027·2028 Holiday and Early Closings Calendar (2025-12-23 발표),
+#       https://www.nyse.com/markets/hours-calendars — office_briefing.py 의 US_CLOSED 와 같은 표
+# 2029년 이후는 표 확장이 필요하다 (표에 없는 연도는 주말만 건너뜀)
+US_CLOSED = {
+    2026: "01-01 01-19 02-16 04-03 05-25 06-19 07-03 09-07 11-26 12-25",
+    2027: "01-01 01-18 02-15 03-26 05-31 06-18 07-05 09-06 11-25 12-24",
+    2028: "01-17 02-21 04-14 05-29 06-19 07-04 09-04 11-23 12-25",
+}
+
+
+def is_trading_day(d):
+    """미국 정규장이 열리는 날: 월~금이면서 휴장일 표에 없는 날"""
+    if d.weekday() >= 5:
+        return False
+    return d.strftime("%m-%d") not in US_CLOSED.get(d.year, "").split()
+
+
 def last_session_date(now=None):
-    """지금 기준 마지막으로 끝난 미국 정규장 날짜 (주말 제외, 휴장일은 고려 안 함)"""
+    """지금 기준 마지막으로 끝난 미국 정규장 날짜 (주말·휴장일 제외)"""
     e = (now or now_kst()).astimezone(ET)
     d = e.date()
     if e.weekday() >= 5 or (e.hour, e.minute) < (16, 0):
         d -= timedelta(days=1)
-    while d.weekday() >= 5:
+    while not is_trading_day(d):
         d -= timedelta(days=1)
     return d
 
 
 def next_session_date(sheet_date):
+    """표 날짜 다음으로 장이 열리는 미국 날짜 (주말·휴장일 제외)"""
     d = sheet_date + timedelta(days=1)
-    while d.weekday() >= 5:
+    while not is_trading_day(d):
         d += timedelta(days=1)
     return d
 
