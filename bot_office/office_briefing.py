@@ -11,6 +11,10 @@
      0주 첫 진입 / 1층 공석 재장전 / 신저가 추매 갈래(sniper_plugin), 매수가능금액 0.2% 안전버퍼
   ② 3번 적립은 실제 주문하는 main.py 규칙(+1%↑ ½, 오늘 완료·익절일 매수 없음)  ③ 조회 실패·가동 OFF는 0으로 두지 않고 '합산 제외' 표시
   ④ 부족하면 내역(2번·3번 분리·보유 달러·부족액)과 함께 🚨 표시, 스나이퍼 당일 추가 매수 상한은 따로 (부족 판정 제외)
+- 사무실 vNEXT (2026-11-03): '토스 달러 확인'을 2번 v2.0.0(원작 d7b3a66) 매매법으로 다시 계산 (읽기 전용 · 주문·환전 없음)
+  ① 본 그리드 1회분 = 순수 코어 자산(가용현금+본·서브·골든포켓 원가−예비수혈금, 기준시드 하한) × 8%, 수수료는 원장 계좌 수수료
+  ② 서브 그리드 1회분(4%, 본 0.5회분 보호예수 뒤 유휴현금, 최대 4회분) — 대상이 아니면 '대상 아님'으로 따로 표시
+  ③ 예비수혈은 필요액에 더하지 않고 경고로만 (2·3번 같은 계좌) · 골든포켓은 모드가 켜졌을 때만 조건부 표시
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
@@ -479,36 +483,53 @@ def sniper_ledger():
     return (best[1], best[2]) if best else (None, {})
 
 
-# ------------------------------------------------------------------ 2번 스나이퍼 다음 1회 (현재 매매법 · 원장 읽기 전용)
-# toss_sniper 코드(main 2026-11-01)의 식을 그대로 옮김. 원장 파일은 읽기만 한다.
-#  · 1회분 예산·목표 주수 = quant_engine.compute_golden8_quota_qty (Case 67: min(예산÷실제 매수가, 예산÷기준가))
-#  · 매수 가능 주수       = quant_engine.resolve_affordable_buy_qty (예산 상한 → 가용현금 → 매수가×(1+왕복 수수료))
-#  · 매수 갈래·매수가     = sniper_plugin.execute_seed_protected_buy_gate_plugin (0주 첫 진입 / 1층 공석 재장전 / 신저가 추매)
-#  · 토스 매수가능금액 0.2% 안전버퍼 = sniper_plugin 의 get_buying_power_usd(safety_buffer_pct=0.2)
-# 필요 달러는 '주수 × 매수가'. 1회분 예산 자체·자투리 절약금·예상 매도 대금은 필요 달러에도 보유 달러에도 더하지 않는다.
-# 수수료: 매수 주수 계산(resolve_affordable_buy_qty)은 toss_api 상수 ROUND_TRIP_FEE_RATE_PCT 를 쓴다.
-#   Case 86 계좌별 동기화 수수료(원장 round_trip_fee_rate_pct)는 매도 정산(calc_sell_realized_pnl)에만 쓰이므로 여기선 안 씀.
+# ------------------------------------------------------------------ 2번 스나이퍼 다음 1회 (v2.0.0 매매법 · 원장 읽기 전용)
+# 사무실 vNEXT (2026-11-03): main toss_sniper v2.0.0(원작 d7b3a66) 식을 그대로 옮김. 원장 파일은 읽기만 한다.
+#  · 순수 코어 자산 = max(기준시드, 가용현금 + 본·서브·골든포켓 투입원가 − 예비수혈금)  (sniper_plugin 매수 게이트의 core_equity)
+#  · 본 1회분 = quant_engine.compute_golden8_quota_qty (8% · Case 67 이중 캡핑) / 서브 1회분 = compute_sub4_quota_qty (4%)
+#  · 매수 주수 = quant_engine.resolve_affordable_buy_qty (예산 상한 → 현금 → 매수가×(1+왕복 수수료))
+#  · 왕복 수수료 = quant_engine.resolve_effective_round_trip_fee_rate_pct (원장 round_trip_fee_rate_pct → us_commission_rate×200 → 상수)
+#  · 30% 가드·예비수혈 = quant_engine.evaluate_guard30_and_reserve_injection (최대 MAX_RESERVE_PORTIONS회분)
+#  · 와이드 단차 = quant_engine.get_golden8_prog_thresholds (회차 = max(보유 회차, cycle_ratchet_max_lots))
+#  · 1층 공석 재장전 = quant_engine.evaluate_l2_only_hybrid_reentry_signal (±1%, 2층 단가 이하만 · Case 73·84)
+#  · 서브 가용 유휴현금 = quant_engine.compute_sub_grid_available_idle_cash (본 0.5회분 보호예수 차감)
+#  · 토스 매수가능금액 0.2% 안전버퍼 = sniper_plugin (raw_bp × 0.998)
+# 필요 달러는 '주수 × 매수가'(수수료·버퍼 포함 보유액 기준). 예비수혈은 새 돈이 아니라 계좌 달러 용도 전환이라 더하지 않는다.
 SNIPER_BP_BUFFER_PCT = 0.2
-SNIPER_CONST_FALLBACK = {"ROUND_TRIP_FEE_RATE_PCT": 0.14, "PORTION_RATIO_LOCKED": 0.08}   # main 2026-11-01 toss_api.py 값
+SNIPER_CONST_FALLBACK = {   # main 2026-11-03 toss_sniper v2.0.0 값 (toss_api.py · quant_engine.py)
+    "ROUND_TRIP_FEE_RATE_PCT": 0.14, "PORTION_RATIO_LOCKED": 0.08, "SUB_PORTION_RATIO_4PCT": 0.04,
+    "SUB_RESERVE_MAIN_PORTIONS": 0.5, "SUB_FROZEN_DAYS_TRIGGER": 5, "SUB_MAX_TOTAL_LOTS_4": 4,
+    "MAX_RESERVE_PORTIONS": 6, "MIN_DIP_BUDGET_RATIO": 0.30, "MIN_DIP_VS_L1_RATIO": 0.30,
+    "DEFAULT_INITIAL_SEED_USD": 10000.0, "REENTRY_PULLBACK_DROP_PCT": -1.0, "REENTRY_BREAKOUT_RISE_PCT": 1.0,
+    "DEFAULT_GOLDEN_ALLIN_MODE": "NONE",
+}
 
 
 def sniper_constants():
-    """toss_sniper/toss_api.py 의 상수를 실행하지 않고 글자로만 읽는다 → (값, 안내). 못 읽은 값은 main 기준값 + 안내."""
+    """toss_sniper/toss_api.py · quant_engine.py 상수를 실행하지 않고 글자로만 읽는다 → (값, 안내). 못 읽은 값은 main 기준값 + 안내."""
     import ast
     vals = {}
-    try:
-        body = ast.parse((SNIPER_DIR / "toss_api.py").read_text(encoding="utf-8")).body
-    except (OSError, SyntaxError, ValueError):
-        body = []
-    for node in body:
-        tgt = node.target if isinstance(node, ast.AnnAssign) else (
-            node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else None)
-        if isinstance(tgt, ast.Name) and tgt.id in SNIPER_CONST_FALLBACK and node.value is not None:
-            try:
-                vals[tgt.id] = float(ast.literal_eval(node.value))
-            except (ValueError, TypeError, SyntaxError):
-                pass
-    note = "" if len(vals) == len(SNIPER_CONST_FALLBACK) else "스나이퍼 상수 확인 실패 → main 기준값(수수료 0.14%·8%) 사용"
+    for fname in ("toss_api.py", "quant_engine.py"):
+        try:
+            body = ast.parse((SNIPER_DIR / fname).read_text(encoding="utf-8")).body
+        except (OSError, SyntaxError, ValueError):
+            body = []
+        for node in body:
+            tgt = node.target if isinstance(node, ast.AnnAssign) else (
+                node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else None)
+            if (isinstance(tgt, ast.Name) and tgt.id in SNIPER_CONST_FALLBACK and tgt.id not in vals
+                    and node.value is not None):
+                try:
+                    v = ast.literal_eval(node.value)
+                except (ValueError, TypeError, SyntaxError):
+                    continue
+                want = SNIPER_CONST_FALLBACK[tgt.id]
+                if isinstance(want, str) and isinstance(v, str):
+                    vals[tgt.id] = v
+                elif not isinstance(want, str) and isinstance(v, (int, float)) and not isinstance(v, bool):
+                    vals[tgt.id] = float(v)
+    missing = [k for k in SNIPER_CONST_FALLBACK if k not in vals]
+    note = "" if not missing else f"스나이퍼 상수 {len(missing)}개 확인 실패 → main 기준값 사용"
     return {k: vals.get(k, v) for k, v in SNIPER_CONST_FALLBACK.items()}, note
 
 
@@ -523,8 +544,8 @@ def _cents_floor(p):
 
 
 def golden8_target_qty(anchor_price, equity, seed, mode, exec_price, ratio):
-    """= quant_engine.compute_golden8_quota_qty → (목표 주수, 1회분 예산).
-    COMP_08PCT: 예산 = max(기준시드, 원가 기준 총자산) × 8% / FIXED_800: 예산 = 기준시드 × 8%"""
+    """= quant_engine.compute_golden8_quota_qty → (목표 주수, 1회분 예산). equity 에는 순수 코어 자산을 넣는다.
+    COMP_08PCT: 예산 = max(기준시드, 코어 자산) × 비율 / FIXED_800: 예산 = 기준시드 × 비율"""
     seed = max(100.0, seed)
     budget = round((seed if mode == "FIXED_800" else max(seed, equity)) * ratio, 4)
     qty = max(1, int(math.floor((budget + 1e-9) / max(0.01, anchor_price))))
@@ -550,8 +571,15 @@ def affordable_buy_qty(target_qty, price, free_cash, broker_bp, budget, fee_pct)
     return qty, (round(qty * price, 4) if qty > 0 else 0.0)
 
 
+def _drop_pct(lots, ratchet):
+    """= quant_engine.get_golden8_prog_thresholds (WIDE_RUNWAY): 회차 = max(1, 보유 회차, 사이클 최고 회차)"""
+    n = max(1, lots, max(0, ratchet))
+    return -1.0 if n <= 4 else (-2.0 if n <= 8 else (-3.5 if n <= 10 else -5.5))
+
+
 def _sniper_buckets(raw):
-    """= quant_engine.StratumBucket.from_dict (순수 원가: 단가 = 실제 원가 ÷ 주수). 앞쪽(0번)이 1층"""
+    """= quant_engine.StratumBucket.from_dict (순수 원가: 단가 = 실제 원가 ÷ 주수). 앞쪽(0번)이 1층.
+    upper = quant_engine.is_upper_grid_tier (본 2~7층 · 서브 2~3층 · 합병층)"""
     out = []
     for b in raw if isinstance(raw, list) else []:
         if not isinstance(b, dict) or _int(b.get("qty")) <= 0:
@@ -564,15 +592,65 @@ def _sniper_buckets(raw):
         if cost <= 0:
             continue
         cost, tag = round(cost, 4), str(b.get("lot_type") or "QUOTA_L1").upper().strip()
+        upper = (tag in ("MERGED_UPPER", "SUB_MERGED") or (tag.startswith("GRID_L") and tag != "GRID_L1")
+                 or (tag.startswith("SUB_L") and tag != "SUB_L1"))
         out.append({"qty": q, "cost": cost, "price": round(cost / q, 4), "lots": max(1, _int(b.get("lot_count"))),
-                    "upper": tag == "MERGED_UPPER" or (tag.startswith("GRID_L") and tag != "GRID_L1")})
+                    "upper": upper})
     return out
 
 
+def sniper_fee(led, consts):
+    """= quant_engine.resolve_effective_round_trip_fee_rate_pct(state_dict=원장) → 왕복 수수료(%)"""
+    rt = num(led.get("round_trip_fee_rate_pct"))
+    if 0.0 < rt <= 2.0:
+        return round(rt, 4)
+    one = num(led.get("us_commission_rate"))
+    if 0.0 < one <= 0.01:
+        return round(one * 200.0, 4)
+    return consts["ROUND_TRIP_FEE_RATE_PCT"]
+
+
+def sniper_core(led, consts):
+    """원장에서 공통 값: 기준시드·가용현금·수혈금·본/서브 층·골든포켓·순수 코어 자산·수수료"""
+    seed = max(100.0, num(led.get("initial_seed_usd"), consts["DEFAULT_INITIAL_SEED_USD"]))
+    free = max(0.0, num(led.get("free_cash_usd")))
+    inj = max(0.0, num(led.get("injected_reserve_usd")))
+    main_b, sub_b = _sniper_buckets(led.get("buckets")), _sniper_buckets(led.get("sub_buckets"))
+    gp = led.get("golden_pocket") if isinstance(led.get("golden_pocket"), dict) else {}
+    gp_cost = num(gp.get("actual_cost_usd")) if _int(gp.get("qty")) > 0 and num(gp.get("actual_cost_usd")) > 0 else 0.0
+    invested = sum(b["cost"] for b in main_b) + sum(b["cost"] for b in sub_b) + gp_cost
+    core = max(seed, free + invested - inj)   # sniper_plugin.execute_seed_protected_buy_gate_plugin 의 core_equity
+    return {"seed": seed, "free": free, "inj": inj, "main": main_b, "sub": sub_b, "gp_cost": round(gp_cost, 2),
+            "core": round(core, 4), "fee": sniper_fee(led, consts),
+            "used_res": max(0, _int(led.get("used_reserve_portions_cnt")))}
+
+
+def _need_with_buffer(qty, price, fee):
+    """스나이퍼가 이 주수를 사려면: 매수가능금액 × (1 − 0.2%) ≥ 주수 × 매수가 × (1 + 왕복 수수료)
+    (+0.0001: 버퍼 적용 금액을 소수 4자리로 반올림하는 만큼 — 1센트 경계에서 1주 모자라는 것 방지)"""
+    need = (qty * price * (1.0 + fee / 100.0) + 0.0001) / (1.0 - SNIPER_BP_BUFFER_PCT / 100.0)
+    return math.ceil(need * 100.0 - 1e-6) / 100.0
+
+
+def _guard30(free, price, budget, fee, l1_cost, is_dip, used_res, consts):
+    """= quant_engine.evaluate_guard30_and_reserve_injection (장부 현금만 보는 부분)
+    → ('normal'|'reserve'|'deposit', 최소 필요 현금, 수혈 회분, 수혈 금액). 실제 수혈은 토스 여유 달러가 있을 때만 일어난다."""
+    unit = price * (1.0 + fee / 100.0)
+    min_req = max(unit, budget * consts["MIN_DIP_BUDGET_RATIO"])
+    if is_dip:
+        min_req = max(min_req, l1_cost * consts["MIN_DIP_VS_L1_RATIO"])
+    if free >= min_req:
+        return "normal", min_req, 0, 0.0
+    portions = max(1, int(math.ceil((min_req - free - 1e-9) / max(0.01, budget))))
+    if int(consts["MAX_RESERVE_PORTIONS"]) - used_res >= portions:
+        return "reserve", min_req, portions, round(portions * budget, 4)
+    return "deposit", min_req, portions, 0.0
+
+
 def sniper_next_buy(led, live_price, consts):
-    """2번 스나이퍼 '다음 1회' 매수 계산. led = 원장 SOXL dict(읽기만), live_price = SOXL 현재가(실패면 None).
-    state: ok | no_cash(장부 가용현금이 수수료 포함 1주보다 적음 → 스나이퍼가 사지 않음) | off | pending(미체결 주문) | unavailable
-    ok: qty·price(매수가)·order_usd(주수×매수가)·need_usd(수수료·0.2% 안전버퍼까지 넣어 '있어야 할 매수가능금액')
+    """2번 스나이퍼 본 그리드 '다음 1회' 매수 계산. led = 원장 SOXL dict(읽기만), live_price = SOXL 현재가(실패면 None).
+    state: ok | no_cash | deposit_wait(수혈 한도 소진 → 입금 대기) | off | pending | unavailable
+    ok 에 guard='reserve' 면 장부 현금이 30% 가드 미만이라 계좌 여유 달러에서 수혈받아 산다 (필요액에 수혈을 따로 더하지 않음).
     갈래가 조건부(재장전·추매)면 조건이 맞는 순간의 가격으로 계산하고, 두 갈래가 가능하면 큰 쪽을 쓴다."""
     if not isinstance(led, dict) or not led:
         return {"state": "unavailable", "why": "원장(JSON) 없음"}
@@ -580,71 +658,172 @@ def sniper_next_buy(led, live_price, consts):
         return {"state": "off"}
     if "initial_seed_usd" not in led or "free_cash_usd" not in led:
         return {"state": "unavailable", "why": "원장에 기준시드·가용현금 없음"}
-    ratio, fee = consts["PORTION_RATIO_LOCKED"], consts["ROUND_TRIP_FEE_RATE_PCT"]
-    seed, free = max(100.0, num(led.get("initial_seed_usd"))), max(0.0, num(led.get("free_cash_usd")))
-    buckets = _sniper_buckets(led.get("buckets"))
-    equity = free + sum(b["cost"] for b in buckets)   # 원가 기준 총자산 (시장 평가액 아님)
-    mode = "COMP_08PCT"   # 스나이퍼는 원장을 읽을 때 portion_mode 를 COMP_08PCT 로 고정 (toss_api.py 원장 정규화)
+    c = sniper_core(led, consts)
+    ratio, fee, free, buckets = consts["PORTION_RATIO_LOCKED"], c["fee"], c["free"], c["main"]
+    mode = "COMP_08PCT"
     raw_mode = str(led.get("portion_mode") or mode).upper().strip()
-    base = {"free": round(free, 2), "fee": fee, "note": "" if raw_mode == mode else f"원장 표기 {raw_mode} → 스나이퍼는 COMP_08PCT로 계산"}
+    base = {"free": round(free, 2), "fee": fee, "core": c["core"], "inj": c["inj"], "used_res": c["used_res"],
+            "note": "" if raw_mode == mode else f"원장 표기 {raw_mode} → 스나이퍼는 COMP_08PCT로 계산"}
     if str(led.get("buy_order_id") or "").strip():   # 이미 낸 주문이 '다음 1회' (따로 또 세지 않음)
         q, p = max(1, _int(led.get("ordered_qty"))), num(led.get("buy_price"))
-        return dict(base, state="pending", qty=q, price=p, order_usd=round(q * p, 2))
+        tag = str(led.get("pending_lot_type") or "").upper()
+        return dict(base, state="pending", qty=q, price=p, order_usd=round(q * p, 2), sub=tag.startswith("SUB_"))
     live = _cents_floor(live_price) if live_price and live_price > 0 else None
     anchor = num(led.get("anchor_price"))
-    if not buckets:   # 0주 → 60초 타임쉴드 뒤 현재가 지정가로 첫 1층 (15:30~16:00 ET 엔 새 사이클 진입 안 함)
+    pull_pct, brk_pct = consts["REENTRY_PULLBACK_DROP_PCT"], consts["REENTRY_BREAKOUT_RISE_PCT"]
+    is_dip, l1_cost, topup = False, 0.0, None
+    if not buckets:   # 분기 A: 0주 → 현재가 지정가 첫 1층 (15:30~16:00 ET 엔 새 사이클 진입 안 함)
         if live is None:
             return dict(base, state="unavailable", why="SOXL 현재가 조회 불가")
         branch, cond = "첫 1층 진입", f"0주 → 현재가 ${live:,.2f} 지정가"
         cands = [(max(0.01, live), anchor if anchor > 0 else max(0.01, live))]
-    elif buckets[0]["upper"]:   # 1층 공석(상단만 보유) → 10분 게이트 눌림 -1% 또는 돌파 +1% 때만 재장전
-        uq = sum(b["qty"] for b in buckets)
-        wma = round(round(sum(b["cost"] for b in buckets), 4) / uq, 4) if uq else 0.0
-        ref = round(anchor if anchor > 0 else (wma if wma > 0 else (live or 0.0)), 4)
-        if ref <= 0:
-            return dict(base, state="unavailable", why="재장전 기준가 없음")
-        pull, brk = round(ref * 0.99, 2), round(ref * 1.01, 2)
+    elif buckets[0]["upper"]:   # 분기 B-1: 1층 공석 → 기준가 ±1% (현재가 ≤ 상단 최저 단가일 때만 · 돌파는 15:30 이후 제외)
+        ceil_p = min(b["price"] for b in buckets)
+        ref = round(anchor if anchor > 0 else ceil_p, 4)
+        pull = round(ref * (1.0 + pull_pct / 100.0), 2)
+        brk = round(ref * (1.0 + brk_pct / 100.0), 2)
         branch = "1층 재장전"
-        chg = (live_price - ref) / ref * 100.0 if live is not None else 0.0
-        if live is not None and (chg <= -1.0 or chg >= 1.0):
+        chg = (live_price - ref) / ref * 100.0 if live is not None and ref > 0 else 0.0
+        if live is not None and live <= ceil_p + 1e-6 and (chg <= pull_pct or chg >= brk_pct):
             cands, cond = [(max(0.01, live), ref)], f"현재가 ${live:,.2f}가 이미 조건 충족 ({chg:+.2f}%)"
         else:
-            cands = [(pull, ref), (brk, ref)]
-            cond = f"조건부: ${pull:,.2f} 이하 또는 ${brk:,.2f} 이상 (돌파는 15:30~16:00 ET 제외)"
-    else:   # 활성 1층 → 기억저가 대비 4단 와이드 신저가 추매 (지정가 = min(현재가, 조건가))
-        lots = sum(b["lots"] for b in buckets)
-        drop = -1.0 if lots <= 4 else (-2.0 if lots <= 8 else (-3.5 if lots <= 10 else -5.5))
-        b0 = buckets[0]["price"]
-        a = num(led.get("anchor_price"), b0)
-        ref = min([x for x in (b0, a, num(led.get("cycle_min_buy_price"), a)) if x > 0] or [b0])
-        trig = _cents_floor(ref * (1.0 + drop / 100.0))
-        branch = "신저가 추매"
-        chg = (live_price - ref) / ref * 100.0 if live is not None and ref > 0 else 0.0
-        if live is not None and chg <= drop:
-            cands, cond = [(max(0.01, min(live, trig)), ref)], f"현재가 ${live:,.2f}가 이미 조건 충족 ({chg:+.2f}%)"
-        else:
-            cands = [(max(0.01, trig), ref)]
-            cond = f"조건부: ${trig:,.2f} 이하 (기억저가 ${ref:,.2f}의 {drop:.1f}% · 보유 {lots}회차)"
+            cands = [(pull, ref)] + ([(brk, ref)] if brk <= ceil_p + 1e-6 else [])
+            cond = (f"조건부: ${pull:,.2f} 이하" + (f" 또는 ${brk:,.2f} 이상" if brk <= ceil_p + 1e-6 else "")
+                    + f" (상단 최저 단가 ${ceil_p:,.2f} 이하만 · 돌파는 15:30~16:00 ET 제외)")
+    else:
+        l1 = buckets[0]
+        l1_target = max(l1["qty"], _int(led.get("l1_target_quota_qty")))
+        if l1_target > l1["qty"]:   # 분기 B-0: 1층 미체결 잔량 보충 (1층 단가 재도래 때 · 수혈 없음)
+            rem, l1p = l1_target - l1["qty"], round(l1["price"], 2)
+            px = max(0.01, min(live, l1p)) if live is not None and live <= l1p + 1e-6 else l1p
+            topup = {"rem": rem, "budget": round(rem * l1p, 4)}
+            branch, cond = "1층 잔량 보충", f"조건부: 1층 단가 ${l1p:,.2f} 이하 재도래 (잔량 {rem}주)"
+            cands = [(px, l1p)]
+        else:   # 분기 B-2: 활성 1층 → 기억저가 대비 4단 와이드 신저가 추매 (지정가 = min(현재가, 조건가))
+            lots = sum(b["lots"] for b in buckets)
+            ratchet = max(lots, _int(led.get("cycle_ratchet_max_lots")))
+            drop = _drop_pct(lots, ratchet)
+            a = num(led.get("anchor_price"), l1["price"])
+            ref = min([x for x in (l1["price"], a, num(led.get("cycle_min_buy_price"))) if x > 0] or [l1["price"]])
+            trig = _cents_floor(ref * (1.0 + drop / 100.0))
+            branch, is_dip, l1_cost = "신저가 추매", True, l1["cost"]
+            chg = (live_price - ref) / ref * 100.0 if live is not None and ref > 0 else 0.0
+            if live is not None and chg <= drop:
+                cands, cond = [(max(0.01, min(live, trig)), ref)], f"현재가 ${live:,.2f}가 이미 조건 충족 ({chg:+.2f}%)"
+            else:
+                cands = [(max(0.01, trig), ref)]
+                cond = (f"조건부: ${trig:,.2f} 이하 (기억저가 ${ref:,.2f}의 {drop:.1f}% · 회차 {lots}"
+                        + (f" · 사이클 최고 {ratchet}회차 잠금" if ratchet > lots else "") + ")")
     best = None
     for px, ref_p in cands:
-        tq, budget = golden8_target_qty(ref_p, equity, seed, mode, px, ratio)
-        q, spent = affordable_buy_qty(tq, px, free, None, budget, fee)   # 장부 가용현금 한도 (토스 잔고와 따로)
-        cur = {"qty": q, "price": px, "anchor": ref_p, "budget": budget, "target": tq, "order_usd": round(spent, 2)}
+        if topup:
+            tq, budget, guard = topup["rem"], topup["budget"], ("normal", 0.0, 0, 0.0)
+        else:
+            tq, budget = golden8_target_qty(ref_p, c["core"], c["seed"], mode, px, ratio)
+            guard = _guard30(free, px, budget, fee, l1_cost, is_dip, c["used_res"], consts)
+        cash = free + guard[3] if guard[0] == "reserve" else free   # 수혈되면 장부 현금이 그만큼 늘어난 뒤 주수 계산
+        q, spent = affordable_buy_qty(tq, px, cash, None, budget, fee)
+        cur = {"qty": q, "price": px, "anchor": ref_p, "budget": budget, "target": tq, "order_usd": round(spent, 2),
+               "guard": guard[0], "min_req": round(guard[1], 2), "inj_portions": guard[2], "inj_usd": round(guard[3], 2),
+               "cash_used": round(cash, 2)}
+        if best is None or (cur["order_usd"], px) > (best["order_usd"], best["price"]):
+            best = cur
+    res = dict(base, branch=branch, cond=cond, **best)
+    if best["guard"] == "deposit":
+        return dict(res, state="deposit_wait")
+    if best["qty"] <= 0:
+        return dict(res, state="no_cash", unit=round(best["price"] * (1.0 + fee / 100.0), 2))
+    return dict(res, state="ok", need_usd=_need_with_buffer(best["qty"], best["price"], fee))
+
+
+def sniper_sub_next_buy(led, live_price, consts):
+    """2번 서브 그리드 '다음 1회' (= sniper_plugin._execute_sub_grid_buy_engine_plugin, 원장 읽기 전용).
+    state: ok | target_no(대상 아님 — why 에 코드 조건) | no_cash(유휴현금 부족) | unavailable.
+    서브는 예비수혈·입금 알림을 쓰지 않고 '본 0.5회분 보호예수를 뺀 유휴 현금' 안에서만 산다."""
+    if not isinstance(led, dict) or not led or "free_cash_usd" not in led:
+        return {"state": "unavailable", "why": "원장 없음"}
+    if not bool(led.get("is_active", True)):
+        return {"state": "target_no", "why": "가동 OFF"}
+    if str(led.get("buy_order_id") or "").strip() or str(led.get("sell_order_id") or "").strip():
+        return {"state": "target_no", "why": "본·서브 미체결 주문 진행 중"}
+    c = sniper_core(led, consts)
+    if not c["main"]:
+        return {"state": "target_no", "why": "본 그리드 0주 (서브는 본 그리드 보유 중에만)"}
+    frozen = max(0, _int(led.get("main_consec_frozen_days")))
+    need_days = int(consts["SUB_FROZEN_DAYS_TRIGGER"])
+    sub = c["sub"]
+    if not sub and frozen < need_days:
+        return {"state": "target_no", "why": f"본 그리드 무매매 {frozen}일 < {need_days}일"}
+    lots = sum(b["lots"] for b in sub)
+    cap = max(1, _int(led.get("sub_max_total_lots")) or int(consts["SUB_MAX_TOTAL_LOTS_4"]))
+    fee = c["fee"]
+    # = compute_sub_grid_available_idle_cash (코어 자산 하한 DEFAULT_INITIAL_SEED_USD · 본 1회분 × 0.5 보호예수)
+    c_eq = max(consts["DEFAULT_INITIAL_SEED_USD"], c["core"])
+    reserved = round(round(c_eq * consts["PORTION_RATIO_LOCKED"], 4) * consts["SUB_RESERVE_MAIN_PORTIONS"], 4)
+    idle = round(max(0.0, c["free"] - reserved), 4)
+    base = {"free": round(c["free"], 2), "fee": fee, "reserved": round(reserved, 2), "idle": round(idle, 2),
+            "lots": lots, "cap": cap}
+    live = _cents_floor(live_price) if live_price and live_price > 0 else None
+    sub_anchor = num(led.get("sub_anchor_price"))
+    pull_pct, brk_pct = consts["REENTRY_PULLBACK_DROP_PCT"], consts["REENTRY_BREAKOUT_RISE_PCT"]
+    topup = None
+    if not sub:   # S-A: 서브 0주 → 현재가 지정가 서브 1층 (15:30~16:00 ET 제외)
+        if live is None:
+            return dict(base, state="unavailable", why="SOXL 현재가 조회 불가")
+        branch, cond = "서브 첫 1층", f"본 무매매 {frozen}일 → 현재가 ${live:,.2f} 지정가"
+        cands = [(max(0.01, live), sub_anchor if sub_anchor > 0 else max(0.01, live))]
+    elif sub[0]["upper"]:   # S-B1: 서브 1층 공석 → ±1% 재장전
+        if lots >= cap:
+            return dict(base, state="target_no", why=f"서브 상한 {cap}회분 도달")
+        ceil_p = min(b["price"] for b in sub)
+        ref = round(sub_anchor if sub_anchor > 0 else ceil_p, 4)
+        pull, brk = round(ref * (1.0 + pull_pct / 100.0), 2), round(ref * (1.0 + brk_pct / 100.0), 2)
+        branch = "서브 1층 재장전"
+        cands = [(pull, ref)] + ([(brk, ref)] if brk <= ceil_p + 1e-6 else [])
+        cond = f"조건부: ${pull:,.2f} 이하" + (f" 또는 ${brk:,.2f} 이상" if brk <= ceil_p + 1e-6 else "")
+    else:
+        l1 = sub[0]
+        tgt = max(l1["qty"], _int(led.get("sub_l1_target_quota_qty")))
+        if tgt > l1["qty"]:   # S-B0: 서브 1층 잔량 보충
+            rem, l1p = tgt - l1["qty"], round(l1["price"], 2)
+            topup = {"rem": rem, "budget": round(rem * l1p, 4)}
+            branch, cond = "서브 1층 잔량 보충", f"조건부: 서브 1층 단가 ${l1p:,.2f} 이하 (잔량 {rem}주)"
+            cands = [(l1p, l1p)]
+        else:   # S-B2: 서브 활성 1층 → 와이드 신저가 (서브 회차·서브 최고 회차)
+            if lots >= cap:
+                return dict(base, state="target_no", why=f"서브 상한 {cap}회분 도달")
+            ratchet = max(lots, _int(led.get("sub_ratchet_max_lots")))
+            drop = _drop_pct(lots, ratchet)
+            a = num(led.get("sub_anchor_price"), l1["price"])
+            ref = min([x for x in (l1["price"], a, num(led.get("sub_cycle_min_buy_price"))) if x > 0] or [l1["price"]])
+            trig = _cents_floor(ref * (1.0 + drop / 100.0))
+            branch, cond = "서브 신저가 추매", f"조건부: ${trig:,.2f} 이하 (서브 기억저가 ${ref:,.2f}의 {drop:.1f}%)"
+            if live is not None and live <= trig:
+                cands = [(max(0.01, min(live, trig)), ref)]
+            else:
+                cands = [(max(0.01, trig), ref)]
+    best = None
+    for px, ref_p in cands:
+        if topup:
+            tq, budget = topup["rem"], topup["budget"]
+        else:   # = compute_sub4_quota_qty (4% · Case 67 이중 캡핑)
+            tq, budget = golden8_target_qty(ref_p, c["core"], c["seed"], "SUB_04PCT", px, consts["SUB_PORTION_RATIO_4PCT"])
+        min_req = max(px * (1.0 + fee / 100.0), budget * consts["MIN_DIP_BUDGET_RATIO"])
+        q, spent = affordable_buy_qty(tq, px, idle, idle, budget, fee) if idle >= min_req or topup else (0, 0.0)
+        cur = {"qty": q, "price": px, "budget": budget, "target": tq, "order_usd": round(spent, 2), "min_req": round(min_req, 2)}
         if best is None or (cur["order_usd"], px) > (best["order_usd"], best["price"]):
             best = cur
     res = dict(base, branch=branch, cond=cond, **best)
     if best["qty"] <= 0:
-        return dict(res, state="no_cash", unit=round(best["price"] * (1.0 + fee / 100.0), 2))
-    # 스나이퍼가 이 주수를 사려면: 매수가능금액 × (1 − 0.2%) ≥ 주수 × 매수가 × (1 + 왕복 수수료)
-    # (+0.0001: 스나이퍼가 버퍼 적용 금액을 소수 4자리로 반올림하는 만큼 — 1센트 경계에서 1주 모자라는 것 방지)
-    need = (best["qty"] * best["price"] * (1.0 + fee / 100.0) + 0.0001) / (1.0 - SNIPER_BP_BUFFER_PCT / 100.0)
-    return dict(res, state="ok", need_usd=math.ceil(need * 100.0 - 1e-6) / 100.0)
+        return dict(res, state="no_cash")
+    return dict(res, state="ok", need_usd=_need_with_buffer(best["qty"], best["price"], fee))
 
 
 def sniper_qty_with_bp(sn, usd):
     """지금 토스 매수가능금액(usd)으로 스나이퍼가 실제 살 주수 (sniper_plugin 과 같이 0.2% 버퍼 적용)"""
     bp = round(max(0.0, usd) * (1.0 - SNIPER_BP_BUFFER_PCT / 100.0), 4)
-    return affordable_buy_qty(sn["target"], sn["price"], sn["free"], bp, sn["budget"], sn["fee"])[0]
+    cash = sn.get("cash_used", sn["free"])
+    return affordable_buy_qty(sn["target"], sn["price"], cash, bp, sn["budget"], sn["fee"])[0]
 
 
 def sniper_plan():
@@ -879,7 +1058,7 @@ def section_dollar_check(now=None):
             " · ⚠️ 2번·3번 토스 인증이 달라 같은 계좌 합산이 맞는지 확인 필요")
     lines = [f"💵 <b>토스 달러 확인</b> · 미국장 {us_day.strftime('%m/%d')}" + acct]
 
-    # 2번 스나이퍼 다음 1회
+    # 2번 스나이퍼 다음 1회 — 본 그리드 + 서브 그리드 (v2.0.0)
     consts, const_note = sniper_constants()
     _, led = sniper_ledger()
     live = None
@@ -889,27 +1068,61 @@ def section_dollar_check(now=None):
         except Exception:
             live = None
     sn = sniper_next_buy(led, live, consts)
-    sn_need = 0.0
+    sb = sniper_sub_next_buy(led, live, consts)
+    sn_need = sb_need = 0.0
+    max_res = int(consts["MAX_RESERVE_PORTIONS"])
     if sn["state"] == "ok":
         sn_need = sn["need_usd"]
-        lines.append(f"🎯 2번 다음 1회 · {sn['branch']}: {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f}")
+        lines.append(f"🎯 2번 본 그리드 다음 1회 · {sn['branch']}: {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f}")
         lines.append(f"   ↳ {sn['cond']}" + (" · 현재가 조회 불가→조건가 기준" if live is None else ""))
-        lines.append(f"   ↳ 1회분 예산 ${sn['budget']:,.2f} · 수수료·안전버퍼 포함 필요 ${sn_need:,.2f}")
+        lines.append(f"   ↳ 1회분 예산 ${sn['budget']:,.2f} (순수 코어 자산 ${sn['core']:,.2f}) · 수수료 {sn['fee']:.2f}%·안전버퍼 포함 필요 ${sn_need:,.2f}")
+        if sn["guard"] == "reserve":
+            unalloc = (usd - sn["free"]) if usd is not None else None
+            lines.append(f"   ↳ 💉 장부 가용현금 ${sn['free']:,.2f} < 30% 가드 ${sn['min_req']:,.2f} → 계좌 여유 달러에서 +{sn['inj_portions']}회분"
+                         f"(${sn['inj_usd']:,.2f}) 수혈 후 매수 (수혈은 필요액에 따로 더하지 않음)"
+                         + ("" if unalloc is None or unalloc > 0 else " · 지금 계좌 여유 달러 없음 → 입금 전엔 매수 보류"))
         if usd is not None:
             now_q = sniper_qty_with_bp(sn, usd)
             if now_q < sn["qty"]:
                 lines.append("   ↳ 지금 보유 달러로는 " + (f"{now_q}주만 가능" if now_q else "매수 불가(0주)"))
+    elif sn["state"] == "deposit_wait":
+        unalloc = max(0.0, usd - sn["free"]) if usd is not None else 0.0
+        rec = max(sn["budget"], sn["inj_portions"] * sn["budget"] - unalloc)
+        lines.append(f"🎯 2번 본 그리드: 시드고갈 · 예비수혈 {sn['used_res']}/{max_res}회분 소진 → 입금 대기 (매수 없음 · 합산 제외)")
+        lines.append(f"   ↳ {sn['branch']} 최소 필요 현금 ${sn['min_req']:,.2f} · 스나이퍼 권장 입금 약 ${rec:,.2f}")
     elif sn["state"] == "no_cash":
-        lines.append(f"🎯 2번 다음 1회: 매수 불가 — 장부 가용현금 ${sn['free']:,.2f}가 수수료 포함 1주 ${sn['unit']:,.2f}보다 적음"
-                     " (달러를 넣어도 스나이퍼는 사지 않음 · 합산 제외)")
+        lines.append(f"🎯 2번 본 그리드 다음 1회: 매수 불가 — 장부 가용현금 ${sn['free']:,.2f}가 수수료 포함 1주 ${sn['unit']:,.2f}보다 적음"
+                     " (합산 제외)")
     elif sn["state"] == "off":
         lines.append("🎯 2번 스나이퍼: 가동 OFF → 매수 없음 (합산 제외)")
     elif sn["state"] == "pending":
-        lines.append(f"🎯 2번: 미체결 매수 {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f} 진행 중")
+        lines.append(f"🎯 2번{' 서브' if sn.get('sub') else ''}: 미체결 매수 {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f} 진행 중")
         excluded.append("2번 미체결 주문(보유 달러에서 이미 빠졌을 수 있음)")
     else:
-        lines.append("🎯 2번 다음 1회: 계산 불가")
+        lines.append("🎯 2번 본 그리드 다음 1회: 계산 불가")
         excluded.append(f"2번 {html.escape(str(sn.get('why') or '계산 불가'))}")
+    if sn["state"] not in ("off", "pending"):
+        if sb["state"] == "ok":
+            sb_need = sb["need_usd"]
+            lines.append(f"🧩 2번 서브 그리드 다음 1회 · {sb['branch']}: {sb['qty']}주 × ${sb['price']:,.2f} = ${sb['order_usd']:,.2f}")
+            lines.append(f"   ↳ {sb['cond']} · 서브 1회분 ${sb['budget']:,.2f} · 유휴현금 ${sb['idle']:,.2f}"
+                         f"(본 0.5회분 ${sb['reserved']:,.2f} 보호) · 서브 {sb['lots']}/{sb['cap']}회분 · 필요 ${sb_need:,.2f}")
+        elif sb["state"] == "target_no":
+            lines.append(f"🧩 2번 서브 그리드: 대상 아님 ({html.escape(sb['why'])})")
+        elif sb["state"] == "no_cash":
+            lines.append(f"🧩 2번 서브 그리드 · {sb['branch']}: 유휴현금 ${sb['idle']:,.2f}이 최소 ${sb['min_req']:,.2f}보다 적어 매수 없음 (합산 제외)")
+        else:
+            excluded.append(f"2번 서브 {html.escape(str(sb.get('why') or '계산 불가'))}")
+    if led and bool(led.get("is_active", True)):
+        used = max(0, int(num(led.get("used_reserve_portions_cnt"))))
+        if used < max_res or num(led.get("injected_reserve_usd")) > 0:
+            lines.append(f"⚠️ 2번 예비수혈: 시드 고갈 때 토스 계좌 여유 달러를 최대 {max_res - used}회분 더 씀"
+                         f" (사용 {used}/{max_res} · 누적 ${num(led.get('injected_reserve_usd')):,.2f}, 0주 졸업 때 상환)"
+                         " — 2·3번 같은 계좌라 3번 적립용 달러까지 쓸 수 있음 (보유 달러는 한 번만 뺌)")
+        gmode = str(led.get("golden_allin_mode") or consts["DEFAULT_GOLDEN_ALLIN_MODE"]).upper().strip()
+        if gmode != "NONE":
+            lines.append(f"🌟 2번 골든포켓 {html.escape(gmode)} 켜짐: 07:00~07:50 EST·RSI≤19 때 그 시간 필요액 = 가용 현금 전액"
+                         f"(장부 ${num(led.get('free_cash_usd')):,.2f}) · 평소 합계엔 미포함")
     for n in (sn.get("note"), const_note):
         if n:
             lines.append("   ↳ " + html.escape(n))
@@ -933,9 +1146,10 @@ def section_dollar_check(now=None):
             lines.append("   ↳ profit_lock 표시(" + ", ".join(U["note"]) + ")는 실제 주문 코드가 읽지 않아 매수로 셈")
         excluded += [f"3번 {f}" for f in U["fail"]]
 
-    total = round(sn_need + U["need"], 2)
+    total = round(sn_need + sb_need + U["need"], 2)
     sn_part = (f"2번 ${sn_need:,.2f}" if sn["state"] == "ok" else
-               {"off": "2번 OFF", "no_cash": "2번 매수 불가"}.get(sn["state"], "2번 합산 제외"))
+               {"off": "2번 OFF", "no_cash": "2번 매수 불가", "deposit_wait": "2번 입금 대기"}.get(sn["state"], "2번 합산 제외"))
+    sn_part += (f" + 2번 서브 ${sb_need:,.2f}" if sb_need > 0 else "")
     dca_part = f"3번 ${U['need']:,.2f}" if dca["master"] else "3번 OFF"
     lines.append(f"🧾 당일 예정 합계 ${total:,.2f} ({sn_part} + {dca_part}) · 보유 "
                  + (f"${usd:,.2f}" if usd is not None else "조회 불가"))
@@ -947,7 +1161,7 @@ def section_dollar_check(now=None):
         lines.append(("✅ 계산된 항목 기준 충분" if excluded else "✅ 토스 달러 충분") + f" (여유 ${usd - total:,.2f})")
     if sn["state"] == "ok":
         extra = max(0.0, sn["free"] + U["need"] - usd) if usd is not None else 0.0
-        lines.append(f"➕ 2번 당일 추가 매수(조건 충족 때만 · 부족 판정 제외): 1회당 최대 ${sn['budget']:,.2f}"
+        lines.append(f"➕ 2번 당일 추가 매수(조건 충족 때만 · 부족 판정 제외): 본 1회당 최대 ${sn['budget']:,.2f}"
                      f" · 장부 가용현금 ${sn['free']:,.2f}까지" + (f" → 다 쓰려면 약 ${extra:,.2f} 더" if extra > 0.005 else ""))
 
     # 국내 적립 (원화 — 달러 합산에 넣지 않음)
