@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.1.9 · 2026-11-04 09:18 (KST)
+- 파일: fanding_trade.py
+- 내용: 팬딩 PC 정상 노트 미전송: fanding_trade 1.11.1 (머리말·VERSION 일치, 기록 파일 미포함 — 받은 작업만으로 staging)
+- 브랜치: staging
+
 ## v1.1.8 · 2026-11-04 03:30 (KST)
 - 파일: office_briefing.py
 - 내용: staging에서 업데이터 거부 파일 제거: docs/log 검증 스크립트(.py)는 서버 적용 대상이 아님, office_briefing.py + VERIFY.md만 남김
