@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.13.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.14.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -70,6 +70,7 @@
 #        · 과거 수집 완료(✅)·미확보·로그인 풀림 등 그 외 노트는 그대로 전송 (모르면 보냄) · VERSION 변수 1.11.1로 맞춤
 # 1.11.2 (사무실 v1.2.0): 가격표·주문 완료 메시지 간결화 — 💵 달러(숫자 앞·정수 반올림, 조회 불가 시 예전 순서)·📦 보유 수량 비교만
 #        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
+# 1.14.0 (사무실 vNEXT): 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
 # 1.13.0: 자동환전을 가격표 알림 '전'에 실행(알림은 환전 후 달러+환전 줄, 중단·시간 밖이면 바로 알림+수동 버튼) · 정/역방향 우대 시간 평일 09:00~15:30 만 · P 원화 역자동환전(💱 역자동환전 토글, 기본 꺼짐, 메리츠 mnec_clcd 2)
 # 1.12.0: 환전 직관화(💱 환전 → 금액 고르기 버튼 → 확인 → [✅ $XXX 환전 실행]) + P 부족금 자동환전(💱 자동환전 토글, 기본 꺼짐, 추정 기준·$10 반올림·회차당 1번, P 키만)
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
@@ -125,7 +126,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1115,7 +1116,13 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
         L.append("\n✅ 안전점검 모두 통과")
     sub = datetime(*now_kst().timetuple()[:3], *hm(c["submit_kst"]), tzinfo=KST)
     L.append(f"\n⏱ 주문 접수: 승인 후 {('지금 바로' if now_kst() >= sub else c['submit_kst'] + ' 이후')}")
-    if c["auto_order"]:
+    mode = auto_mode(c)
+    if c["auto_order"] and mode:
+        at = auto_mode_time(sheet, mode)
+        L.append(f"⏰ {AUTO_MODES[mode]} {at:%H:%M} " +
+                 (("자동주문" if sheet["auto_ok"] else "<b>자동주문 안 함</b>(점검 미통과)") if not sheet.get("auto_late")
+                  else "<b>자동주문 안 함</b>(시각 지남 · 버튼으로 결정)") + f" · 마감 {cutoff:%m/%d %H:%M}")
+    elif c["auto_order"]:
         L.append(f"⏰ 마감 {alarm:%m/%d %H:%M} 알림 → {auto:%H:%M} " +
                  ("자동주문" if sheet["auto_ok"] else "<b>자동주문 안 함</b>(점검 미통과)"))
     else:
@@ -1502,11 +1509,11 @@ def auto_rfx_state(st=None):
 
 
 def auto_fx_label():
-    return AUTO_FX_ON_LABEL if auto_fx_state()[0] else AUTO_FX_OFF_LABEL
+    return FX_OFF_BTN if auto_fx_state()[0] else FX_ON_BTN
 
 
 def auto_rfx_label():
-    return AUTO_RFX_ON_LABEL if auto_rfx_state()[0] else AUTO_RFX_OFF_LABEL
+    return RFX_OFF_BTN if auto_rfx_state()[0] else RFX_ON_BTN
 
 
 def set_auto_fx(tg_s, on=None):
@@ -2285,7 +2292,14 @@ def tick(tg):
             if sh["status"] == "pending" and sh.get("notice_pending") and now >= sheet_notice_time(sh):
                 send_sheet_alert(tg, sh, sh.get("notice_head") or "📋 <b>팬딩 가격표 도착</b>", st)
             if sh["status"] == "pending" and c["auto_order"]:
-                if now >= auto:
+                due = auto_due(sh, c, now)
+                if due == "late" and not sh.get("auto_late"):      # 고른 시각이 이미 지남 → 소급 자동주문 안 함, 수동 결정
+                    sh["auto_late"] = True
+                    mode = auto_mode(c)
+                    tg.send(f"⏰ <b>{AUTO_MODES[mode]}({auto_mode_time(sh, mode):%H:%M})가 이미 지나</b> · {date} 가격표는 자동주문 안 해요.\n"
+                            "주문하려면 아래 버튼으로 결정해 주세요.", sheet_rows(sh))
+                    continue
+                if due == "fire":
                     tg.clear_buttons(sh.get("msg_id"))
                     if sh["auto_ok"]:
                         sh["status"], sh["approved_by"] = "approved", "auto"
@@ -2298,9 +2312,13 @@ def tick(tg):
                     continue
                 if now >= alarm and not sh.get("alarm_sent"):
                     sh["alarm_sent"] = True
-                    left = int((auto - now).total_seconds() // 60)
-                    tg.send(f"⏰ <b>주문 확인 마감 30분 전</b> · {date} 가격표\n"
-                            f"{left}분 뒤({auto:%H:%M}) " + ("자동주문합니다." if sh["auto_ok"] else "점검 미통과라 자동주문 안 합니다.")
+                    mode = auto_mode(c)
+                    at = auto_mode_time(sh, mode)
+                    left = int((at - now).total_seconds() // 60)
+                    when = (f"{left}분 뒤({at:%H:%M}) " if not mode else f"{AUTO_MODES[mode]}({at:%H:%M}) ")
+                    tail = (("자동주문합니다." if sh["auto_ok"] else "점검 미통과라 자동주문 안 합니다.") if not sh.get("auto_late")
+                            else "시각이 지나 자동주문 안 합니다.")
+                    tg.send(f"⏰ <b>주문 확인 마감 30분 전</b> · {date} 가격표\n" + when + tail
                             + "\n지금 결정하려면 아래 버튼을 눌러 주세요.", sheet_rows(sh))
                     continue
             if sh["status"] in ("approved", "retry", "retry_warn") and (now.hour, now.minute) >= (sub_h, sub_m):
@@ -2404,7 +2422,11 @@ P_LABEL, VR6_LABEL, HOME_LABEL, HELP_LABEL = "🅿 P 매매", "🅥 VR6 매매",
 P_TOOLS_LABEL, P_BACK_LABEL = "🛠 도구", "⬅️ 메뉴"
 OLD_P_LABELS = ("🅿 P 메뉴", "⬅️ P 메뉴")            # 예전 키보드가 남아 있어도 동작
 OLD_HOME_LABELS = ("🏠 메인 메뉴",)
-AUTO_ON_LABEL, AUTO_OFF_LABEL = "🤖 자동 켜짐", "🤖 자동 꺼짐"
+AUTO_ON_LABEL, AUTO_OFF_LABEL = "🤖 자동 켜짐", "🤖 자동 꺼짐"          # 옛 글자 (별칭으로만)
+# 1.14.0 메뉴 토글 = 동작 표시 (꺼져 있으면 ⚡ 켜기, 켜져 있으면 💤 끄기). P·VR6 같은 글자
+AUTO_ON_BTN, AUTO_OFF_BTN = "⚡ 자동 켜기", "💤 자동 끄기"
+FX_ON_BTN, FX_OFF_BTN = "⚡ 자동환전 켜기", "💤 자동환전 끄기"
+RFX_ON_BTN, RFX_OFF_BTN = "⚡ 역자동환전 켜기", "💤 역자동환전 끄기"
 
 
 def main_keyboard():
@@ -2414,7 +2436,7 @@ def main_keyboard():
 
 def menu_keyboard():
     """P 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태"""
-    auto = AUTO_ON_LABEL if cfg()["auto_order"] else AUTO_OFF_LABEL
+    auto = AUTO_OFF_BTN if cfg()["auto_order"] else AUTO_ON_BTN
     return [[{"text": "📋 가격표"}, {"text": "💱 환전"}], [{"text": auto}, {"text": "📐 배수"}],
             [{"text": auto_fx_label()}, {"text": auto_rfx_label()}],
             [{"text": "🩺 진단"}, {"text": "🔄 재판독"}], [{"text": P_TOOLS_LABEL}, {"text": HOME_LABEL}]]
@@ -2433,7 +2455,11 @@ SHARED = {"💱 환전": ("/환전", "/vr6환전"), "📐 배수": ("/배수", "
           "⬅️ 메뉴": ("/p", "/vr6"), AUTO_ON_LABEL: (AUTO_ON_LABEL, "/vr6자동전환"), AUTO_OFF_LABEL: (AUTO_OFF_LABEL, "/vr6자동전환"),
           AUTO_FX_ON_LABEL: ("/자동환전전환", "/vr6자동환전전환"), AUTO_FX_OFF_LABEL: ("/자동환전전환", "/vr6자동환전전환"),
           AUTO_RFX_ON_LABEL: ("/역환전자동전환", "/vr6역환전자동전환"), AUTO_RFX_OFF_LABEL: ("/역환전자동전환", "/vr6역환전자동전환")}
-TOGGLE_LABELS = (AUTO_ON_LABEL, AUTO_OFF_LABEL, AUTO_FX_ON_LABEL, AUTO_FX_OFF_LABEL, AUTO_RFX_ON_LABEL, AUTO_RFX_OFF_LABEL)   # 누르면 바로 바뀌는 버튼
+SHARED.update({AUTO_ON_BTN: ("/자동켜기", "/vr6자동켜기"), AUTO_OFF_BTN: ("/자동끄기", "/vr6자동끄기"),
+               FX_ON_BTN: ("/자동환전켜기", "/vr6자동환전켜기"), FX_OFF_BTN: ("/자동환전끄기", "/vr6자동환전끄기"),
+               RFX_ON_BTN: ("/역환전자동켜기", "/vr6역환전자동켜기"), RFX_OFF_BTN: ("/역환전자동끄기", "/vr6역환전자동끄기")})
+TOGGLE_LABELS = (AUTO_ON_LABEL, AUTO_OFF_LABEL, AUTO_FX_ON_LABEL, AUTO_FX_OFF_LABEL, AUTO_RFX_ON_LABEL, AUTO_RFX_OFF_LABEL,
+                 AUTO_ON_BTN, AUTO_OFF_BTN, FX_ON_BTN, FX_OFF_BTN, RFX_ON_BTN, RFX_OFF_BTN)   # 누르면 바로 바뀌는 버튼
 
 
 def remember_menu(keyboard):
@@ -2484,13 +2510,90 @@ def main_menu_text():
     return "📋 <b>팬딩 봇</b>\n\n" + p_status_line() + "\n\n" + vr6 + "\n\n아래 버튼에서 골라 주세요."
 
 
-def toggle_auto(tg):
-    """P 자동주문 버튼: 누르면 바로 켜짐↔꺼짐"""
+# ---------- 자동주문 시간 선택 (1.14.0): 켤 때 판독후 1시간뒤(A) / 마감 1시간전(B) 중 고름. 모드 없는 ON(legacy)은 마감 10분 전
+AUTO_MODES = {"A": "판독후 1시간뒤", "B": "마감 1시간전"}
+
+
+def auto_mode(c=None):
+    """켜져 있을 때의 모드 'A'/'B', 모드 없음(legacy)·꺼짐이면 None"""
+    c = c or cfg()
+    m = c.get("auto_mode")
+    return m if c.get("auto_order") and m in AUTO_MODES else None
+
+
+def auto_mode_time(sheet, mode):
+    """자동주문 시각 (KST). A = 알림일 09:00 + 1시간, B = 예약 마감 − 1시간, 모드 없음 = 기존 마감 10분 전"""
+    if mode == "A":
+        return sheet_notice_time(sheet) + timedelta(hours=1)
+    if mode == "B":
+        return deadlines(sheet)[2] - timedelta(hours=1)
+    return deadlines(sheet)[1]
+
+
+def auto_due(sh, c, now):
+    """'fire'(지금 자동주문) / 'late'(고른 시각이 이미 지나 소급 안 함) / 'wait'"""
+    mode = auto_mode(c)
+    at = auto_mode_time(sh, mode)
+    if now < at:
+        return "wait"
+    if not mode:
+        return "fire"                       # legacy: 기존 그대로
+    def after(x):
+        try:
+            return datetime.fromisoformat(str(x)) > at
+        except (TypeError, ValueError):
+            return True
+    if after(c.get("auto_mode_at")) or not sh.get("notice_sent_at") or after(sh.get("notice_sent_at")):
+        return "late"
+    return "fire"
+
+
+def p_ref_sheet(now=None):
+    """시간 선택 화면의 기준 가격표: 결정 대기 중인 오늘 이후 가격표, 없으면 다음 주문일(가상)"""
+    now = now or now_kst()
+    today = now.strftime("%Y%m%d")
+    sheets = load(STATE, {}).get("sheets") or {}
+    for d in sorted(sheets, reverse=True):
+        if sheets[d].get("status") == "pending" and str(sheets[d].get("us_date") or "") >= today:
+            return sheets[d]
+    return {"us_date": next_session_date(last_session_date(now)).strftime("%Y%m%d")}
+
+
+def auto_pick_rows(prefix, times):
+    return [[{"text": f"{AUTO_MODES['A']} ({times['A']:%H:%M})", "callback_data": f"{prefix}:am:A"}],
+            [{"text": f"{AUTO_MODES['B']} ({times['B']:%H:%M})", "callback_data": f"{prefix}:am:B"}],
+            [{"text": "❌ 취소", "callback_data": f"{prefix}:am:x"}]]
+
+
+def p_auto_picker(tg):
+    """⚡ 자동 켜기 · /자동켜기: 바로 켜지 않고 시간 선택 화면"""
+    sh = p_ref_sheet()
+    times = {m: auto_mode_time(sh, m) for m in AUTO_MODES}
+    tg.send("🅿 <b>P 자동주문 켜기 — 시간을 골라줘</b>\n(한국시간, " + (f"{sh['date']} 가격표 기준)" if sh.get("date") else "다음 가격표 기준)"),
+            auto_pick_rows("fm", times))
+    return True
+
+
+def set_p_auto(tg, mode):
+    """mode 'A'/'B' → 그 시각으로 켬, None → 끔(모드 지움)"""
     c = load(CFG, {})
-    c["auto_order"] = not cfg()["auto_order"]
+    if mode in AUTO_MODES:
+        c.update(auto_order=True, auto_mode=mode, auto_mode_at=now_kst().isoformat())
+    else:
+        c["auto_order"] = False
+        c.pop("auto_mode", None); c.pop("auto_mode_at", None)
     save(CFG, c)
-    tg.send(f"🅿 🤖 P 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b> — 버튼을 안 누르면 "
-            + ("마감 10분 전에 자동주문해요 (점검 통과 시)." if c["auto_order"] else "주문하지 않아요."), keyboard=menu_keyboard())
+    if mode in AUTO_MODES:
+        at = auto_mode_time(p_ref_sheet(), mode)
+        tg.send(f"🅿 🤖 P 자동주문 <b>켜짐</b> — {AUTO_MODES[mode]} ({at:%H:%M})에 자동주문해요 (점검 통과 시).", keyboard=menu_keyboard())
+    else:
+        tg.send("🅿 🤖 P 자동주문 <b>꺼짐</b> — 버튼을 안 누르면 주문하지 않아요.", keyboard=menu_keyboard())
+    return True
+
+
+def toggle_auto(tg):
+    """옛 버튼 글자(🤖 자동 켜짐/꺼짐) 별칭: 켜져 있으면 끄고, 꺼져 있으면 시간 선택"""
+    return set_p_auto(tg, None) if cfg()["auto_order"] else p_auto_picker(tg)
 
 
 def _vr6_text(tg, t):
@@ -2653,17 +2756,14 @@ def bot_message(tg_s, text):
                 tg_s.send(msg + "\n다음 가격표부터 적용돼요.", mult_rows(n))
         return True
     if low in ("/자동", "자동", "/자동켜기", "/자동끄기") or low.startswith("/자동 "):
-        c = load(CFG, {})
         if low in ("/자동켜기", "/자동 켜기", "/자동 on"):
-            c["auto_order"] = True
+            return p_auto_picker(tg_s)                 # 1.14.0: 바로 켜지 않고 시간 선택
         elif low in ("/자동끄기", "/자동 끄기", "/자동 off"):
-            c["auto_order"] = False
+            return set_p_auto(tg_s, None)
         else:
             tg_s.send(f"🤖 자동주문은 지금 <b>{'켜짐' if cfg()['auto_order'] else '꺼짐'}</b>.\n"
                       "아래 버튼으로 바꾸세요. (글자로는 <code>/자동켜기</code> · <code>/자동끄기</code>)",
                       auto_rows(cfg()['auto_order'])); return True
-        save(CFG, c)
-        tg_s.send(f"🤖 자동주문 <b>{'켜짐' if c['auto_order'] else '꺼짐'}</b>", auto_rows(c['auto_order'])); return True
     if low in ("/재예약강제", "재예약강제"):
         with locked_state() as st:
             sh = st["sheets"].get(sorted(st["sheets"])[-1]) if st["sheets"] else None
@@ -2722,11 +2822,11 @@ def bot_message(tg_s, text):
     if low in ("/역환전자동", "역환전자동"):
         on, at = auto_rfx_state()
         tg_s.send(f"🅿 💱 P 역자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                  + "\n바꾸기: <code>/역환전자동켜기</code> · <code>/역환전자동끄기</code> 또는 P 메뉴의 💱 역자동환전 버튼"); return True
+                  + "\n바꾸기: <code>/역환전자동켜기</code> · <code>/역환전자동끄기</code> 또는 P 메뉴의 ⚡ 역자동환전 켜기 · 💤 역자동환전 끄기 버튼"); return True
     if low in ("/자동환전", "자동환전"):
         on, at = auto_fx_state()
         tg_s.send(f"🅿 💱 P 자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                  + "\n바꾸기: <code>/자동환전켜기</code> · <code>/자동환전끄기</code> 또는 P 메뉴의 💱 자동환전 버튼"); return True
+                  + "\n바꾸기: <code>/자동환전켜기</code> · <code>/자동환전끄기</code> 또는 P 메뉴의 ⚡ 자동환전 켜기 · 💤 자동환전 끄기 버튼"); return True
     if low == "/환전" or low == "환전" or low.startswith("/환전 "):
         arg = t[len("/환전"):].strip() if t.startswith("/환전") else ""
         if not arg:
@@ -2754,6 +2854,13 @@ def bot_callback(tg_s, cb):
         key, arg = parts[1], (parts[2] if len(parts) > 2 else "")
         tg_s.answer(cb.get("id"))
         if key == "noop":
+            return True
+        if key == "am":                       # 자동주문 시간 선택 화면
+            tg_s.buttons((cb.get("message") or {}).get("message_id"), [])
+            if arg in AUTO_MODES:
+                return set_p_auto(tg_s, arg)
+            tg_s.send("❌ 취소했어요. 자동주문은 그대로 " + ("켜짐" if cfg()["auto_order"] else "꺼짐") + "이에요.\n" + p_status_line(),
+                      keyboard=menu_keyboard())
             return True
         cmd = {"mt": f"/배수 {arg}" if arg.isdigit() else "/배수",
                "au": {"1": "/자동켜기", "0": "/자동끄기"}.get(arg, "/자동"),

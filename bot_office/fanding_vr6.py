@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.5.0)
+# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.6.0)
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
+#  2.6.0 (2026-11-04, 사무실 vNEXT) 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 첫 발주일 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
 #  2.5.0 (2026-11-04) 자동환전을 주문표 알림 '전'에 실행(알림은 환전 후 달러+환전 줄, 중단·시간 밖이면 바로 알림+수동 버튼) · 정/역방향 우대 시간 평일 09:00~15:30 만 · VR6 원화 역자동환전(💱 역자동환전 토글, 기본 꺼짐, 메리츠 mnec_clcd 2)
 #  2.4.0 (2026-11-04) 환전 직관화(💱 환전 → 금액 고르기 버튼 → 확인 → [✅ $XXX 환전 실행]) + VR6 부족금 자동환전(💱 자동환전 토글, 기본 꺼짐, 추정 기준·$10 반올림·회차당 1번, VR6 키만)
 #  2.3.0 (2026-10-31) 날짜 대조 강화 (P 날짜 오독과 같은 문제 방지): 진행일과 표 기간 시작이 정확히 일치해야 하고,
@@ -46,7 +47,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -88,7 +89,11 @@ OLD_MENU_LABELS = ("🅥 VR6 메뉴", "⬅️ VR6 메뉴")      # 예전 키보�
 #  fanding_trade.route_shared 가 VR6 메뉴일 때 아래 /vr6… 명령으로 바꿔서 넘김)
 KB_MAIN = [["📝 주문표", "💱 환전"], ["AUTO", "📐 배수"], ["FXAUTO", "RFXAUTO"], ["🩺 진단", "🔄 재판독"], ["🛠 도구", "🏠 처음"]]
 KB_TOOLS = [["📋 받은 표", "📅 일정"], ["⏭ 지금 진행", "❓ 도움말"], ["⬅️ 메뉴"]]
-AUTO_ON, AUTO_OFF = "🤖 자동 켜짐", "🤖 자동 꺼짐"
+AUTO_ON, AUTO_OFF = "🤖 자동 켜짐", "🤖 자동 꺼짐"          # 옛 글자 (fanding_trade.route_shared 별칭으로만)
+# 2.6.0 메뉴 토글 = 동작 표시 (꺼져 있으면 ⚡ 켜기, 켜져 있으면 💤 끄기). P 와 같은 글자 → route_shared 가 /vr6… 로 넘김
+AUTO_ON_BTN, AUTO_OFF_BTN = "⚡ 자동 켜기", "💤 자동 끄기"
+FX_ON_BTN, FX_OFF_BTN = "⚡ 자동환전 켜기", "💤 자동환전 끄기"
+RFX_ON_BTN, RFX_OFF_BTN = "⚡ 역자동환전 켜기", "💤 역자동환전 끄기"
 BUTTONS = {"📝 주문표": "/vr6주문", "📋 받은 표": "/vr6표", "📅 일정": "/vr6일정", "⏭ 지금 진행": "/vr6지금",
            # 2.2.0 글자 (VR6 붙은 버튼)
            "📝 VR6 주문표": "/vr6주문", "💱 VR6 환전": "/vr6환전", "📐 VR6 배수": "/vr6배수", "🩺 VR6 진단": "/vr6진단",
@@ -672,10 +677,15 @@ def plan_text(plan, st, head="🅥 <b>VR6 주문표</b>"):
     L += [("  ✅ " if x["ok"] else "  ❌ ") + html.escape(x["msg"]) for x in plan["checks"]]
     if plan["status"] == "pending" and plan.get("order_start"):
         _, auto, cut = deadlines(plan, st)
+        mode = auto_mode(st)
+        if mode:
+            auto = auto_mode_time(plan, st, mode)
         if not st["auto_order"]:
             L.append(f"\n⏰ 자동주문 꺼짐 · 버튼으로 결정해 주세요 (마감 {cut:%m-%d %H:%M} KST)")
+        elif plan.get("auto_late"):
+            L.append(f"\n⏰ {AUTO_MODES[mode] if mode else '자동주문'}({auto:%m-%d %H:%M})가 지나 자동주문 안 해요 · 버튼으로 결정해 주세요 (마감 {cut:%m-%d %H:%M} KST)")
         elif plan["auto_ok"]:
-            L.append(f"\n⏰ 버튼을 안 누르면 <b>{auto:%m-%d %H:%M} KST</b> 에 자동주문해요.")
+            L.append(f"\n⏰ 버튼을 안 누르면 <b>{auto:%m-%d %H:%M} KST</b> 에 자동주문해요." + (f" ({AUTO_MODES[mode]})" if mode else ""))
         else:
             L.append("\n⛔ 점검 미통과라 자동주문 안 해요. 숫자를 확인하고 직접 [✅ 주문] 하거나 앱에서 주문해 주세요.")
     return "\n".join(L)
@@ -807,6 +817,8 @@ def send_plan_notice(tg, cycle, head, refresh=False):
         if cycle in st["plans"]:
             st["plans"][cycle]["msg_id"] = (r or {}).get("message_id")
             st["plans"][cycle].pop("notice_pending", None)
+            if (r or {}).get("message_id"):
+                st["plans"][cycle]["notice_sent_at"] = datetime.now(KST).isoformat()   # 2.6.0: 판독후 1시간뒤 소급 판단용
     replay("vr6_plan_ready", "ok" if plan["auto_ok"] else "partial", "" if plan["auto_ok"] else "checks_failed",
            event_type="user_visible", cycle=cycle, reads_agree=plan.get("reads_agree"),
            buy_rows=len(plan["parsed"]["buys"]), sell_rows=len(plan["parsed"]["sells"]), mult=plan["mult"],
@@ -926,7 +938,15 @@ def tick(tg, now=None):
                 if pl["status"] == "pending":
                     pl["msg_id"] = (r or {}).get("message_id")
             if pl["status"] == "pending" and st["auto_order"]:
-                if now >= auto:
+                mode = auto_mode(st)
+                at = auto_mode_time(pl, st, mode)
+                due = auto_due(pl, st, now)
+                if due == "late" and not pl.get("auto_late"):      # 고른 시각이 이미 지남 → 소급 자동주문 안 함, 수동 결정
+                    pl["auto_late"] = True
+                    tg.send(f"⏰ <b>VR6 {AUTO_MODES[mode]}({at:%H:%M})가 이미 지나</b> · {cycle} 회차는 자동주문 안 해요.\n"
+                            "주문하려면 아래 버튼으로 결정해 주세요.", plan_rows(pl))
+                    continue
+                if due == "fire":
                     tg.clear_buttons(pl.get("msg_id"))
                     if pl["auto_ok"]:
                         pl["status"], pl["approved_by"] = "approved", "auto"
@@ -941,8 +961,10 @@ def tick(tg, now=None):
                     continue
                 if now >= alarm and not pl.get("alarm_sent"):
                     pl["alarm_sent"] = True
-                    tg.send(f"⏰ <b>VR6 주문 확인 마감 30분 전</b> · {cycle} 회차\n{auto:%H:%M} 에 "
-                            + ("자동주문합니다." if pl["auto_ok"] else "점검 미통과라 자동주문 안 합니다.")
+                    tg.send(f"⏰ <b>VR6 주문 확인 마감 30분 전</b> · {cycle} 회차\n"
+                            + (f"{at:%H:%M} 에 " if not mode else f"{AUTO_MODES[mode]}({at:%H:%M}) ")
+                            + (("자동주문합니다." if pl["auto_ok"] else "점검 미통과라 자동주문 안 합니다.") if not pl.get("auto_late")
+                               else "시각이 지나 자동주문 안 합니다.")
                             + f"\n매수 필요 달러 ${need_usd(pl):,.2f} — 부족하면 아래 버튼으로 환전할 수 있어요.", plan_rows(pl))
                     continue
             if pl["status"] == "pending" and not st["auto_order"] and now >= alarm and not pl.get("alarm_sent"):
@@ -1442,13 +1464,98 @@ def _auto_rfx_run(tg, m, key, amount, est, need):
     return "ok"
 
 
+# ---------- 자동주문 시간 선택 (2.6.0): 판독후 1시간뒤(A) / 첫 발주일 마감 1시간전(B). 모드 없는 ON(legacy)은 마감 10분 전
+AUTO_MODES = {"A": "판독후 1시간뒤", "B": "마감 1시간전"}
+
+
+def auto_mode(st):
+    m = st.get("auto_mode")
+    return m if st.get("auto_order") and m in AUTO_MODES else None
+
+
+def auto_mode_time(plan, st, mode):
+    """자동주문 시각 (KST). A = 표 알림일 09:00 + 1시간, B = 첫 발주일 마감 − 1시간, 모드 없음 = 기존 마감 10분 전"""
+    if mode == "A":
+        try:
+            day = datetime.fromisoformat(str(plan.get("received"))).astimezone(KST).date()
+        except (TypeError, ValueError):
+            day = datetime.now(KST).date()
+        h, m = _hm(st["notice_kst"])
+        return datetime(day.year, day.month, day.day, h, m, tzinfo=KST) + timedelta(hours=1)
+    if mode == "B":
+        return deadlines(plan, st)[2] - timedelta(hours=1)
+    return deadlines(plan, st)[1]
+
+
+def auto_due(plan, st, now):
+    """'fire' / 'late'(고른 시각이 이미 지나 소급 안 함) / 'wait'"""
+    mode = auto_mode(st)
+    at = auto_mode_time(plan, st, mode)
+    if now < at:
+        return "wait"
+    if not mode:
+        return "fire"                       # legacy: 기존 그대로
+    noticed = plan.get("notice_sent_at") or (plan.get("received") if plan.get("msg_id") else None)
+    def after(x):
+        try:
+            return datetime.fromisoformat(str(x)) > at
+        except (TypeError, ValueError):
+            return True
+    return "late" if after(st.get("auto_mode_at")) or after(noticed) else "fire"
+
+
+def _ref_plan(st):
+    pl = _latest_plan(st)
+    return pl if pl and pl["status"] == "pending" and pl.get("order_start") else None
+
+
+def vr6_auto_picker(tg):
+    """⚡ 자동 켜기 · /vr6자동켜기: 바로 켜지 않고 시간 선택 화면"""
+    st = _fill(load(STATE, {}))
+    pl = _ref_plan(st)
+    if pl:
+        times = {m: auto_mode_time(pl, st, m) for m in AUTO_MODES}
+        basis = f"{pl['cycle']} 회차 기준, 첫 발주일 {pl['order_start']}"
+    else:
+        due = _d(st["next_due"])
+        h, m = _hm(st["notice_kst"])
+        times = {"A": datetime(due.year, due.month, due.day, h, m, tzinfo=KST) + timedelta(hours=1),
+                 "B": cutoff_kst(due, st) - timedelta(hours=1)}
+        basis = f"다음 진행일 {due.isoformat()} 기준"
+    tg.send(f"🅥 <b>VR6 자동주문 켜기 — 시간을 골라줘</b>\n(한국시간, {basis})", _ft().auto_pick_rows("vm", times))
+
+
+def set_vr6_auto(tg, mode):
+    """mode 'A'/'B' → 그 시각으로 켬, None → 끔(모드 지움)"""
+    with locked() as st:
+        if mode in AUTO_MODES:
+            st.update(auto_order=True, auto_mode=mode, auto_mode_at=datetime.now(KST).isoformat())
+        else:
+            st["auto_order"] = False
+            st.pop("auto_mode", None); st.pop("auto_mode_at", None)
+    replay("vr6_auto_toggle", "ok", (mode or "off"), event_type="user_event")
+    if mode in AUTO_MODES:
+        st = _fill(load(STATE, {}))
+        pl = _ref_plan(st)
+        if pl:
+            at = auto_mode_time(pl, st, mode)
+        else:
+            due = _d(st["next_due"])
+            at = (datetime(due.year, due.month, due.day, *_hm(st["notice_kst"]), tzinfo=KST) + timedelta(hours=1)
+                  if mode == "A" else cutoff_kst(due, st) - timedelta(hours=1))
+        when = f"{AUTO_MODES[mode]} ({at:%H:%M}" + (", 첫 발주일 마감 기준)" if mode == "B" else ")")
+        tg.send(f"🅥 🤖 VR6 자동주문 <b>켜짐</b> — {when}에 자동주문해요 (점검 통과 시).", keyboard=keyboard())
+    else:
+        tg.send("🅥 🤖 VR6 자동주문 <b>꺼짐</b> — 버튼을 안 누르면 주문하지 않아요.", keyboard=keyboard())
+
+
 # ---------------------------------------------------------- 5번 봇 메뉴·명령
 def keyboard():
     """VR6 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태"""
     st = _fill(load(STATE, {}))
-    auto = AUTO_ON if st["auto_order"] else AUTO_OFF
-    fxa = AUTO_FX_ON if auto_fx_state(st)[0] else AUTO_FX_OFF
-    rfx = AUTO_RFX_ON if auto_rfx_state(st)[0] else AUTO_RFX_OFF
+    auto = AUTO_OFF_BTN if st["auto_order"] else AUTO_ON_BTN
+    fxa = FX_OFF_BTN if auto_fx_state(st)[0] else FX_ON_BTN
+    rfx = RFX_OFF_BTN if auto_rfx_state(st)[0] else RFX_ON_BTN
     return [[{"text": {"AUTO": auto, "FXAUTO": fxa, "RFXAUTO": rfx}.get(t, t)} for t in row] for row in KB_MAIN]
 
 
@@ -1540,12 +1647,11 @@ def handle_text(tg, text):
         tg.send(status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 🛠 도구에 있어요.", keyboard=keyboard()); return True
     if low in ("/vr6도구", "vr6도구"):
         tg.send("🛠 <b>VR6 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard()); return True
-    if low in ("/vr6자동전환", "vr6자동전환"):             # 🤖 자동 버튼: 누르면 바로 켜짐↔꺼짐
-        with locked() as st:
-            st["auto_order"] = on = not st["auto_order"]
-        tg.send(f"🅥 🤖 VR6 자동주문 <b>{'켜짐' if on else '꺼짐'}</b> — 버튼을 안 누르면 "
-                + ("첫 발주일 마감 10분 전에 자동주문해요 (점검 모두 통과 시)." if on else "주문하지 않아요."), keyboard=keyboard())
-        replay("vr6_auto_toggle", "ok", "on" if on else "off", event_type="user_event")
+    if low in ("/vr6자동전환", "vr6자동전환"):             # 옛 🤖 자동 버튼 별칭: 켜져 있으면 끄고, 꺼져 있으면 시간 선택
+        if _fill(load(STATE, {}))["auto_order"]:
+            set_vr6_auto(tg, None)
+        else:
+            vr6_auto_picker(tg)
         return True
     if low in ("/vr6도움말", "vr6도움말"):
         tg.send("🅥 <b>VR6 사용법</b>\n" + HELP, keyboard=tools_keyboard()); return True
@@ -1616,13 +1722,10 @@ def handle_text(tg, text):
         except Exception as e:
             tg.send(f"🚨 VR6 재판독 오류: {html.escape(str(e))[:300]}")
         return True
-    if low in ("/vr6자동켜기", "vr6자동켜기", "/vr6자동끄기", "vr6자동끄기"):
-        on = "켜기" in low
-        with locked() as st:
-            st["auto_order"] = on
-        tg.send(f"🤖 VR6 자동주문 <b>{'켜짐' if on else '꺼짐'}</b> — 버튼을 안 누르면 "
-                + ("첫 발주일 마감 10분 전에 자동주문해요 (점검 모두 통과 시)." if on else "주문하지 않아요."), keyboard=keyboard())
-        return True
+    if low in ("/vr6자동켜기", "vr6자동켜기"):            # 2.6.0: 바로 켜지 않고 시간 선택
+        vr6_auto_picker(tg); return True
+    if low in ("/vr6자동끄기", "vr6자동끄기"):
+        set_vr6_auto(tg, None); return True
     if low in ("/vr6자동환전전환", "vr6자동환전전환"):       # 💱 자동환전 버튼: 누르면 바로 켜짐↔꺼짐
         set_auto_fx(tg); return True
     if low in ("/vr6자동환전켜기", "vr6자동환전켜기", "/vr6자동환전끄기", "vr6자동환전끄기"):
@@ -1634,11 +1737,11 @@ def handle_text(tg, text):
     if low in ("/vr6역환전자동", "vr6역환전자동"):
         on, at = auto_rfx_state()
         tg.send(f"🅥 💱 VR6 역자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                + "\n바꾸기: <code>/vr6역환전자동켜기</code> · <code>/vr6역환전자동끄기</code> 또는 VR6 메뉴의 💱 역자동환전 버튼"); return True
+                + "\n바꾸기: <code>/vr6역환전자동켜기</code> · <code>/vr6역환전자동끄기</code> 또는 VR6 메뉴의 ⚡ 역자동환전 켜기 · 💤 역자동환전 끄기 버튼"); return True
     if low in ("/vr6자동환전", "vr6자동환전"):
         on, at = auto_fx_state()
         tg.send(f"🅥 💱 VR6 자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                + "\n바꾸기: <code>/vr6자동환전켜기</code> · <code>/vr6자동환전끄기</code> 또는 VR6 메뉴의 💱 자동환전 버튼"); return True
+                + "\n바꾸기: <code>/vr6자동환전켜기</code> · <code>/vr6자동환전끄기</code> 또는 VR6 메뉴의 ⚡ 자동환전 켜기 · 💤 자동환전 끄기 버튼"); return True
     m = re.fullmatch(r"(?:/vr6환전|vr6환전)\s*([\d,.$]+)?", t, re.I)
     if m:
         amt = None
@@ -1682,6 +1785,15 @@ def callback(tg, cb):
     if not data.startswith("vm:"):
         return False
     parts = data.split(":")
+    if parts[1] == "am" and len(parts) == 3:          # 자동주문 시간 선택 화면
+        tg.answer(cb.get("id"))
+        tg.clear_buttons((cb.get("message") or {}).get("message_id"))
+        if parts[2] in AUTO_MODES:
+            set_vr6_auto(tg, parts[2])
+        else:
+            tg.send("❌ 취소했어요. 자동주문은 그대로 " + ("켜짐" if _fill(load(STATE, {}))["auto_order"] else "꺼짐") + "이에요.\n"
+                    + status_line(), keyboard=keyboard())
+        return True
     if parts[1] in ("ok", "no", "re", "wy") and len(parts) == 4:
         _plan_action(tg, cb, parts[1], parts[2], parts[3])
         return True
