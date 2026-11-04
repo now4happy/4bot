@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.11.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.11.1)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -66,6 +66,8 @@
 # 1.11.0 (사무실 v1.1.7): 미국 휴장일 반영 — 필요 종가일·다음 주문일이 휴장일(주말 포함)을 건너뜀
 #        · US_CLOSED 표(office_briefing.py와 동일, NYSE 공식) + is_trading_day() · 조기 마감일은 장 열린 날
 #        · 평일 동작 그대로, 네트워크 조회 없음 · 표에 없는 연도는 주말만 건너뜀
+# 1.11.1 (사무실 vNEXT): 윈도우 PC 정상 노트 2종(과거자료 진행·오늘 자료 확보 완료)은 텔레그램 대신 서버 로그만
+#        · 과거 수집 완료(✅)·미확보·로그인 풀림 등 그 외 노트는 그대로 전송 (모르면 보냄) · VERSION 변수 1.11.1로 맞춤
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -119,7 +121,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.10.3"
+VERSION = "1.11.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1344,6 +1346,19 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>"):
 
 
 # ---------------------------------------------------------- 새 가격표 처리
+PC_NOTE_DAILY_DONE = ("오늘 필요 자료 확보·PC 수집 작업 완료. 수집기를 자동 종료합니다. "
+                      "재판독이 필요하면 PC에서 run.bat를 다시 실행하세요.")
+
+
+def pc_note_is_routine(note):
+    """정상 진행 노트(텔레그램 안 보냄)인지. 정확히 아는 2종만 True, 그 외·완료(✅)·빈 노트는 False(보냄)"""
+    t = (note or "").strip()
+    if t == PC_NOTE_DAILY_DONE:
+        return True
+    return (t.startswith("과거 자료 PC 저장 ") and "개 글 · 서버 신규 전송 " in t
+            and "개 글 · 남은 글 " in t and "✅ 과거 글 수집 완료" not in t)
+
+
 def process_inbox(tg):
     INBOX.mkdir(parents=True, exist_ok=True)
     try:   # VR6 자료는 따로 처리 (오류가 나도 P 가격표 처리는 계속)
@@ -1352,7 +1367,11 @@ def process_inbox(tg):
     except Exception as e:
         print("VR6 수신 처리 오류:", type(e).__name__, e, flush=True)
     for f in sorted(INBOX.glob("*.note")):
-        tg.send("🖥 <b>윈도우 PC (팬딩)</b>\n" + html.escape(f.read_text(encoding="utf-8", errors="replace")[:300]))
+        note = f.read_text(encoding="utf-8", errors="replace")[:300]
+        if pc_note_is_routine(note):
+            print("PC 노트 정상 → 텔레그램 미전송:", note.strip()[:60], flush=True)
+        else:
+            tg.send("🖥 <b>윈도우 PC (팬딩)</b>\n" + html.escape(note))
         f.unlink(missing_ok=True)
     for f in sorted(INBOX.glob("*.img")):
         mf = f.with_suffix(".json")
