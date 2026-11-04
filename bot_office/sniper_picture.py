@@ -3,6 +3,7 @@
 # FILE: /opt/bot-office/sniper_picture.py   (초안 · 버전 번호는 Muse 가 기존 표기에 맞춰 부여)
 # 2번 토스 스나이퍼 매매 그림 데이터 (/api/sniper-picture · 로그인 필요 · 보기 전용)
 # 사무실 v1.1.6 (2026-11-03): v2.0.0 현황판 — 본 그리드 그대로 + 서브 그리드 별도 섹션 + 예비수혈 경고 + 골든포켓 조건부 표시 (읽기 전용)
+# 사무실 vNEXT (2026-11-04): Case 89(스나이퍼 v2.1.0) 사이클 표시 — summary 의 사이클·전량졸업 예정자산 필드를 cycle 객체로 내보냄 (원장에 필드 없음·현재가 미확인이면 None → 화면 "—", 0 으로 지어내지 않음)
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
 #  · 계산을 새로 만들지 않는다: toss_sniper/quant_engine.py 의 원본 함수를 그대로 부른다.
@@ -245,6 +246,27 @@ def build(state, live_price=None, now_est=None, price_note=""):
               "target_price": round(float(summary.get("golden_pocket_target_price") or 0.0), 4),
               "gain_pct": round(float(summary.get("golden_pocket_gain_pct") or 0.0), 2)}
 
+    # 사무실 vNEXT · Case 89 사이클 표시: quant_engine 요약값을 그대로 옮기기만 한다 (새 계산 없음).
+    #  · 사이클 필드는 원장(state)에 실제로 있을 때만 쓴다 — v2.1.0 이전 원장이면 요약기가 0 을 채워도 None("—") 으로 둔다.
+    #  · 전량졸업 예정자산·ROI 는 요약기에 필드가 있고 현재가를 알 때만 (모르면 None).
+    def _opt(key, as_int=False, need_state=True, need_price=False):
+        if key not in summary or (need_state and key not in state) or (need_price and not known):
+            return None
+        try:
+            v = float(summary.get(key))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(v):
+            return None
+        return int(v) if as_int else round(v, 2)
+    cycle = {"realized_net_usd": _opt("cycle_realized_net_usd"),
+             "sell_events": _opt("cycle_sell_events", as_int=True),
+             "last_realized_net_usd": _opt("last_cycle_realized_net_usd"),
+             "last_sell_events": _opt("last_cycle_sell_events", as_int=True),
+             "completed_cycles": _opt("completed_main_cycles", as_int=True),
+             "projected_graduation_equity_usd": _opt("projected_graduation_equity_usd", need_state=False, need_price=True),
+             "projected_graduation_roi_pct": _opt("projected_graduation_roi_pct", need_state=False, need_price=True)}
+
     engine = None
     if known and buckets:
         ev = qe.evaluate_multi_grid_sell_targets(buckets, lp, rise_l1_pct=rise_l1, rise_upper_pct=rise_up,
@@ -270,7 +292,7 @@ def build(state, live_price=None, now_est=None, price_note=""):
             "observed_kst": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"), "est_time": now_est.strftime("%m-%d %H:%M ET"),
             "session": sess, "is_active": bool(state.get("is_active", True)),
             "price": {"live": round(lp, 4) if known else None, "note": "" if known else (price_note or "no_snapshot")},
-            "tiers": tiers, "targets": targets, "sub_tiers": sub_tiers, "sub_targets": sub_targets, "sub": sub_status, "reserve": reserve, "golden": golden, "holding": holding, "realized": realized, "engine": engine,
+            "tiers": tiers, "targets": targets, "sub_tiers": sub_tiers, "sub_targets": sub_targets, "sub": sub_status, "reserve": reserve, "golden": golden, "cycle": cycle, "holding": holding, "realized": realized, "engine": engine,
             "fx": {"krw_per_usd": None, "note": "환율 미확인 · 달러만 표시"}}
 
 

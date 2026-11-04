@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 vNEXT: Case 89 사이클 줄) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
 <!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
@@ -47,6 +47,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
   <div class="status" id="status">불러오는 중…</div>
   <div class="flag" id="flag" hidden></div>
   <div class="card"><div class="top2" id="top2"></div></div>
+  <div class="card" id="cyclecard"><div id="cycle" class="hold" style="margin:4px 2px"></div></div>
   <div class="card">
     <div class="legend"><span>바 길이 = 주수 · 위층일수록 오른쪽 시작</span><span>● 산 가격</span><span>▶ 1층 목표 +1.5%</span><span>◆ 개별 목표 +1.0%</span><span>■ 통합이평 +1.0%</span><span>✓ 도달 · 🔒 잠김</span></div>
     <div id="pic" aria-label="층별 가격 그림"></div>
@@ -167,10 +168,21 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     });
   }
 
+  // 사무실 vNEXT · Case 89 사이클 줄: 백엔드 cycle 객체만 그린다. 값이 없으면(null) "—" (0 으로 지어내지 않음)
+  function drawCycle(d){
+    var box=$('cycle');box.textContent='';var c=d.cycle||{};
+    function m(v){return v==null?'—':sg(v)}
+    function n(v){return v==null?'—':String(v)}
+    box.appendChild(el('div',null,'🔄 이번 사이클 실현 '+m(c.realized_net_usd)+' (익절 '+n(c.sell_events)+'회) · 직전 사이클 '+m(c.last_realized_net_usd)+' · 완료 사이클 '+n(c.completed_cycles)+'회'));
+    var pg=c.projected_graduation_equity_usd;
+    var roi=(pg!=null&&c.projected_graduation_roi_pct!=null)?' ('+(c.projected_graduation_roi_pct>=0?'+':'')+c.projected_graduation_roi_pct.toFixed(2)+'%)':'';
+    box.appendChild(el('div',null,'🎓 전량졸업 예정자산 '+(pg==null?'—':usd(pg))+roi));
+  }
+
   function render(d){
     lastData=d;
     var st=$('status'),fl=$('flag');
-    if(!d.ok){st.className='status err';st.textContent=ERR[d.error]||('불러오기 실패: '+(d.error||'?'));fl.hidden=true;$('pic').textContent='';$('wma').textContent='';$('top2').textContent='';$('notes').textContent='';return}
+    if(!d.ok){st.className='status err';st.textContent=ERR[d.error]||('불러오기 실패: '+(d.error||'?'));fl.hidden=true;$('pic').textContent='';$('wma').textContent='';$('top2').textContent='';$('cycle').textContent='';$('notes').textContent='';return}
     var lp=d.price.live;
     st.className='status';st.textContent='';
     var b=document.createElement('b');b.textContent='SOXL · '+d.session.name+' ('+d.session.hm+' ET)';st.appendChild(b);
@@ -203,6 +215,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
       right.appendChild(el('div','line','보유 없음'));
     }
     T2.appendChild(left);T2.appendChild(right);
+    drawCycle(d);
     draw(d);drawSub(d);
     var rw=$('reservewarn');
     if(d.reserve&&d.reserve.injected_usd>0){rw.hidden=false;rw.textContent='⚠️ 예비수혈 사용 중: '+usd(d.reserve.injected_usd)+' ('+d.reserve.used_portions+'회분) · 남은 회분 '+d.reserve.avail_portions+'/'+d.reserve.max_portions+' — 2번 수혈은 3번 적립 달러까지 쓸 수 있어요';}else rw.hidden=true;
