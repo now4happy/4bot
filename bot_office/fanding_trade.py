@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.11.1)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.11.2)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -68,6 +68,8 @@
 #        · 평일 동작 그대로, 네트워크 조회 없음 · 표에 없는 연도는 주말만 건너뜀
 # 1.11.1 (사무실 v1.1.9): 윈도우 PC 정상 노트 2종(과거자료 진행·오늘 자료 확보 완료)은 텔레그램 대신 서버 로그만
 #        · 과거 수집 완료(✅)·미확보·로그인 풀림 등 그 외 노트는 그대로 전송 (모르면 보냄) · VERSION 변수 1.11.1로 맞춤
+# 1.11.2 (사무실 vNEXT): 가격표·주문 완료 메시지 간결화 — 💵 달러(숫자 앞·정수 반올림, 조회 불가 시 예전 순서)·📦 보유 수량 비교만
+#        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -121,7 +123,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.11.1"
+VERSION = "1.11.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -950,7 +952,7 @@ def account_snapshot(client=None):
 
 
 def account_lines(sheet, snapshot=None):
-    from decimal import Decimal, InvalidOperation
+    from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
     market = (sheet.get("market") or {}) if snapshot is None else snapshot
     def number(value):
         try:
@@ -967,19 +969,15 @@ def account_lines(sheet, snapshot=None):
     est_gap = max(Decimal(0), need - est) if est is not None else None
     est_surplus = max(Decimal(0), est - need) if est is not None else None
     # 사용자 결정(2026-10-28): 환전 판단 기준은 추정 예수금. 예수금 기준 부족은 참고로만 표시한다.
-    lines = ["\n💵 <b>매수 자금 참고</b>",
-             "▫️ 외화 추정 예수금(미결제 포함, 앱 기준 · 환전 판단 기준): " + (f"${est:,.2f}" if est is not None else "조회 불가"),
-             "▫️ 보유 달러(예수금, 실제 현금 · 참고): " + (f"${cash:,.2f}" if cash is not None else "조회 불가"),
-             f"▫️ 표 매수 필요 달러: ${need:,.2f}",
-             "▫️ 환전 필요 달러(추정 기준): " + (f"${est_gap:,.2f}" if est_gap is not None else "계산 보류"),
-             "▫️ 예수금 기준 부족(참고): " + (f"${cash_gap:,.2f}" if cash_gap is not None else "계산 보류"),
-             "▫️ 추정 기준 여유: " + (f"${est_surplus:,.2f}" if est is not None else "계산 보류"),
-             "▫️ 추정액은 미결제 포함이다. 추정 기준으로 환전이 필요 없다고 나와도, 미결제분이 결제 전에 못 쓰이면 예수금 기준 부족이 실제 부족이 될 수 있다·표의 매수 총액 기준·수수료 별도·예약/체결 후 추가 환전액 아님"]
-    if market.get("account_at"):
-        lines.append("▫️ 계좌 조회: " + html.escape(str(market["account_at"])))
+    def whole(x):   # 소수점 첫째 자리에서 반올림한 정수, 천 단위 쉼표
+        return f"${x.quantize(Decimal(1), rounding=ROUND_HALF_UP):,}"
+    lines = ["\n💵 <b>달러</b>",
+             f"▫️ {whole(est)} 보유 달러" if est is not None else "▫️ 보유 달러: 조회 불가",
+             f"▫️ {whole(need)} 표 매수 필요 달러",
+             f"▫️ {whole(est_gap)} 환전 필요 달러" if est_gap is not None else "▫️ 환전 필요 달러: 계산 보류"]
     target = number(sheet["parsed"].get("holding_qty"))
     actual = number(market.get("holding"))
-    lines.append("\n📦 <b>보유 수량 비교</b> (표 기준·계좌 조회 시점)")
+    lines.append("\n📦 <b>보유 수량 비교</b>")
     if target is None or mult is None or actual is None:
         lines.append("▫️ 차이 계산 보류: 표 보유 개수 또는 계좌 수량 확인 필요")
     else:
@@ -1089,7 +1087,7 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     for (side, price, rq), (_, _, qty) in zip(raw_lines(sheet), order_lines(sheet, keep_zero=True)):
         cut = f" ← 매도가능 부족으로 {rq}에서 줄임" if qty != rq else ""
         L.append(f"{'🔴 매수' if side == 'buy' else '🔵 매도'} <b>{price:g} × {qty}</b>"
-                 f"  <i>(표 {rq // mult})</i>  {fmt_money(price * qty)}{cut}")
+                 f"  {fmt_money(price * qty)}{cut}")
     bad = [x for x in sheet["checks"] if not x["ok"]]
     if bad:
         L.append("\n⚠️ <b>확인 필요</b>")
