@@ -4,7 +4,7 @@
 # 2번 토스 스나이퍼 매매 그림 데이터 (/api/sniper-picture · 로그인 필요 · 보기 전용)
 # 사무실 v1.1.6 (2026-11-03): v2.0.0 현황판 — 본 그리드 그대로 + 서브 그리드 별도 섹션 + 예비수혈 경고 + 골든포켓 조건부 표시 (읽기 전용)
 # 사무실 v1.2.1 (2026-11-04): Case 89(스나이퍼 v2.1.0) 사이클 표시 — summary 의 사이클·전량졸업 예정자산 필드를 cycle 객체로 내보냄 (원장에 필드 없음·현재가 미확인이면 None → 화면 "—", 0 으로 지어내지 않음)
-# 사무실 vNEXT (2026-11-04): 상단 카드 보유 줄에 골든포켓 주수 표시 — holding.golden_shares 추가(골든 켜짐·수량>0 일 때만, 아니면 0),
+# 사무실 v1.2.5 (2026-11-04): 상단 카드 보유 줄에 골든포켓 주수 표시 — holding.golden_shares 추가(골든 켜짐·수량>0 일 때만, 아니면 0),
 #   holding.total_shares 에 golden_shares 포함(본+서브+골든). 투자금·평단·미실현 계산은 그대로(이미 quant_engine 에서 본+서브+골든 합계).
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
@@ -278,7 +278,7 @@ def build(state, live_price=None, now_est=None, price_note=""):
                   "overnight_indiv_locked": bool(ev.get("overnight_indiv_locked"))}
 
     held = int(summary.get("held_shares") or 0)
-    # 사무실 vNEXT: 골든포켓 주수 (원장 기준 · 현재가와 무관). 골든이 꺼져 있거나 수량 0 이면 0 → 기존 본·서브 표시 그대로.
+    # 사무실 v1.2.5: 골든포켓 주수 (원장 기준 · 현재가와 무관). 골든이 꺼져 있거나 수량 0 이면 0 → 기존 본·서브 표시 그대로.
     golden_shares = golden["qty"] if (golden["active"] and golden["qty"] > 0) else 0
     holding = {"shares": held, "tiers_count": len(buckets), "has_active_l1": active_l1,
                "avg_price": round(float(summary.get("actual_avg_price") or 0.0), 4) if held else None,

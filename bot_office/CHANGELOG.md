@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.5 · 2026-11-04 21:40 (KST)
+- 파일: sniper_picture.html, sniper_picture.py
+- 내용: 사무실 vNEXT: 스나이퍼룸 상단 카드에 골든포켓 주수 표시 (본 51·서브 0·골든 80, 합계 131)
+- 브랜치: staging
+
 ## v1.2.4 · 2026-11-04 17:00 (KST)
 - 파일: fanding_trade.py, fanding_vr6.py
 - 내용: 팬딩 자동주문 시간 선택 + 토글 버튼 동작 표시 (fanding_trade 1.14.0, fanding_vr6 2.6.0)
