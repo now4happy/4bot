@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.4 · 2026-11-04 17:00 (KST)
+- 파일: fanding_trade.py, fanding_vr6.py
+- 내용: 팬딩 자동주문 시간 선택 + 토글 버튼 동작 표시 (fanding_trade 1.14.0, fanding_vr6 2.6.0)
+- 브랜치: staging
+
 ## v1.2.3 · 2026-11-04 16:25 (KST)
 - 파일: fanding_trade.py, fanding_vr6.py
 - 내용: 메리츠 환전 순서 변경 + 원화 역자동환전 (fanding_trade 1.13.0, fanding_vr6 2.5.0)
