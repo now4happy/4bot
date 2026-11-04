@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.6 · 2026-11-04 22:13 (KST)
+- 파일: sniper_picture.html, sniper_picture.py
+- 내용: 사무실 vNEXT: 스나이퍼룸 층 영역에 골든포켓 줄 표시 (⭐ 80주 · 황금 칸 ×8, 1칸=10주 반올림)
+- 브랜치: staging
+
 ## v1.2.5 · 2026-11-04 21:40 (KST)
 - 파일: sniper_picture.html, sniper_picture.py
 - 내용: 사무실 vNEXT: 스나이퍼룸 상단 카드에 골든포켓 주수 표시 (본 51·서브 0·골든 80, 합계 131)
