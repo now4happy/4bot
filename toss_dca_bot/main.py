@@ -3,7 +3,8 @@ from t_ui import *
 
 wait_state = {"mode": None, "sym": None}
 
-STEP_KEYS = ("s_day", "s_mode", "s_target_days", "last_exec_date", "sold_stage", "has_held")
+STEP_KEYS = ("s_day", "s_mode", "s_target_days", "last_exec_date", "sold_stage", "has_held", "tp_alert_date")
+_HOLD_WATCH_DAY = {}   # v4.3.8: 정지·결정 중 보유 점검을 종목별 하루 1번만 (메모리)
 
 # ---------------------------------------------------------------- v4.3.5 재생 로그 도우미 (매매 동작은 그대로)
 import re, signal
@@ -100,6 +101,37 @@ async def stock_trade_allowed(sym):
         and bool(latest["stocks"][sym].get("enabled", True))
     )
 
+async def _read_position(client, sym):
+    """현재가·평단·수량 읽기 (조회만, 주문 없음)"""
+    cur_p = float(await client.get_current_price(sym) or 0.0)
+    hold = await client.get_symbol_holdings(sym); avg_p, qty = 0.0, 0.0
+    if isinstance(hold, dict):
+        for k in ["avg_price", "avg_buy_price", "average_price", "buy_avg_price", "pchs_avg_pric"]:
+            if hold.get(k): avg_p = float(hold[k]); break
+        for k in ["qty", "quantity", "holding_qty", "balance", "hold_qty", "ord_psbl_qty", "sellable_qty"]:
+            if hold.get(k): qty = float(hold[k]); break
+    if qty == 0.0: qty = float(await client.get_sellable_quantity(sym) or 0.0)
+    return cur_p, avg_p, qty
+
+async def _hold_watch(client, cfg, sym, s, tp1, today_str):
+    """v4.3.8 R2: 정지·결정 중에도 익절 구간 도달 여부만 보고 알림 1회(하루 1번). 매수·매도 주문은 절대 하지 않음."""
+    if s.get("tp_alert_date") == today_str or _HOLD_WATCH_DAY.get(sym) == today_str: return
+    _HOLD_WATCH_DAY[sym] = today_str
+    try:
+        cur_p, avg_p, qty = await _read_position(client, sym)
+    except Exception as e:
+        RL.err("hold_watch", e, event_type="decision", sym_ref=RL.ref(sym)); return
+    if cur_p <= 0 or avg_p <= 0 or qty <= 0: return
+    prof_pct = (cur_p - avg_p) / avg_p * 100
+    stg = tp_sell_stage(prof_pct, tp1, int(s.get("sold_stage", 0)))
+    if stg <= 0: return
+    s["tp_alert_date"] = today_str; await save_merged(cfg, sym)
+    _decide(sym, "hold_watch", "ok", "tp_zone_alert_only", s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, stage=stg))
+    mode_txt = "정지 대기" if s.get("s_mode") == "pause" else "기간 완료·결정 대기"
+    send_panel(f"🔔 [{sym} {stg}차 익절 구간 도달 알림]\n• 현재 {mode_txt} 중입니다. 수익률 {prof_pct:+.2f}%\n"
+               f"• 정지 중 알림이며 자동 매도가 아닙니다. 아무 주문도 내지 않았습니다.\n• 팔지 여부는 직접 결정해 주세요. (같은 종목은 하루 1번만 알림)",
+               [[{"text": f"📄 {sym} 상세", "callback_data": f"detail_{sym}"}, {"text": "🎛 관제탑", "callback_data": "panel"}]])
+
 async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
     cfg = await sync_holdings_from_toss(client)
     if not cfg.get("is_master_active", True):
@@ -113,6 +145,7 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
     runtime_info["last_retry_ts"] = time.time()
     logs, completed_syms = [], []
     tp1, sr = float(cfg.get("tp1_pct", 10.0)), float(cfg.get("sr_pct", 20.0))
+    n7_mults = await n7_market_multipliers(client, cfg, is_kr_market)   # v4.3.8 N7: 꺼짐이면 {} → 모든 배수 1.0
 
     for sym, s in list(stocks.items()):
         if ((s.get("currency") == "KRW") != is_kr_market): continue
@@ -120,19 +153,24 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
         if s.get("last_exec_date") == today_str: _decide(sym, "stock_step", "skipped", "done_today", s, daily=True); continue
         is_kr = (s.get("currency") == "KRW"); ensure_stock_cycle(s, is_kr)
         s_mode, s_day, s_target = s["s_mode"], int(s["s_day"]), int(s["s_target_days"])
-        if s_mode == "decision": _decide(sym, "stock_step", "skipped", "awaiting_user_decision", s, daily=True); continue
+        if s_mode == "decision":
+            _decide(sym, "stock_step", "skipped", "awaiting_user_decision", s, daily=True)
+            await _hold_watch(client, cfg, sym, s, tp1, today_str); continue
         if s_mode == "pause":
             s["s_day"] = s_day + 1; s["last_exec_date"] = today_str
             if s["s_day"] >= s_target: s["s_mode"] = "decision"; completed_syms.append((sym, f"⏸ 정지 대기({s_target}일) 완료"))
             _decide(sym, "pause_day", "ok", None, s)
-            await save_merged(cfg, sym); continue
+            await save_merged(cfg, sym)
+            await _hold_watch(client, cfg, sym, s, tp1, today_str); continue
 
         base_amt = float(s.get("base_amount", 100000.0 if is_kr else 40.0))
         try:
             fresh = await DcaConfigManager.load()   # 도중에 텔레그램에서 끈 전원·종목 설정을 바로 반영
             if not fresh.get("is_master_active", True): _decide(sym, "stock_step", "skipped", "master_turned_off", s); break
             if sym not in fresh.get("stocks", {}) or not fresh["stocks"][sym].get("enabled", True): _decide(sym, "stock_step", "skipped", "stock_turned_off", s); continue
-            cur_p = float(await client.get_current_price(sym) or 0.0)
+            price_err = None
+            try: cur_p = float(await client.get_current_price(sym) or 0.0)
+            except Exception as pe: cur_p, price_err = 0.0, str(pe)[:120]
             hold = await client.get_symbol_holdings(sym); avg_p, qty = 0.0, 0.0
             if isinstance(hold, dict):
                 for k in ["avg_price", "avg_buy_price", "average_price", "buy_avg_price", "pchs_avg_pric"]:
@@ -144,10 +182,30 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
             elif s.get("has_held") and qty <= 0:
                 RL.ev("state_change", "stock_removed", "ok", None, actor="scheduler", sym_ref=RL.ref(sym), why="holding_zero", audit_ref=_snap(sym, s, cur_price=cur_p, qty=qty))
                 stocks.pop(sym, None); await save_merged(cfg, sym, drop=True); continue
+            if qty <= 0 and int(s.get("sold_stage", 0)) != 0:
+                # v4.3.8 R1 리셋 ①: 보유 0주일 때만 익절 단계 초기화 (즉시 저장)
+                RL.ev("state_change", "sold_stage_reset", "ok", None, actor="scheduler", sym_ref=RL.ref(sym), why="holding_zero", stage_before=s.get("sold_stage"))
+                s["sold_stage"] = 0; await save_merged(cfg, sym)
+            halted = False
+            if cur_p > 0:
+                try: halted = stock_looks_halted(await client.get_stock_info(sym))
+                except Exception: halted = False   # 상태 조회 실패만으로는 정지로 보지 않음
+            if cur_p <= 0 or halted:
+                # v4.3.8 가격 0·조회 실패·거래정지: 그날 매수·익절·분할매도 안 함 (일차 그대로) + 알림 하루 1번
+                why = "halted" if halted else ("price_error" if price_err else "price_zero")
+                why_txt = {"halted": "거래정지·상장폐지 상태로 보임", "price_error": "현재가 조회 실패", "price_zero": "현재가 0"}[why]
+                fail_reasons[sym] = why_txt
+                s["last_exec_date"] = today_str; await save_merged(cfg, sym)
+                _decide(sym, "stock_step", "skipped", why, s)
+                if RL.once(f"{sym}|guard|{why}"):
+                    send_panel(f"⚠️ [{sym} 오늘 주문 안 함]\n• 사유: {why_txt}{(' (' + price_err + ')') if price_err else ''}\n"
+                               f"• 오늘은 매수·익절·분할매도를 하지 않습니다. 진행 일차는 그대로 두었습니다.\n• 다음 거래일에 다시 확인합니다.",
+                               [[{"text": f"📄 {sym} 상세", "callback_data": f"detail_{sym}"}, {"text": "🎛 관제탑", "callback_data": "panel"}]])
+                continue
             prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 and cur_p > 0 else 0.0
             sold_stg = int(s.get("sold_stage", 0))
-            if prof_pct < tp1: sold_stg = 0; s["sold_stage"] = 0
-            target_stg = 1 if (tp1 <= prof_pct < tp1*2 and sold_stg < 1) else (2 if (tp1*2 <= prof_pct < tp1*3 and sold_stg < 2) else 0)
+            # v4.3.8 R1: 단계는 위로만. 이미 판 단계는 다시 팔지 않음, 여러 단계를 넘으면 가장 높은 새 단계 1회만, 3차(30%) 이상 매도 없음
+            target_stg = tp_sell_stage(prof_pct, tp1, sold_stg)
             if qty > 0 and avg_p > 0 and target_stg > 0:
                 sell_q = min(int(qty), max(1, int(round(qty * (sr / 100.0))))) if is_kr else round(qty * (sr / 100.0), 4)
                 if sell_q > 0:
@@ -159,10 +217,13 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
                     else: await _order("take_profit", sym, "sell", sell_q, oid, client.place_us_fractional_sell(sym, sell_q, oid))
                     s["sold_stage"] = target_stg; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
                     logs.append(f"🎯 {sym}: {target_stg}차 익절 ({prof_pct:+.2f}% / {sell_q}주)"); await save_merged(cfg, sym); continue
+            n7m = float(n7_mults.get(n7_index_of(s), 1.0)) if s_mode in ["buy_1", "buy_2"] else 1.0
+            half_buy = bool(avg_p > 0 and qty > 0 and prof_pct >= 1.0)
+            buy_amt_today = calc_buy_amount(base_amt, n7m, half_buy)   # v4.3.8: 달러 부족 검사와 실제 주문이 같은 값
             if not is_kr and s_mode in ["buy_1", "buy_2"]:
                 # 달러 부족 검사는 익절 판단 뒤에 함 (달러가 없어도 익절 매도는 진행되도록)
                 usd_bal = float(await client.get_buying_power("USD") or 0.0)
-                need_amt = (base_amt / 2.0) if (avg_p > 0 and qty > 0 and prof_pct >= 1.0) else base_amt
+                need_amt = buy_amt_today
                 if usd_bal < need_amt:
                     fail_reasons[sym] = f"달러 부족 (필요 ${need_amt:.2f} / 보유 ${usd_bal:.2f})"
                     if RL.once(f"{sym}|buy|usd_insufficient"):
@@ -170,18 +231,19 @@ async def execute_100day_step(client: TossApiClient, is_kr_market: bool):
                     else: RL.count("skip:usd_insufficient")
                     continue
             if s_mode in ["buy_1", "buy_2"]:
-                buy_amt = (base_amt / 2.0) if (avg_p > 0 and qty > 0 and prof_pct >= 1.0) else base_amt
+                buy_amt = buy_amt_today
                 ord_id = f"b_{today_str}_{sym}"   # 같은 날 같은 종목은 같은 주문번호 → 재시도해도 중복 체결 방지
                 try:
                     if is_kr:
-                        buy_q = max(1, int(buy_amt // cur_p)) if cur_p > 0 else 1
+                        if cur_p <= 0: _decide(sym, "buy", "skipped", "price_zero", s); continue   # 가격 0이면 1주 사던 동작 차단
+                        buy_q = max(1, int(buy_amt // cur_p))
                         if not await stock_trade_allowed(sym): _decide(sym, "buy", "skipped", "trade_not_allowed", s); continue
-                        _decide(sym, "buy", "ok", None, s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, buy_amount=buy_amt, buy_qty=buy_q), half=buy_amt < base_amt)
-                        await _order("buy", sym, "buy", buy_q, ord_id, client.place_kr_integer_order(sym, "buy", buy_q, ord_id)); logs.append(f"🛒 {sym}: {buy_q}주 매수 ({s_day+1}/{s_target}일차)")
+                        _decide(sym, "buy", "ok", None, s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, buy_amount=buy_amt, buy_qty=buy_q), half=half_buy, n7_mult=n7m)
+                        await _order("buy", sym, "buy", buy_q, ord_id, client.place_kr_integer_order(sym, "buy", buy_q, ord_id)); logs.append(f"🛒 {sym}: {buy_q}주 매수 ({s_day+1}/{s_target}일차)" + (f" · 지수 {n7m:.1f}배" if n7m != 1.0 else ""))
                     else:
                         if not await stock_trade_allowed(sym): _decide(sym, "buy", "skipped", "trade_not_allowed", s); continue
-                        _decide(sym, "buy", "ok", None, s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, buy_amount=buy_amt), half=buy_amt < base_amt)
-                        await _order("buy", sym, "buy", buy_amt, ord_id, smart_us_buy(client, sym, buy_amt, cur_p, ord_id)); logs.append(f"🛒 {sym}: ${buy_amt:.2f} 매수 ({s_day+1}/{s_target}일차)")
+                        _decide(sym, "buy", "ok", None, s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, buy_amount=buy_amt), half=half_buy, n7_mult=n7m)
+                        await _order("buy", sym, "buy", buy_amt, ord_id, smart_us_buy(client, sym, buy_amt, cur_p, ord_id)); logs.append(f"🛒 {sym}: ${buy_amt:.2f} 매수 ({s_day+1}/{s_target}일차)" + (f" · 지수 {n7m:.1f}배" if n7m != 1.0 else ""))
                 except Exception as oe:
                     if "API HTTP" in str(oe): raise   # 토스가 거절한 주문(체결 안 됨) → 기존처럼 실패 알림 후 재시도
                     # 응답이 끊긴 주문은 체결됐을 수 있으므로 오늘은 다시 주문하지 않음 (일차는 올리지 않음)
@@ -273,7 +335,7 @@ async def handle_callback(cb: dict, client: TossApiClient):
     elif data.startswith("detail_"): send_panel(*(await build_stock_detail_view(client, data.split("_", 1)[1])), msg_id)
     elif data.startswith("setday_"):
         sym = data.split("_", 1)[1]; wait_state["mode"], wait_state["sym"] = "day_sym", sym
-        send_panel(f"🔢 [{sym}] 실제 매수 진행 일수(1~100)를 숫자로 입력해 주세요.", [[{"text": "🔙 취소", "callback_data": f"detail_{sym}"}]], msg_id)
+        send_panel(f"🔢 [{sym}] 실제 매수 진행 일수(1~100)를 숫자로 입력해 주세요.\n• 0 입력 = 새 1차 매수를 처음부터 시작 (익절 단계도 0으로 초기화)", [[{"text": "🔙 취소", "callback_data": f"detail_{sym}"}]], msg_id)
     elif data.startswith("setamt_"):
         sym = data.split("_", 1)[1]; wait_state["mode"], wait_state["sym"] = "amt_sym", sym
         is_kr = (cfg.get("stocks", {}).get(sym, {}).get("currency") == "KRW")
@@ -291,6 +353,20 @@ async def handle_callback(cb: dict, client: TossApiClient):
         cfg["is_master_active"] = not cfg.get("is_master_active", True); await DcaConfigManager.save(cfg)
         RL.ev("state_change", "master_power", "ok", None, actor="user", before=not cfg["is_master_active"], after=cfg["is_master_active"])
         send_panel(*(await build_panel_view(client)), msg_id)
+    elif data == "toggle_n7":
+        latest = await DcaConfigManager.load(); before = bool(latest.get("n7_enabled", False))
+        latest["n7_enabled"] = not before; await DcaConfigManager.save(latest)
+        RL.ev("state_change", "n7_enabled", "ok", None, actor="user", before=before, after=latest["n7_enabled"])
+        send_panel(*(await build_panel_view(client)), msg_id)
+    elif data.startswith("idx_"):
+        sym = data.split("_", 1)[1].strip().upper()
+        latest = await DcaConfigManager.load(); stocks = latest.get("stocks", {})
+        if sym in stocks:
+            mk = "KR" if stocks[sym].get("currency") == "KRW" else "US"
+            cur = n7_index_of(stocks[sym]); a, b = N7_CHOICES[mk]
+            stocks[sym]["index_ref"] = b if cur == a else a; await DcaConfigManager.save(latest)
+            RL.ev("state_change", "n7_index_ref", "ok", None, actor="user", sym_ref=RL.ref(sym), before=cur, after=stocks[sym]["index_ref"])
+        send_panel(*(await build_stock_detail_view(client, sym)), msg_id)
     elif data == "ask_tp": wait_state["mode"] = "tp"; send_panel("🎯 [1차익절% 매도비율%] 입력 (예: 10 20)", [[{"text": "🔙 취소", "callback_data": "panel"}]], msg_id)
 
 async def handle_message(msg: dict, client: TossApiClient):
@@ -317,6 +393,10 @@ async def handle_message(msg: dict, client: TossApiClient):
             RL.ev("state_change", "step_day_manual", "ok", None, actor="user", sym_ref=RL.ref(sym), day_before=stocks[sym].get("s_day"), day_after=d)
             stocks[sym]["s_day"] = d
             stocks[sym]["s_mode"] = "decision" if d >= int(stocks[sym].get("s_target_days", 100)) else "buy_1"
+            if d == 0 and int(stocks[sym].get("sold_stage", 0)) != 0:
+                # v4.3.8 R1 리셋 ②: 사용자가 진행일수를 0으로 입력 = 새 1차 매수를 명시적으로 시작 → 익절 단계 초기화
+                RL.ev("state_change", "sold_stage_reset", "ok", None, actor="user", sym_ref=RL.ref(sym), why="new_cycle_day0", stage_before=stocks[sym].get("sold_stage"))
+                stocks[sym]["sold_stage"] = 0
             await DcaConfigManager.save(cfg); wait_state["mode"] = None
             t, kb = await build_stock_detail_view(client, sym); send_panel(f"✅ [{sym}] 진행 일수가 {d}일차로 반영되었습니다!\n\n" + t, kb)
         except: RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="day_sym"); send_panel("❌ 숫자만 입력해 주세요.", [[{"text": "🔙 돌아가기", "callback_data": f"detail_{sym}"}]])

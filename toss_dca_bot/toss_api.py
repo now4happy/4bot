@@ -376,3 +376,25 @@ class TossApiClient:
         if not isinstance(result, dict) or not isinstance(result.get('items'), list):
             raise ValueError('Unexpected holdings response')
         return result['items']
+
+    async def get_candles_1d(self, symbol: str, count: int = 200, before: str = None) -> tuple:
+        """N7(지수 200일선 배수)용 일봉 1페이지 조회 — 계좌 불필요, 페이지당 최대 200건.
+        반환: (봉 dict 목록, nextBefore 또는 None). 응답 모양이 다르면 ([], None).
+        2번 스나이퍼 toss_api.get_candles() 패턴을 참고만 했고, 2번 코드는 import 하지 않는다."""
+        from urllib.parse import urlencode
+        q = {"symbol": str(symbol).strip().upper(), "interval": "1d",
+             "count": max(1, min(200, int(count))), "adjusted": "true"}
+        if before:
+            q["before"] = str(before).strip()
+        data = await self._request("GET", "/api/v1/candles?" + urlencode(q), headers=self._get_headers())
+        r_obj = data.get("result") if isinstance(data, dict) and "result" in data else data
+        if isinstance(r_obj, list):
+            return [c for c in r_obj if isinstance(c, dict)], None
+        if isinstance(r_obj, dict):
+            candles = r_obj.get("candles")
+            if candles is None:
+                candles = r_obj.get("items") if r_obj.get("items") is not None else r_obj.get("data")
+            nb = r_obj.get("nextBefore")
+            c_list = [c for c in candles if isinstance(c, dict)] if isinstance(candles, list) else []
+            return c_list, (str(nb).strip() if nb else None)
+        return [], None

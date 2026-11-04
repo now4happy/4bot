@@ -97,11 +97,14 @@ async def build_panel_view(client: TossApiClient):
         " • 기본 사이클: 종목별 100일 분할매수 (고정)",
         " • 매매 시각: 🇰🇷 11:00 KST | 🇺🇸 11:30 EST (개장 2시간 뒤)",
         " • 매수 배율: 수익률 +1.0%↑ 시 1/2배 (그 외 1배)",
+        *n7_status_lines(cfg),
         " • 100일 종료 시: [N일 정지 / N일 분할매도 / N일 2차매수] 선택", "─────────────────",
         "📊 [수익률 구간별 매도 계획]",
         f" • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도",
         f" • {tp1*2:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도",
         f" • {tp1*3:.0f}% 이상 수익 도달 시 ➔ 미정 (매도 없음)",
+        " • 단계는 위로만: 이미 판 단계는 다시 팔지 않음 (보유 0주·진행일수 0 입력 때만 초기화)",
+        " • 정지·결정 대기 중: 익절 구간 도달 시 알림만 (자동 매도 아님)",
         f"⏱ 조회: {datetime.now(KST_TZ).strftime('%H:%M:%S')}",
         f"⚡ 스케줄 상태: {get_toss_schedule_status(stocks)}"
     ]
@@ -109,6 +112,7 @@ async def build_panel_view(client: TossApiClient):
     kb = [
         [{"text": "📋 보유종목 리스트 & 개별 금액/상태 설정", "callback_data": "stock_list"}],
         [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}, {"text": "🎯 익절/매도비율 변경", "callback_data": "ask_tp"}],
+        [{"text": "📐 지수 연동 배수 끄기" if cfg.get("n7_enabled", False) else "📐 지수 연동 배수 켜기", "callback_data": "toggle_n7"}],
         [{"text": "🔄 새로고침", "callback_data": "panel"}]
     ]
     return "\n".join(lines), kb
@@ -227,7 +231,12 @@ async def build_stock_detail_view(client: TossApiClient, sym: str):
     s_mode, s_day, s_target = s["s_mode"], int(s["s_day"]), int(s["s_target_days"])
     m_desc = {"buy_1": f"🛒 1차 분할매수 ({s_day}/100일 고정)", "pause": f"⏸ 정지 대기 중 ({s_day}/{s_target}일)", "buy_2": f"🛒 2차 분할매수 ({s_day}/{s_target}일)", "sell": f"📤 분할매도 ({s_day}/{s_target}일)", "decision": f"🚨 기간({s_target}일) 완료! 결정 대기(정지)"}
     lines = [f"{'🇰🇷 한국주식' if is_kr else '🇺🇸 미국주식'} · [{s.get('name', sym)} ({sym}) 상세 설정]", "─────────────────", f"📈 {p_str}", f"💰 1회 기준 매수금: {amt_str}", f"⏳ 진행 거래일수: {m_desc.get(s_mode, s_mode)}", f"🕒 최근 실행일: {s.get('last_exec_date', '대기 중')}"]
+    idx = n7_index_of(s); etf, _, idx_name = N7_INDEX[idx]
+    n7_on = bool(cfg.get("n7_enabled", False)); n7_m = float(((cfg.get("n7_state") or {}).get(idx) or {}).get("mult", 1.0))
+    lines.append(f"📐 기준 지수: {idx_name} ({etf}) · " + (f"지수 배수 {n7_m:.1f}배 (켜짐)" if n7_on else "지수 연동 배수 꺼짐"))
+    lines.append(f"🎯 익절 진행 단계: {int(s.get('sold_stage', 0))}차까지 완료 (위로만, 다시 팔지 않음)")
     kb = [[{"text": f"💰 [{sym}] 기준금액 변경", "callback_data": f"setamt_{sym}"}, {"text": f"🔢 [{sym}] 진행일수 보정", "callback_data": f"setday_{sym}"}]]
+    kb.append([{"text": f"📐 기준 지수 바꾸기 ({idx_name} → {N7_INDEX[[k for k in N7_CHOICES['KR' if is_kr else 'US'] if k != idx][0]][2]})", "callback_data": f"idx_{sym}"}])
     if s_mode == "decision":
         lines.append("\n🚨 [기간이 완료되었습니다! 다음 진행 방향을 선택하세요]")
         kb.append([{"text": "⏸ 몇 일 정지하며 기다릴지 설정", "callback_data": f"next_pause_{sym}"}])
