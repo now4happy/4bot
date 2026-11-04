@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.2 · 2026-11-04 15:43 (KST)
+- 파일: fanding_trade.py, fanding_vr6.py
+- 내용: 메리츠 환전 직관화 + 부족금 자동환전 (fanding_trade 1.12.0, fanding_vr6 2.4.0)
+- 브랜치: staging
+
 ## v1.2.1 · 2026-11-04 10:34 (KST)
 - 파일: sniper_picture.html, sniper_picture.py
 - 내용: 사무실 현황판 Case 89 사이클 표시 (사무실 vNEXT)
