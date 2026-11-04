@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.0 · 2026-11-04 09:46 (KST)
+- 파일: fanding_trade.py
+- 내용: 팬딩 가격표 메시지 간결화: fanding_trade 1.11.2 (달러 숫자 먼저·정수 반올림, 참고 줄 삭제)
+- 브랜치: staging
+
 ## v1.1.9 · 2026-11-04 09:18 (KST)
 - 파일: fanding_trade.py
 - 내용: 팬딩 PC 정상 노트 미전송: fanding_trade 1.11.1 (머리말·VERSION 일치, 기록 파일 미포함 — 받은 작업만으로 staging)
