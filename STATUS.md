@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-04 15:43 (KST) · 계기: 업데이트 적용 (staging: 메리츠 환전 직관화 + 부족금 자동환전 (fanding_trade 1.12.0, fanding_vr6 2.4.0))
+- 갱신: 2026-11-04 16:25 (KST) · 계기: 업데이트 적용 (staging: 메리츠 환전 순서 변경 + 원화 역자동환전 (fanding_trade 1.13.0, fanding_vr6 2.5.0))
 
 ## 봇별 현재 상태
 
@@ -13,12 +13,12 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-04 10:19 KST부터) | v1.1.5 | 2026-11-04 10:20 | 2번 스나이퍼 v2.1.0 원작 e5ae290 Case 89 이식 초안 (사이클 수익·배분 게이지·졸업예정자 |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (11-01 14:57 KST부터) | v4.3.7 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-01 14:57 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-04 15:42 KST부터) | v1.2.2 | 2026-11-04 15:43 | 메리츠 환전 직관화 + 부족금 자동환전 (fanding_trade 1.12.0, fanding_vr6 2.4 |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-04 16:24 KST부터) | v1.2.3 | 2026-11-04 16:25 | 메리츠 환전 순서 변경 + 원화 역자동환전 (fanding_trade 1.13.0, fanding_vr6 2 |
 
 ## 사무실 상시 서비스
 
 - 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-04 03:29 KST부터)
-- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-04 15:43 KST부터)
+- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-04 16:24 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-01 18:38 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
@@ -26,6 +26,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-04 16:25 · 5번 사무실 비서 v1.2.3 · fanding_trade.py, fanding_vr6.py · 메리츠 환전 순서 변경 + 원화 역자동환전 (fanding_trade 1.13.0, fanding_vr6 2
 - 2026-11-04 15:43 · 5번 사무실 비서 v1.2.2 · fanding_trade.py, fanding_vr6.py · 메리츠 환전 직관화 + 부족금 자동환전 (fanding_trade 1.12.0, fanding_vr6 2.4
 - 2026-11-04 10:34 · 5번 사무실 비서 v1.2.1 · sniper_picture.html, sniper_picture.py · 사무실 현황판 Case 89 사이클 표시 (사무실 vNEXT)
 - 2026-11-04 10:20 · 2번 토스 스나이퍼 v1.1.5 · defense_plugin.py, main.py, quant_engine.py, sniper_exit_plu · 2번 스나이퍼 v2.1.0 원작 e5ae290 Case 89 이식 초안 (사이클 수익·배분 게이지·졸업예정자
@@ -35,7 +36,6 @@
 - 2026-11-03 17:32 · 5번 사무실 비서 v1.1.7 · fanding_trade.py · 팬딩 미국 휴장일 반영: fanding_trade 1.11.0 (작업 기록 포함)
 - 2026-11-03 16:25 · 5번 사무실 비서 v1.1.6 · sniper_picture.html, sniper_picture.py · 사무실 현황판 v2.0.0 서브 그리드·수혈·골든포켓 표시
 - 2026-11-03 16:18 · 5번 사무실 비서 v1.1.5 · office_briefing.py · 사무실 vNEXT 토스 달러 확인 v2.0.0 매매법
-- 2026-11-03 16:01 · 2번 토스 스나이퍼 v1.1.4 · defense_plugin.py, main.py, plugin_updater.py, quant_engine. · 2번 스나이퍼 v2.0.0 원작 d7b3a66 이식
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 

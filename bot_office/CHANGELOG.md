@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.3 · 2026-11-04 16:25 (KST)
+- 파일: fanding_trade.py, fanding_vr6.py
+- 내용: 메리츠 환전 순서 변경 + 원화 역자동환전 (fanding_trade 1.13.0, fanding_vr6 2.5.0)
+- 브랜치: staging
+
 ## v1.2.2 · 2026-11-04 15:43 (KST)
 - 파일: fanding_trade.py, fanding_vr6.py
 - 내용: 메리츠 환전 직관화 + 부족금 자동환전 (fanding_trade 1.12.0, fanding_vr6 2.4.0)
