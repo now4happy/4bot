@@ -6,6 +6,7 @@
 # 사무실 v1.2.1 (2026-11-04): Case 89(스나이퍼 v2.1.0) 사이클 표시 — summary 의 사이클·전량졸업 예정자산 필드를 cycle 객체로 내보냄 (원장에 필드 없음·현재가 미확인이면 None → 화면 "—", 0 으로 지어내지 않음)
 # 사무실 v1.2.5 (2026-11-04): 상단 카드 보유 줄에 골든포켓 주수 표시 — holding.golden_shares 추가(골든 켜짐·수량>0 일 때만, 아니면 0),
 #   holding.total_shares 에 golden_shares 포함(본+서브+골든). 투자금·평단·미실현 계산은 그대로(이미 quant_engine 에서 본+서브+골든 합계).
+# 사무실 vNEXT (2026-11-04): 층 영역 골든 줄용 golden.target_pct 추가 — quant_engine.GOLDEN_POCKET_RISE_PCT 를 그대로 옮김(표시 전용 · 새 계산 없음).
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
 #  · 계산을 새로 만들지 않는다: toss_sniper/quant_engine.py 의 원본 함수를 그대로 부른다.
@@ -246,7 +247,9 @@ def build(state, live_price=None, now_est=None, price_note=""):
               "price": round(float(summary.get("golden_pocket_price") or 0.0), 4),
               "cost_usd": round(float(summary.get("golden_pocket_cost_usd") or 0.0), 2),
               "target_price": round(float(summary.get("golden_pocket_target_price") or 0.0), 4),
-              "gain_pct": round(float(summary.get("golden_pocket_gain_pct") or 0.0), 2)}
+              "gain_pct": round(float(summary.get("golden_pocket_gain_pct") or 0.0), 2),
+              # 사무실 vNEXT: 골든 목표 % (엔진 상수 그대로 · 층 영역 '⭐ N주 · $매수가 → $목표 (+%)' 줄에 씀)
+              "target_pct": round(float(getattr(qe, "GOLDEN_POCKET_RISE_PCT", 1.5)), 2)}
 
     # 사무실 v1.2.1 · Case 89 사이클 표시: quant_engine 요약값을 그대로 옮기기만 한다 (새 계산 없음).
     #  · 사이클 필드는 원장(state)에 실제로 있을 때만 쓴다 — v2.1.0 이전 원장이면 요약기가 0 을 채워도 None("—") 으로 둔다.

@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5: 상단 보유 줄에 골든 주수·합계) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5: 상단 보유 줄에 골든 주수·합계 · 사무실 vNEXT: 층 영역 골든 줄·황금 칸) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
 <!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
@@ -32,6 +32,10 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
 .barwrap{flex:1;min-width:0}
 .bar{display:flex;height:16px;border:2px solid #1f3530;border-radius:6px;overflow:hidden;background:#fff}
 .cell{flex:none;background:#fff;border-right:1px solid #1f3530}
+/* 사무실 vNEXT: 골든 줄 (본 층 칸과 같은 방식 · 황금색 · 1칸=10주) */
+.grow{border-top:1px solid var(--line);padding:3px 0}.gline{font-size:12.5px;font-weight:700;margin:0 2px 2px}
+.gbar{display:flex;height:16px;width:max-content;max-width:100%;border:2px solid #8a6a1a;border-radius:6px;overflow:hidden;background:#e3b04f}
+.gcell{flex:none;width:18px;background:#e3b04f;border-right:1px solid #8a6a1a}.gcell:last-child{border-right:0}
 .cell:last-child{border-right:0}
 .prices{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:0}
 .lp{font-size:11.5px;color:var(--muted);margin:1px 2px 0;overflow-wrap:anywhere}
@@ -52,6 +56,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     <div class="legend"><span>바 길이 = 주수 · 위층일수록 오른쪽 시작</span><span>● 산 가격</span><span>▶ 1층 목표 +1.5%</span><span>◆ 개별 목표 +1.0%</span><span>■ 통합이평 +1.0%</span><span>✓ 도달 · 🔒 잠김</span></div>
     <div id="pic" aria-label="층별 가격 그림"></div>
     <div id="wma" aria-label="통합이평"></div>
+    <div id="goldrow" aria-label="골든포켓"></div>
   </div>
   <div class="card" id="subcard">
     <div class="legend"><span>서브 그리드 (4% 정량 · 최대 4회분 · 본 그리드와 따로)</span></div>
@@ -134,6 +139,19 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     });
   }
 
+  // 사무실 vNEXT: 골든 줄 — 켜짐·수량>0 일 때만. 1칸=10주, 10의 배수가 아니면 반올림(최소 1칸): 85주→9칸, 84주→8칸, 73주→7칸, 4주→1칸.
+  // 칸이 틀보다 넓으면 칸 너비만 줄인다(18px→최소 4px). 현재가와 무관하게 원장 숫자로 그린다. 본 층·통합이평과 섞지 않는다.
+  function goldCells(q){return q>0?Math.max(1,Math.round(q/10)):0}
+  function drawGolden(d){
+    var box=$('goldrow');box.textContent='';
+    var g=d.golden;if(!(g&&g.active&&g.qty>0))return;
+    var pct=(g.target_pct!=null?g.target_pct:1.5);
+    var w=el('div','grow');
+    w.appendChild(el('div','gline','⭐ '+g.qty+'주 · '+usd(g.price)+' → '+usd(g.target_price)+' (+'+pct.toFixed(1)+'%)'));
+    var n=goldCells(g.qty),avail=Math.max(60,(box.clientWidth||400)-8),cw=Math.max(4,Math.min(18,Math.floor(avail/n)));
+    var bar=el('div','gbar');for(var i=0;i<n;i++){var c=el('div','gcell');c.style.width=cw+'px';bar.appendChild(c)}
+    w.appendChild(bar);box.appendChild(w);
+  }
   function drawSub(d){
     var box=$('subpic');box.textContent='';$('subwma').textContent='';$('subnote').textContent='';
     var T=(d.sub_tiers||[]).slice().sort(function(a,b){return b.tier-a.tier}),G=d.sub_targets||[],lp=d.price&&d.price.live;
@@ -218,7 +236,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     }
     T2.appendChild(left);T2.appendChild(right);
     drawCycle(d);
-    draw(d);drawSub(d);
+    draw(d);drawGolden(d);drawSub(d);
     var rw=$('reservewarn');
     if(d.reserve&&d.reserve.injected_usd>0){rw.hidden=false;rw.textContent='⚠️ 예비수혈 사용 중: '+usd(d.reserve.injected_usd)+' ('+d.reserve.used_portions+'회분) · 남은 회분 '+d.reserve.avail_portions+'/'+d.reserve.max_portions+' — 2번 수혈은 3번 적립 달러까지 쓸 수 있어요';}else rw.hidden=true;
     var gc=$('goldencard');
@@ -236,7 +254,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     }).then(function(d){if(d)render(d)}).catch(function(e){var s=$('status');s.className='status err';s.textContent='불러오기 실패: '+e.message+' · 새로고침을 눌러 보세요'});
   }
   $('reload').addEventListener('click',load);
-  window.addEventListener('resize',function(){if(resizeTimer)clearTimeout(resizeTimer);resizeTimer=setTimeout(function(){if(lastData&&lastData.ok)draw(lastData)},200)});
+  window.addEventListener('resize',function(){if(resizeTimer)clearTimeout(resizeTimer);resizeTimer=setTimeout(function(){if(lastData&&lastData.ok){draw(lastData);drawGolden(lastData)}},200)});
   load();setInterval(load,30000);
 })();
 </script>
