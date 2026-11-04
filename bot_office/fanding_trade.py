@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.11.2)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.12.0)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -70,6 +70,7 @@
 #        · 과거 수집 완료(✅)·미확보·로그인 풀림 등 그 외 노트는 그대로 전송 (모르면 보냄) · VERSION 변수 1.11.1로 맞춤
 # 1.11.2 (사무실 v1.2.0): 가격표·주문 완료 메시지 간결화 — 💵 달러(숫자 앞·정수 반올림, 조회 불가 시 예전 순서)·📦 보유 수량 비교만
 #        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
+# 1.12.0: 환전 직관화(💱 환전 → 금액 고르기 버튼 → 확인 → [✅ $XXX 환전 실행]) + P 부족금 자동환전(💱 자동환전 토글, 기본 꺼짐, 추정 기준·$10 반올림·회차당 1번, P 키만)
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -123,7 +124,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.11.2"
+VERSION = "1.12.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -331,6 +332,23 @@ class TG:
         except Exception as e:
             print("사진 전송 실패:", e, flush=True)
             return self.send(caption, rows)
+
+    def edit(self, msg_id, text, rows=None):
+        """보낸 글을 고쳐 씀 (환전 금액 고르기 화면). 고쳤거나 내용이 같으면 True, 안 되면 False"""
+        if not msg_id:
+            return False
+        try:
+            self._post("editMessageText", {"chat_id": self.chat, "message_id": msg_id, "text": text[:3900],
+                                           "parse_mode": "HTML", "disable_web_page_preview": True,
+                                           "reply_markup": {"inline_keyboard": rows or []}})
+            return True
+        except urllib.error.HTTPError as e:
+            try:
+                return "not modified" in e.read().decode("utf-8", "ignore")
+            except Exception:
+                return False
+        except Exception:
+            return False
 
     def clear_buttons(self, msg_id):
         if not msg_id:
@@ -1105,36 +1123,22 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     return "\n".join(L)
 
 
-def fx_est_gap(sheet):
-    """추정 기준 부족액(Decimal) 또는 None. sheet['market']에 usd_est가 없으면 None."""
-    from decimal import Decimal
-    try:
-        market = sheet.get("market") or {}
-        est = market.get("usd_est")
-        if est is None:
-            return None
-        need = sum((Decimal(str(price)) * qty for side, price, qty in order_lines(sheet) if side == "buy"), Decimal(0))
-        gap = need - Decimal(str(est))
-        return gap if gap > 0 else Decimal(0)
-    except Exception:
-        return None
-
-
-def sheet_rows(sheet):
-    k = f"{sheet['date']}:{sheet['ver']}"
-    rows = [[{"text": "✅ 주문", "callback_data": f"fd:ok:{k}"}, {"text": "❌ 이번엔 안 함", "callback_data": f"fd:no:{k}"}]]
-    gap = fx_est_gap(sheet)
-    if gap is not None and gap > 0:
-        rows.append([{"text": "💱 환전 금액 확인", "callback_data": f"fx:calc:{k}"}])
-    return rows
-
-
-# ---------------------------------------------------------- 환전 버튼 (추정 기준, 자동환전 없음)
-# 흐름: 가격표 알림 [💱 환전 금액 확인] 또는 /환전 [금액] → 확인 화면(적용환율·필요 원화) →
-#       [✅ 환전 실행] 버튼을 눌러야만 실행 → 실행 결과 + 계좌 재조회.
-# /환전 명령 자체는 실행하지 않고, 확인 화면만 만든다. 실행 버튼도 대기 정보가 있어야만 동작한다.
+# ---------------------------------------------------------- 환전 (1.12.0)
+# 수동: 💱 환전 → 금액 고르기(버튼) → 확인 화면(아직 실행 아님) → [✅ $XXX 환전 실행] → 완료 화면.
+#       /환전 [금액] 은 바로 확인 화면. 실행은 확인 화면의 실행 버튼에서만 (10분 유효 · 실행 직전 환율 1% 초과 변동 중단 ·
+#       대기 정보 1회용 = 중복 방지 · 결과 불확실하면 다시 실행 안 함).
+# 자동(부족금 자동환전): P 계좌만 · 기본 꺼짐 · 켠 뒤 도착한 가격표만 · 알림을 보낸 뒤 추정 기준 부족이 계산될 때 1회.
+#       금액 = 부족 $10 이상 → $10 단위 반올림(5 이상 올림), $0 초과 $10 미만 → $100, $0 이하 → 안 함.
+#       멈춤(다시 안 함, 바로 알림): 원화 부족 · 실행 직전 환율 1% 이상 변동 · 같은 회차 이미 함 · 결과 불확실.
 FX_TTL_MINUTES = 10
-FX_RATE_MAX_CHANGE = None  # 아래 함수에서 Decimal로 초기화 (모듈 상단 Decimal import가 없어서 지역 import 사용)
+FX_RATE_MAX_CHANGE = None  # (예전 이름 유지)
+FX_PRESETS = (100, 300, 500, 1000)
+FX_STEP, FX_MAX_PICK = 100, 99999
+FX_SKIP_STATUS = ("cancelled", "expired")
+FX_NO_SHEET = "아직 몰라요 (주문표 없음)"
+FX_PICK_CACHE_SEC = 600
+_FX_PICK = {}          # 금액 고르기 화면의 계좌 숫자 (메모리에만 둠, 파일에 남기지 않음)
+AUTO_FX_ON_LABEL, AUTO_FX_OFF_LABEL = "💱 자동환전 켜짐", "💱 자동환전 꺼짐"
 
 
 def fx_parse_amount(s):
@@ -1154,73 +1158,220 @@ def fx_parse_amount(s):
     return v
 
 
-def fx_show_calc(tg_s, amount=None, sheet=None):
-    """환전 확인 화면을 만든다. 실행하지 않는다. 대기 정보를 state에 저장한다."""
+def _dec(x):
+    from decimal import Decimal, InvalidOperation
+    try:
+        if x is None or isinstance(x, bool):
+            return None
+        d = Decimal(str(x).replace(",", ""))
+        return d if d.is_finite() else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def fx_money(d):
+    return f"${d:,.2f}" if d is not None else "조회 불가"
+
+
+def fx_cb_amount(d):
+    """버튼 데이터용 금액 글자 ('300', '123.45')"""
+    s = f"{d:.2f}".rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def fx_auto_amount(gap):
+    """자동환전 금액 (Decimal) 또는 None. $10 이상 → $10 단위 반올림(5 이상 올림, half-up), $0 초과 $10 미만 → $100"""
+    from decimal import Decimal, ROUND_HALF_UP
+    g = _dec(gap)
+    if g is None or g <= 0:
+        return None
+    if g < 10:
+        return Decimal(100)
+    return (g / 10).quantize(Decimal(1), rounding=ROUND_HALF_UP) * 10
+
+
+def fx_current_sheet(st=None, now=None):
+    """이번 회차 가격표: 주문일(us_date)이 오늘 이후이고 취소·마감 아닌 가장 최근 것. 없으면 None"""
+    st = st if st is not None else load(STATE, {})
+    today = (now or now_kst()).strftime("%Y%m%d")
+    for d in sorted((st.get("sheets") or {}), reverse=True):
+        sh = st["sheets"][d]
+        if sh.get("status") not in FX_SKIP_STATUS and str(sh.get("us_date") or "") >= today:
+            return sh
+    return None
+
+
+def fx_need(sheet):
+    """가격표 매수 줄이 모두 체결될 때 필요한 달러 (Decimal) 또는 None"""
     from decimal import Decimal
-    # 최신 가격표(부족액 기본값용)
-    if sheet is None:
-        try:
-            with locked_state() as st:
-                if st.get("sheets"):
-                    sheet = st["sheets"][sorted(st["sheets"])[-1]]
-        except Exception:
-            sheet = None
-    need = None
-    if sheet is not None:
-        try:
-            need = sum((Decimal(str(price)) * qty for side, price, qty in order_lines(sheet) if side == "buy"), Decimal(0))
-        except Exception:
-            need = None
-    snap = account_snapshot()
-    est = snap.get("usd_est")
-    cash = snap.get("usd_cash")
-    est_d = Decimal(str(est)) if est is not None else None
-    est_gap = (need - est_d) if (need is not None and est_d is not None and need > est_d) else (Decimal(0) if (need is not None and est_d is not None) else None)
-    if amount is None:
-        amount = est_gap
-    if amount is None or amount <= 0:
-        lines = ["💱 <b>환전 확인</b>",
-                 "▫️ 외화 추정 예수금: " + (f"${est_d:,.2f}" if est_d is not None else "조회 불가"),
-                 "▫️ 표 매수 필요 달러: " + (f"${need:,.2f}" if need is not None else "가격표 없음"),
-                 "▫️ 환전 필요 달러(추정 기준): " + (f"${est_gap:,.2f}" if est_gap is not None else "계산 보류"),
-                 "추정 기준으로 환전이 필요 없어요. 금액을 직접 정하려면 <code>/환전 1000</code> 처럼 적어 주세요."]
-        tg_s.send("\n".join(lines))
-        return True
-    # 적용환율 조회 (읽기 전용)
+    if not sheet:
+        return None
+    try:
+        return sum((Decimal(str(price)) * qty for side, price, qty in order_lines(sheet) if side == "buy"), Decimal(0))
+    except Exception:
+        return None
+
+
+def fx_est_gap(sheet):
+    """추정 기준 부족액(Decimal) 또는 None. sheet['market']에 usd_est가 없으면 None."""
+    from decimal import Decimal
+    try:
+        est = _dec((sheet.get("market") or {}).get("usd_est"))
+        need = fx_need(sheet)
+        if est is None or need is None:
+            return None
+        gap = need - est
+        return gap if gap > 0 else Decimal(0)
+    except Exception:
+        return None
+
+
+def sheet_rows(sheet):
+    k = f"{sheet['date']}:{sheet['ver']}"
+    rows = [[{"text": "✅ 주문", "callback_data": f"fd:ok:{k}"}, {"text": "❌ 이번엔 안 함", "callback_data": f"fd:no:{k}"}]]
+    gap = fx_est_gap(sheet)
+    if gap is not None and gap > 0:
+        rows.append([{"text": "💱 환전 금액 확인", "callback_data": f"fx:calc:{k}"}])
+    return rows
+
+
+def fx_pick_info(sheet=None, fresh=True):
+    """금액 고르기 화면 숫자: 보유 달러(추정·예수금)·이번 회차 필요 달러·부족액. 조회 실패는 None"""
+    from decimal import Decimal, ROUND_UP
+    if not fresh and _FX_PICK and time.time() - _FX_PICK.get("t", 0) < FX_PICK_CACHE_SEC:
+        return dict(_FX_PICK)
+    sheet = sheet or fx_current_sheet()
+    need = fx_need(sheet)
+    est = cash = None
     try:
         from meritz_client import Meritz
-        rate_info = Meritz().fx_applied_rate()
+        m = Meritz()
+        try:
+            est = _dec(m.usd_estimated())
+        except Exception:
+            pass
+        try:
+            cash = _dec(m.usd_cash())
+        except Exception:
+            pass
+    except Exception:
+        pass
+    gap = None
+    if need is not None and est is not None:
+        gap = max(Decimal(0), need - est).quantize(Decimal("0.01"), rounding=ROUND_UP)
+    info = {"need": need, "est": est, "cash": cash, "gap": gap,
+            "sheet_date": (sheet or {}).get("date") if need is not None else None, "t": time.time()}
+    _FX_PICK.clear(); _FX_PICK.update(info)
+    return dict(info)
+
+
+def fx_pick_view(info, amount, title="💱 <b>P 환전 — 금액 고르기</b>", prefix="fx"):
+    """금액 고르기 화면 (글자, 버튼). VR6 도 같은 틀을 씀 (prefix 만 다름)"""
+    from decimal import Decimal
+    amount = amount if amount is not None else Decimal(0)
+    L = [title,
+         f"▫️ 보유 달러: {fx_money(info.get('est'))} (추정 예수금)"
+         + (f" · 예수금 {fx_money(info.get('cash'))}" if info.get("cash") is not None else ""),
+         "▫️ 이번 회차 필요 달러: " + (f"{fx_money(info['need'])}" + (f" ({info['sheet_date']})" if info.get("sheet_date") else "")
+                                if info.get("need") is not None else FX_NO_SHEET)]
+    gap = info.get("gap")
+    if gap is not None:
+        L.append("▫️ 부족액(추정 기준): " + (fx_money(gap) if gap > 0 else "없음"))
+    L.append(f"\n👉 선택한 금액: <b>{fx_money(amount)}</b>" if amount > 0
+             else "\n👉 선택한 금액: 아직 없음 — 아래 버튼으로 골라 주세요")
+    rows = []
+    if gap is not None and gap > 0:
+        rows.append([{"text": f"부족액 {fx_money(gap)} 그대로", "callback_data": f"{prefix}:pk:{fx_cb_amount(gap)}"}])
+    rows.append([{"text": "-$100", "callback_data": f"{prefix}:pk:{fx_cb_amount(max(Decimal(0), amount - FX_STEP))}"},
+                 {"text": "+$100", "callback_data": f"{prefix}:pk:{fx_cb_amount(min(Decimal(FX_MAX_PICK), amount + FX_STEP))}"}])
+    rows.append([{"text": f"${n:,}", "callback_data": f"{prefix}:pk:{n}"} for n in FX_PRESETS])
+    rows.append([{"text": "다음: 확인 화면으로 →", "callback_data": f"{prefix}:cf:{fx_cb_amount(amount)}"},
+                 {"text": "❌ 취소", "callback_data": f"{prefix}:cancel" if prefix == "fx" else f"{prefix}:fn"}])
+    return "\n".join(L), rows
+
+
+def fx_screen(tg_s, text, rows, msg_id=None):
+    """같은 메시지를 고쳐 쓰기(버튼 화면 이어가기). 안 되면 새로 보냄"""
+    edit = getattr(tg_s, "edit", None)
+    if msg_id and edit and edit(msg_id, text, rows):
+        return
+    tg_s.send(text, rows)
+
+
+def fx_open_picker(tg_s, amount=None, sheet=None, msg_id=None, fresh=True):
+    """💱 환전 버튼·/환전: 금액 고르기 화면. 실행하지 않는다"""
+    from decimal import Decimal
+    info = fx_pick_info(sheet, fresh=fresh)
+    if amount is None:
+        amount = info["gap"] if info.get("gap") is not None and info["gap"] > 0 else Decimal(0)
+    text, rows = fx_pick_view(info, amount)
+    fx_screen(tg_s, text, rows, msg_id)
+    return True
+
+
+def fx_show_calc(tg_s, amount=None, sheet=None, msg_id=None):
+    """환전 확인 화면 (아직 실행 아님). 금액이 없으면 금액 고르기 화면. 대기 정보를 state에 저장한다."""
+    from decimal import Decimal, ROUND_UP
+    if amount is None or amount <= 0:
+        return fx_open_picker(tg_s, amount=None, sheet=sheet, msg_id=msg_id)
+    amount = amount.quantize(Decimal("0.01"))
+    back = {"text": "↩ 금액 다시 고르기", "callback_data": f"fx:pk:{fx_cb_amount(amount)}"}
+    cancel = {"text": "❌ 취소", "callback_data": "fx:cancel"}
+    try:
+        from meritz_client import Meritz
+        m = Meritz()
+        rate_info = m.fx_applied_rate()
         rate = Decimal(str(rate_info["rate"]))
         exrt_time = str(rate_info.get("exrt_stnd_time") or "")
     except Exception as e:
-        tg_s.send(f"💱 환전 확인 실패: 적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). 잠시 뒤 다시 눌러 주세요.")
+        fx_screen(tg_s, f"💱 <b>P 환전 — 확인</b>\n적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). "
+                  "환전 가능 시간(평일 낮)인지 확인하고 다시 눌러 주세요. 돈은 움직이지 않았어요.", [[back, cancel]], msg_id)
         return True
     try:
-        from meritz_client import Meritz
-        krw = Meritz().krw_cash()
+        krw = _dec(m.krw_cash())
     except Exception:
         krw = None
     krw_needed = amount * rate
-    over = est_gap is not None and amount > est_gap
+    short = (krw_needed - krw).quantize(Decimal(1), rounding=ROUND_UP) if krw is not None and krw < krw_needed else None
+    L = ["💱 <b>P 환전 — 확인</b> (아직 실행하지 않았어요)"]
+    if short is not None:
+        L.append(f"⚠️ <b>원화가 {short:,.0f}원 모자라요</b> — 그래서 실행 버튼이 없어요. 원화를 먼저 넣거나 금액을 줄여 주세요.")
+    L += [f"▫️ 환전할 달러: <b>{fx_money(amount)}</b>",
+          f"▫️ 적용환율: {rate:,.4f} (기준 {html.escape(exrt_time)})",
+          f"▫️ 필요 원화(추정): 약 {krw_needed:,.0f}원 (수수료 별도 · 실제 금액은 실행 결과 기준)",
+          "▫️ 원화 예수금: " + (f"{krw:,.0f}원" if krw is not None else "조회 불가")]
+    if short is not None:
+        with locked_state() as st:
+            st.pop("fx_pending", None)
+        fx_screen(tg_s, "\n".join(L), [[back, cancel]], msg_id)
+        return True
     with locked_state() as st:
         st["fx_pending"] = {"amount": f"{amount:.2f}", "rate": str(rate), "exrt_stnd_time": exrt_time,
                             "created_at": now_kst().isoformat(), "sheet_date": (sheet or {}).get("date")}
-    lines = ["💱 <b>환전 확인</b> — 아직 실행하지 않았어요",
-             f"▫️ 환전할 달러: <b>${amount:,.2f}</b>" + (" (추정 기준 부족액보다 많아요)" if over else ""),
-             f"▫️ 적용환율: {rate:,.4f} (기준시각 {html.escape(exrt_time)})",
-             f"▫️ 필요 원화(추정): 약 {krw_needed:,.0f}원 (실제 차감액은 실행 결과 기준, 수수료 별도 확인)",
-             "▫️ 외화 추정 예수금: " + (f"${est_d:,.2f}" if est_d is not None else "조회 불가"),
-             "▫️ 표 매수 필요 달러: " + (f"${need:,.2f}" if need is not None else "가격표 없음"),
-             "▫️ 원화 예수금: " + (f"{krw:,.0f}원" if krw is not None else "조회 불가")]
-    if krw is not None and Decimal(str(krw)) < krw_needed:
-        lines.append("⚠️ 원화 예수금이 부족해요. 실행 버튼이 안 뜹니다. 원화를 먼저 채우거나 금액을 줄여 주세요.")
-        tg_s.send("\n".join(lines), [[{"text": "❌ 취소", "callback_data": "fx:cancel"}]])
-        return True
-    lines.append("실행 버튼을 누르면 그 시점의 적용환율로 다시 확인하고, 확인 화면 환율과 1% 이상 달라지면 실행하지 않고 다시 확인해요.")
-    tg_s.send("\n".join(lines),
-              [[{"text": "✅ 환전 실행", "callback_data": f"fx:exec:{amount:.2f}"},
-                {"text": "❌ 취소", "callback_data": "fx:cancel"}]])
+    L.append(f"실행 버튼은 {FX_TTL_MINUTES}분 동안 유효해요. 누르면 그때 환율을 다시 보고, 1% 넘게 바뀌었으면 실행하지 않아요.")
+    fx_screen(tg_s, "\n".join(L),
+              [[{"text": f"✅ {fx_money(amount)} 환전 실행", "callback_data": f"fx:exec:{amount:.2f}"}], [back, cancel]], msg_id)
     return True
+
+
+def fx_result_lines(head, amount, res, rate, after):
+    """환전 완료 화면 (수동·자동, P·VR6 공용). after = 환전 뒤 계좌 조회 (usd_est·usd_cash)"""
+    res = res or {}
+    def val(k, unit=""):
+        v = res.get(k)
+        if v in (None, ""):
+            return None
+        d = _dec(v)
+        return html.escape(f"{d:,.0f}{unit}" if d is not None and unit == "원" else f"{v}{unit}")
+    after = after or {}
+    est, cash = _dec(after.get("usd_est")), _dec(after.get("usd_cash"))
+    return [head,
+            f"▫️ 환전한 달러: {fx_money(amount)}",
+            f"▫️ 실제 적용환율: {html.escape(str(res.get('aply_exrt') or rate))}",
+            "▫️ 차감 원화: " + (val("tr_amt", "원") or "결과에 없음 (메리츠 앱 환전 내역에서 확인)"),
+            "▫️ 수수료: " + (val("fee") or "결과에 없음"),
+            "▫️ 거래번호: " + (val("tr_srno") or "결과에 없음"),
+            f"▫️ 환전 후 보유 달러: 추정 예수금 {fx_money(est)} · 예수금 {fx_money(cash)}"]
 
 
 def fx_handle_callback(tg_s, cb):
@@ -1238,8 +1389,21 @@ def fx_handle_callback(tg_s, cb):
         tg_s.buttons(msg_id, [])
         tg_s.send("❌ 환전 취소했어요. 실행하지 않았어요.")
         return True
+    if kind in ("pk", "cf"):
+        # fx:pk:{금액} 금액 고르기 화면 (같은 메시지 고쳐 쓰기) · fx:cf:{금액} 확인 화면으로
+        amt = _dec(parts[2]) if len(parts) > 2 else None
+        if amt is None or amt < 0:
+            tg_s.answer(cb_id, "금액이 이상해요"); return True
+        amt = min(amt, Decimal(FX_MAX_PICK))
+        if kind == "cf":
+            if amt <= 0:
+                tg_s.answer(cb_id, "금액을 먼저 골라 주세요"); return True
+            tg_s.answer(cb_id, "확인 화면을 만들게요")
+            return fx_show_calc(tg_s, amount=amt, sheet=fx_current_sheet(), msg_id=msg_id)
+        tg_s.answer(cb_id)
+        return fx_open_picker(tg_s, amount=amt, msg_id=msg_id, fresh=False)
     if kind == "calc":
-        # fx:calc:{date}:{ver}
+        # fx:calc:{date}:{ver} — 가격표 알림의 [💱 환전 금액 확인] → 금액 고르기 (부족액 미리 선택)
         date = parts[2] if len(parts) > 2 else ""
         ver = parts[3] if len(parts) > 3 else ""
         with locked_state() as st:
@@ -1249,8 +1413,8 @@ def fx_handle_callback(tg_s, cb):
                 tg_s.buttons(msg_id, [])
                 return True
             sheet_copy = dict(sh)
-        tg_s.answer(cb_id, "환전 금액을 계산할게요")
-        return fx_show_calc(tg_s, amount=None, sheet=sheet_copy)
+        tg_s.answer(cb_id, "환전 금액을 골라 주세요")
+        return fx_open_picker(tg_s, amount=None, sheet=sheet_copy)
     if kind == "exec":
         amount_str = parts[2] if len(parts) > 2 else ""
         try:
@@ -1263,7 +1427,7 @@ def fx_handle_callback(tg_s, cb):
         tg_s.answer(cb_id, "환전을 확인할게요")
         tg_s.buttons(msg_id, [])
         if not pending:
-            tg_s.send("환전 대기 정보가 없어요. 다시 확인 화면을 열어 주세요. (<code>/환전</code> 또는 가격표의 환전 버튼)")
+            tg_s.send("환전 대기 정보가 없어요. 다시 확인 화면을 열어 주세요. (<code>/환전</code> 또는 💱 환전 버튼)")
             return True
         if pending.get("amount") != f"{amount:.2f}":
             tg_s.send("환전 금액이 확인 화면과 달라요. 다시 확인 화면을 열어 주세요.")
@@ -1279,7 +1443,8 @@ def fx_handle_callback(tg_s, cb):
         # 실행 직전 적용환율로 다시 확인
         try:
             from meritz_client import Meritz
-            rate_info = Meritz().fx_applied_rate()
+            m = Meritz()
+            rate_info = m.fx_applied_rate()
             new_rate = Decimal(str(rate_info["rate"]))
             new_time = str(rate_info.get("exrt_stnd_time") or "")
             old_rate = Decimal(str(pending.get("rate")))
@@ -1291,26 +1456,182 @@ def fx_handle_callback(tg_s, cb):
             return fx_show_calc(tg_s, amount=amount, sheet=None)
         # 실행 (이 지점만 실제 돈이 움직인다)
         try:
-            from meritz_client import Meritz
-            result = Meritz().fx_exchange(f"{amount:.2f}", str(new_rate), new_time)
+            result = m.fx_exchange(f"{amount:.2f}", str(new_rate), new_time)
         except Exception as e:
             tg_s.send(f"⚠️ 환전 실행 결과를 확인하지 못했어요 ({html.escape(type(e).__name__)}). "
                      "서버에서 환전이 됐을 수도 있으니, 자동으로 다시 실행하지 않았어요. "
                      "메리츠 앱의 환전 내역에서 먼저 확인해 주세요.")
             return True
-        snap = account_snapshot()
-        lines = ["✅ <b>환전 완료</b>",
-                 f"▫️ 환전한 달러: ${amount:,.2f}",
-                 f"▫️ 실제 적용환율: {html.escape(str(result.get('aply_exrt') or new_rate))}",
-                 f"▫️ 차감된 원화: {result.get('tr_amt')}원" if result.get('tr_amt') is not None else "▫️ 차감된 원화: 실행 결과 확인",
-                 f"▫️ 수수료: {result.get('fee')}" if result.get('fee') is not None else "",
-                 f"▫️ 거래일련번호: {result.get('tr_srno')}" if result.get('tr_srno') is not None else "",
-                 "▫️ 환전 후 외화 추정 예수금: " + (f"${snap.get('usd_est'):,.2f}" if snap.get('usd_est') is not None else "조회 불가"),
-                 "▫️ 환전 후 보유 달러(예수금): " + (f"${snap.get('usd_cash'):,.2f}" if snap.get('usd_cash') is not None else "조회 불가")]
-        tg_s.send("\n".join([x for x in lines if x]))
+        snap = account_snapshot(m)
+        tg_s.send("\n".join(fx_result_lines("✅ <b>P 환전 완료</b>", amount, result, new_rate, snap)))
         return True
     tg_s.answer(cb_id, "모르는 환전 버튼이에요")
     return True
+
+
+# ---------- 부족금 자동환전 (P 계좌 · P 키 /etc/bot-office/meritz.json 로만)
+def auto_fx_state(st=None):
+    """(켜짐 여부, 켠 시각). 기록이 없으면 꺼짐"""
+    st = st if st is not None else load(STATE, {})
+    af = st.get("auto_fx") if isinstance(st.get("auto_fx"), dict) else {}
+    return af.get("on") is True, str(af.get("at") or "")
+
+
+def auto_fx_label():
+    return AUTO_FX_ON_LABEL if auto_fx_state()[0] else AUTO_FX_OFF_LABEL
+
+
+def set_auto_fx(tg_s, on=None):
+    """P 자동환전 켜기/끄기 (on=None 이면 반대로). VR6 토글과 따로 저장 (P 는 state.json)"""
+    with locked_state() as st:
+        cur, _ = auto_fx_state(st)
+        new = (not cur) if on is None else bool(on)
+        st["auto_fx"] = {"on": new, "at": now_kst().isoformat()}
+    replay("auto_fx_toggle", "ok", "on" if new else "off", event_type="user_event")
+    tg_s.send(f"🅿 💱 P 자동환전 <b>{'켜짐' if new else '꺼짐'}</b>\n"
+              + ("지금부터 새로 오는 가격표에서 추정 예수금 기준 부족이 있으면 1번 자동환전해요 "
+                 "(부족 $10 이상 → $10 단위 반올림 · $10 미만 → $100). P 계좌만, VR6 에는 영향 없어요."
+                 if new else "자동환전하지 않아요. 💱 환전(수동)은 그대로 쓸 수 있어요."),
+              keyboard=menu_keyboard())
+    return True
+
+
+def auto_fx_execute(m, amount):
+    """자동환전 1회 실행. m = 그 계좌의 Meritz (P/VR6 각자 키). 돌려줌 (결과, 정보):
+    결과 'ok'(정보: res·rate) / 'stop'(정보: why — 돈 안 움직임) / 'uncertain'(실행 결과 모름).
+    이 함수 안의 fx_exchange 한 줄만 실제 돈이 움직인다."""
+    from decimal import Decimal, ROUND_UP
+    try:
+        r1 = m.fx_applied_rate()
+        rate1 = Decimal(str(r1["rate"]))
+        if not rate1.is_finite() or rate1 <= 0:
+            raise ValueError("rate")
+    except Exception as e:
+        return "stop", {"why": f"적용환율 조회 실패 ({type(e).__name__}) — 환전 가능 시간(평일 낮)이 아닐 수 있어요"}
+    try:
+        krw = _dec(m.krw_cash())
+    except Exception:
+        krw = None
+    krw_need = amount * rate1
+    if krw is None:
+        return "stop", {"why": "원화 예수금을 못 읽어 원화가 충분한지 확인하지 못했어요"}
+    if krw < krw_need:
+        short = (krw_need - krw).quantize(Decimal(1), rounding=ROUND_UP)
+        return "stop", {"why": f"원화가 {short:,.0f}원 모자라요 (필요 원화 약 {krw_need:,.0f}원 · 원화 예수금 {krw:,.0f}원)"}
+    try:
+        r2 = m.fx_applied_rate()
+        rate2 = Decimal(str(r2["rate"]))
+        time2 = str(r2.get("exrt_stnd_time") or "")
+        if not rate2.is_finite() or rate2 <= 0:
+            raise ValueError("rate")
+    except Exception as e:
+        return "stop", {"why": f"실행 직전 적용환율 재조회 실패 ({type(e).__name__})"}
+    if abs(rate2 - rate1) / rate1 >= Decimal("0.01"):
+        return "stop", {"why": f"실행 직전 환율이 {rate1:,.4f} → {rate2:,.4f} 로 1% 이상 바뀌었어요"}
+    try:
+        res = m.fx_exchange(f"{amount:.2f}", str(rate2), time2)
+    except Exception as e:
+        return "uncertain", {"why": type(e).__name__}
+    return "ok", {"res": res or {}, "rate": rate2}
+
+
+def _after_on(at_text, on_at):
+    """가격표 받은 시각이 자동환전을 켠 시각 이후인지"""
+    try:
+        return datetime.fromisoformat(str(at_text)) >= datetime.fromisoformat(on_at)
+    except (TypeError, ValueError):
+        return False
+
+
+def auto_fx_tick(tg, now=None):
+    """tick 끝에서 부름. 켜져 있고, 켠 뒤 받은 가격표의 알림이 나갔고, 마감 전이면 회차(가격표 날짜)당 1번만"""
+    now = now or now_kst()
+    st = load(STATE, {})
+    on, on_at = auto_fx_state(st)
+    if not on:
+        return
+    done = st.get("auto_fx_done") or {}
+    for date in sorted(st.get("sheets") or {}):
+        sh = st["sheets"][date]
+        if (sh.get("status") in FX_SKIP_STATUS or sh.get("notice_pending") or not sh.get("notice_sent_at")
+                or not _after_on(sh.get("received"), on_at)):
+            continue
+        try:
+            if now >= deadlines(sh)[2]:
+                continue
+        except Exception:
+            continue
+        rec = done.get(date)
+        if rec:
+            if (rec.get("result") == "ok" and str(rec.get("ver")) != str(sh.get("ver"))
+                    and str(rec.get("dup_ver")) != str(sh.get("ver"))):
+                with locked_state() as s2:
+                    s2.setdefault("auto_fx_done", {}).setdefault(date, {})["dup_ver"] = sh.get("ver")
+                tg.send(f"🅿 💱 <b>P 자동환전 안 함</b> · {date} 가격표 (새 판독)\n"
+                        "이 회차는 이미 자동환전했어요. 같은 회차는 1번만 해요. 더 필요하면 💱 환전으로 직접 해 주세요.")
+            continue
+        _auto_fx_one(tg, date, sh)
+
+
+def _auto_fx_one(tg, date, sh):
+    with locked_state() as st:            # 먼저 '진행 중'으로 적어 두고 실행 → 꺼졌다 켜져도 다시 안 함 (중복 방지)
+        d = st.setdefault("auto_fx_done", {})
+        if date in d:
+            return
+        d[date] = {"ver": sh.get("ver"), "at": now_kst().isoformat(timespec="seconds"), "result": "running"}
+        for k in sorted(d)[:-30]:
+            d.pop(k, None)
+    try:
+        result = _auto_fx_run(tg, date, sh)
+    except Exception as e:
+        result = "error"
+        print("P 자동환전 오류:", type(e).__name__, flush=True)
+        tg.send(f"🅿 ⚠️ <b>P 자동환전 처리 오류</b> · {date} 가격표 ({html.escape(type(e).__name__)})\n"
+                "자동으로 다시 하지 않아요. 메리츠 앱 환전 내역을 먼저 확인하고, 필요하면 💱 환전으로 직접 해 주세요.")
+    with locked_state() as st:
+        st.setdefault("auto_fx_done", {}).setdefault(date, {})["result"] = result
+    replay("auto_fx", "ok" if result == "ok" else ("skipped" if result in ("no_gap", "unknown") else "failed"),
+           result, event_type="external_call" if result in ("ok", "uncertain") else "decision", sheet=date)
+
+
+def _auto_fx_run(tg, date, sh):
+    head = f"🅿 💱 <b>P 자동환전"
+    try:
+        from meritz_client import Meritz
+        m = Meritz()                       # P 키 (/etc/bot-office/meritz.json) 만
+    except Exception as e:
+        tg.send(f"{head} 안 함</b> · {date} 가격표\nP 계좌 키를 못 읽었어요 ({html.escape(type(e).__name__)}). 자동으로 다시 하지 않아요.")
+        return "stop"
+    need = fx_need(sh)
+    try:
+        est = _dec(m.usd_estimated())     # 판단 기준: 추정 예수금 (예수금은 참고만)
+    except Exception:
+        est = None
+    if need is None or est is None:
+        tg.send(f"{head} 안 함</b> · {date} 가격표\n추정 예수금을 못 읽어 부족을 계산하지 못했어요. 자동으로 다시 하지 않아요. "
+                "필요하면 💱 환전으로 직접 해 주세요.")
+        return "unknown"
+    gap = need - est
+    amount = fx_auto_amount(gap)
+    if amount is None:
+        return "no_gap"
+    status, info = auto_fx_execute(m, amount)
+    base = f"▫️ 부족액(추정 기준) {fx_money(gap)} → 자동환전 {fx_money(amount)}"
+    if status == "stop":
+        text = (f"{head} 중단</b> · {date} 가격표\n{base}\n⛔ {html.escape(info['why'])}\n"
+                "돈은 움직이지 않았어요. 자동으로 다시 하지 않아요. 필요하면 💱 환전으로 직접 해 주세요.")
+        tg.send(text); _hub_alert('5번 팬딩 가격표', 'warning', text)
+        return "stop"
+    if status == "uncertain":
+        text = (f"🅿 ⚠️ <b>P 자동환전 결과 확인 안 됨</b> · {date} 가격표\n{base}\n"
+                f"실행 결과를 확인하지 못했어요 ({html.escape(info['why'])}). 환전이 됐을 수도 있어 자동으로 다시 하지 않아요.\n"
+                "메리츠 앱의 환전 내역에서 먼저 확인해 주세요.")
+        tg.send(text); _hub_alert('5번 팬딩 가격표', 'warning', text)
+        return "uncertain"
+    after = account_snapshot(m)
+    text = "\n".join(fx_result_lines(f"🅿 ✅ <b>P 자동환전 완료</b> · {date} 가격표", amount, info["res"], info["rate"], after) + [base])
+    tg.send(text); _hub_alert('5번 팬딩 가격표', 'info', text)
+    return "ok"
 
 
 def sheet_notice_time(sheet):
@@ -1774,6 +2095,10 @@ def tick(tg):
         for k in sorted(k for k in st if k.startswith("missing:"))[:-10]:
             st.pop(k, None)
         cleanup_images(st)
+    try:
+        auto_fx_tick(tg, now)            # 부족금 자동환전 (켜졌을 때만, 잠금 밖에서)
+    except Exception as e:
+        print("P 자동환전 점검 오류:", type(e).__name__, e, flush=True)
 
 
 def loop():
@@ -1818,7 +2143,8 @@ HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <
              "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
              "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
              "▫️ <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기\n"
-             "▫️ <b>/환전 [금액]</b> 추정 기준 부족액 환전 확인·실행 (금액을 안 적으면 부족액으로 계산, 실행은 2차 확인 버튼으로만)")
+             "▫️ <b>/환전</b> 금액 고르기 버튼 → 확인 → 실행 · <b>/환전 [금액]</b> 바로 확인 화면 (실행은 확인 화면 버튼으로만)\n"
+             "▫️ <b>/자동환전</b> 부족금 자동환전 상태 · <b>/자동환전켜기</b> · <b>/자동환전끄기</b> (P 계좌만, 기본 꺼짐)")
 
 # ---------------------------------------------------------- 5번 봇 하단 버튼 메뉴
 # 버튼은 기존 명령 글자와 똑같이 처리된다(새 기능이 아니라 같은 기능을 버튼으로 누르는 것).
@@ -1848,6 +2174,7 @@ def menu_keyboard():
     """P 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태"""
     auto = AUTO_ON_LABEL if cfg()["auto_order"] else AUTO_OFF_LABEL
     return [[{"text": "📋 가격표"}, {"text": "💱 환전"}], [{"text": auto}, {"text": "📐 배수"}],
+            [{"text": auto_fx_label()}],
             [{"text": "🩺 진단"}, {"text": "🔄 재판독"}], [{"text": P_TOOLS_LABEL}, {"text": HOME_LABEL}]]
 
 
@@ -1861,7 +2188,9 @@ MENU_MODE = HOME / "menu_mode.json"
 P_KB_MARKS, VR6_KB_MARKS, HOME_KB_MARKS = ("📋 가격표", "⏱ 발주시간"), ("📝 주문표", "📋 받은 표"), ("🅿 P 매매",)
 SHARED = {"💱 환전": ("/환전", "/vr6환전"), "📐 배수": ("/배수", "/vr6배수"), "🩺 진단": ("/진단", "/vr6진단"),
           "🔄 재판독": ("/재판독", "/vr6재판독"), "🛠 도구": (P_TOOLS_LABEL, "/vr6도구"), "❓ 도움말": ("/help", "/vr6도움말"),
-          "⬅️ 메뉴": ("/p", "/vr6"), AUTO_ON_LABEL: (AUTO_ON_LABEL, "/vr6자동전환"), AUTO_OFF_LABEL: (AUTO_OFF_LABEL, "/vr6자동전환")}
+          "⬅️ 메뉴": ("/p", "/vr6"), AUTO_ON_LABEL: (AUTO_ON_LABEL, "/vr6자동전환"), AUTO_OFF_LABEL: (AUTO_OFF_LABEL, "/vr6자동전환"),
+          AUTO_FX_ON_LABEL: ("/자동환전전환", "/vr6자동환전전환"), AUTO_FX_OFF_LABEL: ("/자동환전전환", "/vr6자동환전전환")}
+TOGGLE_LABELS = (AUTO_ON_LABEL, AUTO_OFF_LABEL, AUTO_FX_ON_LABEL, AUTO_FX_OFF_LABEL)   # 누르면 바로 바뀌는 버튼
 
 
 def remember_menu(keyboard):
@@ -1884,7 +2213,7 @@ def route_shared(t):
     if t not in SHARED:
         return t
     mode = load(MENU_MODE, {}).get("mode")
-    if mode not in ("p", "vr6") and t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):
+    if mode not in ("p", "vr6") and t in TOGGLE_LABELS:
         return MENU_UNKNOWN
     return SHARED[t][1 if mode == "vr6" else 0]
 
@@ -1898,7 +2227,8 @@ def p_status_line():
     c, st = cfg(), load(STATE, {})
     sheets = st.get("sheets") or {}
     last = sheets[max(sheets)] if sheets else None
-    head = f"🅿 <b>P 매매</b> · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])} · 자동 {'켜짐' if c['auto_order'] else '꺼짐'}"
+    head = (f"🅿 <b>P 매매</b> · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])} · 자동 {'켜짐' if c['auto_order'] else '꺼짐'}"
+            f" · 자동환전 {'켜짐' if auto_fx_state(st)[0] else '꺼짐'}")
     return head + ("\n최근 가격표: " + f"{last['date']} · {STATUS_KO.get(last['status'], last['status'])}" if last else "\n최근 가격표: 없음")
 
 
@@ -1998,7 +2328,7 @@ def poll_own_bot(tg):
                 elif t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):
                     toggle_auto(tg)
                 elif t == MENU_UNKNOWN:
-                    tg.send("🤖 P·VR6 중 어느 메뉴의 버튼인지 몰라서 아무것도 바꾸지 않았어요. 메뉴를 다시 열고 눌러 주세요.",
+                    tg.send("P·VR6 중 어느 메뉴의 버튼인지 몰라서 아무것도 바꾸지 않았어요. 메뉴를 다시 열고 눌러 주세요.",
                             keyboard=main_keyboard())
                 elif t.lower() in ("/help", "도움말"):
                     tg.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT + "\n\n▫️ VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
@@ -2138,6 +2468,14 @@ def bot_message(tg_s, text):
             tg_s.send(sheet_text(view, f"📋 <b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
                       sheet_rows(sh) if sh["status"] == "pending" else None)
         return True
+    if low in ("/자동환전전환", "자동환전전환"):           # 💱 자동환전 버튼: 누르면 바로 켜짐↔꺼짐
+        return set_auto_fx(tg_s)
+    if low in ("/자동환전켜기", "/자동환전끄기", "자동환전켜기", "자동환전끄기"):
+        return set_auto_fx(tg_s, "켜기" in low)
+    if low in ("/자동환전", "자동환전"):
+        on, at = auto_fx_state()
+        tg_s.send(f"🅿 💱 P 자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
+                  + "\n바꾸기: <code>/자동환전켜기</code> · <code>/자동환전끄기</code> 또는 P 메뉴의 💱 자동환전 버튼"); return True
     if low == "/환전" or low == "환전" or low.startswith("/환전 "):
         arg = t[len("/환전"):].strip() if t.startswith("/환전") else ""
         if not arg:
