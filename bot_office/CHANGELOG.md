@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.9 · 2026-11-05 14:17 (KST)
+- 파일: export_past_sheet.py
+- 내용: staging에서 백테스트 스크립트만 제외 (업데이터 허용 파일만 남김)
+- 브랜치: staging
+
 ## v1.2.8 · 2026-11-05 09:58 (KST)
 - 파일: sniper_picture.html, sniper_picture.py
 - 내용: 사무실 현황판 지하층 시각 표시 (황금 칸·상단 지하 주수, 사무실 vNEXT)
