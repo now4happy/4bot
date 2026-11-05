@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.1.6 · 2026-11-05 09:32 (KST)
+- 파일: defense_plugin.py, main.py, plugin_updater.py, quant_engine.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py, tg_ui_plugin.py, toss_api.py
+- 내용: 2번 스나이퍼 v2.2.0 원작 골든포켓 폐기 이식 + 지하층 보관 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.1.5 · 2026-11-04 10:20 (KST)
 - 파일: defense_plugin.py, main.py, quant_engine.py, sniper_exit_plugin.py, sniper_plugin.py, tg_ui_plugin.py, toss_api.py
 - 내용: 2번 스나이퍼 v2.1.0 원작 e5ae290 Case 89 이식 초안 (사이클 수익·배분 게이지·졸업예정자산)

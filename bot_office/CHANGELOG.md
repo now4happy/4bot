@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.7 · 2026-11-05 09:32 (KST)
+- 파일: office_briefing.py, sniper_picture.html, sniper_picture.py
+- 내용: 2번 스나이퍼 v2.2.0 원작 골든포켓 폐기 이식 + 지하층 보관 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.2.6 · 2026-11-04 22:13 (KST)
 - 파일: sniper_picture.html, sniper_picture.py
 - 내용: 사무실 vNEXT: 스나이퍼룸 층 영역에 골든포켓 줄 표시 (⭐ 80주 · 황금 칸 ×8, 1칸=10주 반올림)

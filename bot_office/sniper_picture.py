@@ -7,7 +7,7 @@
 # 사무실 v1.2.5 (2026-11-04): 상단 카드 보유 줄에 골든포켓 주수 표시 — holding.golden_shares 추가(골든 켜짐·수량>0 일 때만, 아니면 0),
 #   holding.total_shares 에 golden_shares 포함(본+서브+골든). 투자금·평단·미실현 계산은 그대로(이미 quant_engine 에서 본+서브+골든 합계).
 # 사무실 v1.2.6 (2026-11-04): 층 영역 골든 줄용 golden.target_pct 추가 — quant_engine.GOLDEN_POCKET_RISE_PCT 를 그대로 옮김(표시 전용 · 새 계산 없음).
-# 사무실 vNEXT (2026-11-05): 스나이퍼 v2.2.0(원작 골든포켓 폐기 + 기존 골든 → 지하층 보관) 대응 —
+# 사무실 v1.2.7 (2026-11-05): 스나이퍼 v2.2.0(원작 골든포켓 폐기 + 기존 골든 → 지하층 보관) 대응 —
 #   golden 객체·holding.golden_shares 제거, basement 객체 추가(quant_engine.summarize_basement_pocket 그대로 · 새 계산 없음).
 #   지하층 없으면 basement=None(카드 숨김). 현재가 모르면 손익 None("—"). 지하층은 층 바·상단 보유 합계·평단·미실현에 섞지 않음.
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
@@ -244,7 +244,7 @@ def build(state, live_price=None, now_est=None, price_note=""):
                "max_portions": int(summary.get("max_reserve_portions") or 6),
                "waiting_deposit": bool(summary.get("waiting_reserve_deposit")),
                "required_deposit_usd": round(float(summary.get("required_reserve_deposit_usd") or 0.0), 2)}
-    # 사무실 vNEXT: 지하층(basement_pocket · 옛 골든포켓 보관분) — 엔진 요약 함수 그대로. 없으면 None (카드 숨김).
+    # 사무실 v1.2.7: 지하층(basement_pocket · 옛 골든포켓 보관분) — 엔진 요약 함수 그대로. 없으면 None (카드 숨김).
     basement = None
     if hasattr(qe, "summarize_basement_pocket"):
         try:

@@ -19,7 +19,7 @@
   ① 통합 잔액 블록 대신 '필요 금액' 표 1개 (고정폭 <pre>, 머리말 계좌·보유·필요 1번, 숫자+아이콘, 범례 1번)
   ② 토스(달러·원화)·메리츠(P·VR6)는 이름 1번에 두 줄로 묶음 · 메리츠 보유는 추정 달러만, 필요는 '–'
   ③ 시장 일정은 평일 휴장일만 표시 (진행 중·예정 문구 없음) · 조회 실패는 휴장으로 단정하지 않고 전달 노트로
-- 사무실 vNEXT (2026-11-05): 스나이퍼 v2.2.0(원작 골든포켓 폐기 + 기존 골든 → 지하층 보관) 대응 — 달러 계산 부분만
+- 사무실 v1.2.7 (2026-11-05): 스나이퍼 v2.2.0(원작 골든포켓 폐기 + 기존 골든 → 지하층 보관) 대응 — 달러 계산 부분만
   ① 골든 필요 달러 조건 줄(모드 ≠ NONE) 제거 · 상수 목록에서 DEFAULT_GOLDEN_ALLIN_MODE 제거(원작에서 삭제된 상수)
   ② 순수 코어 자산 = max(기준시드, 가용현금 + 본·서브 투입원가 − 예비수혈금) — 골든/지하층 원가는 넣지 않음 (sniper_plugin core_equity 와 같음)
   ③ 지하층(basement_pocket)이 원장에 있을 때만 참고 1줄(수량·비용) — 필요 달러·코어 자산·보유 차감 어디에도 넣지 않음, 없으면 줄 없음
@@ -508,7 +508,7 @@ def sniper_ledger():
 
 # ------------------------------------------------------------------ 2번 스나이퍼 다음 1회 (v2.0.0 매매법 · 원장 읽기 전용)
 # 사무실 v1.1.5 (2026-11-03): main toss_sniper v2.0.0(원작 d7b3a66) 식을 그대로 옮김. 원장 파일은 읽기만 한다.
-#  · 순수 코어 자산 = max(기준시드, 가용현금 + 본·서브 투입원가 − 예비수혈금)  (sniper_plugin 매수 게이트의 core_equity · 사무실 vNEXT: 골든/지하층 제외)
+#  · 순수 코어 자산 = max(기준시드, 가용현금 + 본·서브 투입원가 − 예비수혈금)  (sniper_plugin 매수 게이트의 core_equity · 사무실 v1.2.7: 골든/지하층 제외)
 #  · 본 1회분 = quant_engine.compute_golden8_quota_qty (8% · Case 67 이중 캡핑) / 서브 1회분 = compute_sub4_quota_qty (4%)
 #  · 매수 주수 = quant_engine.resolve_affordable_buy_qty (예산 상한 → 현금 → 매수가×(1+왕복 수수료))
 #  · 왕복 수수료 = quant_engine.resolve_effective_round_trip_fee_rate_pct (원장 round_trip_fee_rate_pct → us_commission_rate×200 → 상수)
@@ -638,7 +638,7 @@ def sniper_core(led, consts):
     free = max(0.0, num(led.get("free_cash_usd")))
     inj = max(0.0, num(led.get("injected_reserve_usd")))
     main_b, sub_b = _sniper_buckets(led.get("buckets")), _sniper_buckets(led.get("sub_buckets"))
-    invested = sum(b["cost"] for b in main_b) + sum(b["cost"] for b in sub_b)   # 사무실 vNEXT: 골든/지하층 원가 제외
+    invested = sum(b["cost"] for b in main_b) + sum(b["cost"] for b in sub_b)   # 사무실 v1.2.7: 골든/지하층 원가 제외
     core = max(seed, free + invested - inj)   # sniper_plugin.execute_seed_protected_buy_gate_plugin 의 core_equity
     return {"seed": seed, "free": free, "inj": inj, "main": main_b, "sub": sub_b,
             "core": round(core, 4), "fee": sniper_fee(led, consts),
@@ -1144,7 +1144,7 @@ def section_dollar_check(now=None, info=None):
             _keep(warn, f"⚠️ 2번 예비수혈: 시드 고갈 때 토스 계좌 여유 달러를 최대 {max_res - used}회분 더 씀"
                          f" (사용 {used}/{max_res} · 누적 ${num(led.get('injected_reserve_usd')):,.2f}, 0주 졸업 때 상환)"
                          " — 2·3번 같은 계좌라 3번 적립용 달러까지 쓸 수 있음 (보유 달러는 한 번만 뺌)")
-    # 사무실 vNEXT: 지하층(옛 골든포켓 보관분) 참고 1줄 — 원장에 있을 때만. 필요 달러·코어 자산·보유 차감에 넣지 않음.
+    # 사무실 v1.2.7: 지하층(옛 골든포켓 보관분) 참고 1줄 — 원장에 있을 때만. 필요 달러·코어 자산·보유 차감에 넣지 않음.
     bp = led.get("basement_pocket") if isinstance(led, dict) and isinstance(led.get("basement_pocket"), dict) else {}
     if _int(bp.get("qty")) > 0 and num(bp.get("actual_cost_usd")) > 0:
         _keep(state, f"🏚️ 2번 지하층(참고): {_int(bp.get('qty'))}주 · 비용 ${num(bp.get('actual_cost_usd')):,.2f}"

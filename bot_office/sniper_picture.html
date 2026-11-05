@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 vNEXT: 지하층 카드로 교체) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
 <!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
@@ -200,7 +200,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     left.appendChild(el('div','big '+cls(r.cumulative_net_usd),sg(r.cumulative_net_usd)));
     left.appendChild(el('div','line','매도 '+r.sell_events+'회 (이익 '+r.win_events+')'));
     left.appendChild(el('div','line','매도한 주식 '+r.sold_shares+'주'));
-    // 사무실 vNEXT: 골든 폐기 → 상단 보유 줄은 본·서브만 (지하층은 아래 지하층 카드에만)
+    // 사무실 v1.2.7: 골든 폐기 → 상단 보유 줄은 본·서브만 (지하층은 아래 지하층 카드에만)
     function shareLine(h){return '본 '+h.shares+'주 · 서브 '+(h.sub_shares||0)+'주'}
     var right=el('div','col');
     right.appendChild(el('div','sm','지금 보유 · 수익률'));
@@ -221,7 +221,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     draw(d);drawSub(d);
     var rw=$('reservewarn');
     if(d.reserve&&d.reserve.injected_usd>0){rw.hidden=false;rw.textContent='⚠️ 예비수혈 사용 중: '+usd(d.reserve.injected_usd)+' ('+d.reserve.used_portions+'회분) · 남은 회분 '+d.reserve.avail_portions+'/'+d.reserve.max_portions+' — 2번 수혈은 3번 적립 달러까지 쓸 수 있어요';}else rw.hidden=true;
-    // 사무실 vNEXT: 지하층 카드 — 지하층이 있을 때만. 손익은 현재가를 알 때만, 모르면 '—'.
+    // 사무실 v1.2.7: 지하층 카드 — 지하층이 있을 때만. 손익은 현재가를 알 때만, 모르면 '—'.
     var bc=$('basementcard'),bm=d.basement;
     if(bm&&bm.qty>0){bc.hidden=false;
       var pl=(bm.pnl_usd!=null&&bm.pnl_pct!=null)?(sg(bm.pnl_usd)+' ('+(bm.pnl_pct>=0?'+':'')+bm.pnl_pct.toFixed(2)+'%)'):'—';
