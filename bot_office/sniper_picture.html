@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체 · 사무실 vNEXT: 층 영역 지하층 줄(황금 칸)·상단 지하 주수) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
 <!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
@@ -33,6 +33,11 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
 .bar{display:flex;height:16px;border:2px solid #1f3530;border-radius:6px;overflow:hidden;background:#fff}
 .cell{flex:none;background:#fff;border-right:1px solid #1f3530}
 .cell:last-child{border-right:0}
+/* 사무실 vNEXT: 지하층 줄 (예전 골든 줄 방식 · 황금색 · 1칸=10주) */
+.brow{border-top:1px solid var(--line);padding:3px 0}.bline{font-size:12.5px;font-weight:700;margin:0 2px 2px}
+.bbar{display:flex;height:16px;width:max-content;max-width:100%;border:2px solid #8a6a1a;border-radius:6px;overflow:hidden;background:#e3b04f}
+.bcell{flex:none;width:18px;background:#e3b04f;border-right:1px solid #8a6a1a}.bcell:last-child{border-right:0}
+.bsub{font-size:12px;color:var(--muted);margin:2px 2px 0;overflow-wrap:anywhere}
 .prices{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:0}
 .lp{font-size:11.5px;color:var(--muted);margin:1px 2px 0;overflow-wrap:anywhere}
 .lp.ok{color:var(--ok);font-weight:650}.lp.lk{color:var(--warn)}
@@ -52,6 +57,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     <div class="legend"><span>바 길이 = 주수 · 위층일수록 오른쪽 시작</span><span>● 산 가격</span><span>▶ 1층 목표 +1.5%</span><span>◆ 개별 목표 +1.0%</span><span>■ 통합이평 +1.0%</span><span>✓ 도달 · 🔒 잠김</span></div>
     <div id="pic" aria-label="층별 가격 그림"></div>
     <div id="wma" aria-label="통합이평"></div>
+    <div id="basementrow" aria-label="지하층"></div>
   </div>
   <div class="card" id="subcard">
     <div class="legend"><span>서브 그리드 (4% 정량 · 최대 4회분 · 본 그리드와 따로)</span></div>
@@ -134,6 +140,22 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     });
   }
 
+  // 사무실 vNEXT: 지하층 줄 — 지하층 데이터가 있을 때만 (없으면 비움). 1칸=10주, 반올림, 최소 1칸: 80→8, 85→9, 84→8, 73→7, 4→1.
+  // 칸이 틀보다 넓으면 칸 너비만 줄인다(18px→최소 4px). 본 층·통합이평·서브와 섞지 않는다. 손익은 현재가를 알 때만, 모르면 '—'.
+  function basementCells(q){return q>0?Math.max(1,Math.round(q/10)):0}
+  function drawBasement(d){
+    var box=$('basementrow');box.textContent='';
+    var b=d.basement;if(!(b&&b.qty>0))return;
+    var w=el('div','brow');
+    w.appendChild(el('div','bline','🏚️ 지하 '+b.qty+'주'));
+    var n=basementCells(b.qty),avail=Math.max(60,(box.clientWidth||400)-8),cw=Math.max(4,Math.min(18,Math.floor(avail/n)));
+    var bar=el('div','bbar');for(var i=0;i<n;i++){var c=el('div','bcell');c.style.width=cw+'px';bar.appendChild(c)}
+    w.appendChild(bar);
+    var pl=(b.pnl_usd!=null&&b.pnl_pct!=null)?(sg(b.pnl_usd)+' ('+(b.pnl_pct>=0?'+':'')+b.pnl_pct.toFixed(2)+'%)'):'—';
+    var tp=(b.target_pct!=null?' (+'+b.target_pct.toFixed(1)+'%)':'');
+    w.appendChild(el('div','bsub','매수 '+usd(b.price)+' → 목표 '+usd(b.target_price)+tp+' · 손익 '+pl));
+    box.appendChild(w);
+  }
   function drawSub(d){
     var box=$('subpic');box.textContent='';$('subwma').textContent='';$('subnote').textContent='';
     var T=(d.sub_tiers||[]).slice().sort(function(a,b){return b.tier-a.tier}),G=d.sub_targets||[],lp=d.price&&d.price.live;
@@ -200,8 +222,8 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     left.appendChild(el('div','big '+cls(r.cumulative_net_usd),sg(r.cumulative_net_usd)));
     left.appendChild(el('div','line','매도 '+r.sell_events+'회 (이익 '+r.win_events+')'));
     left.appendChild(el('div','line','매도한 주식 '+r.sold_shares+'주'));
-    // 사무실 v1.2.7: 골든 폐기 → 상단 보유 줄은 본·서브만 (지하층은 아래 지하층 카드에만)
-    function shareLine(h){return '본 '+h.shares+'주 · 서브 '+(h.sub_shares||0)+'주'}
+    // 사무실 vNEXT: 지하층이 있으면 '본 N주 · 서브 N주 · 지하 N주 (합계 N주)', 없으면 기존 '본 N주 · 서브 N주' 그대로
+    function shareLine(h){var s='본 '+h.shares+'주 · 서브 '+(h.sub_shares||0)+'주';if((h.basement_shares||0)>0)s+=' · 지하 '+h.basement_shares+'주 (합계 '+h.total_shares+'주)';return s}
     var right=el('div','col');
     right.appendChild(el('div','sm','지금 보유 · 수익률'));
     if((h.total_shares||h.shares)>0&&h.unrealized_pct!=null){
@@ -218,7 +240,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     }
     T2.appendChild(left);T2.appendChild(right);
     drawCycle(d);
-    draw(d);drawSub(d);
+    draw(d);drawBasement(d);drawSub(d);
     var rw=$('reservewarn');
     if(d.reserve&&d.reserve.injected_usd>0){rw.hidden=false;rw.textContent='⚠️ 예비수혈 사용 중: '+usd(d.reserve.injected_usd)+' ('+d.reserve.used_portions+'회분) · 남은 회분 '+d.reserve.avail_portions+'/'+d.reserve.max_portions+' — 2번 수혈은 3번 적립 달러까지 쓸 수 있어요';}else rw.hidden=true;
     // 사무실 v1.2.7: 지하층 카드 — 지하층이 있을 때만. 손익은 현재가를 알 때만, 모르면 '—'.
@@ -239,7 +261,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     }).then(function(d){if(d)render(d)}).catch(function(e){var s=$('status');s.className='status err';s.textContent='불러오기 실패: '+e.message+' · 새로고침을 눌러 보세요'});
   }
   $('reload').addEventListener('click',load);
-  window.addEventListener('resize',function(){if(resizeTimer)clearTimeout(resizeTimer);resizeTimer=setTimeout(function(){if(lastData&&lastData.ok){draw(lastData)}},200)});
+  window.addEventListener('resize',function(){if(resizeTimer)clearTimeout(resizeTimer);resizeTimer=setTimeout(function(){if(lastData&&lastData.ok){draw(lastData);drawBasement(lastData)}},200)});
   load();setInterval(load,30000);
 })();
 </script>

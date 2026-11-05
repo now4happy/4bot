@@ -10,6 +10,8 @@
 # 사무실 v1.2.7 (2026-11-05): 스나이퍼 v2.2.0(원작 골든포켓 폐기 + 기존 골든 → 지하층 보관) 대응 —
 #   golden 객체·holding.golden_shares 제거, basement 객체 추가(quant_engine.summarize_basement_pocket 그대로 · 새 계산 없음).
 #   지하층 없으면 basement=None(카드 숨김). 현재가 모르면 손익 None("—"). 지하층은 층 바·상단 보유 합계·평단·미실현에 섞지 않음.
+# 사무실 vNEXT (2026-11-05): 지하층 시각 표시 — holding.basement_shares 추가(지하층 수량>0 이면 그 수량, 아니면 0),
+#   holding.total_shares = 본 + 서브 + 지하층 (주수 합계만). 투자금·평단·미실현은 본·서브만 그대로 (지하층 금액 미포함).
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
 #  · 계산을 새로 만들지 않는다: toss_sniper/quant_engine.py 의 원본 함수를 그대로 부른다.
@@ -282,11 +284,13 @@ def build(state, live_price=None, now_est=None, price_note=""):
                   "overnight_indiv_locked": bool(ev.get("overnight_indiv_locked"))}
 
     held = int(summary.get("held_shares") or 0)
+    # 사무실 vNEXT: 지하층 주수 (basement 데이터 유무로만 결정 · 금액 계산에는 넣지 않음)
+    basement_shares = int(basement["qty"]) if (isinstance(basement, dict) and int(basement.get("qty") or 0) > 0) else 0
     holding = {"shares": held, "tiers_count": len(buckets), "has_active_l1": active_l1,
                "avg_price": round(float(summary.get("actual_avg_price") or 0.0), 4) if held else None,
                "invested_usd": round(float(summary.get("actual_invested_usd") or 0.0), 2) if held else None,
-               "sub_shares": int(summary.get("sub_held_shares") or 0),
-               "total_shares": int(summary.get("held_shares") or 0) + int(summary.get("sub_held_shares") or 0),
+               "sub_shares": int(summary.get("sub_held_shares") or 0), "basement_shares": basement_shares,
+               "total_shares": int(summary.get("held_shares") or 0) + int(summary.get("sub_held_shares") or 0) + basement_shares,
                # 현재가를 모르면 미실현 손익은 계산하지 않는다 (quant_engine 은 모르면 평단으로 대신 계산해 0 이 나옴 → 거짓 0 방지)
                "unrealized_usd": round(float(summary.get("unrealized_pnl_usd") or 0.0), 2) if (held and known) else None,
                "unrealized_pct": round(float(summary.get("unrealized_rate_pct") or 0.0), 2) if (held and known) else None}
