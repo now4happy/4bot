@@ -30,6 +30,7 @@
 | investment_signals | 5대 신호, 지표·뉴스·금리 |
 | muse_product | Muse 자체: 기억·작업 관리·AI 전달·ai-hub |
 | general | 문서·여행·구매·학습·디자인 등 일반 업무 |
+| thought_connection | 생각의 연결 책×앱 프로젝트 |
 
 목록에 없는 프로젝트는 가장 가까운 것을 쓰고 `title`에 프로젝트 이름을 적는다. 새 project_id는 사용자 승인 후에만 이 표에 추가한다.
 
