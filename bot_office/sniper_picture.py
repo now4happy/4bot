@@ -7,6 +7,9 @@
 # 사무실 v1.2.5 (2026-11-04): 상단 카드 보유 줄에 골든포켓 주수 표시 — holding.golden_shares 추가(골든 켜짐·수량>0 일 때만, 아니면 0),
 #   holding.total_shares 에 golden_shares 포함(본+서브+골든). 투자금·평단·미실현 계산은 그대로(이미 quant_engine 에서 본+서브+골든 합계).
 # 사무실 v1.2.6 (2026-11-04): 층 영역 골든 줄용 golden.target_pct 추가 — quant_engine.GOLDEN_POCKET_RISE_PCT 를 그대로 옮김(표시 전용 · 새 계산 없음).
+# 사무실 vNEXT (2026-11-05): 스나이퍼 v2.2.0(원작 골든포켓 폐기 + 기존 골든 → 지하층 보관) 대응 —
+#   golden 객체·holding.golden_shares 제거, basement 객체 추가(quant_engine.summarize_basement_pocket 그대로 · 새 계산 없음).
+#   지하층 없으면 basement=None(카드 숨김). 현재가 모르면 손익 None("—"). 지하층은 층 바·상단 보유 합계·평단·미실현에 섞지 않음.
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
 #  · 계산을 새로 만들지 않는다: toss_sniper/quant_engine.py 의 원본 함수를 그대로 부른다.
@@ -241,15 +244,13 @@ def build(state, live_price=None, now_est=None, price_note=""):
                "max_portions": int(summary.get("max_reserve_portions") or 6),
                "waiting_deposit": bool(summary.get("waiting_reserve_deposit")),
                "required_deposit_usd": round(float(summary.get("required_reserve_deposit_usd") or 0.0), 2)}
-    golden = {"active": bool(summary.get("has_golden_pocket")),
-              "mode": str(summary.get("golden_allin_mode") or "NONE"),
-              "qty": int(summary.get("golden_pocket_qty") or 0),
-              "price": round(float(summary.get("golden_pocket_price") or 0.0), 4),
-              "cost_usd": round(float(summary.get("golden_pocket_cost_usd") or 0.0), 2),
-              "target_price": round(float(summary.get("golden_pocket_target_price") or 0.0), 4),
-              "gain_pct": round(float(summary.get("golden_pocket_gain_pct") or 0.0), 2),
-              # 사무실 v1.2.6: 골든 목표 % (엔진 상수 그대로 · 층 영역 '⭐ N주 · $매수가 → $목표 (+%)' 줄에 씀)
-              "target_pct": round(float(getattr(qe, "GOLDEN_POCKET_RISE_PCT", 1.5)), 2)}
+    # 사무실 vNEXT: 지하층(basement_pocket · 옛 골든포켓 보관분) — 엔진 요약 함수 그대로. 없으면 None (카드 숨김).
+    basement = None
+    if hasattr(qe, "summarize_basement_pocket"):
+        try:
+            basement = qe.summarize_basement_pocket(state, live_price=lp)
+        except Exception:
+            basement = None
 
     # 사무실 v1.2.1 · Case 89 사이클 표시: quant_engine 요약값을 그대로 옮기기만 한다 (새 계산 없음).
     #  · 사이클 필드는 원장(state)에 실제로 있을 때만 쓴다 — v2.1.0 이전 원장이면 요약기가 0 을 채워도 None("—") 으로 둔다.
@@ -281,13 +282,11 @@ def build(state, live_price=None, now_est=None, price_note=""):
                   "overnight_indiv_locked": bool(ev.get("overnight_indiv_locked"))}
 
     held = int(summary.get("held_shares") or 0)
-    # 사무실 v1.2.5: 골든포켓 주수 (원장 기준 · 현재가와 무관). 골든이 꺼져 있거나 수량 0 이면 0 → 기존 본·서브 표시 그대로.
-    golden_shares = golden["qty"] if (golden["active"] and golden["qty"] > 0) else 0
     holding = {"shares": held, "tiers_count": len(buckets), "has_active_l1": active_l1,
                "avg_price": round(float(summary.get("actual_avg_price") or 0.0), 4) if held else None,
                "invested_usd": round(float(summary.get("actual_invested_usd") or 0.0), 2) if held else None,
-               "sub_shares": int(summary.get("sub_held_shares") or 0), "golden_shares": golden_shares,
-               "total_shares": int(summary.get("held_shares") or 0) + int(summary.get("sub_held_shares") or 0) + golden_shares,
+               "sub_shares": int(summary.get("sub_held_shares") or 0),
+               "total_shares": int(summary.get("held_shares") or 0) + int(summary.get("sub_held_shares") or 0),
                # 현재가를 모르면 미실현 손익은 계산하지 않는다 (quant_engine 은 모르면 평단으로 대신 계산해 0 이 나옴 → 거짓 0 방지)
                "unrealized_usd": round(float(summary.get("unrealized_pnl_usd") or 0.0), 2) if (held and known) else None,
                "unrealized_pct": round(float(summary.get("unrealized_rate_pct") or 0.0), 2) if (held and known) else None}
@@ -300,7 +299,7 @@ def build(state, live_price=None, now_est=None, price_note=""):
             "observed_kst": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"), "est_time": now_est.strftime("%m-%d %H:%M ET"),
             "session": sess, "is_active": bool(state.get("is_active", True)),
             "price": {"live": round(lp, 4) if known else None, "note": "" if known else (price_note or "no_snapshot")},
-            "tiers": tiers, "targets": targets, "sub_tiers": sub_tiers, "sub_targets": sub_targets, "sub": sub_status, "reserve": reserve, "golden": golden, "cycle": cycle, "holding": holding, "realized": realized, "engine": engine,
+            "tiers": tiers, "targets": targets, "sub_tiers": sub_tiers, "sub_targets": sub_targets, "sub": sub_status, "reserve": reserve, "basement": basement, "cycle": cycle, "holding": holding, "realized": realized, "engine": engine,
             "fx": {"krw_per_usd": None, "note": "환율 미확인 · 달러만 표시"}}
 
 

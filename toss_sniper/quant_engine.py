@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine.py (원작 quant_engine_core.py + 원작 quant_engine.py 병합)
+# 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 1 / 2 (Step 04 / 13)
 역할:
 1) 전역 퀀트 상수 락온 (본 그리드 8% 황금비율 · 7-Layer 골디락스 그리드 · DEFAULT_GRID_MERGE_MODE = "L2_L7_MERGE_SORT" [Case 87] ·
    🛡️ 스위치 없는 100% 기본 상시 적용[Default ON] 3-Layer 서브 그리드 4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 상한 캡 · SUB_L1_L3_MERGE [Case 88] ·
-   STEP2X_15PCT_C20 · GUARD30 예비수혈[실계좌 30% 가드 이상 시 미할당 여유달러 즉시 수혈 Case 89] · 황금시간 전액매수 기본값 NONE[OFF] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
+   STEP2X_15PCT_C20 · GUARD30 예비수혈[실계좌 30% 가드 이상 시 미할당 여유달러 즉시 수혈 Case 89] · Case 84 15:30 0주 신규진입 및 1층 공석 돌파추격 차단)
 2) 계좌별 미국 주식 매매 수수료율(GET /api/v1/commissions : 편도 0.07% -> 왕복 0.14% / 편도 0.10% -> 왕복 0.20%) 런타임 동적 동기화 브릿지 탑재 (Case 86)
-3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket, GoldenAllInPocket) ·
+3) 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (StratumBucket) ·
    본 그리드 상단(7층 초과 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치 L2_L7_MERGE_SORT · Case 87) 번호 정규화·합병기(relabel_upper_grid_tiers) 및
    서브 그리드 상단(3층 초과 시 서브 구 1층 + 구 3층 양끝 가중평균 통합 후 오름차순 재배치 SUB_L1_L3_MERGE · Case 88) 번호 정규화·합병기(relabel_sub_upper_grid_tiers)
-4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88) ·
-   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88) 및
-   황금시간대(07:00 ~ 07:50 EST & 1분봉 Wilder RSI(14) <= 19.0) 가용현금 100% 전액매수 판정기(Case 80)
+4) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량 산출기(min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑 Case 67, Case 88) 및
+   본 그리드 0.5회분(4.0%) 보호예수금 차감 서브 가용 유휴 현금 산출기(compute_sub_grid_available_idle_cash · Case 88)
 5) 30% 자투리 1주 승격 방지 가드(GUARD30) & 토스 실계좌 주문가능금액이 30% 가드 이상일 때 미할당 여유자금 즉시 온디맨드 예비시드 자동 수혈 판정기(Case 77, Case 89) 및
    0주 전량 졸업 시 예비시드 원금 자동 상환 연산기(Case 77)
 6) 사이클 최고 도달 회차(eff_lots = max(held_lots, cycle_ratchet_max_lots)) 잠금 기반 4단 와이드 점진 활주로(1~4회 -1.0% / 5~8회 -2.0% / 9~10회 -3.5% / 11회+ -5.5% · Case 87, Case 88) ·
@@ -65,7 +65,7 @@ DEFAULT_GRID_MERGE_MODE: str = str(
     getattr(toss_api, "DEFAULT_GRID_MERGE_MODE", "L2_L7_MERGE_SORT")
 )
 
-# NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
+# [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 상수 락온]
 SUB_GRID_DEFAULT_ENABLED: bool = bool(
     getattr(toss_api, "SUB_GRID_DEFAULT_ENABLED", True)
 )
@@ -135,31 +135,6 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = float(
     getattr(toss_api, "RESERVE_DEPOSIT_TOLERANCE_RATIO", 0.95)
 )
 
-# [Case 80]: 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI(14) <= 19.0) 가용현금 100% 전액 추가매수 상수
-# 사용자 지시에 따라 기본값은 반드시 "NONE" (OFF) 으로 고정!
-GOLDEN_ALLIN_MODES: Tuple[str, ...] = tuple(
-    getattr(
-        toss_api,
-        "GOLDEN_ALLIN_MODES",
-        ("NONE", "POCKET_ALLIN", "GRID_L1_ALLIN"),
-    )
-)
-DEFAULT_GOLDEN_ALLIN_MODE: str = str(
-    getattr(toss_api, "DEFAULT_GOLDEN_ALLIN_MODE", "NONE")
-)
-GOLDEN_WINDOW_START_HM: int = int(
-    getattr(toss_api, "GOLDEN_WINDOW_START_HM", 700)
-)
-GOLDEN_WINDOW_END_HM: int = int(
-    getattr(toss_api, "GOLDEN_WINDOW_END_HM", 750)
-)
-GOLDEN_RSI_MAX_THRESHOLD: float = float(
-    getattr(toss_api, "GOLDEN_RSI_MAX_THRESHOLD", 19.0)
-)
-GOLDEN_POCKET_RISE_PCT: float = float(
-    getattr(toss_api, "GOLDEN_POCKET_RISE_PCT", 1.50)
-)
-
 
 # ---------------------------------------------------------------------------
 # [핵심 0 · Case 86] 계좌별 미국 주식 수수료율 런타임 조회/갱신 브릿지
@@ -224,21 +199,8 @@ def resolve_effective_round_trip_fee_rate_pct(
     return get_runtime_round_trip_fee_rate_pct()
 
 
-def get_golden_allin_mode_label(mode: str) -> str:
-    """
-    # [Case 80 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 모드 한글 상태 라벨]:
-    전술 제어반(/settlement), 레이더(/avwap), 지시서(/sync)에서 표출할 직관적인 모드명을 반환한다.
-    """
-    m = str(mode or DEFAULT_GOLDEN_ALLIN_MODE).upper().strip()
-    if m == "POCKET_ALLIN":
-        return "🌟 독립 골든포켓 100% (ON·권장)"
-    if m == "GRID_L1_ALLIN":
-        return "🔥 7층 그리드 1층편입 100% (ON)"
-    return "⚪ 사용 안 함 (OFF·기본챔피언)"
-
-
 # ---------------------------------------------------------------------------
-# [핵심 1] StratumBucket & GoldenAllInPocket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 88)
+# [핵심 1] StratumBucket : 순수 실물 매수 원가(book_price == actual_avg_price) 구조체 (Case 46 ~ 88)
 # ---------------------------------------------------------------------------
 @dataclass
 class StratumBucket:
@@ -317,126 +279,6 @@ class StratumBucket:
             lot_count=l_cnt,
             lot_type=l_type,
         )
-
-
-@dataclass
-class GoldenAllInPocket:
-    """
-    # [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 독립 골든포켓 분리회계 구조체]:
-    7층 본 그리드(buckets) 및 3층 서브 그리드(sub_buckets)의 층수·회차·기억저가를 전혀 오염시키지 않고 독립 관리되는
-    가용시드 100% 전액매수 전용 포켓 (목표 익절률 +1.50% 고정).
-    """
-
-    qty: int = 0
-    book_price: float = 0.0
-    book_invested_usd: float = 0.0
-    actual_cost_usd: float = 0.0
-    entry_ts: float = 0.0
-    order_date: str = ""
-
-    @property
-    def is_active(self) -> bool:
-        return bool(self.qty > 0 and self.actual_cost_usd > 0.0)
-
-    @property
-    def actual_avg_price(self) -> float:
-        if self.qty <= 0:
-            return 0.0
-        return round(self.actual_cost_usd / float(self.qty), 4)
-
-    def target_sell_price(
-        self, rise_pct: float = GOLDEN_POCKET_RISE_PCT
-    ) -> float:
-        if not self.is_active:
-            return 0.0
-        pure_p = self.actual_avg_price
-        return round(
-            math.ceil((pure_p * (1.0 + rise_pct / 100.0) - 1e-9) * 100.0)
-            / 100.0,
-            2,
-        )
-
-    def to_dict(self) -> Dict[str, Any]:
-        if self.qty <= 0:
-            return {
-                "qty": 0,
-                "book_price": 0.0,
-                "book_invested_usd": 0.0,
-                "actual_cost_usd": 0.0,
-                "entry_ts": 0.0,
-                "order_date": "",
-            }
-        q_int = max(1, safe_int(self.qty, 1))
-        a_cost = round(
-            max(
-                0.01 * float(q_int),
-                safe_float(
-                    self.actual_cost_usd,
-                    float(q_int) * safe_float(self.book_price, 0.01),
-                ),
-            ),
-            4,
-        )
-        pure_p = round(max(0.01, a_cost / float(q_int)), 4)
-        return {
-            "qty": q_int,
-            "book_price": pure_p,
-            "book_invested_usd": a_cost,
-            "actual_cost_usd": a_cost,
-            "entry_ts": round(max(0.0, safe_float(self.entry_ts, 0.0)), 4),
-            "order_date": str(self.order_date or "").strip(),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Any) -> "GoldenAllInPocket":
-        if isinstance(data, GoldenAllInPocket):
-            return cls.from_dict(data.to_dict())
-        if not isinstance(data, dict):
-            return cls()
-        q_int = safe_int(data.get("qty"), 0)
-        if q_int <= 0:
-            return cls()
-        raw_p = safe_float(
-            data.get("book_price"), safe_float(data.get("buy_price"), 0.0)
-        )
-        raw_bi = safe_float(
-            data.get("book_invested_usd"), float(q_int) * max(0.0, raw_p)
-        )
-        a_cost = safe_float(data.get("actual_cost_usd"), raw_bi)
-        if a_cost <= 0.0 and raw_p > 0.0:
-            a_cost = float(q_int) * raw_p
-        if a_cost <= 0.0:
-            return cls()
-        clean_cost = round(max(0.01 * float(q_int), a_cost), 4)
-        pure_p = round(max(0.01, clean_cost / float(q_int)), 4)
-        return cls(
-            qty=q_int,
-            book_price=pure_p,
-            book_invested_usd=clean_cost,
-            actual_cost_usd=clean_cost,
-            entry_ts=round(max(0.0, safe_float(data.get("entry_ts"), 0.0)), 4),
-            order_date=str(data.get("order_date") or "").strip(),
-        )
-
-
-def pocket_from_dict(raw_data: Any) -> GoldenAllInPocket:
-    return GoldenAllInPocket.from_dict(raw_data)
-
-
-def pocket_to_dict(pocket: Any) -> Dict[str, Any]:
-    if isinstance(pocket, GoldenAllInPocket):
-        return pocket.to_dict()
-    return GoldenAllInPocket.from_dict(pocket).to_dict()
-
-
-def has_active_golden_pocket(pocket_or_state: Any) -> bool:
-    if isinstance(pocket_or_state, GoldenAllInPocket):
-        return pocket_or_state.is_active
-    if isinstance(pocket_or_state, dict) and "golden_pocket" in pocket_or_state:
-        return GoldenAllInPocket.from_dict(
-            pocket_or_state.get("golden_pocket")
-        ).is_active
-    return GoldenAllInPocket.from_dict(pocket_or_state).is_active
 
 
 def buckets_from_dicts(
@@ -599,7 +441,7 @@ def relabel_sub_upper_grid_tiers_with_flag(
     merge_mode: str = SUB_MERGE_MODE_L1_L3,
 ) -> Tuple[List[StratumBucket], bool]:
     """
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 초과(4층 발생) 시 서브 구 1층 + 구 3층 양끝 합병(SUB_L1_L3_MERGE) 및 오름차순 재배치]:
     """
     valid = [
         b
@@ -725,7 +567,7 @@ def enforce_true_breakeven_floor_on_buckets(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · 100% 전액매수 주수 · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 80, 86, 88, 89)
+# [핵심 2] 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 정량 주수 · 유휴현금(0.5회분 보호예수) · GUARD30 판정 · 온디맨드 수혈/상환기 (🎯 1 & Case 25 ~ 35, 67, 77, 86, 88, 89)
 # ---------------------------------------------------------------------------
 def compute_golden8_quota_qty(
     anchor_price: float,
@@ -782,7 +624,7 @@ def compute_sub4_quota_qty(
     exec_price: Optional[float] = None,
 ) -> Tuple[int, float]:
     """
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기]:
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 전용 4.0%(25분할) 정량 주수 산출기]:
     순수 코어 총자산(current_core_equity)의 4.0%를 서브 1회분 예산(sub_portion_budget)으로 산출하고
     min(서브 1회분 예산 상한 주수, 서브 기준가 고정 정량) 이중 캡핑(Case 67)을 적용하여 반환한다.
     """
@@ -803,7 +645,7 @@ def compute_sub_grid_available_idle_cash(
     reserve_main_portions: float = SUB_RESERVE_MAIN_PORTIONS,
 ) -> Dict[str, Any]:
     """
-    # NEW [Case 88 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기]:
+    # [Case 88 : 본 그리드 보호예수금 0.5회분(4.0%) 차감 후 서브 그리드 가용 유휴 현금(avail_idle_cash_usd) 산출기]:
     """
     f_cash = max(0.0, safe_float(free_cash_usd, 0.0))
     c_eq = max(
@@ -884,146 +726,6 @@ def resolve_affordable_buy_qty(
         round(float(buy_qty) * exec_p, 4) if buy_qty > 0 else 0.0
     )
     return buy_qty, actual_spent_usd
-
-
-def resolve_allin_affordable_buy_qty(
-    price_t: float,
-    free_cash_usd: float,
-    broker_buying_power_usd: Optional[float] = None,
-    round_trip_fee_rate_pct: Optional[float] = None,
-) -> Tuple[int, float]:
-    """
-    # [Case 80 & Case 86 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 가용 현금 시드 100% 전액 매수 주수 산출기]:
-    """
-    exec_p = safe_float(price_t, 0.0)
-    if exec_p <= 0.0:
-        return 0, 0.0
-
-    avail_cash = max(0.0, safe_float(free_cash_usd, 0.0))
-    if broker_buying_power_usd is not None:
-        bp_val = safe_float(broker_buying_power_usd, 0.0)
-        if bp_val > 0.0:
-            avail_cash = min(avail_cash, bp_val)
-
-    eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(
-        round_trip_fee_rate_pct
-    )
-    fee_mult = 1.0 + (eff_rt_pct / 100.0)
-    unit_cost_with_fee = exec_p * fee_mult
-    if avail_cash < unit_cost_with_fee:
-        return 0, 0.0
-
-    allin_qty = max(
-        0, int(math.floor((avail_cash + 1e-9) / unit_cost_with_fee))
-    )
-    actual_spent_usd = (
-        round(float(allin_qty) * exec_p, 4) if allin_qty > 0 else 0.0
-    )
-    return allin_qty, actual_spent_usd
-
-
-def evaluate_golden_allin_signal(
-    hm: int,
-    rsi_14: float,
-    live_price: float,
-    golden_allin_mode: str = DEFAULT_GOLDEN_ALLIN_MODE,
-    today_str: str = "",
-    last_golden_allin_date: str = "",
-    golden_pocket: Optional[Any] = None,
-    rsi_ready: bool = True,
-) -> Dict[str, Any]:
-    """
-    # [Case 80 : 미동부 프리장 황금시간대(07:00 ~ 07:50 EST) & RSI(14) <= 19.0 가용시드 100% 전액 추가매수 판정기]:
-    """
-    mode = str(golden_allin_mode or DEFAULT_GOLDEN_ALLIN_MODE).upper().strip()
-    if mode not in GOLDEN_ALLIN_MODES:
-        mode = DEFAULT_GOLDEN_ALLIN_MODE
-
-    hm_int = safe_int(hm, 0)
-    rsi_val = round(safe_float(rsi_14, 50.0), 2)
-    lp = safe_float(live_price, 0.0)
-    in_window = bool(GOLDEN_WINDOW_START_HM <= hm_int <= GOLDEN_WINDOW_END_HM)
-    gp = pocket_from_dict(golden_pocket)
-    lot_tag = "GOLDEN_POCKET" if mode == "POCKET_ALLIN" else "GOLDEN_L1"
-
-    if mode == "NONE":
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": "",
-            "reason": "MODE_OFF",
-            "in_window": in_window,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if not in_window:
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "OUTSIDE_GOLDEN_WINDOW",
-            "in_window": False,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if (
-        today_str
-        and str(last_golden_allin_date or "").strip() == str(today_str).strip()
-    ):
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "ALREADY_EXECUTED_TODAY",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if mode == "POCKET_ALLIN" and gp.is_active:
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "GOLDEN_POCKET_ALREADY_HELD",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if lp <= 0.0 or not rsi_ready or rsi_val <= 0.0:
-        return {
-            "should_buy": False,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": "RSI_OR_PRICE_NOT_READY",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    if rsi_val <= GOLDEN_RSI_MAX_THRESHOLD:
-        return {
-            "should_buy": True,
-            "mode": mode,
-            "lot_type": lot_tag,
-            "reason": f"GOLDEN_{mode}_RSI_{rsi_val:.1f}",
-            "in_window": True,
-            "rsi_14": rsi_val,
-            "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-        }
-
-    return {
-        "should_buy": False,
-        "mode": mode,
-        "lot_type": lot_tag,
-        "reason": "HOLD_RSI_ABOVE_19",
-        "in_window": True,
-        "rsi_14": rsi_val,
-        "rsi_threshold": GOLDEN_RSI_MAX_THRESHOLD,
-    }
 def evaluate_guard30_and_reserve_injection(
     free_cash_usd: float,
     broker_bp_usd: Optional[float],
@@ -1112,7 +814,7 @@ def evaluate_guard30_and_reserve_injection(
     )
     required_inj_usd = round(float(needed_portions) * p_bud, 4)
 
-    # MODIFIED [Case 89 : 토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고 미할당 여유 달러로 가드 충족 시 즉시 수혈 승인]
+    # [Case 89 : 토스 실계좌 주문가능금액(eff_bp)이 30% 가드(min_req_cash) 이상이고 미할당 여유 달러로 가드 충족 시 즉시 수혈 승인]
     if (
         rem_portions >= needed_portions
         and eff_bp >= min_req_cash
@@ -1591,7 +1293,7 @@ def evaluate_sub_grid_dip_signal(
     unlock_drop_pct: float = SUB_UNLOCK_DROP_FROM_L1_PCT,
 ) -> Dict[str, Any]:
     """
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 10분 게이트 추매 & 최대 4회분(16%) 상한 캡 & 10영업일/-10% 저가 해금 판정기]:
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 3층 서브 그리드 10분 게이트 추매 & 최대 4회분(16%) 상한 캡 & 10영업일/-10% 저가 해금 판정기]:
     """
     valid = [
         sb
@@ -1744,19 +1446,19 @@ def evaluate_sub_grid_dip_signal(
 # ======================================================================
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: quant_engine.py
+# MODIFIED: quant_engine.py (황금시간 07:00~07:50 RSI<=19 올인 재익스포트·포켓매칭·다중익절·요약·TDD 전면 영구 소각)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 퀀트 엔진 코어 Part 2 / 2 (Step 05 / 13)
 역할:
 1) quant_engine_core.py (Part 1 / 2) 의 모든 상수(DEFAULT_GRID_MERGE_MODE · Case 88 서브 그리드 상수 포함)·구조체·정량/수혈/스텝업/서브해금/컷오프/동적수수료 판정 심볼
    명시적 재익스포트(Facade Re-export)로 타 모듈 AST 임포트 호환성 100% 보장
 2) 본 그리드 1층 ~ 7층 골디락스 순수 멀티 그리드 배치 및 병합기(vrev_add_quota_lot_and_merge_2tier :
    REENTRY_1FL 독립 1층 배치 / TOPUP_1FL 기존 1층 무승격 원자적 합산[Case 78] /
-   DIP_1FL·GOLDEN_L1 7층 이하 개별 승격 및 7층 초과[8층 발생] 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치[L2_L7_MERGE_SORT · Case 53, 72, 87] /
+   DIP_1FL 7층 이하 개별 승격 및 7층 초과[8층 발생] 시 구 1층[새 2층 후보] 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치[L2_L7_MERGE_SORT · Case 53, 72, 87] /
    수동 추가매수 시 단가 비교 오름차순 층간 스마트 중간 편입[Case 63]) 및
    🛡️ Default-ON 3층 서브 그리드 배치 및 양끝 합병기(add_lot_to_sub_grid_with_flag / add_lot_to_sub_grid :
    SUB_REENTRY_1FL 독립 서브 1층 배치 / SUB_TOPUP_1FL 기존 서브 1층 무승격 합산[Case 78] /
    SUB_DIP_1FL 3층 이하 개별 승격 및 3층 초과[4층 발생] 시 서브 구 1층 + 구 3층 양끝 합병 후 오름차순 재배치[SUB_L1_L3_MERGE · Case 88])
-3) 수동 매도 시 독립 골든포켓 · 3층 서브 그리드 · 7층 본 그리드 최하단 저가 지층 순차 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 80, 87, 88) 및
+3) 수동 매도 시 3층 서브 그리드 · 7층 본 그리드 최하단 저가 지층 순차 1:1 매칭 정산기(match_and_remove_sold_buckets_7tier · Case 63, 69, 87, 88) 및
    계좌별 동적 왕복 수수료율(0.14% / 0.20%) · 실측 매도 수수료(execution.commission + tax) 반영 세후 실현손익 산출기(calc_sell_realized_pnl · Case 86)
 4) 본 그리드 상단 2층 ~ 7층 순수 통합 이동평균(compute_upper_2_to_7_moving_avg : 1층 단가 100% 배제) 및 서브 그리드 상단 2층 ~ 3층 순수 통합 이동평균(compute_sub_upper_2_to_3_moving_avg · Case 88) 산출 ·
    🚨 [Case 83 방안 C & Case 88 & 상단 순수 통합이평 +1.00% 도달 시 1층 무조건 동시 포함 전량 졸업] 오버나이트(애프터·데이마켓, is_overnight_session=True) 중 상단층 보유 시
@@ -1782,7 +1484,7 @@ logger = logging.getLogger("toss_sniper.quant_engine")
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4 · Case 63, Case 71 ~ 88] 본 그리드 1층 ~ 7층(L2_L7_MERGE_SORT) & 서브 그리드 1층 ~ 3층(SUB_L1_L3_MERGE) 배치 · 매도 층/포켓 원가 매칭 정산기
+# [핵심 4 · Case 63, Case 71 ~ 88] 본 그리드 1층 ~ 7층(L2_L7_MERGE_SORT) & 서브 그리드 1층 ~ 3층(SUB_L1_L3_MERGE) 배치 · 매도 층 원가 매칭 정산기
 # ---------------------------------------------------------------------------
 def vrev_add_quota_lot_and_merge_2tier(
     queue: Sequence[StratumBucket],
@@ -1795,8 +1497,8 @@ def vrev_add_quota_lot_and_merge_2tier(
 ) -> List[StratumBucket]:
     """
     🎯 3 & 🎯 4 & Case 46 ~ 87 (함수명은 타 모듈 AST 호환을 위해 유지하되 내부는 1~7층 골디락스 L2_L7_MERGE_SORT 멀티 그리드로 작동):
-    신규 정량 매수(또는 GRID_L1_ALLIN 모드 1층 전액편입 GOLDEN_L1) 체결 시
-    최대 7개 지층(1층 공격수 + 2~7층 상단 완충/합병 그리드 · 8층 발생 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치)을 관리한다.
+    신규 정량 매수 체결 시 최대 7개 지층(1층 공격수 + 2~7층 상단 완충/합병 그리드 ·
+    8층 발생 시 구 1층 보존 + 구 2층 + 구 7층 통합 후 평단 오름차순 중간층 재배치)을 관리한다.
     """
     q_int = max(1, safe_int(buy_qty, 1))
     p_val = round(max(0.0001, safe_float(buy_price, 0.01)), 4)
@@ -1834,11 +1536,10 @@ def vrev_add_quota_lot_and_merge_2tier(
         str(merge_mode or DEFAULT_GRID_MERGE_MODE).upper().strip()
     )
 
-    # 🚨 Case 59, Case 71, Case 72, Case 73 & Case 80: 상단 그리드(2층 ~ 7층)만 보유 중(1층 공석) REENTRY_1FL / GOLDEN_L1 유입 시 상단 비병합 독립 1층 배치!
+    # 🚨 Case 59, Case 71, Case 72 & Case 73: 상단 그리드(2층 ~ 7층)만 보유 중(1층 공석) REENTRY_1FL 유입 시 상단 비병합 독립 1층 배치!
     if not has_active_l1_bucket(existing) and tag in (
         "REENTRY_1FL",
         "TOPUP_1FL",
-        "GOLDEN_L1",
     ):
         preserved_uppers = relabel_upper_grid_tiers(
             existing, max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
@@ -1891,7 +1592,7 @@ def vrev_add_quota_lot_and_merge_2tier(
         return [new_l1, merged_l2]
 
     # 🚨 [Case 63, Case 72 & Case 87 : 단가 비교 오름차순(저가 1층 ➔ 고가 7층) 층간 중간 편입]
-    if tag != "GOLDEN_L1" and pure_p > existing[0].book_price + 1e-6:
+    if pure_p > existing[0].book_price + 1e-6:
         combined = list(existing) + [new_l1]
         combined.sort(key=lambda b: round(b.book_price, 4))
         lowest_b = combined[0]
@@ -1925,7 +1626,7 @@ def add_lot_to_sub_grid_with_flag(
     merge_mode: str = SUB_MERGE_MODE_L1_L3,
 ) -> Tuple[List[StratumBucket], bool]:
     """
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 배치 및 양끝 합병기]:
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드 배치 및 양끝 합병기]:
     1) 서브 0주 첫 진입 시 단일 서브 1층([new_sub_l1], False) 생성.
     2) 서브 상단(2~3층)만 보유 중(서브 1층 공석) SUB_REENTRY_1FL / SUB_TOPUP_1FL 유입 시 상단 비병합 독립 서브 1층 배치.
     3) 서브 활성 1층 보유 중 미체결 잔량 보충(SUB_TOPUP_1FL) 유입 시 지층 승격이나 회차 증가 없이 기존 서브 1층에 원자적 가중평균 합산(Case 78).
@@ -2066,7 +1767,6 @@ def match_and_remove_sold_buckets_7tier(
     delta_remove_qty: int,
     sell_exec_price: float = 0.0,
     max_tiers: int = MAX_GRID_TIERS_7,
-    golden_pocket: Optional[Any] = None,
     round_trip_fee_rate_pct: Optional[float] = None,
     actual_sell_fee_usd: Optional[float] = None,
     merge_mode: str = DEFAULT_GRID_MERGE_MODE,
@@ -2075,11 +1775,11 @@ def match_and_remove_sold_buckets_7tier(
     sub_merge_mode: str = SUB_MERGE_MODE_L1_L3,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 63, Case 69, Case 71, Case 72, Case 80, Case 86, Case 87 & Case 88 최하단 저가 지층 순차 매칭 정산기]:
+    # MODIFIED [Case 63, Case 69, Case 71, Case 72, Case 86, Case 87 & Case 88 최하단 저가 지층 순차 매칭 정산기]:
     수동 매도(전량 또는 부분 매도)로 보유 수량이 delta_remove_qty 만큼 줄었을 때:
-    1) 차감 수량(rem_to_cut)이 독립 골든포켓(golden_pocket), 서브 그리드(sub_buckets), 본 그리드(buckets)의
+    1) 차감 수량(rem_to_cut)이 서브 그리드(sub_buckets) 또는 본 그리드(buckets)의
        단독 보유 수량과 정확히 일치하면 해당 레이어를 1:1 우선 차감한다.
-    2) 복합 수량 차감 시에는 매 스텝마다 잔존 (rem_gp, sub_queue[0], main_queue[0]) 후보 중
+    2) 복합 수량 차감 시에는 매 스텝마다 잔존 (sub_queue[0], main_queue[0]) 후보 중
        매수 단가(book_price)가 가장 낮은 최하단 저가 지층부터 순차적으로 차감하여,
        본 그리드 고가 상단층이 서브 그리드 저가 1층보다 먼저 차감되는 원가 왜곡 역설을 100% 원천 차단한다!
     3) 실제로 차감된 물량의 고유 순수 매수 원금(sold_actual_cost_usd)과 계좌별 수수료율을 적용하여
@@ -2095,16 +1795,13 @@ def match_and_remove_sold_buckets_7tier(
         for sb in (sub_buckets or [])
         if isinstance(sb, StratumBucket) and sb.qty > 0
     ]
-    gp = pocket_from_dict(golden_pocket)
     rem_to_cut = max(0, safe_int(delta_remove_qty, 0))
     exec_p = round(max(0.0, safe_float(sell_exec_price, 0.0)), 4)
 
-    if (not valid and not valid_sub and not gp.is_active) or rem_to_cut <= 0:
+    if (not valid and not valid_sub) or rem_to_cut <= 0:
         return {
             "rem_buckets": valid,
             "rem_sub_buckets": valid_sub,
-            "rem_golden_pocket": gp.to_dict(),
-            "sold_pocket_qty": 0,
             "sold_sub_qty": 0,
             "sold_sub_cost_usd": 0.0,
             "sold_sub_buckets": [],
@@ -2126,9 +1823,6 @@ def match_and_remove_sold_buckets_7tier(
             ),
         }
 
-    sold_pocket_qty = 0
-    sold_pocket_cost = 0.0
-    rem_gp = pocket_from_dict(gp.to_dict())
     sold_tier_parts: List[str] = []
 
     was_active_l1 = has_active_l1_bucket(valid)
@@ -2147,41 +1841,6 @@ def match_and_remove_sold_buckets_7tier(
     sold_upper_tier = False
     sold_sub_l1_completely = False
     sold_sub_merged_bucket = False
-
-    def _cut_from_golden_pocket(cut_q: int) -> int:
-        nonlocal sold_pocket_qty, sold_pocket_cost, rem_gp
-        if not rem_gp.is_active or cut_q <= 0:
-            return 0
-        if cut_q >= rem_gp.qty:
-            taken = rem_gp.qty
-            sold_pocket_qty += taken
-            sold_pocket_cost = round(
-                sold_pocket_cost + rem_gp.actual_cost_usd, 4
-            )
-            sold_tier_parts.append(
-                f"골든포켓({taken}주@${rem_gp.book_price:.2f})"
-            )
-            rem_gp = GoldenAllInPocket()
-            return taken
-        taken = cut_q
-        keep_q = rem_gp.qty - taken
-        unit_p = rem_gp.actual_avg_price
-        part_cost = round(float(taken) * unit_p, 4)
-        keep_cost = round(
-            max(0.01 * float(keep_q), rem_gp.actual_cost_usd - part_cost), 4
-        )
-        sold_pocket_qty += taken
-        sold_pocket_cost = round(sold_pocket_cost + part_cost, 4)
-        sold_tier_parts.append(f"골든포켓부분({taken}주@${unit_p:.2f})")
-        rem_gp = GoldenAllInPocket(
-            qty=keep_q,
-            book_price=round(keep_cost / float(keep_q), 4),
-            book_invested_usd=keep_cost,
-            actual_cost_usd=keep_cost,
-            entry_ts=rem_gp.entry_ts,
-            order_date=rem_gp.order_date,
-        )
-        return taken
 
     def _pop_from_sub(cut_q: int) -> int:
         nonlocal sold_sub_l1_completely, sold_sub_merged_bucket
@@ -2306,20 +1965,16 @@ def match_and_remove_sold_buckets_7tier(
     tot_sub_q = sum(sb.qty for _, sb in sub_queue)
     tot_main_q = sum(b.qty for _, b in main_queue)
 
-    if rem_gp.is_active and rem_to_cut == rem_gp.qty:
-        rem_to_cut -= _cut_from_golden_pocket(rem_to_cut)
-    elif sub_queue and rem_to_cut == tot_sub_q and rem_to_cut != tot_main_q:
+    if sub_queue and rem_to_cut == tot_sub_q and rem_to_cut != tot_main_q:
         while rem_to_cut > 0 and sub_queue:
             rem_to_cut -= _pop_from_sub(rem_to_cut)
     elif main_queue and rem_to_cut == tot_main_q and rem_to_cut != tot_sub_q:
         while rem_to_cut > 0 and main_queue:
             rem_to_cut -= _pop_from_main(rem_to_cut)
 
-    # 2단계: 매 스텝마다 잔존 (골든포켓, 서브 최하단층, 본그리드 최하단층) 중 단가(book_price)가 가장 낮은 층부터 순차 차감
-    while rem_to_cut > 0 and (rem_gp.is_active or sub_queue or main_queue):
+    # 2단계: 매 스텝마다 잔존 (서브 최하단층, 본그리드 최하단층) 중 단가(book_price)가 가장 낮은 층부터 순차 차감
+    while rem_to_cut > 0 and (sub_queue or main_queue):
         candidates: List[Tuple[float, int, str]] = []
-        if rem_gp.is_active:
-            candidates.append((round(rem_gp.book_price, 4), 0, "GP"))
         if sub_queue:
             candidates.append((round(sub_queue[0][1].book_price, 4), 1, "SUB"))
         if main_queue:
@@ -2330,9 +1985,7 @@ def match_and_remove_sold_buckets_7tier(
             break
 
         _, _, chosen_src = min(candidates, key=lambda item: (item[0], item[1]))
-        if chosen_src == "GP":
-            cut_done = _cut_from_golden_pocket(rem_to_cut)
-        elif chosen_src == "SUB":
+        if chosen_src == "SUB":
             cut_done = _pop_from_sub(rem_to_cut)
         else:
             cut_done = _pop_from_main(rem_to_cut)
@@ -2388,15 +2041,9 @@ def match_and_remove_sold_buckets_7tier(
     sold_sub_cost_total = round(
         sum(sb.actual_cost_usd for sb in sold_sub_buckets), 4
     )
-    sold_qty_total = (
-        sum(b.qty for b in sold_buckets)
-        + sold_sub_qty_total
-        + sold_pocket_qty
-    )
+    sold_qty_total = sum(b.qty for b in sold_buckets) + sold_sub_qty_total
     sold_cost_total = round(
-        sum(b.actual_cost_usd for b in sold_buckets)
-        + sold_sub_cost_total
-        + sold_pocket_cost,
+        sum(b.actual_cost_usd for b in sold_buckets) + sold_sub_cost_total,
         4,
     )
     sold_avg_cost_p = (
@@ -2416,8 +2063,6 @@ def match_and_remove_sold_buckets_7tier(
     return {
         "rem_buckets": rem_buckets,
         "rem_sub_buckets": rem_sub_buckets,
-        "rem_golden_pocket": rem_gp.to_dict(),
-        "sold_pocket_qty": sold_pocket_qty,
         "sold_sub_qty": sold_sub_qty_total,
         "sold_sub_cost_usd": sold_sub_cost_total,
         "sold_sub_buckets": sold_sub_buckets,
@@ -2515,13 +2160,11 @@ def evaluate_multi_grid_sell_targets(
     live_price: float,
     rise_l1_pct: float = 1.50,
     rise_upper_pct: float = 1.00,
-    golden_pocket: Optional[Any] = None,
-    rise_pocket_pct: float = GOLDEN_POCKET_RISE_PCT,
     is_overnight_session: bool = False,
     sub_buckets: Optional[Sequence[StratumBucket]] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [Case 69, Case 70, Case 71, Case 72, Case 80, Case 83, Case 87 & Case 88 (방안 C 오버나이트 통합이평 사수 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료 판정기)]:
+    # MODIFIED [Case 69, Case 70, Case 71, Case 72, Case 83, Case 87 & Case 88 (방안 C 오버나이트 통합이평 사수 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료 판정기)]:
     - 2층 ~ 7층(서브 2층 ~ 3층) 이동평균 단가는 1층 매수 가격을 포함하지 않고 순수 2층 ~ 7층(서브 2층 ~ 3층) 물량만으로 산출한다.
     - 현재가(lp)가 2층 ~ 7층 순수 이동평균 단가 대비 +1.00% 익절가(wma_target_p)에 도달하면,
       1층 매수 가격과 무관하게 1층(index 0) 물량도 조건 없이 동일한 가격(wma_target_p)에 포함하여
@@ -2537,20 +2180,17 @@ def evaluate_multi_grid_sell_targets(
         for sb in (sub_buckets or [])
         if isinstance(sb, StratumBucket) and sb.qty > 0
     ]
-    gp = pocket_from_dict(golden_pocket)
     lp = safe_float(live_price, 0.0)
-    if (not valid and not valid_sub and not gp.is_active) or lp <= 0.0:
+    if (not valid and not valid_sub) or lp <= 0.0:
         return {
             "should_sell": False,
             "sold_indices": [],
             "sub_sold_indices": [],
-            "sell_pocket_qty": 0,
             "grid_sell_qty": 0,
             "sub_sell_qty": 0,
             "sell_qty": 0,
             "min_floor_price": 0.0,
             "reason_tag": "NONE",
-            "hit_golden_pocket": False,
             "hit_l1": False,
             "hit_indiv_grid": False,
             "hit_wma_grad": False,
@@ -2563,8 +2203,6 @@ def evaluate_multi_grid_sell_targets(
     sold_idx_set: Set[int] = set()
     sub_sold_idx_set: Set[int] = set()
     floor_candidates: List[float] = []
-    hit_golden_pocket = False
-    sell_pocket_qty = 0
     hit_l1 = False
     hit_indiv_grid = False
     hit_wma_grad = False
@@ -2573,15 +2211,7 @@ def evaluate_multi_grid_sell_targets(
     hit_sub_wma_grad = False
     overnight_indiv_locked = False
 
-    # ① 독립 골든포켓(+1.50%) 익절 판정 (Case 80 — 전 세션 허용)
-    if gp.is_active:
-        gp_target_p = gp.target_sell_price(rise_pct=rise_pocket_pct)
-        if gp_target_p > 0.0 and lp >= gp_target_p:
-            hit_golden_pocket = True
-            sell_pocket_qty = gp.qty
-            floor_candidates.append(gp_target_p)
-
-    # ② ~ ④ 본 그리드(valid) : 2~7층 순수 통합이평(+1.00%) 전량 졸업 최우선 판정 후 미달 시 1층(+1.50%) / 2~7층 개별층(+1.00%) 판정
+    # ① ~ ③ 본 그리드(valid) : 2~7층 순수 통합이평(+1.00%) 전량 졸업 최우선 판정 후 미달 시 1층(+1.50%) / 2~7층 개별층(+1.00%) 판정
     active_l1 = has_active_l1_bucket(valid)
     upper_start_idx = 1 if (active_l1 and valid) else 0
     has_upper_tiers = bool(len(valid) > upper_start_idx)
@@ -2593,7 +2223,7 @@ def evaluate_multi_grid_sell_targets(
         )
         wma_target_p = safe_float(wma_info.get("upper_wma_target_price"), 0.0)
 
-        # MODIFIED: 2~7층 순수 이동평균 +1.00% 익절가 도달 시 1층 물량도 같은 가격(wma_target_p)에 무조건 포함하여 전량 매도(사이클 완전 종료)
+        # 2~7층 순수 이동평균 +1.00% 익절가 도달 시 1층 물량도 같은 가격(wma_target_p)에 무조건 포함하여 전량 매도(사이클 완전 종료)
         if wma_target_p > 0.0 and lp >= wma_target_p:
             for k in range(len(valid)):
                 sold_idx_set.add(k)
@@ -2636,7 +2266,7 @@ def evaluate_multi_grid_sell_targets(
                         floor_candidates.append(bk_target_p)
                         hit_indiv_grid = True
 
-    # ⑤ ~ ⑦ 서브 그리드(valid_sub) : 2~3층 순수 통합이평(+1.00%) 전량 졸업 최우선 판정 후 미달 시 서브 1층(+1.50%) / 2~3층 개별층(+1.00%) 판정 (Case 88)
+    # ④ ~ ⑥ 서브 그리드(valid_sub) : 2~3층 순수 통합이평(+1.00%) 전량 졸업 최우선 판정 후 미달 시 서브 1층(+1.50%) / 2~3층 개별층(+1.00%) 판정 (Case 88)
     sub_active_l1 = has_active_l1_bucket(valid_sub)
     sub_upper_start_idx = 1 if (sub_active_l1 and valid_sub) else 0
     has_sub_upper_tiers = bool(len(valid_sub) > sub_upper_start_idx)
@@ -2650,7 +2280,7 @@ def evaluate_multi_grid_sell_targets(
             sub_wma_info.get("upper_wma_target_price"), 0.0
         )
 
-        # MODIFIED: 서브 2~3층 순수 이동평균 +1.00% 익절가 도달 시 서브 1층 물량도 같은 가격(sub_wma_target_p)에 무조건 포함하여 전량 매도
+        # 서브 2~3층 순수 이동평균 +1.00% 익절가 도달 시 서브 1층 물량도 같은 가격(sub_wma_target_p)에 무조건 포함하여 전량 매도
         if sub_wma_target_p > 0.0 and lp >= sub_wma_target_p:
             for sk in range(len(valid_sub)):
                 sub_sold_idx_set.add(sk)
@@ -2696,12 +2326,11 @@ def evaluate_multi_grid_sell_targets(
                         floor_candidates.append(sbk_target_p)
                         hit_sub_indiv = True
 
-    if not sold_idx_set and not sub_sold_idx_set and sell_pocket_qty <= 0:
+    if not sold_idx_set and not sub_sold_idx_set:
         return {
             "should_sell": False,
             "sold_indices": [],
             "sub_sold_indices": [],
-            "sell_pocket_qty": 0,
             "grid_sell_qty": 0,
             "sub_sell_qty": 0,
             "sell_qty": 0,
@@ -2711,7 +2340,6 @@ def evaluate_multi_grid_sell_targets(
                 if overnight_indiv_locked
                 else "NONE"
             ),
-            "hit_golden_pocket": False,
             "hit_l1": False,
             "hit_indiv_grid": False,
             "hit_wma_grad": False,
@@ -2725,13 +2353,10 @@ def evaluate_multi_grid_sell_targets(
     sorted_sub_indices = sorted(sub_sold_idx_set)
     grid_sell_qty = sum(valid[idx].qty for idx in sorted_indices)
     sub_sell_qty = sum(valid_sub[s_idx].qty for s_idx in sorted_sub_indices)
-    total_sell_qty = grid_sell_qty + sub_sell_qty + sell_pocket_qty
+    total_sell_qty = grid_sell_qty + sub_sell_qty
     min_floor_p = max(floor_candidates) if floor_candidates else round(lp, 2)
 
-    # MODIFIED [Case 80 & Case 88 : 본 그리드 미포함 상태에서 서브 그리드 + 골든포켓 동시 익절 시 SELL_SUB_AND_POCKET 태그 분리]
-    if hit_golden_pocket and not sorted_indices and not sorted_sub_indices:
-        reason_tag = "SELL_GOLDEN_POCKET"
-    elif sorted_sub_indices and not sorted_indices and not hit_golden_pocket:
+    if sorted_sub_indices and not sorted_indices:
         if len(sorted_sub_indices) == len(valid_sub):
             reason_tag = (
                 "SELL_SUB_ALL_GRAD"
@@ -2746,8 +2371,6 @@ def evaluate_multi_grid_sell_targets(
             reason_tag = "SELL_SUB_GRID_INDIV"
         else:
             reason_tag = "SELL_SUB_L1_ONLY"
-    elif sorted_sub_indices and hit_golden_pocket and not sorted_indices:
-        reason_tag = "SELL_SUB_AND_POCKET"
     elif sorted_sub_indices and sorted_indices:
         if len(sorted_indices) == len(valid) and len(sorted_sub_indices) == len(
             valid_sub
@@ -2755,11 +2378,6 @@ def evaluate_multi_grid_sell_targets(
             reason_tag = "SELL_ALL_GRAD"
         else:
             reason_tag = "SELL_MAIN_AND_SUB"
-    elif hit_golden_pocket and sorted_indices:
-        if len(sorted_indices) == len(valid):
-            reason_tag = "SELL_ALL_GRAD"
-        else:
-            reason_tag = "SELL_POCKET_AND_GRID"
     elif len(sorted_indices) == len(valid):
         reason_tag = (
             "SELL_ALL_GRAD"
@@ -2779,13 +2397,11 @@ def evaluate_multi_grid_sell_targets(
         "should_sell": True,
         "sold_indices": sorted_indices,
         "sub_sold_indices": sorted_sub_indices,
-        "sell_pocket_qty": sell_pocket_qty,
         "grid_sell_qty": grid_sell_qty,
         "sub_sell_qty": sub_sell_qty,
         "sell_qty": total_sell_qty,
         "min_floor_price": round(min_floor_p, 2),
         "reason_tag": reason_tag,
-        "hit_golden_pocket": hit_golden_pocket,
         "hit_l1": hit_l1,
         "hit_indiv_grid": hit_indiv_grid,
         "hit_wma_grad": hit_wma_grad,
@@ -2859,7 +2475,7 @@ def calc_sell_realized_pnl(
 ) -> Dict[str, float]:
     """
     # [Case 86 : 계좌별 동적 왕복 수수료율(0.14% / 0.20%) 및 토스 실측 매도 수수료(execution.commission + tax) 연동 정산]:
-    매도 체결 수량(sold_qty), 실제 체결 단가(sell_exec_price), 매도 지층/포켓들의 실제 매수 원금 합계(sold_actual_cost_usd)를
+    매도 체결 수량(sold_qty), 실제 체결 단가(sell_exec_price), 매도 지층들의 실제 매수 원금 합계(sold_actual_cost_usd)를
     기반으로 왕복 수수료 차감 후 세후 실현 손익을 정밀 산출한다.
     - actual_sell_fee_usd (토스 GET /api/v1/orders/{orderId} 의 execution.commission + execution.tax 실측값)가
       양수(> 0.0)로 전달되면: 매수 당시 편도 수수료(actual_cost * one_way_rate) + 실측 매도 수수료(actual_sell_fee_usd)를 합산 차감한다.
@@ -2915,16 +2531,16 @@ def calc_sell_realized_pnl(
 # [핵심 5] 포트폴리오 · 1~7층 골디락스 본 그리드(L2_L7_MERGE_SORT & 최고도달회차 잠금) · Default-ON 1~3층 서브 그리드(SUB_L1_L3_MERGE & 최대4회분 캡) · 시드 배분 게이지(🟦🟨🟩) · 현재 사이클 단위 수익 · 전량졸업 예정자산(🎓) 통합 요약기 (Case 59 ~ 89)
 # ---------------------------------------------------------------------------
 def _build_10block_allocation_gauge(
-    main_and_pocket_cost: float,
+    main_cost: float,
     sub_cost: float,
     free_cash: float,
 ) -> Tuple[str, float, float, float, float]:
     """
-    # NEW [시드 배분 10칸 유니코드 블록 게이지(🟦본그리드 · 🟨서브그리드 · 🟩가용현금) 및 비중(%) 산출기]:
+    # [시드 배분 10칸 유니코드 블록 게이지(🟦본그리드 · 🟨서브그리드 · 🟩가용현금) 및 비중(%) 산출기]:
     보유 물량이 존재하는 영역은 최소 1칸 이상 표시되도록 보정하며 총 10칸 길이를 100% 유지한다.
     반환값: (gauge_bar_10blocks, main_pct, sub_pct, stock_pct, cash_pct)
     """
-    m_val = max(0.0, safe_float(main_and_pocket_cost, 0.0))
+    m_val = max(0.0, safe_float(main_cost, 0.0))
     s_val = max(0.0, safe_float(sub_cost, 0.0))
     c_val = max(0.0, safe_float(free_cash, 0.0))
     tot = m_val + s_val + c_val
@@ -2989,7 +2605,6 @@ def summarize_stratum_portfolio(
     buckets = enforce_true_breakeven_floor_on_buckets(raw_buckets)
     raw_sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
     sub_buckets = enforce_true_breakeven_floor_on_buckets(raw_sub_buckets)
-    gp = pocket_from_dict(st.get("golden_pocket"))
 
     eff_rt_fee_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
     us_comm_rate = safe_float(
@@ -3031,15 +2646,12 @@ def summarize_stratum_portfolio(
     book_invested_sub = round(
         sum(sb.book_invested_usd for sb in sub_buckets), 4
     )
-    gp_qty = gp.qty if gp.is_active else 0
-    gp_cost = round(gp.actual_cost_usd if gp.is_active else 0.0, 4)
-    gp_price = round(gp.book_price if gp.is_active else 0.0, 4)
 
     actual_invested = round(
-        actual_invested_buckets + actual_invested_sub + gp_cost, 4
+        actual_invested_buckets + actual_invested_sub, 4
     )
     book_invested = round(
-        book_invested_buckets + book_invested_sub + gp_cost, 4
+        book_invested_buckets + book_invested_sub, 4
     )
 
     expected_free_cash = round(
@@ -3056,7 +2668,7 @@ def summarize_stratum_portfolio(
 
     held_shares = sum(b.qty for b in buckets)
     sub_held_shares = sum(sb.qty for sb in sub_buckets)
-    total_held_shares = held_shares + sub_held_shares + gp_qty
+    total_held_shares = held_shares + sub_held_shares
 
     held_lots = sum(max(1, b.lot_count) for b in buckets)
     held_tiers = len(buckets)
@@ -3087,8 +2699,6 @@ def summarize_stratum_portfolio(
             lp = buckets[0].actual_avg_price
         elif sub_buckets:
             lp = sub_buckets[0].actual_avg_price
-        elif gp.is_active:
-            lp = gp.actual_avg_price
 
     actual_avg_p = (
         round(actual_invested / float(total_held_shares), 4)
@@ -3122,13 +2732,6 @@ def summarize_stratum_portfolio(
     unlock_mode = str(
         st.get("unlock_mode") or DEFAULT_UNLOCK_MODE
     ).upper()
-    golden_allin_mode = (
-        str(st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE)
-        .upper()
-        .strip()
-    )
-    if golden_allin_mode not in GOLDEN_ALLIN_MODES:
-        golden_allin_mode = DEFAULT_GOLDEN_ALLIN_MODE
 
     drop_buy_pct, rise_l1_pct, rise_l2_pct = get_golden8_prog_thresholds(
         held_lots=max(1, held_lots),
@@ -3141,13 +2744,6 @@ def summarize_stratum_portfolio(
             threshold_mode=threshold_mode,
             cycle_ratchet_max_lots=sub_ratchet_max_lots,
         )
-    )
-
-    gp_target_price = gp.target_sell_price(rise_pct=GOLDEN_POCKET_RISE_PCT)
-    gp_gain_pct = (
-        round(((lp - gp_price) / gp_price) * 100.0, 2)
-        if (gp.is_active and lp > 0.0 and gp_price > 0.0)
-        else 0.0
     )
 
     active_l1 = has_active_l1_bucket(buckets)
@@ -3171,11 +2767,7 @@ def summarize_stratum_portfolio(
         l1_cur_qty = 0
         l1_target_quota_qty = (
             raw_l1_target_q
-            if (
-                has_pending_buy
-                and not is_pending_sub_buy
-                and pending_lot_tag != "GOLDEN_POCKET"
-            )
+            if (has_pending_buy and not is_pending_sub_buy)
             else 0
         )
         l1_rem_quota_qty = 0
@@ -3354,7 +2946,7 @@ def summarize_stratum_portfolio(
     next_target_qty = min(budget_cap_qty, anchor_quota_qty)
 
     # -----------------------------------------------------------------------
-    # NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 상태 및 지표 산출]
+    # [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 상태 및 지표 산출]
     # -----------------------------------------------------------------------
     main_consec_frozen_days = max(
         0, safe_int(st.get("main_consec_frozen_days"), 0)
@@ -3619,7 +3211,7 @@ def summarize_stratum_portfolio(
     total_net_pnl_usd = round(cum_realized + unrealized_pnl_usd, 4)
     total_roi_pct = round((total_net_pnl_usd / init_seed) * 100.0, 2)
 
-    # NEW [시드 배분 10칸 유니코드 블록 게이지(🟦🟨🟩) 및 비중(%) 산출]
+    # [시드 배분 10칸 유니코드 블록 게이지(🟦🟨🟩) 및 비중(%) 산출]
     (
         allocation_gauge_bar,
         main_alloc_pct,
@@ -3627,14 +3219,12 @@ def summarize_stratum_portfolio(
         stock_alloc_pct,
         cash_alloc_pct,
     ) = _build_10block_allocation_gauge(
-        main_and_pocket_cost=actual_invested_buckets + gp_cost,
+        main_cost=actual_invested_buckets,
         sub_cost=actual_invested_sub,
         free_cash=free_cash,
     )
 
-    # NEW [🎓 전량 졸업 시 확정 예정 총자산(projected_graduation_equity_usd) 산출]
-    # 현재 보유 중인 본 그리드(1층 + 상단 2~7층), 서브 그리드(서브 1층 + 서브 2~3층), 독립 골든포켓이
-    # 각각의 목표 익절가에 전량 매도될 때 발생하는 세후 실현수익을 합산하여 졸업 시 확정 예정 총자산을 계산한다.
+    # [🎓 전량 졸업 시 확정 예정 총자산(projected_graduation_equity_usd) 산출]
     proj_main_l1_net = 0.0
     if active_l1 and buckets and l1_target_price > 0.0:
         proj_main_l1_net = calc_sell_realized_pnl(
@@ -3671,21 +3261,11 @@ def summarize_stratum_portfolio(
             round_trip_fee_rate_pct=eff_rt_fee_pct,
         )["net_pnl_usd"]
 
-    proj_gp_net = 0.0
-    if gp.is_active and gp_target_price > 0.0:
-        proj_gp_net = calc_sell_realized_pnl(
-            sold_qty=gp.qty,
-            sell_exec_price=gp_target_price,
-            sold_actual_cost_usd=gp.actual_cost_usd,
-            round_trip_fee_rate_pct=eff_rt_fee_pct,
-        )["net_pnl_usd"]
-
     projected_graduation_pending_net_usd = round(
         proj_main_l1_net
         + proj_main_upper_net
         + proj_sub_l1_net
-        + proj_sub_upper_net
-        + proj_gp_net,
+        + proj_sub_upper_net,
         4,
     )
     projected_graduation_equity_usd = round(
@@ -3698,7 +3278,7 @@ def summarize_stratum_portfolio(
         (projected_graduation_net_pnl_usd / init_seed) * 100.0, 2
     )
 
-    # NEW [현재 진행 사이클 단위 수익 및 완료 사이클 통계 추출]
+    # [현재 진행 사이클 단위 수익 및 완료 사이클 통계 추출]
     cycle_realized_gross_usd = round(
         safe_float(st.get("cycle_realized_gross_usd"), 0.0), 4
     )
@@ -3770,22 +3350,6 @@ def summarize_stratum_portfolio(
     daily_main_buy_cnt = safe_int(st.get("daily_main_buy_cnt"), 0)
     daily_main_sell_cnt = safe_int(st.get("daily_main_sell_cnt"), 0)
 
-    golden_allin_buy_events = safe_int(st.get("golden_allin_buy_events"), 0)
-    daily_golden_allin_buy_events = safe_int(
-        st.get("daily_golden_allin_buy_events"), 0
-    )
-    golden_pocket_sell_cnt = safe_int(st.get("golden_pocket_sell_cnt"), 0)
-    daily_golden_pocket_sell_cnt = safe_int(
-        st.get("daily_golden_pocket_sell_cnt"), 0
-    )
-    golden_realized_net_usd = round(
-        safe_float(st.get("golden_realized_net_usd"), 0.0), 4
-    )
-    daily_golden_realized_net_usd = round(
-        safe_float(st.get("daily_golden_realized_net_usd"), 0.0), 4
-    )
-    last_golden_allin_date = str(st.get("last_golden_allin_date") or "").strip()
-
     total_reserve_injected_cnt = safe_int(
         st.get("total_reserve_injected_cnt"), 0
     )
@@ -3810,7 +3374,7 @@ def summarize_stratum_portfolio(
     return {
         "buckets": buckets,
         "grid_merge_mode": grid_merge_mode,
-        # NEW [Case 88 : Default-ON 3층 서브 그리드 요약 필드]
+        # [Case 88 : Default-ON 3층 서브 그리드 요약 필드]
         "sub_grid_enabled": True,
         "sub_merge_mode": sub_merge_mode,
         "sub_buckets": sub_buckets,
@@ -3888,24 +3452,6 @@ def summarize_stratum_portfolio(
         "daily_main_sell_cnt": daily_main_sell_cnt,
         "us_commission_rate": us_comm_rate,
         "round_trip_fee_rate_pct": eff_rt_fee_pct,
-        "golden_allin_mode": golden_allin_mode,
-        "golden_allin_mode_label": get_golden_allin_mode_label(
-            golden_allin_mode
-        ),
-        "golden_pocket": gp,
-        "has_golden_pocket": gp.is_active,
-        "golden_pocket_qty": gp_qty,
-        "golden_pocket_price": gp_price,
-        "golden_pocket_cost_usd": gp_cost,
-        "golden_pocket_target_price": gp_target_price,
-        "golden_pocket_gain_pct": gp_gain_pct,
-        "last_golden_allin_date": last_golden_allin_date,
-        "golden_allin_buy_events": golden_allin_buy_events,
-        "daily_golden_allin_buy_events": daily_golden_allin_buy_events,
-        "golden_pocket_sell_cnt": golden_pocket_sell_cnt,
-        "daily_golden_pocket_sell_cnt": daily_golden_pocket_sell_cnt,
-        "golden_realized_net_usd": golden_realized_net_usd,
-        "daily_golden_realized_net_usd": daily_golden_realized_net_usd,
         "has_active_l1": active_l1,
         "l1_cur_qty": l1_cur_qty,
         "l1_target_quota_qty": l1_target_quota_qty,
@@ -3952,7 +3498,7 @@ def summarize_stratum_portfolio(
         "total_net_pnl_usd": total_net_pnl_usd,
         "total_roi_pct": total_roi_pct,
         "mark_roi_pct": total_roi_pct,
-        # NEW: 시드 배분 게이지 및 비중(%) · 현재 사이클 수익 · 전량졸업 예정자산(🎓) 요약 필드
+        # 시드 배분 게이지 및 비중(%) · 현재 사이클 수익 · 전량졸업 예정자산(🎓) 요약 필드
         "allocation_gauge_bar": allocation_gauge_bar,
         "main_alloc_pct": main_alloc_pct,
         "sub_alloc_pct": sub_alloc_pct,
@@ -4032,13 +3578,57 @@ def summarize_stratum_portfolio(
 # ---------------------------------------------------------------------------
 # [핵심 6] TDD 사전 무결성 자동 검증 슈트 (Case 25 ~ 89 전수 검증)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# [4bot 지하층 v2.2.0 · 사용자 커스텀] 지하층(basement_pocket) 표시용 요약 — 읽기 전용, 본·서브 계산과 무관
+#  · summarize_stratum_portfolio 에는 넣지 않는다 (코어자산·투입원금·평단·미실현에 섞이지 않게).
+#  · 현황판(bot_office/sniper_picture.py)이 이 함수만 부른다. toss_api 의 safe_float/safe_int 만 쓴다.
+# ---------------------------------------------------------------------------
+def summarize_basement_pocket(
+    state: Any, live_price: float = 0.0
+) -> Optional[Dict[str, Any]]:
+    """원장의 basement_pocket → {qty, price, cost_usd, target_price, live, pnl_usd, pnl_pct, reached, pending_sell}.
+    지하층이 없거나 수량 0 이면 None. 현재가를 모르면 손익 None (0 으로 지어내지 않음)."""
+    if not isinstance(state, dict):
+        return None
+    bp = state.get("basement_pocket")
+    if not isinstance(bp, dict):
+        return None
+    q = safe_int(bp.get("qty"), 0)
+    cost = safe_float(bp.get("actual_cost_usd"), 0.0)
+    if q <= 0 or cost <= 0.0:
+        return None
+    price = round(cost / float(q), 4)
+    tgt = safe_float(bp.get("target_price"), 0.0)
+    if tgt <= 0.0:
+        tgt = round(math.ceil((price * 1.015 - 1e-9) * 100.0) / 100.0, 2)
+    lp = safe_float(live_price, 0.0)
+    known = lp > 0.0
+    pnl_usd = round(float(q) * lp - cost, 2) if known else None
+    pnl_pct = round((lp / price - 1.0) * 100.0, 2) if known and price > 0 else None
+    return {
+        "qty": q,
+        "price": price,
+        "cost_usd": round(cost, 2),
+        "target_price": round(tgt, 2),
+        "target_pct": round((tgt / price - 1.0) * 100.0, 2) if price > 0 else None,
+        "live": round(lp, 4) if known else None,
+        "pnl_usd": pnl_usd,
+        "pnl_pct": pnl_pct,
+        "reached": bool(known and lp >= tgt),
+        "pending_sell": bool(str(bp.get("sell_order_id") or "").strip()),
+        "realized_net_usd": round(safe_float(state.get("basement_realized_net_usd"), 0.0), 2)
+        if "basement_realized_net_usd" in state
+        else None,
+    }
+
+
 def run_quant_engine_tdd() -> bool:
     """
     기동 직전 8%(본 그리드) 및 4%(서브 그리드) 황금정량 산출, Case 67 min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑,
     4단 와이드 활주로(-1.0% / -2.0% / -3.5% / -5.5%) 및 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 단차 잠금(Case 87, 88),
     👑 Case 87: 본 그리드 7층 초과(8회차 유입) 시 구 1층(새 2층 후보) 보존 + 구 2층 + 구 7층 가중평균 통합 후 평단 오름차순 중간층 재배치(L2_L7_MERGE_SORT),
     🛡️ Case 88: Default-ON 3층 서브 그리드(4.0% 정량 · 0.5회분 보호예수금 · 최대 4회분[16%] 상한 캡 · 3층 초과 시 구 1층+구 3층 양끝합병 SUB_L1_L3_MERGE · 10일/-10% 저가해금),
-    골든포켓(+1.50%) / 본·서브 1층(+1.50%) / 본 2~7층·서브 2~3층 개별 및 합병층(+1.00%) / 본 2~7층·서브 2~3층 순수 통합 이동평균(+1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료) 다중 익절 판정(Case 71, 72, 80, 87, 88),
+    본·서브 1층(+1.50%) / 본 2~7층·서브 2~3층 개별 및 합병층(+1.00%) / 본 2~7층·서브 2~3층 순수 통합 이동평균(+1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 사이클 종료) 다중 익절 판정(Case 71, 72, 87, 88),
     🚨 Case 83 (방안 C) 오버나이트(is_overnight_session=True) 중 상단층 보유 시 개별층 매도 잠금 및 상단 순수 통합이평(+1.00%) 도달 시 1층 포함 전량 일괄 졸업 허용,
     상단 그리드 단독 보유(1층 공석) 시 2층 단가 상한 역전 차단(HOLD_PREVENT_INVERSION · Case 73) 및
     눌림/돌파 독립 1층 재장전(Case 59, 73),
@@ -4047,7 +3637,6 @@ def run_quant_engine_tdd() -> bool:
     정적 기억저가 잠금 및 🔓 06_STEP2X_15PCT_C20 3중 안전문 스텝업 저가 해금(Case 60, 72, 76),
     💉 05_RESV_6P_GUARD30 30% 자투리 승격 방지 가드 · 토스 계좌 여유자금 감지 자동 수혈(Case 89 포함) · 0주 졸업 자동 상환(Case 77),
     🎯 Case 78 지정가 부분 체결 후 미체결 잔량(TOPUP_1FL / SUB_TOPUP_1FL) 기존 1층 무승격 원자적 합산,
-    🌟 Case 80 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 기본값 OFF("NONE") 및 POCKET_ALLIN / GRID_L1_ALLIN 판정 검증,
     💰 Case 86 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증,
     📊 시드 배분 10칸 유니코드 블록 게이지 · 현재 사이클 단위 수익(cycle_realized_net_usd) · 전량졸업 예정자산(projected_graduation_equity_usd) 검증을 전수 수행한다.
     """
@@ -4056,9 +3645,6 @@ def run_quant_engine_tdd() -> bool:
     set_runtime_round_trip_fee_rate_pct(0.14, us_commission_rate=0.0007)
 
     try:
-        assert DEFAULT_GOLDEN_ALLIN_MODE == "NONE", (
-            f"TDD 실패(Case 80 기본값 OFF 위반): {DEFAULT_GOLDEN_ALLIN_MODE}"
-        )
         assert DEFAULT_GRID_MERGE_MODE == "L2_L7_MERGE_SORT", (
             f"TDD 실패(Case 87 기본 합병모드 위반): {DEFAULT_GRID_MERGE_MODE}"
         )
@@ -4095,12 +3681,11 @@ def run_quant_engine_tdd() -> bool:
             zero_sum["anchor_quota_qty"] == 9
             and zero_sum["budget_cap_qty"] == 10
             and zero_sum["next_target_qty"] == q_zero_order == 9
-            and zero_sum["golden_allin_mode"] == "NONE"
             and zero_sum["cycle_ratchet_max_lots"] == 0
             and zero_sum["sub_grid_enabled"] is True
             and zero_sum["allocation_gauge_bar"] == "🟩" * 10
             and abs(zero_sum["projected_graduation_equity_usd"] - 10000.0) < 1e-4
-        ), f"TDD 실패(Case 67/80/87/88 0주 정량/기본모드 일치): {zero_sum}"
+        ), f"TDD 실패(Case 67/87/88 0주 정량/기본모드 일치): {zero_sum}"
 
         # 2) 4단 와이드 활주로 단차 및 Case 87 최고 도달 회차(cycle_ratchet_max_lots) 잠금 검증
         d1, s1, s2 = get_golden8_prog_thresholds(1, "WIDE_RUNWAY", 0)
@@ -4146,7 +3731,7 @@ def run_quant_engine_tdd() -> bool:
             and abs(grid_q[-1].book_price - 99.00) < 1e-4
         ), f"TDD 실패(Case 87 L2+L7 중간층 재배치 불일치): {[b.to_dict() for b in grid_q]}"
 
-        # 4) 🚨 Case 71, Case 72, Case 80 & Case 83(방안 C): 4중 다중 익절 및 오버나이트 개별층 잠금 & 2~7층 순수 통합이평(+1.00%) 도달 시 1층 무조건 동시 포함 전량 매도 검증
+        # 4) 🚨 Case 71, Case 72 & Case 83(방안 C): 다중 익절 및 오버나이트 개별층 잠금 & 2~7층 순수 통합이평(+1.00%) 도달 시 1층 무조건 동시 포함 전량 매도 검증
         test_grid = [
             StratumBucket(10, 80.0, 800.0, 800.0, 1, "DIP_1FL"),
             StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
@@ -4197,11 +3782,11 @@ def run_quant_engine_tdd() -> bool:
             and res_ov_l1_single["reason_tag"] == "SELL_L1_ONLY"
         ), f"TDD 실패(Case 83 1층 단독 오버나이트 익절 미작동): {res_ov_l1_single}"
 
-        # MODIFIED: 1층 단가($88.00)가 2~3층 순수 이동평균($83.00 -> +1.00% 목표 $83.83)보다 높더라도
+        # 1층 단가($88.00)가 2~3층 순수 이동평균($83.00 -> +1.00% 목표 $83.83)보다 높더라도
         # 2~3층 순수 이동평균 +1.00%($83.83) 도달 시 1층 물량까지 동일한 가격($83.83)에 전량 매도(SELL_ALL_GRAD) 검증
         res_ov_wma_all = evaluate_multi_grid_sell_targets(
             [
-                StratumBucket(20, 88.0, 1760.0, 1760.0, 1, "GOLDEN_L1"),
+                StratumBucket(20, 88.0, 1760.0, 1760.0, 1, "DIP_1FL"),
                 StratumBucket(10, 81.0, 810.0, 810.0, 1, "GRID_L2"),
                 StratumBucket(10, 85.0, 850.0, 850.0, 1, "GRID_L3"),
             ],
@@ -4216,29 +3801,6 @@ def run_quant_engine_tdd() -> bool:
             and res_ov_wma_all["hit_wma_grad"] is True
             and res_ov_wma_all["reason_tag"] == "SELL_ALL_GRAD"
         ), f"TDD 실패(Case 83 2~7층 순수 이평 +1.00% 도달 시 1층 포함 전량졸업 SELL_ALL_GRAD 미작동): {res_ov_wma_all}"
-
-        mock_gp = GoldenAllInPocket(
-            qty=50,
-            book_price=70.00,
-            book_invested_usd=3500.0,
-            actual_cost_usd=3500.0,
-            entry_ts=1000.0,
-            order_date="2026-03-10",
-        )
-        res_gp_only = evaluate_multi_grid_sell_targets(
-            test_grid,
-            live_price=71.05,
-            golden_pocket=mock_gp,
-            is_overnight_session=True,
-        )
-        assert (
-            res_gp_only["should_sell"] is True
-            and res_gp_only["hit_golden_pocket"] is True
-            and res_gp_only["sell_pocket_qty"] == 50
-            and res_gp_only["grid_sell_qty"] == 0
-            and res_gp_only["sell_qty"] == 50
-            and res_gp_only["reason_tag"] == "SELL_GOLDEN_POCKET"
-        ), f"TDD 실패(Case 80 골든포켓 단독 익절): {res_gp_only}"
 
         rem_uppers = relabel_upper_grid_tiers(test_grid[2:])
         assert len(rem_uppers) == 2 and not has_active_l1_bucket(rem_uppers), (
@@ -4519,52 +4081,7 @@ def run_quant_engine_tdd() -> bool:
             and abs(completed_q[0].actual_cost_usd - 1542.07) < 1e-4
         ), f"TDD 실패(Case 78 TOPUP_1FL 무승격 1층 합산 불일치): {completed_q}"
 
-        # 11) [Case 80 : 황금시간대(07:00 ~ 07:50 EST & RSI <= 19.0) 전액매수 판정 검증]
-        g_off = evaluate_golden_allin_signal(
-            hm=715,
-            rsi_14=17.5,
-            live_price=40.0,
-            golden_allin_mode="NONE",
-            today_str="2026-03-10",
-        )
-        assert g_off["should_buy"] is False and g_off["reason"] == "MODE_OFF", (
-            f"TDD 실패(Case 80 OFF 모드 차단 오류): {g_off}"
-        )
-
-        g_pocket_ok = evaluate_golden_allin_signal(
-            hm=725,
-            rsi_14=18.4,
-            live_price=40.0,
-            golden_allin_mode="POCKET_ALLIN",
-            today_str="2026-03-10",
-            last_golden_allin_date="2026-03-09",
-        )
-        assert (
-            g_pocket_ok["should_buy"] is True
-            and g_pocket_ok["lot_type"] == "GOLDEN_POCKET"
-        ), f"TDD 실패(Case 80 POCKET_ALLIN 승인 오류): {g_pocket_ok}"
-
-        g_grid_ok = evaluate_golden_allin_signal(
-            hm=745,
-            rsi_14=19.0,
-            live_price=40.0,
-            golden_allin_mode="GRID_L1_ALLIN",
-            today_str="2026-03-10",
-            last_golden_allin_date="",
-        )
-        assert (
-            g_grid_ok["should_buy"] is True
-            and g_grid_ok["lot_type"] == "GOLDEN_L1"
-        ), f"TDD 실패(Case 80 GRID_L1_ALLIN 승인 오류): {g_grid_ok}"
-
-        allin_q, allin_spent = resolve_allin_affordable_buy_qty(
-            price_t=40.0, free_cash_usd=8000.0
-        )
-        assert allin_q == 199 and abs(allin_spent - 7960.0) < 1e-4, (
-            f"TDD 실패(Case 80 전액매수 주수 산출 오류): q={allin_q}, spent={allin_spent}"
-        )
-
-        # 12) [Case 86 : 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증]
+        # 11) [Case 86 : 계좌별 동적 왕복 수수료율(0.14% vs 0.20%) 및 실측 수수료(actual_sell_fee_usd) 정산 검증]
         pnl_014 = calc_sell_realized_pnl(
             sold_qty=10,
             sell_exec_price=74.29,
@@ -4583,7 +4100,7 @@ def run_quant_engine_tdd() -> bool:
             and pnl_014["net_pnl_usd"] > pnl_020["net_pnl_usd"]
         ), f"TDD 실패(계좌별 0.14% vs 0.20% 수수료 정산 불일치): {pnl_014} vs {pnl_020}"
 
-        # 13) NEW [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 4% 정량 · 0.5회분 보호예수 · SUB_L1_L3_MERGE 합병 · 4회분 상한 캡 · 10일/-10% 저가해금 · 서브+골든포켓 동시익절 검증]
+        # 12) [Case 88 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 4% 정량 · 0.5회분 보호예수 · SUB_L1_L3_MERGE 합병 · 4회분 상한 캡 · 10일/-10% 저가해금 검증]
         sub_q_qty, sub_q_bud = compute_sub4_quota_qty(
             sub_anchor_price=50.0,
             current_core_equity=10000.0,
@@ -4672,34 +4189,10 @@ def run_quant_engine_tdd() -> bool:
             and abs(res_sub_grad["min_floor_price"] - 49.49) < 1e-4
             and res_sub_grad["reason_tag"] == "SELL_SUB_ALL_GRAD"
         ), f"TDD 실패(Case 88 서브 그리드 통합이평 전량 졸업 판정 오류): {res_sub_grad}"
-
-        # 본 그리드 미매도 상태에서 서브 그리드 + 독립 골든포켓 동시 익절 시 SELL_SUB_AND_POCKET 판정 검증
-        res_sub_and_gp = evaluate_multi_grid_sell_targets(
-            buckets=[StratumBucket(10, 95.0, 950.0, 950.0, 1, "REENTRY_1FL")],
-            live_price=49.55,
-            golden_pocket=GoldenAllInPocket(
-                qty=20,
-                book_price=48.0,
-                book_invested_usd=960.0,
-                actual_cost_usd=960.0,
-                entry_ts=1000.0,
-                order_date="2026-03-10",
-            ),
-            sub_buckets=sub_q,
-            is_overnight_session=True,
-        )
-        assert (
-            res_sub_and_gp["should_sell"] is True
-            and res_sub_and_gp["sold_indices"] == []
-            and res_sub_and_gp["sub_sold_indices"] == [0, 1, 2]
-            and res_sub_and_gp["sell_pocket_qty"] == 20
-            and res_sub_and_gp["sell_qty"] == 52
-            and res_sub_and_gp["reason_tag"] == "SELL_SUB_AND_POCKET"
-        ), f"TDD 실패(Case 80/88 서브+골든포켓 동시익절 SELL_SUB_AND_POCKET 판정 오류): {res_sub_and_gp}"
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)
 
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · 사이클 수익 · 졸업예정자산 · Case 84 ~ 89 전수 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · 사이클 수익 · 졸업예정자산 · Case 84 ~ 89 전수 검증 완료"
     )
     return True

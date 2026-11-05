@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main.py (원작 main_runtime.py + 원작 main.py 병합)
+# 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 메인 런타임 서포트 브릿지 (메인 코드 2분할 리팩토링 Part 1 / 2 · Step 12 / 13)
 - 역할:
   1) 적응형 비동기 플러그인 호출기(_call_plugin_adaptive) 및 동적 심볼 리졸버(_resolve_module_attr) (Case 13)
   2) TossApiClient 런타임 메서드 호환성 폴리필 어댑터(_install_toss_api_compatibility_patches · get_commissions / ensure_us_commission_rate 런타임 수수료 폴백 보존 포함 · Case 86)
   3) 폴더별 3중 원장 인스턴스 팩토리(_instantiate_stratum_ledger · Case 68, Case 87, Case 88) 및 주말 휴장 판별(_check_weekend_nyse_closed_dynamic · Case 01, 79, 83)
-  4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic · Case 80 RSI 50.0 고정 버그 영구 소각)
+  4) 100% 벡터화 1분봉/일봉 지표 및 실시간 틱 Wilder's RSI(14) 무손실 직결(_compute_candle_metrics_dynamic)
   5) 폴더 위치(base_dir) 전용 텔레그램 토큰·채팅방 ID 자동 탐색기(_discover_telegram_credentials · Case 68)
   6) 내장형 사용자 중심 초슬림 텔레그램 불사조 롱폴링/관제탑 브릿지(_AdaptiveTelegramBridge · tg_ui_plugin 4버튼 단일 렌더러 직결 ·
      층별 자산($)·10칸 배분 게이지(🟦🟨🟩)·현재 사이클 단위 실현수익 vs 전체 누적 수익·재고 평가착시 3단 해부·전량졸업 예정자산(🎓) 표출 ·
      전술 제어반 /reset_profit 명령어 탑재 · 13대 코어 모듈 프리플라이트 안내 동기화 · /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행 ·
-     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 + 골든포켓 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88] ·
-     전술 제어반 황금시간[07:00 ~ 07:50 EST & RSI <= 19.0] 전액매수 모드 선택기 완벽 지원 ·
+     /sync 조회 시 계좌별 미국 주식 수수료율 자동 확인[Case 86] · /reset_profit 실행 시 본 그리드 + Default-ON 3층 서브 그리드 및 당일 무매매 동결 판정 카운터 100% 보존 초기화[Case 88] ·
      Case 75 httpx/httpcore INFO 로그 묵음화 & Case 81 전용 httpx.AsyncClient 자동 재생성 불사조 폴링 · 오프셋 파일 선행 영속화 · os.execv 인플레이스 자가 교체 · Case 84/85/86/87/88/89 완벽 준수)
 - 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 전수 락온
 """
@@ -61,8 +61,6 @@ from plugin_updater import (
     write_persisted_tg_offset_sync,
 )
 from quant_engine import (
-    DEFAULT_GOLDEN_ALLIN_MODE,
-    GOLDEN_ALLIN_MODES,
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
     set_runtime_round_trip_fee_rate_pct,
@@ -231,7 +229,7 @@ def _normalize_single_holding_item(
     )
     pl_obj = (
         item.get("profitLoss")
-        if isinstance(item.get("profitLoss"), dict)
+        if isinstance(it_pl := item.get("profitLoss"), dict)
         else {}
     )
 
@@ -424,7 +422,6 @@ def _extract_candles_list(
     raw_res: Any,
 ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
-    # [Case 80]:
     result.candles 표준 스키마뿐만 아니라 result 직접 리스트, items, data 키 응답을 모두 파싱한다.
     """
     if isinstance(raw_res, list):
@@ -916,7 +913,7 @@ def _check_weekend_nyse_closed_dynamic(now_est: datetime) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 자체 벡터화 1분봉/일봉 지표 및 Wilder's RSI(14) 산출 폴백 (Case 80 완벽 호환)
+# [핵심 3] 자체 벡터화 1분봉/일봉 지표 및 Wilder's RSI(14) 산출 폴백
 # ---------------------------------------------------------------------------
 def _compute_vectorized_metrics_fallback(
     candles_1m: List[Dict[str, Any]],
@@ -925,7 +922,6 @@ def _compute_vectorized_metrics_fallback(
     candles_1d: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    # [Case 80]:
     quant_indicators_plugin.compute_soxl_quant_metrics_1m() 를 최우선 호출하여
     인메모리 1분봉(_LIVE_1M_BAR_STORE) 병합 및 Wilder's RSI(14) 산출을 수행하고,
     예외 발생 시에만 ISO8601 + np.diff 기반 자체 벡터화 폴백을 수행한다.
@@ -1166,7 +1162,7 @@ async def _compute_candle_metrics_dynamic(
     candles_1d: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    # [Case 80 : compute_soxl_quant_metrics_1m 결과 무손실 직결]:
+    compute_soxl_quant_metrics_1m 결과 무손실 직결:
     quant_indicators_plugin.compute_soxl_quant_metrics_1m() 가 반환한 딕셔너리를
     조건부 누락 없이 즉시 채택하여 인메모리 1분봉 합성 기저값(prev_bar_close 등)이 100% 유지되도록 보장한다.
     """
@@ -1330,7 +1326,7 @@ def _discover_telegram_credentials(
 
     return bot_token, chat_id
 # ---------------------------------------------------------------------------
-# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & 사이클 수익 초기화 연동 & Case 80/81/83/84/85/86/87/88/89 완벽 통합)
+# [핵심 5] 내장형 텔레그램 브릿지 (_AdaptiveTelegramBridge — tg_ui_plugin 렌더러 직결 & 사이클 수익 초기화 연동 & Case 81/83/84/85/86/87/88/89 완벽 통합)
 # ---------------------------------------------------------------------------
 class _AdaptiveTelegramBridge:
     """
@@ -1685,7 +1681,7 @@ class _AdaptiveTelegramBridge:
         self,
     ) -> Tuple[float, Dict[str, Any]]:
         """
-        # [Case 80 : /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행]:
+        /avwap 조회 시 1분봉 미확보 상태면 즉시 온디맨드 프리워밍 수행:
         """
         now_est = datetime.now(EST_TZ)
         live_p = safe_float(
@@ -1847,9 +1843,6 @@ class _AdaptiveTelegramBridge:
             text=msg,
             reply_markup=_build_settlement_inline_keyboard(
                 bool(st.get("is_active", True)),
-                str(
-                    st.get("golden_allin_mode") or DEFAULT_GOLDEN_ALLIN_MODE
-                ),
             ),
         )
 
@@ -1908,21 +1901,17 @@ class _AdaptiveTelegramBridge:
             ),
             reply_markup=_build_settlement_inline_keyboard(
                 bool(updated_st.get("is_active", True)),
-                str(
-                    updated_st.get("golden_allin_mode")
-                    or DEFAULT_GOLDEN_ALLIN_MODE
-                ),
             ),
         )
 
     async def _reset_realized_profit_only(self, chat_id: str) -> None:
         """
-        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 80, Case 86, Case 87 & Case 88]:
-        보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함) 및
-        독립 골든포켓(golden_pocket), 당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
+        # MODIFIED [Case 02, Case 74, Case 76, Case 77, Case 86, Case 87 & Case 88]:
+        보유 중인 본 그리드 지층(buckets · cycle_ratchet_max_lots 포함), Default-ON 3층 서브 그리드(sub_buckets · sub_ratchet_max_lots 포함),
+        당일 무매매 동결 판정용 매매 횟수(daily_main_buy_cnt, daily_main_sell_cnt, daily_sub_buy_cnt, daily_sub_sell_cnt),
         기준 시드머니(initial_seed_usd), 계좌별 수수료율(us_commission_rate, round_trip_fee_rate_pct)은 100% 보존하고,
         오직 누적/당일 세후 실현수익금, 사이클 단위 수익금(cycle_realized_net_usd 등), 자투리 절약금·스텝업 해금·
-        서브 그리드 누적 통계·황금시간 통계·예비시드 통계만 0점으로 초기화한다.
+        서브 그리드 누적 통계·예비시드 통계만 0점으로 초기화한다.
         """
         mark_reserve_deposit_check_shield(
             self.context, TARGET_SYMBOL, clear_shield=True
@@ -1930,10 +1919,6 @@ class _AdaptiveTelegramBridge:
         st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
         has_buckets = bool(st_cur.get("buckets"))
         has_sub_buckets = bool(st_cur.get("sub_buckets"))
-        gp_cur = st_cur.get("golden_pocket") or {}
-        has_gp = bool(
-            isinstance(gp_cur, dict) and safe_int(gp_cur.get("qty"), 0) > 0
-        )
         reset_kw: Dict[str, Any] = {
             "cumulative_realized_gross_usd": 0.0,
             "cumulative_realized_fee_usd": 0.0,
@@ -1969,12 +1954,6 @@ class _AdaptiveTelegramBridge:
             "sub_realized_fee_usd": 0.0,
             "sub_realized_net_usd": 0.0,
             "daily_sub_realized_net_usd": 0.0,
-            "golden_allin_buy_events": 0,
-            "daily_golden_allin_buy_events": 0,
-            "golden_pocket_sell_cnt": 0,
-            "daily_golden_pocket_sell_cnt": 0,
-            "golden_realized_net_usd": 0.0,
-            "daily_golden_realized_net_usd": 0.0,
             "total_reserve_injected_cnt": 0,
             "daily_reserve_injected_cnt": 0,
             "cumulative_reserve_repaid_usd": 0.0,
@@ -2005,7 +1984,7 @@ class _AdaptiveTelegramBridge:
         if not has_sub_buckets:
             reset_kw["daily_sub_buy_cnt"] = 0
             reset_kw["daily_sub_sell_cnt"] = 0
-        if not has_buckets and not has_sub_buckets and not has_gp:
+        if not has_buckets and not has_sub_buckets:
             reset_kw["used_reserve_portions_cnt"] = 0
             reset_kw["injected_reserve_usd"] = 0.0
             reset_kw["cycle_ratchet_max_lots"] = 0
@@ -2037,14 +2016,12 @@ class _AdaptiveTelegramBridge:
         held_sh = safe_int(summary.get("held_shares"), 0)
         sub_sh = safe_int(summary.get("sub_held_shares"), 0)
         sub_tiers = safe_int(summary.get("sub_held_tiers"), 0)
-        gp_sh = safe_int(summary.get("golden_pocket_qty"), 0)
         held_tiers = safe_int(summary.get("held_tiers"), 0)
         held_lots = safe_int(summary.get("held_lots"), 0)
         ratchet_lots = safe_int(
             summary.get("cycle_ratchet_max_lots"), held_lots
         )
         sub_note = f"+서브 {sub_sh}주({sub_tiers}층)" if sub_sh > 0 else ""
-        gp_note = f"+골든포켓 {gp_sh}주" if gp_sh > 0 else ""
         lot_keep_str = (
             f"보유 {held_lots}회차/단차잠금 {ratchet_lots}회차"
             if ratchet_lots > held_lots
@@ -2058,7 +2035,7 @@ class _AdaptiveTelegramBridge:
                 "🔸 이번사이클 / 누적 세후실현익: <b>$0.00</b>\n"
                 f"🔸 복귀 기준시드: <b>${init_seed:,.2f}</b> (가용현금 <b>${free_cash:,.2f}</b>)\n"
                 f"🔸 차기 1회(8%) 정량: 예산 <b>${next_bud:,.2f}</b> ➔ {quota_badge_str}\n"
-                f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note}{gp_note} 유지)"
+                f"🔸 보유 지층 보존: 본 <b>{held_sh}주</b> ({held_tiers}개층 · {lot_keep_str}{sub_note} 유지)"
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -2143,39 +2120,6 @@ class _AdaptiveTelegramBridge:
         await asyncio.sleep(0.3)
         perform_self_restart_execv(reason="MANUAL_TELEGRAM_UPDATE")
 
-    async def _cycle_golden_mode_and_render(
-        self,
-        chat_id: str,
-        target_mode: Optional[str] = None,
-        edit_msg_id: Optional[int] = None,
-    ) -> None:
-        if hasattr(self.context.ledger, "cycle_golden_allin_mode"):
-            await self.context.ledger.cycle_golden_allin_mode(
-                target_mode=target_mode
-            )
-        else:
-            st_cur = self.context.ledger.get_state(TARGET_SYMBOL)
-            cur_m = (
-                str(
-                    st_cur.get("golden_allin_mode")
-                    or DEFAULT_GOLDEN_ALLIN_MODE
-                )
-                .upper()
-                .strip()
-            )
-            try:
-                idx = GOLDEN_ALLIN_MODES.index(cur_m)
-                nxt_m = GOLDEN_ALLIN_MODES[(idx + 1) % len(GOLDEN_ALLIN_MODES)]
-            except ValueError:
-                nxt_m = "POCKET_ALLIN"
-            await self.context.ledger.update_state(
-                TARGET_SYMBOL, golden_allin_mode=nxt_m
-            )
-        self.context.wakeup_event.set()
-        await self._render_and_send_settlement(
-            chat_id=chat_id, edit_msg_id=edit_msg_id
-        )
-
     async def _handle_command_or_text(
         self, chat_id: str, raw_text: str
     ) -> None:
@@ -2254,14 +2198,6 @@ class _AdaptiveTelegramBridge:
             or text == "⚙️ 전술 제어반"
         ):
             await self._render_and_send_settlement(chat_id=chat_id)
-            return
-
-        if first_token == "/golden":
-            parts = text.split(maxsplit=1)
-            arg_mode = parts[1].strip() if len(parts) >= 2 else None
-            await self._cycle_golden_mode_and_render(
-                chat_id=chat_id, target_mode=arg_mode
-            )
             return
 
         if first_token == "/seed":
@@ -2369,10 +2305,6 @@ class _AdaptiveTelegramBridge:
                     )
             self.context.wakeup_event.set()
             await self._render_and_send_settlement(
-                chat_id=chat_id, edit_msg_id=msg_id
-            )
-        elif data == "toggle_golden_allin_mode":
-            await self._cycle_golden_mode_and_render(
                 chat_id=chat_id, edit_msg_id=msg_id
             )
         elif data == "prompt_seed_input":
@@ -2603,35 +2535,33 @@ async def _run_auto_update_loop_dynamic(
 # ======================================================================
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: main.py
+# MODIFIED: main.py (황금시간 07:00~07:50 RSI<=19 올인 임포트·롤오버키·포켓참조·주석 전면 영구 소각)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
 (정규장 마감 30분 전 15:30 ~ 16:00 EST 본·서브 0주 새 사이클 1층 진입 및 1층 공석 +1.0% 돌파 추격 차단 · Case 84, Case 88) &
 익절 매도 24시간 전 세션(프리마켓 + 정규장 + 애프터마켓 + 데이마켓 · 방안 C 오버나이트 통합이평 사수 · Case 83) 확장
 오버나이트 7층 골디락스 본 그리드(👑 06_L2L7_RATCHET_8PCT · Case 87) +
 🛡️ 스위치 없는 100% 기본 상시 적용(Default ON) 3층 서브 그리드(13_SUB_L1L3_RESV05_CAP4L · 최대 4회분[16%] 상한 캡 · Case 88) 지층관리 스나이퍼
 경량화 메인 오케스트레이터 코어 모듈 (메인 코드 2분할 리팩토링 Part 2 / 2 · Step 13 / 13)
-- 최종 확정 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🌃 OVERNIGHT_WMA_GRAD_LOCK × 🛡️ LATE_1530_CUTOFF · 황금시간 기본값 NONE[OFF] · Case 70 ~ Case 88) 100% 결속:
+- 최종 확정 진화 챔피언 (👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 × 🌃 OVERNIGHT_WMA_GRAD_LOCK × 🛡️ LATE_1530_CUTOFF · Case 70 ~ Case 89) 100% 결속:
   1) main_runtime.py 와 역할 분리를 통해 모바일 편집기 및 유지보수에 최적화된 경량 오케스트레이터 구현
   2) 기동 시 GET /api/v1/commissions (ensure_us_commission_rate) 를 호출하여 계좌별 미국 주식 실제 수수료율
      (예: pipiosToss 편도 0.07% -> 왕복 0.14% / wonToss 편도 0.10% -> 왕복 0.20%) 자동 락온 및 원장 영속화 (Case 86)
   3) 본 그리드 8%(12.5분할) & 서브 그리드 4%(25분할) 황금비율 정액 기반 정량제 & 온디맨드 예비시드 수혈금(injected_reserve_usd)을 제외한
      순수 코어 총자산(core_equity) 기반 정량 산출 & min(1회분 예산 상한 주수, 기준가 고정 정량) 이중 캡핑(Case 67, Case 77, Case 88) &
      자투리 절약금(부분 체결 시 비례 정산 Case 78) · 세후 실현수익금 실시간 시드 풀 복리 산입
-  4) 🌟 [Case 80] 미동부 프리장 황금시간대(07:00 ~ 07:50 EST & 1분봉 Wilder RSI(14) <= 19.0) 도달 시 전술 제어반(/settlement) 선택 모드
-     (기본값 NONE[OFF] ↔ POCKET_ALLIN[독립 골든포켓 100%] ↔ GRID_L1_ALLIN[7층 그리드 1층편입 100%])에 따라 가용 현금 시드 100% 전액 추가매수 집행!
-  5) 🎯 [Case 78 & Case 88] 본·서브 활성 1층 지정가 부분 체결 시 04:07 ~ 16:00 EST 구간에서 매수 후 60.0초 타임쉴드 경과 시점부터
+  4) 🎯 [Case 78 & Case 88] 본·서브 활성 1층 지정가 부분 체결 시 04:07 ~ 16:00 EST 구간에서 매수 후 60.0초 타임쉴드 경과 시점부터
      매 1.5초 실시간 모니터에서 현재가 <= 1층 단가 재도래 시 미체결 잔량(TOPUP_1FL / SUB_TOPUP_1FL) 지정가 60초 재대기 및 기존 1층 무승격 원자적 합산!
-  6) 🛡️ [Case 73, Case 84 & Case 88] 15:30 ~ 16:00 EST 정규장 마감 30분 전 구간에서는 본·서브 0주 새 사이클 첫 1층(REENTRY_1FL / SUB_REENTRY_1FL) 진입과
+  5) 🛡️ [Case 73, Case 84 & Case 88] 15:30 ~ 16:00 EST 정규장 마감 30분 전 구간에서는 본·서브 0주 새 사이클 첫 1층(REENTRY_1FL / SUB_REENTRY_1FL) 진입과
      상단층 보유 · 1층 공석 상태의 +1.00% 상승돌파(BREAKOUT_RELOAD) 추격을 원천 차단하고,
      2층 단가 상한 가드(HOLD_PREVENT_INVERSION · Case 73) 하의 -1.00% 눌림목(PULLBACK_RELOAD) 재장전은 정상 허용!
-  7) 본 그리드 활성 1층 보유 중 정적 기억 사이클 최저 매수가(cycle_min_buy_price) 및 최고 도달 회차(cycle_ratchet_max_lots · Case 87) 잠금 기반
-     10분 고정 4단 와이드 활주로 및 STEP2X_15PCT_C20 3중 안전문(-15.0% 스텝업 해금 · Case 76) & GUARD30 / 최대 +6회분 온디맨드 예비시드 수혈 및 0주 졸업 자동 상환(Case 77) &
+  6) 본 그리드 활성 1층 보유 중 정적 기억 사이클 최저 매수가(cycle_min_buy_price) 및 최고 도달 회차(cycle_ratchet_max_lots · Case 87) 잠금 기반
+     10분 고정 4단 와이드 활주로 및 STEP2X_15PCT_C20 3중 안전문(-15.0% 스텝업 해금 · Case 76) & GUARD30 / 최대 +6회분 온디맨드 예비시드 수혈 및 0주 졸업 자동 상환(Case 77, Case 89) &
      본 그리드 5영업일 이상 무매매 동결 시 100% 기본 상시 가동(Default ON)되는 3층 서브 그리드 엔진(4% 정량 · 0.5회분 보호예수 · 최대 4회분[16%] 캡 · SUB_L1_L3_MERGE · 10일/-10% 저가해금 · Case 88)
-  8) ⚡ [Case 65, Case 70, Case 71, Case 72, Case 79, Case 80, Case 82, Case 83, Case 87 & Case 88] 매수 직후 최초 60.0초 타임쉴드 유지 & 이후 보유 중 프리·정규·애프터·데이마켓
-     24시간 전 세션(is_active_sell_window)에서 매 1.5초 실시간 다중 익절(본 그리드 + 서브 그리드 + 골든포켓) + 최근 5.0초 체결틱 윗꼬리 병행 감지 + 방안 C 오버나이트 통합이평 사수 스나이퍼 매도 모니터 가동!
-  9) 🚨 [Case 66 미결 매수/매도 선행 정산 및 16:00 마감 72번 버킷 보호 후 일일 결산 실행], [Case 11 SIGTERM 0.1초 고속 안전 종료 가드],
+  7) ⚡ [Case 65, Case 70, Case 71, Case 72, Case 79, Case 82, Case 83, Case 87 & Case 88] 매수 직후 최초 60.0초 타임쉴드 유지 & 이후 보유 중 프리·정규·애프터·데이마켓
+     24시간 전 세션(is_active_sell_window)에서 매 1.5초 실시간 다중 익절(본 그리드 + 서브 그리드) + 최근 5.0초 체결틱 윗꼬리 병행 감지 + 방안 C 오버나이트 통합이평 사수 스나이퍼 매도 모니터 가동!
+  8) 🚨 [Case 66 미결 매수/매도 선행 정산 및 16:00 마감 72번 버킷 보호 후 일일 결산 실행], [Case 11 SIGTERM 0.1초 고속 안전 종료 가드],
      [Case 75 httpx/httpcore 로그 묵음화] 및 [Case 81 장외 자동 업데이트 / 수동 업데이트 직후 2.0초 태스크 타임아웃 취소 · 텔레그램 소켓 즉시 반납 · os.execv 인플레이스 무중단 자가 교체 결속]
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 88 전수 락온
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 전수 락온
 """
 
 # [4bot 단일파일 병합] 원작 분할 임포트 제거: main_runtime
@@ -2662,7 +2592,6 @@ from quant_engine import (
     SUB_MAX_TOTAL_LOTS_4,
     buckets_from_dicts,
     has_active_l1_bucket,
-    pocket_from_dict,
     run_quant_engine_tdd,
     set_runtime_round_trip_fee_rate_pct,
 )
@@ -2675,6 +2604,7 @@ from quant_indicators_plugin import (
 )
 from sniper_exit_plugin import (
     execute_1m_sniper_sell_and_reanchor_plugin,
+    execute_basement_pocket_exit_plugin,
     is_within_post_buy_time_shield,
     is_within_post_sell_time_shield,
     sync_pending_sell_order_plugin,
@@ -2850,7 +2780,7 @@ class SniperAppContext:
 # ---------------------------------------------------------------------------
 async def candle_radar_loop(context: SniperAppContext) -> None:
     """
-    # [Case 79 & Case 80 : 주말 휴장 폴링 차단 및 장외 트래픽 최적화]:
+    # [Case 79 : 주말 휴장 폴링 차단 및 장외 트래픽 최적화]:
     1분봉 및 일봉을 주기적으로 수집하여 VWAP, 5MA 진폭, Heikin-Ashi 추세, Wilder's RSI(14) 기저값을 산출한다.
     """
     while not context.shutdown_event.is_set():
@@ -2921,7 +2851,7 @@ def _evaluate_fast_shield_mode(
     live_p: float,
 ) -> bool:
     """
-    # MODIFIED [Case 70, Case 78, Case 79, Case 80 & Case 88]:
+    # MODIFIED [Case 70, Case 78, Case 79 & Case 88]:
     미체결 주문(buy_order_id / sell_order_id) 대기 중이거나 본 그리드 / 서브 그리드 10분 매수 게이트 정각 경계일 때만 0.4초 부스터를 가동한다.
     """
     hm = now_est.hour * 100 + now_est.minute
@@ -3023,9 +2953,32 @@ def _write_picture_snapshot(live_p: float) -> None:
         pass
 
 
+async def _run_basement_exit_step(
+    context: SniperAppContext,
+    holdings: Dict[str, Dict[str, Any]],
+    prices: Dict[str, float],
+    now_est: datetime,
+    allow_new_order: bool,
+) -> bool:
+    """[4bot 지하층 v2.2.0] 지하층 목표가 매도 단계 (실패해도 본/서브 매매는 계속). 반환: 지하층 매도 미체결 여부."""
+    try:
+        res = await _call_plugin_adaptive(
+            execute_basement_pocket_exit_plugin,
+            context=context,
+            holdings=holdings,
+            prices=prices,
+            now_est=now_est,
+            allow_new_order=allow_new_order,
+        )
+        return bool(isinstance(res, dict) and res.get("basement_order_pending"))
+    except Exception as exc:
+        logger.warning("🏚️ 지하층 매도 단계 예외(본/서브 매매 계속): %s", exc)
+        return False
+
+
 async def main_sniper_loop(context: SniperAppContext) -> None:
     """
-    # MODIFIED [Case 01, Case 65, Case 66, Case 70 ~ Case 88 (방안 C 오버나이트 통합이평 사수 · Default-ON 3층 서브 그리드 · 16:00 마감 72번 버킷 보호)]:
+    # MODIFIED [Case 01, Case 65, Case 66, Case 70 ~ Case 89 (방안 C 오버나이트 통합이평 사수 · Default-ON 3층 서브 그리드 · 16:00 마감 72번 버킷 보호)]:
     """
     while not context.shutdown_event.is_set():
         # alert-hub 하트비트 (2번 v1.1.2, 2026-11-01): 메인 루프 매 바퀴(주말 대기 포함) 신호 · DB 기록은 30초에 1번 · 실패해도 매매 계속
@@ -3119,9 +3072,6 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                         daily_sub_realized_net_usd=0.0,
                         daily_main_buy_cnt=0,
                         daily_main_sell_cnt=0,
-                        daily_golden_allin_buy_events=0,
-                        daily_golden_pocket_sell_cnt=0,
-                        daily_golden_realized_net_usd=0.0,
                         daily_reserve_injected_cnt=0,
                         daily_dust_guard_blocked_cnt=0,
                         pending_step_up_min_price=0.0,
@@ -3155,7 +3105,13 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                         now_est=now_est,
                     )
 
-                # [Step 3-1] 로컬 7층 본 그리드 + 3층 서브 그리드 + 독립 골든포켓 원장 ↔ 토스 실보유 잔고 무결성 화해 (24시간 전 세션 작동)
+                # 🏚️ [4bot 지하층 v2.2.0] 지하층 매도 미체결이 있으면 먼저 확인·정산 (새 발주는 대조 뒤)
+                basement_busy = await _run_basement_exit_step(
+                    context, holdings, prices_for_sell, now_est, allow_new_order=False
+                )
+
+                # [Step 3-1] 로컬 7층 본 그리드 + 3층 서브 그리드 원장 ↔ 토스 실보유 잔고 무결성 화해 (24시간 전 세션 작동)
+                # (4bot 지하층: 토스 실보유 = 본 + 서브 + 지하층 으로 대조 — defense_plugin 래퍼)
                 await _call_plugin_adaptive(
                     reconcile_stratum_with_broker_holdings_plugin,
                     context=context,
@@ -3164,21 +3120,30 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     now_est=now_est,
                 )
 
-                # ⚡ [Step 3-2 · Case 70, 71, 72, 79, 80, 82, 83, 87, 88] 프리·정규·애프터·데이마켓 24시간 전 세션 매 1.5초 실시간 다중 익절(본+서브+포켓) + 방안 C 매도 모니터
-                sell_res = await _call_plugin_adaptive(
-                    execute_1m_sniper_sell_and_reanchor_plugin,
-                    context=context,
-                    holdings=holdings,
-                    prices=prices_for_sell,
-                    now_est=now_est,
-                )
+                # 🏚️ [4bot 지하층 v2.2.0] 현재가 ≥ 지하층 목표가면 지하층 전량 지정가 매도 (본/서브 주문이 없을 때만)
+                if not basement_busy:
+                    basement_busy = await _run_basement_exit_step(
+                        context, holdings, prices_for_sell, now_est, allow_new_order=True
+                    )
+
+                # ⚡ [Step 3-2 · Case 70, 71, 72, 79, 82, 83, 87, 88] 프리·정규·애프터·데이마켓 24시간 전 세션 매 1.5초 실시간 다중 익절(본+서브) + 방안 C 매도 모니터
+                # (4bot 지하층: 지하층 매도 미체결 중(최대 60초)에는 본/서브 매매를 쉰다 — 원작 스윕이 미체결 매도를 취소하므로)
+                sell_res = None
+                if not basement_busy:
+                    sell_res = await _call_plugin_adaptive(
+                        execute_1m_sniper_sell_and_reanchor_plugin,
+                        context=context,
+                        holdings=holdings,
+                        prices=prices_for_sell,
+                        now_est=now_est,
+                    )
                 did_sell = bool(
                     isinstance(sell_res, dict)
                     and sell_res.get("did_sell_or_ratchet")
                 )
 
-                # 🔵 [Step 3-3 · Case 44, 78, 79, 80, 84, 87, 88] 매수 게이트/모니터(본 그리드 + Default-ON 3층 서브 그리드)는 오직 04:07 ~ 16:00 EST (is_active_buy_window) 구간에서만 가동!
-                if not did_sell and is_active_buy_window(hm, now_est=now_est):
+                # 🔵 [Step 3-3 · Case 44, 78, 79, 84, 87, 88] 매수 게이트/모니터(본 그리드 + Default-ON 3층 서브 그리드)는 오직 04:07 ~ 16:00 EST (is_active_buy_window) 구간에서만 가동!
+                if not did_sell and not basement_busy and is_active_buy_window(hm, now_est=now_est):
                     await _call_plugin_adaptive(
                         execute_seed_protected_buy_gate_plugin,
                         context=context,
@@ -3213,6 +3178,10 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                             )
 
             else:
+                # 🏚️ [4bot 지하층 v2.2.0] 매도 창 밖: 지하층 미체결 주문만 확인 (새 발주 없음)
+                await _run_basement_exit_step(
+                    context, holdings, prices, now_est, allow_new_order=False
+                )
                 st_idle = context.ledger.get_state(TARGET_SYMBOL)
                 if str(st_idle.get("sell_order_id") or "").strip():
                     await _call_plugin_adaptive(
@@ -3259,14 +3228,12 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
             st_after = context.ledger.get_state(TARGET_SYMBOL)
             b_after = st_after.get("buckets") or []
             sub_after = st_after.get("sub_buckets") or []
-            gp_after = pocket_from_dict(st_after.get("golden_pocket"))
             h_qty_after = safe_int(
                 context.latest_holdings.get(TARGET_SYMBOL, {}).get("qty"), 0
             )
             has_pos_or_ord = bool(
                 len(b_after) > 0
                 or len(sub_after) > 0
-                or gp_after.is_active
                 or h_qty_after > 0
                 or str(st_after.get("buy_order_id") or "").strip()
                 or str(st_after.get("sell_order_id") or "").strip()
@@ -3289,7 +3256,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# [핵심 4] 백그라운드 태스크 3 : 17:00 EST 일일 GC · 날짜별 금고 백업 및 롤오버 루프 (Case 74, 76, 77, 79, 80, 88)
+# [핵심 4] 백그라운드 태스크 3 : 17:00 EST 일일 GC · 날짜별 금고 백업 및 롤오버 루프 (Case 74, 76, 77, 79, 88)
 # ---------------------------------------------------------------------------
 async def daily_gc_and_rollover_loop(context: SniperAppContext) -> None:
     last_gc_date = ""
@@ -3322,9 +3289,6 @@ async def daily_gc_and_rollover_loop(context: SniperAppContext) -> None:
                     daily_sub_realized_net_usd=0.0,
                     daily_main_buy_cnt=0,
                     daily_main_sell_cnt=0,
-                    daily_golden_allin_buy_events=0,
-                    daily_golden_pocket_sell_cnt=0,
-                    daily_golden_realized_net_usd=0.0,
                     daily_reserve_injected_cnt=0,
                     daily_dust_guard_blocked_cnt=0,
                     pending_step_up_min_price=0.0,
@@ -3403,7 +3367,7 @@ async def async_main() -> None:
 
     run_quant_engine_tdd()
     logger.info(
-        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 🌟 POCKET_ALLIN / 🔥 GRID_L1_ALLIN × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84 ~ 88 전수 검증 완료"
+        "✅ [QuantEngine TDD 사전 무결성 검증 통과] 챔피언 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L(Default ON) × 💉 05_RESV_6P_GUARD30 × 🔓 06_STEP2X_15PCT_C20 & 방안 C · Case 84 ~ 89 전수 검증 완료"
     )
 
     context = SniperAppContext(base_dir=base_dir)
@@ -3544,7 +3508,7 @@ async def async_main() -> None:
     ]
 
     logger.info(
-        "🚀 [SOXL 7층 본그리드 + Default-ON 3층 서브그리드 스나이퍼 가동 완료 · 폴더=%s] 매수 04:07~16:00 EST(15:30~16:00 0주신규/돌파차단 · 서브 5일동결 4%%·4회캡 상시가동) & 익절 매도 24시간(프리·정규·애프터·데이장 · 방안 C 통합이평 사수 & 윗꼬리 즉시 체결 & 계좌별 수수료 자동정산) 확장(Case 65~88)",
+        "🚀 [SOXL 7층 본그리드 + Default-ON 3층 서브그리드 스나이퍼 가동 완료 · 폴더=%s] 매수 04:07~16:00 EST(15:30~16:00 0주신규/돌파차단 · 서브 5일동결 4%%·4회캡 상시가동) & 익절 매도 24시간(프리·정규·애프터·데이장 · 방안 C 통합이평 사수 & 윗꼬리 즉시 체결 & 계좌별 수수료 자동정산) 확장(Case 65~89)",
         context.folder_slug,
     )
 
