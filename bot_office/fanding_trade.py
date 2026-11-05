@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.14.0)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.14.2)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -71,6 +71,11 @@
 # 1.11.2 (사무실 v1.2.0): 가격표·주문 완료 메시지 간결화 — 💵 달러(숫자 앞·정수 반올림, 조회 불가 시 예전 순서)·📦 보유 수량 비교만
 #        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
 # 1.14.0 (사무실 v1.2.4): 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
+# 1.14.2 (사무실 vNEXT): 과거 가격표 숫자 파일을 5번 팬딩 봇으로 보냄 — past_sheet_telegram.tick() 호출 1줄
+#        (파일이 오늘 새로 갱신되고 내용이 바뀐 날 1번만 · 숫자 파일 1개만 · 기존 팬딩 봇 설정 · 매매 로직 불변)
+# 1.14.1 (사무실 vNEXT): 과거 가격표 숫자 파일 자동 갱신 — 매일 12:00 KST 뒤(과거 수집 시간대 8~12시 이후),
+#        history.jsonl 이 바뀌었을 때만 export_past_sheet.auto_export() 를 이 서비스 계정으로 실행 (10분에 한 번 확인)
+#        · 원본 읽기만 · 알림·주문·state.json 안 건드림 · 실패해도 매매 루프 계속 (서비스 로그 한 줄만) · 매매 로직 불변
 # 1.13.0: 자동환전을 가격표 알림 '전'에 실행(알림은 환전 후 달러+환전 줄, 중단·시간 밖이면 바로 알림+수동 버튼) · 정/역방향 우대 시간 평일 09:00~15:30 만 · P 원화 역자동환전(💱 역자동환전 토글, 기본 꺼짐, 메리츠 mnec_clcd 2)
 # 1.12.0: 환전 직관화(💱 환전 → 금액 고르기 버튼 → 확인 → [✅ $XXX 환전 실행]) + P 부족금 자동환전(💱 자동환전 토글, 기본 꺼짐, 추정 기준·$10 반올림·회차당 1번, P 키만)
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
@@ -126,7 +131,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.14.0"
+VERSION = "1.14.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -2387,6 +2392,12 @@ def loop():
             fanding_vr6.tick(tg)
         except Exception as e:
             print("VR6 점검 오류:", type(e).__name__, e, flush=True)
+        past_export_tick()            # 1.14.1 과거 숫자 파일 (자체 예외 처리 · 알림 없음)
+        try:                          # 1.14.2 과거 숫자 파일 → 5번 팬딩 봇 (갱신된 날 1번만)
+            import past_sheet_telegram
+            past_sheet_telegram.tick(tg, HOME)
+        except Exception as e:
+            print("과거 숫자 파일 전송 점검 오류:", type(e).__name__, flush=True)
         if tg.own:
             poll_own_bot(tg)          # 약 15초 동안 버튼·명령 기다림
         else:
@@ -2716,6 +2727,37 @@ _LOADED_MTIME = _mtimes()
 
 def _file_changed():
     return _mtimes() != _LOADED_MTIME
+
+
+# ---------------------------------------------------------- 1.14.1 과거 가격표 숫자 파일 자동 갱신 (알림·주문 없음)
+PAST_EXPORT = {"tried": 0.0, "err_day": ""}
+
+
+def past_export_tick(now=None):
+    """매일 past_export_after_kst(기본 12:00) 뒤, 10분마다 history.jsonl 변경 여부만 보고 바뀌었으면 숫자 파일 갱신"""
+    now = now or now_kst()
+    if now.strftime("%H:%M") < str(cfg().get("past_export_after_kst", "12:00")):
+        return None
+    if time.time() - PAST_EXPORT["tried"] < 600:
+        return None
+    PAST_EXPORT["tried"] = time.time()
+    try:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "export_past_sheet.py")
+        spec = importlib.util.spec_from_file_location("export_past_sheet", path)   # 매번 새로 읽음 → 추출기만 바뀌어도 재시작 불필요
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        res = mod.auto_export(HOME)
+        if res.get("status") != "skip":
+            replay("past_export", res.get("status", ""), event_type="backfill",
+                   rows=int(res.get("count", 0)), invalid=int(res.get("invalid", 0)))
+        return res
+    except Exception as e:
+        day = now.date().isoformat()
+        if PAST_EXPORT["err_day"] != day:          # 하루 한 번만 로그 (텔레그램 없음)
+            PAST_EXPORT["err_day"] = day
+            replay("past_export", "error", type(e).__name__, event_type="backfill")
+        return None
 
 
 # ---------------------------------------------------------- 5번 봇 글자 명령·버튼 처리
