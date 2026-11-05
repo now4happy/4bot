@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.2.8 · 2026-11-05 09:58 (KST)
+- 파일: sniper_picture.html, sniper_picture.py
+- 내용: 사무실 현황판 지하층 시각 표시 (황금 칸·상단 지하 주수, 사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.2.7 · 2026-11-05 09:32 (KST)
 - 파일: office_briefing.py, sniper_picture.html, sniper_picture.py
 - 내용: 2번 스나이퍼 v2.2.0 원작 골든포켓 폐기 이식 + 지하층 보관 (사무실 vNEXT)
