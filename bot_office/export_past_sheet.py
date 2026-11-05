@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # FANDING_PAST_SHEET_EXPORT_V1.1.1 — standalone, no trading imports
-# 1.1.1 (사무실 vNEXT, 2026-11-05): ① 당일 표(kind=sheet)도 뽑음 — 과거 표(past_sheet)와 같은 5칸, 중복 기준 종가일+글 주소
+# 1.1.1 (사무실 v1.3.1, 2026-11-05): ① 당일 표(kind=sheet)도 뽑음 — 과거 표(past_sheet)와 같은 5칸, 중복 기준 종가일+글 주소
 #   (같은 키는 history.jsonl 에서 나중 줄이 이김 = 다시 읽은 최신 숫자) ② 빠진 매매일 찾기 coverage()·missing_text()
 #   · 주말 제외 · 미국 휴장일은 따로 표시(빠진 날짜에서 뺌) · 조기 폐장일(11/27·12/24 등)은 매매일
 #   · 숫자를 추측으로 채우지 않음 (찾아서 보여 주기만) · --missing: 파일을 쓰지 않고 빠진 날짜만 출력

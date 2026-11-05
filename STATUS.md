@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-05 14:50 (KST) · 계기: 업데이트 적용 (staging: 팬딩 past_sheet 자동 추출 + 텔레그램 전달 (추출기 1.1.0, fanding_trade 1.14.2, 텔레그램 모듈 1.0.0))
+- 갱신: 2026-11-05 15:24 (KST) · 계기: 업데이트 적용 (staging: 팬딩 과거자료 다운 버튼화 + 당일 표 누적 (추출기 1.1.1, fanding_trade 1.14.3, 텔레그램 모듈 1.1.0))
 
 ## 봇별 현재 상태
 
@@ -13,12 +13,12 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-05 09:31 KST부터) | v1.1.6 | 2026-11-05 09:32 | 2번 스나이퍼 v2.2.0 원작 골든포켓 폐기 이식 + 지하층 보관 (사무실 vNEXT) |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (11-05 09:02 KST부터) | v4.3.8 | 2026-11-05 09:02 | 3번 토스 적립 v4.3.8: R1 단계 단조화 + 정지·결정 중 알림 + 가격 0 가드 + N7 지수 20 |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-01 14:57 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-05 14:50 KST부터) | v1.3.0 | 2026-11-05 14:50 | 팬딩 past_sheet 자동 추출 + 텔레그램 전달 (추출기 1.1.0, fanding_trade 1.14 |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-05 15:23 KST부터) | v1.3.1 | 2026-11-05 15:24 | 팬딩 과거자료 다운 버튼화 + 당일 표 누적 (추출기 1.1.1, fanding_trade 1.14.3, 텔 |
 
 ## 사무실 상시 서비스
 
 - 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-05 09:32 KST부터)
-- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-05 14:50 KST부터)
+- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-05 15:23 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-01 18:38 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
@@ -26,6 +26,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-05 15:24 · 5번 사무실 비서 v1.3.1 · export_past_sheet.py, fanding_trade.py, past_sheet_telegram. · 팬딩 과거자료 다운 버튼화 + 당일 표 누적 (추출기 1.1.1, fanding_trade 1.14.3, 텔
 - 2026-11-05 14:50 · 5번 사무실 비서 v1.3.0 · export_past_sheet.py, fanding_trade.py, past_sheet_telegram. · 팬딩 past_sheet 자동 추출 + 텔레그램 전달 (추출기 1.1.0, fanding_trade 1.14
 - 2026-11-05 14:17 · 5번 사무실 비서 v1.2.9 · export_past_sheet.py · staging에서 백테스트 스크립트만 제외 (업데이터 허용 파일만 남김)
 - 2026-11-05 09:58 · 5번 사무실 비서 v1.2.8 · sniper_picture.html, sniper_picture.py · 사무실 현황판 지하층 시각 표시 (황금 칸·상단 지하 주수, 사무실 vNEXT)
@@ -35,7 +36,6 @@
 - 2026-11-04 22:13 · 5번 사무실 비서 v1.2.6 · sniper_picture.html, sniper_picture.py · 사무실 vNEXT: 스나이퍼룸 층 영역에 골든포켓 줄 표시 (⭐ 80주 · 황금 칸 ×8, 1칸=10주 반올
 - 2026-11-04 21:40 · 5번 사무실 비서 v1.2.5 · sniper_picture.html, sniper_picture.py · 사무실 vNEXT: 스나이퍼룸 상단 카드에 골든포켓 주수 표시 (본 51·서브 0·골든 80, 합계 131)
 - 2026-11-04 17:00 · 5번 사무실 비서 v1.2.4 · fanding_trade.py, fanding_vr6.py · 팬딩 자동주문 시간 선택 + 토글 버튼 동작 표시 (fanding_trade 1.14.0, fanding_v
-- 2026-11-04 16:25 · 5번 사무실 비서 v1.2.3 · fanding_trade.py, fanding_vr6.py · 메리츠 환전 순서 변경 + 원화 역자동환전 (fanding_trade 1.13.0, fanding_vr6 2
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
