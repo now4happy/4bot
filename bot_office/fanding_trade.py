@@ -71,6 +71,11 @@
 # 1.11.2 (사무실 v1.2.0): 가격표·주문 완료 메시지 간결화 — 💵 달러(숫자 앞·정수 반올림, 조회 불가 시 예전 순서)·📦 보유 수량 비교만
 #        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
 # 1.14.0 (사무실 v1.2.4): 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
+# 1.14.3 (사무실 vNEXT): 과거자료 다운을 버튼으로 (사용자 지시 2026-11-05) — 매매·주문·판독·알림 로직 불변
+#        ① loop() 의 past_sheet_telegram.tick() 호출 삭제 → 매일 자동 전송 없음
+#        ② 🛠 도구에 [📥 과거자료 다운] (/과거자료다운): 누르면 숫자 파일을 바로 갱신(history 가 바뀐 경우만) → 5칸 검사 →
+#          5번 팬딩 봇으로 1번 전송 → 줄 수·날짜 범위·빠진 매매일 답장 · /빠진날짜 는 전송 없이 목록만
+#        ③ 🩺 진단·🔄 재판독 버튼을 P 메뉴에서 🛠 도구로 옮김 (/진단·/재판독 글자 명령·알림 안 버튼은 그대로)
 # 1.14.2 (사무실 v1.3.0): 과거 가격표 숫자 파일을 5번 팬딩 봇으로 보냄 — past_sheet_telegram.tick() 호출 1줄
 #        (파일이 오늘 새로 갱신되고 내용이 바뀐 날 1번만 · 숫자 파일 1개만 · 기존 팬딩 봇 설정 · 매매 로직 불변)
 # 1.14.1 (사무실 v1.3.0): 과거 가격표 숫자 파일 자동 갱신 — 매일 12:00 KST 뒤(과거 수집 시간대 8~12시 이후),
@@ -131,7 +136,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.14.2"
+VERSION = "1.14.3"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -2393,11 +2398,7 @@ def loop():
         except Exception as e:
             print("VR6 점검 오류:", type(e).__name__, e, flush=True)
         past_export_tick()            # 1.14.1 과거 숫자 파일 (자체 예외 처리 · 알림 없음)
-        try:                          # 1.14.2 과거 숫자 파일 → 5번 팬딩 봇 (갱신된 날 1번만)
-            import past_sheet_telegram
-            past_sheet_telegram.tick(tg, HOME)
-        except Exception as e:
-            print("과거 숫자 파일 전송 점검 오류:", type(e).__name__, flush=True)
+        # 1.14.3: 과거 숫자 파일 자동 전송 없음 — 🛠 도구 [📥 과거자료 다운] 버튼으로만 (past_download)
         if tg.own:
             poll_own_bot(tg)          # 약 15초 동안 버튼·명령 기다림
         else:
@@ -2409,6 +2410,7 @@ def loop():
 
 HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
              "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황\n"
+             "▫️ <b>/과거자료다운</b> 과거 숫자 파일 받기(누를 때만) · <b>/빠진날짜</b> 빠진 매매일 목록\n"
              "▫️ <b>/재판독</b> PC 사이트 재접속·최신 자료 요청 · <b>/진단</b> 단계별 상태\n"
              "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
              "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
@@ -2424,7 +2426,7 @@ MENU_ITEMS = [("pr", "📋 가격표", "/가격표"), ("fx", "💱 환전", "/�
               ("dg", "🩺 진단", "/진단"), ("rs", "🔄 재판독", "/재판독"),
               ("rt", "⏱ 발주시간", "/발주시간"), ("rr", "🔁 재예약", "/재예약"), ("rf", "⚠️ 재예약 강제", "/재예약강제"),
               ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"), ("hp", "❓ P 도움말", "/help"),   # 1.10.0 글자
-              ("au", "🤖 자동주문", "/자동")]
+              ("au", "🤖 자동주문", "/자동"), ("pd", "📥 과거자료 다운", "/과거자료다운")]   # 1.14.3
 MENU_ALIAS = {label: cmd for _, label, cmd in MENU_ITEMS}
 MENU_ALIAS.update({"❓ 도움말": "/help"})          # 1.10.0 전 하단 버튼 글자
 MENU_CMD = {key: cmd for key, _, cmd in MENU_ITEMS}
@@ -2446,16 +2448,17 @@ def main_keyboard():
 
 
 def menu_keyboard():
-    """P 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태"""
+    """P 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태 (1.14.3: 진단·재판독은 🛠 도구로)"""
     auto = AUTO_OFF_BTN if cfg()["auto_order"] else AUTO_ON_BTN
     return [[{"text": "📋 가격표"}, {"text": "💱 환전"}], [{"text": auto}, {"text": "📐 배수"}],
             [{"text": auto_fx_label()}, {"text": auto_rfx_label()}],
-            [{"text": "🩺 진단"}, {"text": "🔄 재판독"}], [{"text": P_TOOLS_LABEL}, {"text": HOME_LABEL}]]
+            [{"text": P_TOOLS_LABEL}, {"text": HOME_LABEL}]]
 
 
 def tools_keyboard():
     return [[{"text": "⏱ 발주시간"}, {"text": "🔁 재예약"}], [{"text": "⚠️ 재예약 강제"}, {"text": "🧠 판독 AI"}],
-            [{"text": "🗂 과거 수집"}, {"text": "❓ 도움말"}], [{"text": P_BACK_LABEL}]]
+            [{"text": "🩺 진단"}, {"text": "🔄 재판독"}],
+            [{"text": "🗂 과거 수집"}, {"text": "📥 과거자료 다운"}], [{"text": "❓ 도움말"}, {"text": P_BACK_LABEL}]]
 
 
 # ---------- P·VR6 가 같은 글자를 쓰는 버튼 → 지금 보고 있는 메뉴로 보냄 (1.10.1)
@@ -2760,6 +2763,62 @@ def past_export_tick(now=None):
         return None
 
 
+# ---------------------------------------------------------- 1.14.3 🛠 도구 [📥 과거자료 다운] · /빠진날짜 (누를 때만)
+PAST_SEND_KO = {"no_file": "숫자 파일이 아직 없어요 (12:00 KST 뒤 자동 갱신).", "just_sent": "방금 보냈어요. 30초 뒤에 다시 눌러 주세요.",
+                "too_big": "파일이 너무 커서 보내지 않았어요.", "bad_content": "정해진 5칸 밖의 내용이 있어 보내지 않았어요.",
+                "empty": "숫자 파일에 줄이 없어요.", "no_fanding_bot": "팬딩 전용 봇이 아니라 보내지 않았어요.",
+                "send_failed": "텔레그램 전송에 실패했어요. 잠시 뒤 다시 눌러 주세요.", "error": "보내는 중 오류가 났어요."}
+PAST_FILL_NOTE = "빠진 날짜 채우기: 서버만으로는 안 돼요 (하남 컴이 그 날짜 글을 다시 보내야 함) · 숫자는 추측으로 채우지 않아요"
+
+
+def _past_refresh():
+    """버튼을 눌렀을 때 숫자 파일을 먼저 갱신 (history.jsonl 이 바뀐 경우만 · 12:00 조건 없음). 실패해도 있는 파일로 진행"""
+    try:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "export_past_sheet.py")
+        spec = importlib.util.spec_from_file_location("export_past_sheet", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        res = mod.auto_export(HOME)
+        if res.get("status") != "skip":
+            replay("past_export", res.get("status", ""), "button", event_type="backfill",
+                   rows=int(res.get("count", 0)), invalid=int(res.get("invalid", 0)))
+        return mod
+    except Exception as e:
+        replay("past_export", "error", type(e).__name__, event_type="backfill")
+        return None
+
+
+def past_download(tg_s):
+    """누를 때만 숫자 파일 1개를 5번 팬딩 봇으로 보내고, 줄 수·날짜 범위·빠진 매매일을 답장"""
+    _past_refresh()
+    try:
+        import past_sheet_telegram
+        r = past_sheet_telegram.send_now(tg_s, HOME)
+    except Exception as e:
+        print("과거자료 다운 오류:", type(e).__name__, flush=True)
+        r = {"status": "error"}
+    if r.get("status") == "sent":
+        tg_s.send(f"📥 <b>과거자료 보냄</b> · {r['rows']}줄 · {r['first']} ~ {r['last']}\n"
+                  + html.escape(r.get("missing") or "") + "\n" + PAST_FILL_NOTE)
+    else:
+        print("과거자료 다운 안 보냄:", r.get("status"), flush=True)
+        tg_s.send("📥 " + PAST_SEND_KO.get(r.get("status"), "보내지 않았어요."))
+    return True
+
+
+def past_missing(tg_s):
+    """전송 없이 빠진 매매일 목록만"""
+    mod = _past_refresh()
+    try:
+        cov = mod.coverage_of_file(HOME / "past_sheet_numbers.jsonl")
+        tg_s.send("🗓 <b>과거자료 빠진 매매일</b>\n" + html.escape(mod.missing_text(cov)) + "\n" + PAST_FILL_NOTE)
+    except Exception as e:
+        print("빠진 날짜 확인 오류:", type(e).__name__, flush=True)
+        tg_s.send("🗓 빠진 날짜를 확인하지 못했어요 (숫자 파일 없음 또는 읽기 오류).")
+    return True
+
+
 # ---------------------------------------------------------- 5번 봇 글자 명령·버튼 처리
 def _pending_sheet(st):
     for d in sorted(st["sheets"], reverse=True):
@@ -2772,6 +2831,10 @@ def bot_message(tg_s, text):
     """처리했으면 True. tg_s 는 5번 팬딩 봇의 TG 객체"""
     t = text.strip()
     low = t.lower()
+    if t in ("/과거자료다운", "과거자료다운", "/과거다운"):       # 1.14.3 🛠 도구 [📥 과거자료 다운]
+        return past_download(tg_s)
+    if t in ("/빠진날짜", "빠진날짜"):
+        return past_missing(tg_s)
     if t in ("/재판독", "재판독", "/판독요청"):
         tg_s.send(request_scan()); return True
     if t in ("/진단", "진단"):
