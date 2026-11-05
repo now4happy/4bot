@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.3.2 · 2026-11-05 17:23 (KST)
+- 파일: office_briefing.py
+- 내용: 비서 브리핑 필요 금액 표 한투 USD 줄 추가 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.3.1 · 2026-11-05 15:24 (KST)
 - 파일: export_past_sheet.py, fanding_trade.py, past_sheet_telegram.py
 - 내용: 팬딩 과거자료 다운 버튼화 + 당일 표 누적 (추출기 1.1.1, fanding_trade 1.14.3, 텔레그램 모듈 1.1.0)

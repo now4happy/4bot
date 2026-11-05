@@ -23,7 +23,7 @@
   ① 골든 필요 달러 조건 줄(모드 ≠ NONE) 제거 · 상수 목록에서 DEFAULT_GOLDEN_ALLIN_MODE 제거(원작에서 삭제된 상수)
   ② 순수 코어 자산 = max(기준시드, 가용현금 + 본·서브 투입원가 − 예비수혈금) — 골든/지하층 원가는 넣지 않음 (sniper_plugin core_equity 와 같음)
   ③ 지하층(basement_pocket)이 원장에 있을 때만 참고 1줄(수량·비용) — 필요 달러·코어 자산·보유 차감 어디에도 넣지 않음, 없으면 줄 없음
-- 사무실 vNEXT (2026-11-05): '필요 금액' 표 한투에 USD 줄 추가 (USD 먼저·KRW 다음, 필요 '-', USD 조회 실패는 0 아님 + 노트) — kis_balances() 1번 호출, 그 밖 로직 그대로
+- 사무실 v1.3.2 (2026-11-05): '필요 금액' 표 한투에 USD 줄 추가 (USD 먼저·KRW 다음, 필요 '-', USD 조회 실패는 0 아님 + 노트) — kis_balances() 1번 호출, 그 밖 로직 그대로
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
@@ -1432,7 +1432,7 @@ def section_need(now, notes):
     notes.append("메리츠 필요: 계산식 없음 → '-' (지어내지 않음)")
 
     try:
-        kis = kis_balances()   # vNEXT: 1번만 호출해 KRW·USD 둘 다 받는다
+        kis = kis_balances()   # v1.3.2: 1번만 호출해 KRW·USD 둘 다 받는다
     except Exception:
         kis = {}
     kis_krw, kis_usd = kis.get("KRW"), kis.get("USD")
