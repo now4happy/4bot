@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.3.0 · 2026-11-05 14:50 (KST)
+- 파일: export_past_sheet.py, fanding_trade.py, past_sheet_telegram.py
+- 내용: 팬딩 past_sheet 자동 추출 + 텔레그램 전달 (추출기 1.1.0, fanding_trade 1.14.2, 텔레그램 모듈 1.0.0)
+- 브랜치: staging
+
 ## v1.2.9 · 2026-11-05 14:17 (KST)
 - 파일: export_past_sheet.py
 - 내용: staging에서 백테스트 스크립트만 제외 (업데이터 허용 파일만 남김)

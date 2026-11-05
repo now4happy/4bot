@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # FANDING_PAST_SHEET_EXPORT_V1.1.0 — standalone, no trading imports
-# 1.1.0 (사무실 vNEXT, 2026-11-05): 자동 실행 지원 — fanding_trade 1.14.1 이 매일 12:00 KST 뒤 서비스 계정으로 호출
+# 1.1.0 (사무실 v1.3.0, 2026-11-05): 자동 실행 지원 — fanding_trade 1.14.1 이 매일 12:00 KST 뒤 서비스 계정으로 호출
 #   · auto_export(): history.jsonl 이 바뀌었을 때만 다시 씀 (원본은 읽기만) · 결과 0640 + 폴더 그룹
 #   · --check: 파일을 쓰지 않고 개수만 (수동 확인용) · 쓰기 권한 없으면 Traceback 대신 안내 문구, 종료코드 2
 #   · 뽑는 범위·필드·중복 기준·원자적 저장은 1.0.0 그대로
