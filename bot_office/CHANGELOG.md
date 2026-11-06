@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.3.9 · 2026-11-06 16:57 (KST)
+- 파일: bot_updater.py, office_briefing.py, office_secretary.py
+- 내용: 가격·비용 메뉴 삭제 + 파기 파일 2개 삭제 준비 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.3.8 · 2026-11-06 16:51 (KST)
 - 파일: asset_board.py, test_asset_board.py
 - 내용: 자산 구성 도넛 1% 미만 숨김 (사무실 vNEXT)
