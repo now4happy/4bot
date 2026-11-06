@@ -76,7 +76,7 @@ OFFICE_DIR = os.environ.get("U_OFFICE", "/opt/bot-office")
 OFFICE_UNIT, SELF_UNIT, SELF_FILE = "bot-office.service", "bot-updater.service", "bot_updater.py"
 # 사무실 폴더(/opt/bot-office)에서 따로 도는 상시 서비스 — 그 파일이 바뀌면 이 서비스도 다시 시작해야 새 코드가 반영됨
 SECRETARY_UNIT, FANDING_UNIT = "bot-office-secretary.service", "bot-office-fanding.service"
-OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_briefing.py", "price_watch.py", "gemini_usage.py", "meritz_client.py", "toss_token_share.py", "pc_monitor.py", "office_url.py"),
+OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_briefing.py", "gemini_usage.py", "meritz_client.py", "toss_token_share.py", "pc_monitor.py", "office_url.py"),
                 FANDING_UNIT: ("fanding_trade.py", "fanding_vr6.py", "meritz_client.py", "gemini_usage.py")}
 OFFICE_EXT = (".py", ".html", ".css", ".js")
 SYSTEMCTL = os.environ.get("U_SYSTEMCTL", "systemctl")

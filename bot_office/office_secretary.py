@@ -8,7 +8,7 @@
 # V4 (2026-10-26): 비서봇에서 팬딩 모듈 import 및 팬딩 콜백 제거. 팬딩은 전용 봇에서만 처리.
 # V3 (2026-10-26): 하단 메인 메뉴·하위 메뉴 정리
 # 텔레그램 "사무실 비서" 대화 담당 (항상 실행: bot-office-secretary.service)
-#  - 하단 메뉴: 📊 조회(브리핑·잔액·PC 상태·사무실 주소) · 💲 가격·비용 · 🏢 사무실 · ❓ 도움말
+#  - 하단 메뉴: 📊 조회(브리핑·잔액·PC 상태·사무실 주소) · 🏢 사무실 · ❓ 도움말
 #  - 코드 수정은 GitHub staging → 6. Update 승인 방식만 씀 (이 비서는 수정 요청·결재를 받지 않음)
 #  안전: 등록된 대표님 채팅방(chat_id)에서 온 것만 처리.
 # ==========================================================
@@ -57,7 +57,6 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "▫️ <b>🏢 사무실</b> : 사무실 상황판을 바로 여는 버튼\n"
         "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
         "▫️ <b>📊 조회 → 💰 잔액</b> → 회사 선택(한국투자·토스·메리츠·빗썸·전체) : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
-        "▫️ <b>/가격도움말</b> : 한국 제품 가격 등록·조회·변동 알림\n"
         "▫️ <b>📊 조회 → 🖥 PC 상태</b> : 한국 PC 연결·매직스플릿 실행 확인\n"
         "▫️ <b>📊 조회 → 🔗 사무실 주소</b> : 지금 주소·한국 PC 주소 바꾸는 한 줄 (/주소변경 으로 고정 도메인 이동)\n"
         "▫️ 봇 코드 수정은 Claude·GPT 에게 맡겨 GitHub staging 에 올리고 6. Update 에서 승인해요.")
@@ -151,11 +150,10 @@ class TG:
 # 버튼은 기존 글자 명령과 똑같이 처리된다. 글자를 꼭 입력해야 하는 기능(수정 내용·상품명·금액)은
 # 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안 · 취소는 아래 다른 버튼).
 HOME = "🏠 메인 메뉴"
-MAIN_LABELS = [["📊 조회", "💲 가격·비용"], ["🏢 사무실", "❓ 도움말"]]
+MAIN_LABELS = [["📊 조회", "🏢 사무실"], ["❓ 도움말"]]
 SUB_LABELS = {
     "view": [["🗞 브리핑", "💰 잔액"], ["🖥 PC 상태", "🔗 사무실 주소"], [HOME]],
-    "price": [["🔎 가격 목록", "🔄 가격 확인", "📊 가격 비교"], ["➕ 가격 등록", "🔀 웹·앱 비교 등록"],
-              ["🤖 Gemini 사용량", "💵 Gemini 잔액 입력", "💲 Gemini 단가 입력"], [HOME]],
+
 }
 MENU_KB = [[{"text": t} for t in row] for row in MAIN_LABELS]
 SUB_KB = {k: [[{"text": t} for t in row] for row in v] for k, v in SUB_LABELS.items()}
@@ -165,81 +163,9 @@ BAL_ROWS = [[{"text": "🏦 한국투자", "callback_data": "bl:kis"}, {"text": 
             [{"text": "🏛 메리츠", "callback_data": "bl:meritz"}, {"text": "🪙 빗썸", "callback_data": "bl:bithumb"}],
             [{"text": "🧾 전체", "callback_data": "bl:all"}, {"text": "✖ 닫기", "callback_data": "mn:x"}]]
 BAL_NAME = {v: k for k, v in BAL_ACTIONS.items()}
-PRICE_ACTIONS = {"🔎 가격 목록": "ls", "🔄 가격 확인": "ck", "📊 가격 비교": "cp", "➕ 가격 등록": "rg", "🔀 웹·앱 비교 등록": "rc"}
-GEMINI_ACTIONS = {"🤖 Gemini 사용량": "v", "💵 Gemini 잔액 입력": "b", "💲 Gemini 단가 입력": "r"}
-MENU_SPECIAL = tuple(["📊 조회", "💲 가격·비용", "🏢 사무실", "💰 잔액", HOME] + list(PRICE_ACTIONS) + list(GEMINI_ACTIONS))
+MENU_SPECIAL = ("📊 조회", "🏢 사무실", "💰 잔액", HOME)
 CANCEL_WORDS = ("브리핑", "잔액", "도움말", "help", "?")
 CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
-AWAIT_PROMPTS = {
-    "price_reg": "➕ <b>상품 등록</b>\n다음 메시지로 보내 주세요 (10분 안 · 취소는 아래 다른 버튼):\n<code>상품명 | 도메인(선택) | 연간·월간·일시불(선택)</code>\n예) <i>클로드 Pro 연간 구독</i>",
-    "price_cmp": "🔀 <b>웹·앱 비교 등록</b>\n다음 메시지로 상품명을 보내 주세요 (10분 안 · 취소는 아래 다른 버튼). 예) <i>클로드 Pro 연간 구독</i>",
-    "gem_bal": "💵 <b>Gemini 잔액 입력</b>\n다음 메시지로 보내 주세요 (10분 안 · 취소는 아래 다른 버튼):\n<code>달러금액 [화면집계일 YYYY-MM-DD]</code>\n예) <i>12.34</i>",
-    "gem_rate": "💲 <b>Gemini 단가 입력</b>\n다음 메시지로 보내 주세요 (10분 안 · 취소는 아래 다른 버튼):\n<code>모델명 입력단가 출력단가</code>"}
-
-
-def menu_inline(spec, prefix):
-    return [[{"text": t, "callback_data": f"{prefix}:{k}"} for t, k in row] for row in spec]
-
-
-def run_price(tg, command):
-    try:
-        import price_watch
-        price_watch.handle(tg, command)
-    except Exception as e:
-        tg.send("가격 추적을 불러오지 못했어요: " + html.escape(str(e)[:150]))
-
-
-def price_list_rows():
-    try:
-        import price_watch
-        with price_watch.state(write=False) as pdata:
-            items = list(pdata["items"].items())
-    except Exception:
-        return None
-    return [[{"text": f"{'⏸ 중지' if it.get('enabled') else '▶ 재개'} · {str(it.get('name', ''))[:16]}",
-              "callback_data": f"pw:t:{ident}"}] for ident, it in items[:10]] or None
-
-
-def price_action(tg, st, key):
-    if key == "ls":
-        run_price(tg, "/가격목록")
-        rows = price_list_rows()
-        if rows:
-            tg.send("▫️ 눌러서 중지·재개", rows)
-    elif key == "ck":
-        run_price(tg, "/가격확인")
-    elif key == "cp":
-        run_price(tg, "/가격비교")
-    elif key == "hp":
-        run_price(tg, "/가격도움말")
-    elif key in ("rg", "rc"):
-        kind = "price_reg" if key == "rg" else "price_cmp"
-        st["await"] = {"kind": kind, "at": time.time()}
-        tg.send(AWAIT_PROMPTS[kind])
-
-
-def gemini_action(tg, st, key):
-    if key == "v":
-        import gemini_usage
-        gemini_usage.handle(tg, "/제미나이잔액")
-    elif key in ("b", "r"):
-        kind = "gem_bal" if key == "b" else "gem_rate"
-        st["await"] = {"kind": kind, "at": time.time()}
-        tg.send(AWAIT_PROMPTS[kind])
-
-
-def handle_await(tg, st, msg, aw, text):
-    """버튼을 누른 뒤 보낸 다음 메시지를 알맞은 명령으로 처리"""
-    kind = aw.get("kind")
-    if kind == "price_reg":
-        run_price(tg, "/가격등록 " + text)
-    elif kind == "price_cmp":
-        run_price(tg, "/가격비교등록 " + text)
-    elif kind in ("gem_bal", "gem_rate"):
-        import gemini_usage
-        gemini_usage.handle(tg, ("/제미나이잔액 " if kind == "gem_bal" else "/제미나이단가 ") + text)
-
-
 def office_open(tg):
     """🏢 사무실: 지금 사무실 주소를 여는 버튼 (주소는 /etc/bot-office/office_url · 임시 터널이면 바뀔 때마다 자동 갱신)"""
     try:
@@ -271,36 +197,16 @@ def handle_message(tg, st, msg):
         import office_url
         if office_url.handle_text(tg, text):
             return
-    aw = st.get("await")
-    if aw and (time.time() - aw.get("at", 0) > 600 or raw.startswith("/") or raw in MENU_SPECIAL or raw in MENU_ALIAS
-               or raw.lower() in CANCEL_WORDS):
-        st.pop("await", None); aw = None
     if raw == HOME:
         tg.send("🏠 <b>메인 메뉴</b> · 아래 버튼을 눌러 주세요", keyboard=MENU_KB); return
     if raw == "📊 조회":
         tg.send("📊 <b>조회</b> · 아래 버튼을 눌러 주세요", keyboard=SUB_KB["view"]); return
-    if raw == "💲 가격·비용":
-        tg.send("💲 <b>가격·비용</b> · 아래 버튼을 눌러 주세요", keyboard=SUB_KB["price"]); return
     if raw == "🏢 사무실":
         office_open(tg); return
     if raw == "💰 잔액":
         tg.send("💰 <b>어느 회사 잔액을 볼까요?</b>", BAL_ROWS); return
     if raw in BAL_ACTIONS:   # 예전 하단 버튼이 남아 있을 때도 동작
         balance(tg, BAL_ACTIONS[raw]); return
-    if raw in PRICE_ACTIONS:
-        price_action(tg, st, PRICE_ACTIONS[raw]); return
-    if raw in GEMINI_ACTIONS:
-        gemini_action(tg, st, GEMINI_ACTIONS[raw]); return
-    if aw:
-        st.pop("await", None); handle_await(tg, st, msg, aw, text); return
-    if text.split()[0] in ("/가격등록", "/가격목록", "/가격중지", "/가격재개", "/가격확인", "/가격도움말", "/가격비교등록", "/가격비교"):
-        import price_watch
-        if price_watch.handle(tg, text):
-            return
-    if text.split()[0] in ("/제미나이잔액", "/제미나이단가"):
-        import gemini_usage
-        if gemini_usage.handle(tg, text):
-            return
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?"):
         tg.send(HELP + "\n▫️ 아래 버튼 메뉴로 모든 기능을 쓸 수 있어요.", keyboard=MENU_KB); return
@@ -328,28 +234,6 @@ def handle_callback(tg, st, cb):
         tg.answer(cb_id, BAL_NAME[key]); balance(tg, key); return
     if data.startswith(("mq:", "rb:", "ch:", "rq:", "cx:", "ap:", "apy:", "keep:", "rj:", "df:")):   # 삭제한 수정 요청·결재 버튼 (예전 메시지)
         tg.answer(cb_id, "수정 요청·결재 기능은 없어졌어요"); tg.buttons(msg_id, []); return
-    if data.startswith("pw:"):
-        tg.answer(cb_id)
-        parts = data.split(":"); key = parts[1]
-        if key == "t" and len(parts) > 2:
-            ident = parts[2]
-            try:
-                import price_watch
-                with price_watch.state(write=False) as pdata:
-                    enabled = bool((pdata["items"].get(ident) or {}).get("enabled"))
-            except Exception:
-                tg.send("가격 추적 상태를 읽지 못했어요."); return
-            run_price(tg, ("/가격중지 " if enabled else "/가격재개 ") + ident)
-            rows = price_list_rows()
-            if rows:
-                tg.send("▫️ 현재 상태", rows)
-        else:
-            price_action(tg, st, key)
-        return
-    if data.startswith("gm:"):
-        tg.answer(cb_id)
-        gemini_action(tg, st, data[3:])
-        return
 
 
 def main():

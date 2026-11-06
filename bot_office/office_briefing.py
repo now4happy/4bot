@@ -1685,12 +1685,7 @@ def scheduled_run(now=None):
         print("전송 결과:", sent)
         if sent:
             commit_seen()
-        if sent and 8 <= now.hour < 12:
-            try:
-                import price_watch
-                price_watch.launch()
-            except Exception as error:
-                print("가격 추적 시작 실패:", type(error).__name__)
+
 
 
 if __name__ == "__main__":
