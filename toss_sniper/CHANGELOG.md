@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.1.8 · 2026-11-06 11:57 (KST)
+- 파일: defense_plugin.py, sniper_exit_plugin.py, toss_api.py
+- 내용: 2번 스나이퍼 v2.3.1 R1·R2 수동 주문 보호 (04:00·16:00 일괄 취소와 익절 스윕을 봇 주문만 대상으로 제한)
+- 브랜치: staging
+
 ## v1.1.7 · 2026-11-06 10:12 (KST)
 - 파일: defense_plugin.py, main.py, quant_engine.py, sniper_exit_plugin.py, sniper_plugin.py, tg_ui_plugin.py, toss_api.py
 - 내용: 2번 스나이퍼 Case 91 이식 v2.3.0 (복리/단리 모드 + 무제한 시멘트추가 + 지하층 보존, 사무실 vNEXT)
