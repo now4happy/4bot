@@ -12,7 +12,7 @@
 #   지하층 없으면 basement=None(카드 숨김). 현재가 모르면 손익 None("—"). 지하층은 층 바·상단 보유 합계·평단·미실현에 섞지 않음.
 # 사무실 v1.2.8 (2026-11-05): 지하층 시각 표시 — holding.basement_shares 추가(지하층 수량>0 이면 그 수량, 아니면 0),
 #   holding.total_shares = 본 + 서브 + 지하층 (주수 합계만). 투자금·평단·미실현은 본·서브만 그대로 (지하층 금액 미포함).
-# 사무실 vNEXT (2026-11-06): 스나이퍼 v2.3.0(원작 a4b4790 Case 91) 대응 — reserve 에 total_injected_cnt·daily_injected_cnt 추가
+# 사무실 v1.3.3 (2026-11-06): 스나이퍼 v2.3.0(원작 a4b4790 Case 91) 대응 — reserve 에 total_injected_cnt·daily_injected_cnt 추가
 #   (무제한 시멘트추가 · 회분 상한 표시 없앰), mode 객체 추가(원장 portion_mode · 없으면 복리). 지하층·본·서브·사이클·캐시 그대로.
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
@@ -248,10 +248,10 @@ def build(state, live_price=None, now_est=None, price_note=""):
                "max_portions": int(summary.get("max_reserve_portions") or 6),
                "waiting_deposit": bool(summary.get("waiting_reserve_deposit")),
                "required_deposit_usd": round(float(summary.get("required_reserve_deposit_usd") or 0.0), 2),
-               # 사무실 vNEXT · 스나이퍼 v2.3.0(Case 91 무제한 시멘트추가): 회분 상한 대신 횟수만 (원장 값 그대로)
+               # 사무실 v1.3.3 · 스나이퍼 v2.3.0(Case 91 무제한 시멘트추가): 회분 상한 대신 횟수만 (원장 값 그대로)
                "total_injected_cnt": int(state.get("total_reserve_injected_cnt") or 0),
                "daily_injected_cnt": int(state.get("daily_reserve_injected_cnt") or 0)}
-    # 사무실 vNEXT · Case 91 운용 모드: 원장 portion_mode 그대로 (없으면 복리 · 엔진 판정 함수가 있으면 그것을 씀)
+    # 사무실 v1.3.3 · Case 91 운용 모드: 원장 portion_mode 그대로 (없으면 복리 · 엔진 판정 함수가 있으면 그것을 씀)
     _pm = str(state.get("portion_mode") or "COMP_08PCT").upper().strip()
     _is_simple = bool(qe.is_simple_income_mode(_pm)) if hasattr(qe, "is_simple_income_mode") else _pm in ("SIMPLE_08PCT", "FIXED_800", "SIMPLE", "INCOME")
     mode = {"portion_mode": "SIMPLE_08PCT" if _is_simple else "COMP_08PCT", "simple": _is_simple,

@@ -24,7 +24,7 @@
   ② 순수 코어 자산 = max(기준시드, 가용현금 + 본·서브 투입원가 − 예비수혈금) — 골든/지하층 원가는 넣지 않음 (sniper_plugin core_equity 와 같음)
   ③ 지하층(basement_pocket)이 원장에 있을 때만 참고 1줄(수량·비용) — 필요 달러·코어 자산·보유 차감 어디에도 넣지 않음, 없으면 줄 없음
 - 사무실 v1.3.2 (2026-11-05): '필요 금액' 표 한투에 USD 줄 추가 (USD 먼저·KRW 다음, 필요 '-', USD 조회 실패는 0 아님 + 노트) — kis_balances() 1번 호출, 그 밖 로직 그대로
-- 사무실 vNEXT (2026-11-06): 스나이퍼 v2.3.0(원작 a4b4790 Case 91) 대응 — 달러 계산 부분만, 형식 그대로
+- 사무실 v1.3.3 (2026-11-06): 스나이퍼 v2.3.0(원작 a4b4790 Case 91) 대응 — 달러 계산 부분만, 형식 그대로
   ① 원장 portion_mode 가 단리(SIMPLE_08PCT 등)일 때만 1회분 예산 기준 = 초기 시드 고정 (본 8%·서브 4%·서브 보호예수 0.5회분)
      복리 또는 portion_mode 없음(구 원장) = 기존 공식 그대로 (순수 코어 자산)
   ② 시멘트추가(예비시드) 무제한: 참고 1줄(현재 회분·금액·총 횟수)만 — 필요 달러 계산에는 넣지 않음 · 표시 문구 '수혈'→'시멘트추가'
@@ -525,7 +525,7 @@ def sniper_ledger():
 #  · 토스 매수가능금액 0.2% 안전버퍼 = sniper_plugin (raw_bp × 0.998)
 # 필요 달러는 '주수 × 매수가'(수수료·버퍼 포함 보유액 기준). 예비수혈은 새 돈이 아니라 계좌 달러 용도 전환이라 더하지 않는다.
 SNIPER_BP_BUFFER_PCT = 0.2
-SNIPER_CONST_FALLBACK = {   # main 2026-11-03 toss_sniper v2.0.0 값 (toss_api.py · quant_engine.py) · 사무실 vNEXT: v2.3.0 무제한 시멘트추가 → MAX_RESERVE_PORTIONS 999999
+SNIPER_CONST_FALLBACK = {   # main 2026-11-03 toss_sniper v2.0.0 값 (toss_api.py · quant_engine.py) · 사무실 v1.3.3: v2.3.0 무제한 시멘트추가 → MAX_RESERVE_PORTIONS 999999
     "ROUND_TRIP_FEE_RATE_PCT": 0.14, "PORTION_RATIO_LOCKED": 0.08, "SUB_PORTION_RATIO_4PCT": 0.04,
     "SUB_RESERVE_MAIN_PORTIONS": 0.5, "SUB_FROZEN_DAYS_TRIGGER": 5, "SUB_MAX_TOTAL_LOTS_4": 4,
     "MAX_RESERVE_PORTIONS": 999999, "MIN_DIP_BUDGET_RATIO": 0.30, "MIN_DIP_VS_L1_RATIO": 0.30,
@@ -571,7 +571,7 @@ def _cents_floor(p):
     return math.floor((p + 1e-9) * 100.0) / 100.0
 
 
-# 사무실 vNEXT · Case 91: = quant_engine.is_simple_income_mode (단리 표기). 서브 단리는 SIMPLE_04PCT.
+# 사무실 v1.3.3 · Case 91: = quant_engine.is_simple_income_mode (단리 표기). 서브 단리는 SIMPLE_04PCT.
 SNIPER_SIMPLE_MODES = ("SIMPLE_08PCT", "FIXED_800", "SIMPLE", "INCOME", "SIMPLE_04PCT")
 
 
@@ -695,7 +695,7 @@ def sniper_next_buy(led, live_price, consts):
         return {"state": "unavailable", "why": "원장에 기준시드·가용현금 없음"}
     c = sniper_core(led, consts)
     ratio, fee, free, buckets = consts["PORTION_RATIO_LOCKED"], c["fee"], c["free"], c["main"]
-    # 사무실 vNEXT · Case 91: 단리면 SIMPLE_08PCT(초기 시드 고정), 아니면(없음 포함) COMP_08PCT(기존 공식)
+    # 사무실 v1.3.3 · Case 91: 단리면 SIMPLE_08PCT(초기 시드 고정), 아니면(없음 포함) COMP_08PCT(기존 공식)
     simple = sniper_is_simple(led)
     mode = "SIMPLE_08PCT" if simple else "COMP_08PCT"
     base = {"free": round(free, 2), "fee": fee, "core": c["core"], "seed": c["seed"], "simple": simple,
@@ -795,7 +795,7 @@ def sniper_sub_next_buy(led, live_price, consts):
     fee = c["fee"]
     # = compute_sub_grid_available_idle_cash (코어 자산 하한 DEFAULT_INITIAL_SEED_USD · 본 1회분 × 0.5 보호예수)
     c_eq = max(consts["DEFAULT_INITIAL_SEED_USD"], c["core"])
-    simple = sniper_is_simple(led)   # 사무실 vNEXT · Case 91: 단리면 보호예수 기준도 초기 시드
+    simple = sniper_is_simple(led)   # 사무실 v1.3.3 · Case 91: 단리면 보호예수 기준도 초기 시드
     base_eq = c["seed"] if simple else c_eq
     reserved = round(round(base_eq * consts["PORTION_RATIO_LOCKED"], 4) * consts["SUB_RESERVE_MAIN_PORTIONS"], 4)
     idle = round(max(0.0, c["free"] - reserved), 4)
@@ -1157,7 +1157,7 @@ def section_dollar_check(now=None, info=None):
         else:
             excluded.append(f"2번 서브 {html.escape(str(sb.get('why') or '계산 불가'))}")
     if led and bool(led.get("is_active", True)):
-        # 사무실 vNEXT · Case 91: 시멘트추가(예비시드)는 무제한 — 참고 1줄(수량·금액)만, 필요 달러 계산 제외
+        # 사무실 v1.3.3 · Case 91: 시멘트추가(예비시드)는 무제한 — 참고 1줄(수량·금액)만, 필요 달러 계산 제외
         used = max(0, int(num(led.get("used_reserve_portions_cnt"))))
         tot_cnt = max(used, int(num(led.get("total_reserve_injected_cnt"))))
         _keep(warn, f"⚠️ 2번 시멘트추가: 현재 {used}회분 ${num(led.get('injected_reserve_usd')):,.2f} (총 {tot_cnt}회 · 0주 졸업 때 상환)"
