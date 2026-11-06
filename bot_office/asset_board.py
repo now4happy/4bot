@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
+# vNEXT: 수익률 추가 — 월별 표 '입력정리'!A67:H78 에서 B(총자산)가 있는 마지막 월의 월 수익률(D)·1년 수익률(H)만 %로 저장
+#        (returns = {month, monthly, yearly} · 총자산 금액은 저장 안 함 · 표가 비었거나 D·H가 비면 returns 없음, 오류 아님)
 # v1.3.8: 자산 구성(mix) 도넛에서만 비율 1% 미만 항목 숨김 (합계·다른 항목 % 그대로) · mix 기본 이름 '간접자산'
 # v1.3.7: 신규. 상황판 '자산 현황' 도넛 2개용 자료를 구글 시트에서 읽어 비율(%)만 저장
 #        (버전 번호는 승인 때 채움)
@@ -9,8 +11,8 @@
 #    시트 "26년 계획"을 그 서비스 계정 이메일에 '보기' 권한으로 공유해야 읽힘. 파일이 없으면 '자료 없음'/오래된 값으로만 표시
 #  - 독립 파일: 서명(openssl)·HTTP 부품을 이 파일 안에 둠 (kiwoom_holdings.py 를 쓰지 않음)
 #  - 이름: A열 글자에서 앞에 붙은 '42.7% ' 같은 퍼센트를 떼고 씀 (보드가 계산한 % 와 이중 표시 방지)
-#  - 읽는 칸 (코드에 고정): '입력정리'!A14:Z14 (기준일), A83:B87 (자산 구성), A91:B99 (투자 종목)
-#  - 저장: /var/lib/bot-office/assets/assets.json (0644) — 이름·비율(%)·기준일·가져온 시각만.
+#  - 읽는 칸 (코드에 고정): '입력정리'!A14:Z14 (기준일), A83:B87 (자산 구성), A91:B99 (투자 종목), A67:H78 (월별 수익률)
+#  - 저장: /var/lib/bot-office/assets/assets.json (0644) — 이름·비율(%)·기준일·가져온 시각·수익률(%)만.
 #          금액·계좌번호·토큰·주소는 저장하지 않음. 웹서버(office_board.py)는 이 파일만 읽음.
 #  - 시트에 못 닿으면 이전 자료를 그대로 두고 error·tried 만 갱신 → 상황판은 '오래된 값'으로 표시
 # 사용:
@@ -38,9 +40,13 @@ CHARTS = (
      ("미국", "한국관련주", "중국관련주", "일본관련주", "SOXL", "TQQQ", "토스 해외주식", "코인")),
 )
 HIDE_BELOW = {"mix": 1.0}   # 차트별: 반올림한 % 가 이 값 미만이면 그림에서만 숨김 (합계에는 포함) · stock 은 숨기지 않음
-READ_RANGES = (DATE_RANGE,) + tuple(c[2] for c in CHARTS)
+# 월별 표 (2026-01~12): A=월 B=총자산(만원) C=전월 차액 D=월 수익률 E=연초 대비 F=연초 수익률 G=전년 동월 H=1년 수익률
+RETURNS_RANGE = f"'{TAB}'!A67:H78"
+RETURNS_YEAR = 2026        # A열 글자에서 월을 못 읽을 때만 '행 순서 = 1~12월'로 씀
+READ_RANGES = (DATE_RANGE,) + tuple(c[2] for c in CHARTS) + (RETURNS_RANGE,)
 TOTAL_TOL = 0.005          # 항목 합 vs 시트 합계 차이 허용 (0.5%)
 PCT_PREFIX = re.compile(r"^\s*[-+]?\d+(?:[.,]\d+)?\s*%\s*")   # A열 '42.7% 현금' 의 앞 퍼센트
+MONTH_RE = re.compile(r"(20\d\d)\s*[./\-년]\s*(\d{1,2})")
 DATE_RE = re.compile(r"(20\d\d)\s*[./\-년]\s*(\d{1,2})\s*[./\-월]\s*(\d{1,2})")
 
 
@@ -181,8 +187,41 @@ def chart(rows, defaults, hide_below=0.0):
     return {"items": items, "check": check, "zero": [nm for nm, v in zip(names, vals) if v <= 0]}
 
 
+def _ratio(v):
+    """수익률 칸 → % (소수 -0.0773 → -7.7). 빈칸·글자는 None. '-7.7%' 처럼 글자로 오면 그대로 %"""
+    if v is None or isinstance(v, bool) or (isinstance(v, str) and not v.strip()):
+        return None
+    if isinstance(v, str) and v.strip().endswith("%"):
+        n = _num(v.strip()[:-1])
+        return None if n is None else round(n, 1) + 0.0
+    n = _num(v)
+    return None if n is None else round(n * 100, 1) + 0.0     # + 0.0: -0.0 → 0.0
+
+
+def returns(rows):
+    """월별 표 → {"month":"2026-11","monthly":-7.7,"yearly":0.5} · B(총자산)가 있는 마지막 행 기준 · 없으면 None"""
+    last = None
+    for i, r in enumerate(rows[:12]):
+        r = list(r) + [""] * 8
+        b = _num(r[1]) if not (isinstance(r[1], str) and not r[1].strip()) else None
+        if b:                                   # 빈칸·0·글자는 '아직 없는 달'
+            last = (i, r)
+    if last is None:
+        return None
+    i, r = last
+    m = MONTH_RE.search(str(r[0]))
+    month = f"{int(m.group(1))}-{int(m.group(2)):02d}" if m and 1 <= int(m.group(2)) <= 12 else f"{RETURNS_YEAR}-{i + 1:02d}"
+    mo, yr = _ratio(r[3]), _ratio(r[7])
+    if mo is None or yr is None:
+        return None
+    return {"month": month, "monthly": mo, "yearly": yr}
+
+
 def build(values):
     out = {"base_date": base_date(values.get(DATE_RANGE, [])), "charts": [], "errors": []}
+    ret = returns(values.get(RETURNS_RANGE, []))
+    if ret:
+        out["returns"] = ret
     for key, title, rng, defaults in CHARTS:
         try:
             c = chart(values.get(rng, []), defaults, HIDE_BELOW.get(key, 0.0))
@@ -212,9 +251,11 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "v1.3.8", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "vNEXT", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
+    if prev.get("returns"):
+        rec["returns"] = prev["returns"]          # 시트 못 읽으면 이전 수익률 유지
     try:
         b = build(read_sheet(http, sa, now, signer))
     except Exception as e:   # 연결·토큰·응답 문제 → 이전 값 유지
@@ -224,11 +265,22 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
     for c in b["charts"]:
         old[c["key"]] = c
     rec["charts"] = [old[k] for k, *_ in CHARTS if k in old]
+    if b.get("returns"):
+        rec["returns"] = b["returns"]
+    else:
+        rec.pop("returns", None)                  # 시트는 읽었는데 월별 표가 비었음 → 보드에서 안 보임
     if b["charts"]:
         rec["fetched_kst"] = rec["tried_kst"]
         rec["base_date"] = b["base_date"] or rec["base_date"]
     rec["error"] = "; ".join(b["errors"])[:160]
     return rec
+
+
+def returns_line(r):
+    if not r:
+        return "수익률: 없음 (월별 표에 총자산이 있는 달이 없거나 수익률 칸이 비어 있음)"
+    sg = lambda v: ("+" if v > 0 else "") + f"{v:.1f}%"
+    return f"수익률 월 {sg(r['monthly'])} · 수익률 년 {sg(r['yearly'])} ({r['month']})"
 
 
 def main(argv=None, http=None, out=print):
@@ -259,6 +311,7 @@ def main(argv=None, http=None, out=print):
     for c in rec["charts"]:
         out(f"[{c['title']}] " + ", ".join(f"{i['pct']}% {i['name']}" for i in c["items"])
             + ("" if c["check"] == "ok" else f"  (합계 확인: {c['check']})"))
+    out(returns_line(rec.get("returns")))
     out("(dry-run: 파일 안 씀)" if not a.write else f"저장: {OUT}")
     return 0 if not rec["error"] else 1
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
 # 사무실 v1.3.8: 자산 구성 1% 미만 숨김 테스트 추가
+# 사무실 vNEXT: 수익률(월별 표 A67:H78 → returns) · office_board returns 전달 · 보드 하이브리드(도넛+막대) 테스트 추가
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from datetime import datetime
@@ -27,11 +28,25 @@ STOCK_REAL = ("3.4% 미국", "49.3% 한국관련주", "7.1% 중국관련주", "3
               "0.8% 토스 해외주식", "0.3% 코인")
 
 
-def sheet(mix, stock, date="2026.11.6", mix_total=None, stock_total=None, mix_names=MIX_NAMES, stock_names=STOCK_NAMES):
+def ret_rows(upto=11, nov_d=-0.0773, nov_h=0.00466):
+    """가짜 월별 표 A67:H78 (2026-01~12) · upto 월까지 B(총자산) 채움 · 11월 D·H 는 실제 값"""
+    rows = []
+    for m in range(1, 13):
+        if m <= upto:
+            d, h = (nov_d, nov_h) if m == 11 else (0.012 * m, 0.03)
+            rows.append([f"2026-{m:02d}", 70351.21 if m == 11 else 70000 + m, -5893.1, d, -3100, -0.043, 70024.5, h])
+        else:
+            rows.append([f"2026-{m:02d}", "", "", "", "", "", "", ""])
+    return rows
+
+
+def sheet(mix, stock, date="2026.11.6", mix_total=None, stock_total=None, mix_names=MIX_NAMES, stock_names=STOCK_NAMES,
+          ret=None):
     rows = lambda names, vals, tot: [[n, v] for n, v in zip(names, vals)] + [["합계", sum(v for v in vals if isinstance(v, int)) if tot is None else tot]]
     return {"valueRanges": [{"values": [["기준일", date]]},
                             {"values": rows(mix_names, mix, mix_total)},
-                            {"values": rows(stock_names, stock, stock_total)}]}
+                            {"values": rows(stock_names, stock, stock_total)},
+                            {"values": ret_rows() if ret is None else ret}]}
 
 
 class Http:
@@ -187,6 +202,91 @@ class T(unittest.TestCase):
         self.assertEqual((a["check"], a["zero"]), (b["check"], b["zero"]))
         self.assertEqual(AB.HIDE_BELOW, {"mix": 1.0})
         self.assertEqual(AB.CHARTS[0][3][3], "간접자산")
+
+    # ---- vNEXT: 수익률 (월별 표)
+    def test_returns_current_month(self):
+        rec, disk = self.run_update(Http(sheet(MIX, STOCK)))
+        self.assertEqual(disk["returns"], {"month": "2026-11", "monthly": -7.7, "yearly": 0.5})
+        self.assertEqual(rec["error"], "")
+        raw = json.dumps(disk, ensure_ascii=False)
+        for amount in ("70351", "5893", "70024", "-4.3", "0.0773", "0.00466"):   # 금액·연초 수익률·원래 소수 저장 안 함
+            self.assertNotIn(amount, raw)
+        self.assertEqual(AB.RETURNS_RANGE, "'입력정리'!A67:H78")
+        self.assertEqual(AB.READ_RANGES[-1], AB.RETURNS_RANGE)
+
+    def test_returns_moves_to_december(self):
+        rows = ret_rows(upto=12)
+        rows[11][3], rows[11][7] = 0.021, -0.0149
+        _, disk = self.run_update(Http(sheet(MIX, STOCK, ret=rows)))
+        self.assertEqual(disk["returns"], {"month": "2026-12", "monthly": 2.1, "yearly": -1.5})
+
+    def test_returns_empty_table_charts_still_shown(self):
+        _, good = self.run_update(Http(sheet(MIX, STOCK)))
+        self.assertIn("returns", good)
+        for ret in ([], ret_rows(upto=0)):                     # 표가 비었거나 B가 모두 빈칸
+            rec, disk = self.run_update(Http(sheet(MIX, STOCK, ret=ret)))
+            self.assertNotIn("returns", disk)
+            self.assertEqual(rec["error"], "")                 # 오류 아님
+            self.assertEqual([c["key"] for c in disk["charts"]], ["mix", "stock"])
+
+    def test_returns_blank_d_or_h_means_none(self):
+        for d, h in (("", 0.00466), (-0.0773, ""), (-0.0773, None)):
+            _, disk = self.run_update(Http(sheet(MIX, STOCK, ret=ret_rows(nov_d=d, nov_h=h))))
+            self.assertNotIn("returns", disk)
+            self.assertEqual(len(disk["charts"]), 2)
+
+    def test_returns_kept_when_sheet_unreachable(self):
+        _, good = self.run_update(Http(sheet(MIX, STOCK)))
+        rec, bad = self.run_update(Http(fail=True))
+        self.assertTrue(bad["error"])
+        self.assertEqual(bad["returns"], good["returns"])
+        rec, bad = self.run_update(Http({"error": {"status": "PERMISSION_DENIED"}}, status=403))
+        self.assertEqual(bad["returns"], good["returns"])
+
+    def test_returns_month_text_and_sign(self):
+        self.assertEqual(AB.returns([["2026. 3", 1, 0, 0.05, 0, 0, 0, -0.0004]]), {"month": "2026-03", "monthly": 5.0, "yearly": 0.0})
+        self.assertEqual(AB.returns([["", 1, 0, -0.0773, 0, 0, 0, 0.00466]])["month"], "2026-01")   # 글자 없으면 행 순서
+        self.assertEqual(AB.returns_line({"month": "2026-11", "monthly": -7.7, "yearly": 0.5}),
+                         "수익률 월 -7.7% · 수익률 년 +0.5% (2026-11)")
+        self.assertIn("없음", AB.returns_line(None))
+
+    def test_returns_with_mix_hide_still_works(self):
+        c = self.charts_of(self.MIX_NOW, self.STOCK_NOW)
+        self.assertNotIn("코인", [i["name"] for i in c["mix"]["items"]])   # 코인 0.1% 숨김 그대로
+        self.assertEqual(len(c["stock"]["items"]), 8)
+
+    def test_dry_run_prints_returns_line(self):
+        lines, real = [], AB.update
+        AB.update = lambda http, out_path=None, **k: real(Http(sheet(MIX, STOCK)), out_path=TMP / "dry.json", signer=FAKE_SIGN, sa=SA)
+        try:
+            AB.main([], http=Http(), out=lines.append)
+        finally:
+            AB.update = real
+        self.assertIn("수익률 월 -7.7% · 수익률 년 +0.5% (2026-11)", lines)
+        self.assertFalse((TMP / "dry.json").exists())          # dry-run 은 파일 안 씀
+
+    def test_office_board_passes_returns(self):
+        self.run_update(Http(sheet(MIX, STOCK)))
+        OB.ASSETS_FILE = TMP / "assets.json"
+        self.assertEqual(OB.assets()["returns"], {"month": "2026-11", "monthly": -7.7, "yearly": 0.5})
+        p = TMP / "ret_bad.json"
+        good = json.loads(OB.ASSETS_FILE.read_text(encoding="utf-8"))
+        for bad in ({"month": "2026-11", "monthly": "x", "yearly": 0.5}, {"month": "<b>", "monthly": 1, "yearly": 1},
+                    {"month": "2026-11", "monthly": float("nan"), "yearly": 1}, "oops", None):
+            p.write_text(json.dumps(dict(good, returns=bad)))
+            OB.ASSETS_FILE = p
+            a = OB.assets()
+            self.assertNotIn("returns", a)
+            self.assertTrue(a["ok"])                           # 도넛·막대는 그대로
+
+    def test_board_hybrid(self):
+        html = (HERE / "board.html").read_text(encoding="utf-8")
+        self.assertNotIn("minHalf", html)                      # 두 도넛 맞추기 로직 삭제
+        self.assertIn("function donutSVG(ch){", html)
+        self.assertIn("function barsHTML(ch)", html)
+        self.assertNotIn("bandHTML", html)
+        self.assertIn('id="assetRet"', html)
+        self.assertIn(".donut.mix svg{max-width:240px}", html)
 
     def test_date_formats(self):
         for txt, want in (("2026.11.6", "2026.11.6"), ("2026. 11. 6", "2026.11.6"), ("2026-11-06", "2026.11.6"),

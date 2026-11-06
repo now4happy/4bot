@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_board.py   (사무실 v1.3.7 · 2026-11-06)
+#  · 사무실 vNEXT: assets 에 수익률 returns {month, monthly, yearly} 전달 (월 'YYYY-MM'·숫자만 검사 · 이상하면 뺌, 도넛·막대는 그대로)
 #  · 사무실 v1.3.7: 상황판 '자산 현황'(도넛 2개) 자료 assets 추가 — asset_board.py 가 만든 assets.json 을 읽기만 함
 #    (시트에 직접 닿지 않아 화면이 멈추지 않음 · 못 가져오면 마지막 값 + stale 표시) · 봇 신호등 표시는 board.html 에서 뺌, services 필드는 그대로
 #    · 금액 규칙 예외는 자산 현황(assets)에만: 이름·비율(%)·기준일만 보냄 (금액·계좌번호·토큰·주소 원문 없음)
@@ -17,7 +18,7 @@
 #            · 팬딩/PC 감시 상태 파일 · office_health.json(바깥 접속 감시) · /proc(메모리·스왑)
 #  · 한계: 웹서버 계정은 서버 기록(journal)을 못 읽어 '마지막으로 실제 일한 시각' 대신 '실행 시작 시각'을 보여 줌
 # ==========================================================
-import json, os, re, shutil, subprocess, time
+import json, math, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -274,8 +275,16 @@ def assets(now=None):
         pass
     err = str(d.get("error") or "")[:120]
     stale = bool(err) or age is None or age > ASSETS_OLD_MIN
-    return {"ok": bool(charts), "why": "" if charts else "no_data", "base_date": str(d.get("base_date") or "")[:12],
-            "fetched_kst": fetched[5:], "age_min": age, "stale": stale, "error": err, "charts": charts}
+    out = {"ok": bool(charts), "why": "" if charts else "no_data", "base_date": str(d.get("base_date") or "")[:12],
+           "fetched_kst": fetched[5:], "age_min": age, "stale": stale, "error": err, "charts": charts}
+    r = d.get("returns")
+    try:   # 수익률(%)만: 월 'YYYY-MM' + 유한한 숫자 2개일 때만 보냄
+        ret = {"month": str(r["month"]), "monthly": float(r["monthly"]), "yearly": float(r["yearly"])}
+        if re.fullmatch(r"20\d\d-(0[1-9]|1[0-2])", ret["month"]) and all(math.isfinite(ret[k]) for k in ("monthly", "yearly")):
+            out["returns"] = ret
+    except (TypeError, ValueError, KeyError):
+        pass
+    return out
 
 
 def board():
