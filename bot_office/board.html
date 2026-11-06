@@ -1,6 +1,7 @@
 <!-- 사무실 (초안 · 버전은 Muse 가 부여): 마인드맵 탭 삭제 · 탭 순서 상황판·스나이퍼룸·팬딩룸·서버실·기록실 · 오늘 할 일 카드와 주문 안내 문구 삭제 · 첫 줄 안내 문구 삭제 · /api/board 내용 변경 없음 (신호등 순서는 office_board.py에서) -->
 <!-- 사무실 (초안 · 버전은 Muse 가 부여): 마인드맵 탭 새로 추가 · 생각의 연결 마인드맵 v1.3 페이지를 iframe으로 안에 표시 · /api/board 내용·주문 기능 변경 없음 -->
 <!doctype html>
+<!-- 사무실 vNEXT: 자산 현황 도넛 2개의 파이 지름을 같게 · 두 도넛 viewBox 가로폭을 넓은 쪽(밖 라벨 있는 쪽)에 맞춤 · 반지름·구멍·색·라벨·글씨색·데이터 변경 없음 -->
 <!-- 사무실 v1.3.7: 상황판 탭의 봇 신호등(카드 8개) 삭제 → 자산 현황(도넛 2개: 자산 구성 보라 · 투자 종목 주황) · 기준일 작게 · 큰 조각 라벨 안 · 작은 조각 지시선+라벨 밖 · 범례 없음 · 데이터 /api/board 의 assets (비율만) · 다른 탭 변경 없음 -->
 <!-- 사무실 상황판 · 사무실 v1.0.56 (2026-10-28) · 주문·승인은 텔레그램 · 웹에서 하는 일은 '서버 정리 실행' 하나 · 데이터: /api/board -->
 <!-- 사무실 (초안 · 버전은 Muse 가 부여): 상황판 첫 탭 맨밑의 스나이퍼 그림 보기 전용 링크 제거 (그림은 스나이퍼룸 탭에서 봄) · /api/board 내용은 그대로 -->
@@ -109,7 +110,7 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
   function tw(t,fs){var w=0;for(var i=0;i<t.length;i++){var ch=t.charCodeAt(i);w+=(ch>=0x1100?1.0:(t[i]===' '?0.32:0.6))*fs}return w}
   function esc(t){return String(t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
   function f1(n){return (Math.round(n*10)/10).toFixed(1)}
-  function donutSVG(ch){
+  function donutSVG(ch,minHalf){   /* minHalf: 두 도넛 파이 크기를 같게 하려고 viewBox 가로 절반폭을 최소 이만큼 */
     var items=ch.items.filter(function(i){return i.pct>0}).slice().sort(function(a,b){return b.pct-a.pct});
     var tot=items.reduce(function(s,i){return s+i.pct},0);if(!tot)return '';
     var pal=PAL[ch.key]||PAL.mix,n=items.length,RMAX=100,RMIN=74,HOLE=36,FS=11.5,GAP=14;
@@ -148,7 +149,7 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
           '<text class="out" text-anchor="'+(side>0?'start':'end')+'" x="'+tx.toFixed(1)+'" y="'+(o.y+4).toFixed(1)+'">'+esc(o.label)+'</text>');
         if(side>0)maxX=Math.max(maxX,tx+w+2);else minX=Math.min(minX,tx-w-2);
         minY=Math.min(minY,o.y-10);maxY=Math.max(maxY,o.y+8)})});
-    var half=Math.max(-minX,maxX);minX=-half;maxX=half;   /* 도넛을 가운데에 */
+    var half=Math.max(-minX,maxX);donutSVG.lastHalf=half;half=Math.max(half,minHalf||0);minX=-half;maxX=half;   /* 도넛을 가운데에 */
     var aria=ch.title+': '+items.map(function(i){return f1(i.pct)+'% '+i.name}).join(', ');
     return '<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-label="'+esc(aria)+'" viewBox="'+[minX,minY,maxX-minX,maxY-minY].map(function(v){return v.toFixed(1)}).join(' ')+'">'+parts.join('')+texts.join('')+'</svg>';
   }
@@ -159,9 +160,10 @@ ul.plain{margin:0;padding-left:18px;font-size:13.5px}ul.plain li{margin:3px 0;ov
       w.textContent=a&&a.why==='no_file'?'아직 자산 자료가 없어요 (서버에 가져오기 타이머 설치 뒤 15분 안에 표시)':'자산 자료를 읽지 못했어요 ('+((a&&a.why)||'?')+')';return}
     dt.textContent='기준일 '+(a.base_date||'?');dt.className='adate'+(a.stale?' old':'');
     if(a.stale){w.hidden=false;w.textContent='⚠ 시트에서 새로 가져오지 못해 마지막 값을 보여 줘요 (마지막 가져옴 '+(a.fetched_kst||'?')+' KST)'}
+    var H=0;a.charts.forEach(function(ch){donutSVG(ch);H=Math.max(H,donutSVG.lastHalf||0)});   /* 가장 넓은 viewBox 폭 */
     a.charts.forEach(function(ch){
       var d=el('div','donut');d.appendChild(el('h3',null,ch.title));
-      var holder=el('div');holder.innerHTML=donutSVG(ch);d.appendChild(holder);
+      var holder=el('div');holder.innerHTML=donutSVG(ch,H);d.appendChild(holder);
       var notes=[];if(ch.check==='diff')notes.push('시트 합계와 항목 합이 달라요 · 시트 확인');
       if(ch.zero&&ch.zero.length)notes.push('0인 항목: '+ch.zero.join(', '));
       if(notes.length)d.appendChild(el('p','note',notes.join(' · ')));
