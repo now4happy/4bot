@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.14.2)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.14.4)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -71,6 +71,13 @@
 # 1.11.2 (사무실 v1.2.0): 가격표·주문 완료 메시지 간결화 — 💵 달러(숫자 앞·정수 반올림, 조회 불가 시 예전 순서)·📦 보유 수량 비교만
 #        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
 # 1.14.0 (사무실 v1.2.4): 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
+# 1.14.4 (사무실 vNEXT): 검산 오탐 + 주문 버튼 사라짐 수정 (사용자 지시 2026-11-06, P 표 33차 종가 40.87 사례)
+#        ① 매도가 상한을 종가 2배만으로 보지 않음 → 직전 가격표 최고 매도가 +10% (없으면 보유 평단 2배) 와 비교.
+#          기준이 없으면 '이상한 매도가' 대신 '기준 없음, 확인 필요' (통과 아님 = 자동주문 판정은 예전과 같음)
+#        ② 검산 메시지의 매수·매도 수량은 배수 곱한 뒤 수량 (예: 101.14 × 50주 = 알림·주문 수량과 같은 기준)
+#        ③ 점검 미통과로 자동주문 시각에 '자동주문 안 함'이 되면 버튼을 지우던 것 → 상태는 결정 대기 그대로·버튼 유지
+#          (마감 전까지 ✅/❌ 로 직접 결정) · /가격표 다시 보내기도 버튼 붙음 · 버튼 붙은 메시지를 모두 기억해 마감·자동승인 때 함께 정리
+#        · 매수 범위·개수·매수 총액·매도 합계 검사, 자동주문 가능 판정, 버튼 문구·callback_data·주문 접수 흐름 불변
 # 1.14.3 (사무실 v1.3.1): 과거자료 다운을 버튼으로 (사용자 지시 2026-11-05) — 매매·주문·판독·알림 로직 불변
 #        ① loop() 의 past_sheet_telegram.tick() 호출 삭제 → 매일 자동 전송 없음
 #        ② 🛠 도구에 [📥 과거자료 다운] (/과거자료다운): 누르면 숫자 파일을 바로 갱신(history 가 바뀐 경우만) → 5칸 검사 →
@@ -136,7 +143,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.14.3"
+VERSION = "1.14.4"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -912,6 +919,37 @@ def core(p):
 
 
 # ---------------------------------------------------------- 안전점검
+def check_rows(rows, mult):
+    """1.14.4 검산 메시지용 줄 표시 — 배수 곱한 뒤 수량 (알림·주문 수량과 같은 기준)"""
+    return ", ".join(f"{r['price']:g} × {r['qty'] * mult}주" for r in rows)
+
+
+def sell_ref(sheet, market=None):
+    """1.14.4 매도가 상한 기준: (설명, 상한) 또는 None.
+    ① 직전 가격표(종가일이 이번보다 앞선 가장 최근 표 = 어제·직전 회차)의 최고 매도가 +10%
+    ② 없으면 보유 평단(표 → 계좌) × 2   ③ 둘 다 없으면 None"""
+    p = sheet["parsed"]
+    cur = str(p.get("close_date") or "")
+    try:
+        sheets = load(STATE, {}).get("sheets") or {}
+    except Exception:
+        sheets = {}
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", cur):
+        for d in sorted(sheets, reverse=True):
+            prev = (sheets[d] or {}).get("parsed") or {}
+            if d < cur and prev.get("sells"):
+                top = max(float(r["price"]) for r in prev["sells"])
+                return f"직전 가격표 {d} 최고 매도가 {top:g} +10%", round(top * 1.10, 4)
+    for name, avg in (("표 보유 평단", p.get("avg_price")), ("계좌 평단", (market or {}).get("avg"))):
+        try:
+            avg = float(avg)
+        except (TypeError, ValueError):
+            continue
+        if avg > 0:
+            return f"{name} {avg:g} ×2", round(avg * 2.0, 4)
+    return None
+
+
 def run_checks(sheet, mult, market=None):
     """[(통과?, 설명)] 과 자동주문 가능 여부. market = {'price','prev_close','holding','sellable','exch_id'}"""
     c = cfg()
@@ -934,9 +972,22 @@ def run_checks(sheet, mult, market=None):
         add(False, "메리츠 시세 확인 실패 → 종가 대조 못 함")
     if close:
         bad_b = [r for r in p["buys"] if not 0.80 * close <= r["price"] <= 1.10 * close]
-        bad_s = [r for r in p["sells"] if not 0.90 * close <= r["price"] <= 2.0 * close]
-        add(not bad_b, "매수가 범위 정상 (종가 -20%~+10%)" if not bad_b else f"이상한 매수가: {bad_b}")
-        add(not bad_s, "매도가 범위 정상 (종가 -10%~+100%)" if not bad_s else f"이상한 매도가: {bad_s}")
+        add(not bad_b, "매수가 범위 정상 (종가 -20%~+10%)" if not bad_b else f"이상한 매수가: {check_rows(bad_b, mult)}")
+        # 1.14.4: 매도 상한 = max(종가 2배, 기준 상한). 하한(종가 -10%)은 그대로
+        low_s = [r for r in p["sells"] if r["price"] < 0.90 * close]
+        high = [r for r in p["sells"] if r["price"] > 2.0 * close]
+        ref = sell_ref(sheet, market) if high else None
+        up = max(2.0 * close, ref[1]) if ref else 2.0 * close
+        high_bad = [r for r in high if r["price"] > up]
+        if low_s:
+            add(False, f"이상한 매도가 (종가 -10% 아래): {check_rows(low_s, mult)}")
+        if high and not ref:
+            add(False, f"매도가 기준 없음, 확인 필요: {check_rows(high, mult)} (종가 2배 {2.0 * close:g} 초과 · 직전 가격표·평단 없음)")
+        elif high_bad:
+            add(False, f"이상한 매도가: {check_rows(high_bad, mult)} (상한 {up:g} · 기준 {ref[0]})")
+        if not low_s and (not high or (ref and not high_bad)):
+            add(True, "매도가 범위 정상 (종가 -10%~+100%)" if not high else
+                f"매도가 범위 정상 (종가 -10% ~ 상한 {up:g} · 기준 {ref[0]})")
     bad_q = [r for r in p["buys"] + p["sells"] if not 1 <= r["qty"] <= 500]
     add(not bad_q, "개수 범위 정상" if not bad_q else f"이상한 개수: {bad_q}")
     buy_total = sum(r["price"] * r["qty"] * mult for r in p["buys"])
@@ -1242,6 +1293,21 @@ def fx_est_gap(sheet):
         return gap if gap > 0 else Decimal(0)
     except Exception:
         return None
+
+
+def track_buttons(sheet, res):
+    """1.14.4 버튼(✅/❌)이 붙은 메시지 번호를 기억 → 마감·자동승인 때 모두 정리"""
+    mid = (res or {}).get("message_id")
+    if mid and mid != sheet.get("msg_id"):
+        sheet["btn_msgs"] = ([x for x in sheet.get("btn_msgs") or [] if x != mid] + [mid])[-10:]
+    return res
+
+
+def clear_sheet_buttons(tg, sheet):
+    """1.14.4 가격표 알림 + 다시 보낸 버튼 메시지의 버튼을 모두 지움 (마감·자동승인·새 알림 때만)"""
+    for mid in [sheet.get("msg_id")] + list(sheet.get("btn_msgs") or []):
+        tg.clear_buttons(mid)
+    sheet["btn_msgs"] = []
 
 
 def sheet_rows(sheet):
@@ -1801,8 +1867,8 @@ def rfx_cycle(st, now=None):
     sh = cur[-1]
     if sh.get("status") == "submitted":
         return sh["date"], fx_need(sh)
-    if sh.get("status") in ("cancelled", "skipped"):
-        return sh["date"], Decimal(0)
+    if sh.get("status") in ("cancelled", "skipped") or (sh.get("status") == "pending" and sh.get("auto_skipped")):
+        return sh["date"], Decimal(0)             # 1.14.4: 자동주문 안 함(버튼 유지)도 예전 skipped 와 같은 판단
     return None                                   # 결정 대기·접수 중·일부 실패 등 → 주문 미완료
 
 
@@ -1900,7 +1966,7 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>", st=N
             lines = []
         if lines:
             sheet["auto_fx_lines"] = lines          # 알림 전송이 실패해 다시 보낼 때도 같은 줄
-    tg.clear_buttons(sheet.get("msg_id"))
+    clear_sheet_buttons(tg, sheet)          # 예전 알림 버튼만 지우고, 아래 새 알림에 버튼을 붙임
     img = IMAGES / (sheet.get("img") or "_none_")
     text = sheet_text(sheet, head)
     if sheet.get("auto_fx_lines"):
@@ -1910,6 +1976,9 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>", st=N
         res = tg.send(text, sheet_rows(sheet))
     else:
         res = tg.photo(img, text, sheet_rows(sheet)) if img.is_file() else tg.send(text, sheet_rows(sheet))
+    if not (res or {}).get("message_id"):   # 1.14.4: 글 전송 실패(HTML 오류 등) → 태그 뺀 글 + 버튼으로 한 번 더
+        plain = html.escape(html.unescape(re.sub(r"<[^>]+>", "", text)))
+        res = tg.send(plain, sheet_rows(sheet))
     sheet["msg_id"] = (res or {}).get("message_id")
     sheet["notice_pending"] = not bool(sheet["msg_id"])
     if not sheet["notice_pending"]:
@@ -2296,7 +2365,7 @@ def tick(tg):
                     tg.send(f"❌ {date} 가격표: 예약 마감({cutoff:%H:%M})이 지나 주문을 못 넣었어요.")
                 else:
                     tg.send(f"ℹ️ {date} 가격표: 마감이 지나 이번 주문은 넘어갑니다.")
-                tg.clear_buttons(sh.get("msg_id"))
+                clear_sheet_buttons(tg, sh)
                 sh["status"] = "expired"
                 continue
             if sh["status"] == "pending" and sh.get("notice_pending") and now >= sheet_notice_time(sh):
@@ -2306,19 +2375,21 @@ def tick(tg):
                 if due == "late" and not sh.get("auto_late"):      # 고른 시각이 이미 지남 → 소급 자동주문 안 함, 수동 결정
                     sh["auto_late"] = True
                     mode = auto_mode(c)
-                    tg.send(f"⏰ <b>{AUTO_MODES[mode]}({auto_mode_time(sh, mode):%H:%M})가 이미 지나</b> · {date} 가격표는 자동주문 안 해요.\n"
-                            "주문하려면 아래 버튼으로 결정해 주세요.", sheet_rows(sh))
+                    track_buttons(sh, tg.send(f"⏰ <b>{AUTO_MODES[mode]}({auto_mode_time(sh, mode):%H:%M})가 이미 지나</b> · {date} 가격표는 자동주문 안 해요.\n"
+                            "주문하려면 아래 버튼으로 결정해 주세요.", sheet_rows(sh)))
                     continue
-                if due == "fire":
-                    tg.clear_buttons(sh.get("msg_id"))
+                if due == "fire" and not sh.get("auto_skipped"):
                     if sh["auto_ok"]:
+                        clear_sheet_buttons(tg, sh)
                         sh["status"], sh["approved_by"] = "approved", "auto"
                         tg.send(f"🤖 <b>버튼이 안 눌려 자동주문 진행</b> · {date} 가격표 (점검 모두 통과)")
                     else:
-                        sh["status"] = "skipped"
+                        # 1.14.4: 자동주문만 안 함. 상태는 결정 대기 그대로 → 버튼 유지, 마감 전까지 직접 결정 (예전: skipped + 버튼 삭제)
+                        sh["auto_skipped"] = True
                         bad = "\n".join("  · " + html.escape(x["msg"]) for x in sh["checks"] if not x["ok"])
-                        tg.send(f"⛔ <b>자동주문 안 함</b> · {date} 가격표\n안전점검을 통과 못 했어요:\n{bad}\n"
-                                "필요하면 메리츠 앱에서 직접 주문해 주세요.")
+                        track_buttons(sh, tg.send(f"⛔ <b>자동주문 안 함</b> · {date} 가격표\n안전점검을 통과 못 했어요:\n{bad}\n"
+                                                  f"숫자가 맞으면 마감({cutoff:%m/%d %H:%M}) 전까지 아래 ✅ 주문 버튼으로 직접 주문할 수 있어요.",
+                                                  sheet_rows(sh)))
                     continue
                 if now >= alarm and not sh.get("alarm_sent"):
                     sh["alarm_sent"] = True
@@ -2328,8 +2399,8 @@ def tick(tg):
                     when = (f"{left}분 뒤({at:%H:%M}) " if not mode else f"{AUTO_MODES[mode]}({at:%H:%M}) ")
                     tail = (("자동주문합니다." if sh["auto_ok"] else "점검 미통과라 자동주문 안 합니다.") if not sh.get("auto_late")
                             else "시각이 지나 자동주문 안 합니다.")
-                    tg.send(f"⏰ <b>주문 확인 마감 30분 전</b> · {date} 가격표\n" + when + tail
-                            + "\n지금 결정하려면 아래 버튼을 눌러 주세요.", sheet_rows(sh))
+                    track_buttons(sh, tg.send(f"⏰ <b>주문 확인 마감 30분 전</b> · {date} 가격표\n" + when + tail
+                            + "\n지금 결정하려면 아래 버튼을 눌러 주세요.", sheet_rows(sh)))
                     continue
             if sh["status"] in ("approved", "retry", "retry_warn") and (now.hour, now.minute) >= (sub_h, sub_m):
                 warn = sh["status"] == "retry_warn"
@@ -2910,11 +2981,15 @@ def bot_message(tg_s, text):
                 tg_s.send("아직 받은 가격표가 없어요."); return True
             d = sorted(st["sheets"])[-1]
             sh = st["sheets"][d]
-            label = {"pending": "결정 대기", "approved": "승인됨·접수 대기", "submitting": "접수 중", "submitted": "접수 완료",
+            if sh["status"] == "skipped" and now_kst() < deadlines(sh)[2]:
+                sh["status"], sh["auto_skipped"] = "pending", True   # 1.14.4 이전에 버튼이 지워진 표 → 마감 전이면 버튼 되살림
+            label = {"pending": "결정 대기 · 자동주문 안 함(버튼으로 결정)" if sh.get("auto_skipped") else "결정 대기", "approved": "승인됨·접수 대기", "submitting": "접수 중", "submitted": "접수 완료",
                      "partial": "일부 실패", "cancelled": "안 함", "skipped": "자동주문 안 함", "expired": "마감 지남"}
             view = dict(sh, market=current_account)
-            tg_s.send(sheet_text(view, f"📋 <b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
-                      sheet_rows(sh) if sh["status"] == "pending" else None)
+            res = tg_s.send(sheet_text(view, f"📋 <b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
+                            sheet_rows(sh) if sh["status"] == "pending" else None)
+            if sh["status"] == "pending":
+                track_buttons(sh, res)
         return True
     if low in ("/자동환전전환", "자동환전전환"):           # 💱 자동환전 버튼: 누르면 바로 켜짐↔꺼짐
         return set_auto_fx(tg_s)
