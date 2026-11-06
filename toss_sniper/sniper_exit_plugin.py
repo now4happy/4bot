@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_exit_plugin.py
+# 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
 순수 롱(SOXL) 전용 '매수 체결 후 최초 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
@@ -33,11 +34,11 @@
 1층 익절 후 상단층 잔존 시 1층 공석 보존 · 상단 익절 후 1층 단독 잔류 시 알림 정밀 표출 ·
 l1_target_quota_qty / sub_l1_target_quota_qty = 0 자동 클리어 및 1층 부분 익절 시 잔여 수량 동기화(허위 TOPUP_1FL 재매수 차단 · Case 78) ·
 익절 매도로 가용현금 회복 시 시드고갈 입금 대기 및 단 1회 알림 래치(waiting_reserve_deposit_alert_sent) 자동 해제 &
-본·서브 모두 0주 전량 졸업 시 온디맨드 예비시드 원금 자동 상환 및 6/6회분 한도 원상 복구(compute_reserve_repayment_on_zero · Case 77, Case 88) ·
+본·서브 모두 0주 전량 졸업 시 무제한 온디맨드 예비시드 원금 자동 상환 및 잔여 수혈 횟수 정산(compute_reserve_repayment_on_zero · Case 77, Case 88, Case 91) ·
 매도 체결 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
 60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts / last_sub_reentry_eval_ts = 0.0) &
 15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 08 / 13)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 89 완벽 준수
+- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
 """
 
 from __future__ import annotations
@@ -54,6 +55,8 @@ from quant_engine import (
     MAX_GRID_TIERS_7,
     MAX_GRID_TIERS_12,
     MAX_RESERVE_PORTIONS,
+    PORTION_MODE_COMPOUND,
+    PORTION_MODE_SIMPLE,
     REANCHOR_NET_BUFFER_MULT,
     SUB_MAX_TIERS_3,
     SUB_MAX_TOTAL_LOTS_4,
@@ -69,6 +72,7 @@ from quant_engine import (
     evaluate_multi_grid_sell_targets,
     get_golden8_prog_thresholds,
     has_active_l1_bucket,
+    is_simple_income_mode,
     relabel_sub_upper_grid_tiers,
     relabel_upper_grid_tiers,
     resolve_effective_round_trip_fee_rate_pct,
@@ -931,7 +935,7 @@ async def execute_bulletproof_sell_sweep(
             )
             return {"status": "SWEEP_FAILED", "symbol": sym, "error": str(exc)}
 # ---------------------------------------------------------------------------
-# [핵심 2] 실물 매도 FILLED 정산 · 서브그리드/본그리드 분리 정산(Case 88) · 최고도달회차 잠금 유지(Case 87, 88) · 현재 사이클 단위 실현수익 누적 및 0주 졸업 시 자동 리셋(📌 ③) · 실측/동적 수수료 차감 세후 순익 복리 산입 · 0주 졸업 시 예비시드 자동 상환
+# [핵심 2] 실물 매도 FILLED 정산 · 서브그리드/본그리드 분리 정산(Case 88) · 최고도달회차 잠금 유지(Case 87, 88) · 현재 사이클 단위 실현수익 누적 및 0주 졸업 시 자동 리셋(📌 ③) · 실측/동적 수수료 차감 세후 순익 산입 · 0주 졸업 시 무제한 예비시드 원금 자동 상환 및 인출형(단리) 당일 수익 안내 (Case 91)
 # ---------------------------------------------------------------------------
 async def _commit_filled_sell_and_reanchor_ledger(
     context: Any,
@@ -942,7 +946,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 89 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 현재 사이클 단위 실현수익(cycle_realized_net_usd) 누적 및 0주 전량 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 자동 리셋(📌 ③) · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 본+서브 동시익절 통계/알림 보강 · Case 84 알림 연동]:
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 91 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 현재 사이클 단위 실현수익(cycle_realized_net_usd) 누적 및 0주 전량 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 자동 리셋(📌 ③) · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 무제한 예비시드 상환 카운트 · 인출형(단리) 당일 수익 인출 안내 연동]:
     7층 골디락스 본 그리드 및 Default-ON 3층 서브 그리드 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
     1) pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
        토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
@@ -951,7 +955,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     3) 👑 [Case 87 & Case 88 : 부분 익절 시 잔여 지층이 존재하는 동안에는 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금을 그대로 유지하고,
        해당 그리드가 0주 졸업했을 때만 0으로 리셋!]
     4) 🚨 [Case 78 : 본·서브 1층 부분 익절 시 l1_target_quota_qty / sub_l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]
-    5) 🚨 [Case 77 & Case 88 : 본·서브 모두 0주 전량 졸업 시 예비시드 자동 상환]
+    5) 🚨 [Case 77, Case 88 & Case 91 : 본·서브 모두 0주 전량 졸업 시 무제한 예비시드 원금 자동 상환 및 잔여 수혈 횟수 카운트 정산]
     6) 🔄 [📌 ③ 현재 사이클 단위 수익 추적 및 0주 졸업 시 자동 리셋 : 부분 익절 시에는 cycle_realized_net_usd 에 누적하고,
        is_graduated_zero == True 순간 이번 사이클 최종 확정수익을 last_cycle_realized_net_usd 에 박제한 뒤 cycle_realized_net_usd = 0.0 으로 자동 리셋!]
     """
@@ -971,6 +975,10 @@ async def _commit_filled_sell_and_reanchor_ledger(
     eff_sub_merge_mode = str(
         st.get("sub_merge_mode") or SUB_MERGE_MODE_L1_L3
     ).upper()
+    portion_mode = (
+        str(st.get("portion_mode") or PORTION_MODE_COMPOUND).upper().strip()
+    )
+    is_simple_mode = is_simple_income_mode(portion_mode)
 
     settled_oids: List[str] = list(st.get("last_settled_order_ids") or [])
     if eff_oid and eff_oid not in settled_oids:
@@ -1582,6 +1590,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             injected_reserve_usd=cur_inj_res_usd,
             used_reserve_portions_cnt=cur_used_res_cnt,
             max_reserve_portions=MAX_RESERVE_PORTIONS,
+            portion_mode=portion_mode,
         )
         if bool(repay_info.get("did_repay")):
             repaid_this_time = round(
@@ -1598,11 +1607,11 @@ async def _commit_filled_sell_and_reanchor_ledger(
             )
             cum_repaid_usd = round(cum_repaid_usd + repaid_this_time, 4)
             logger.info(
-                "🎓 [Case 77 0주 졸업 온디맨드 예비시드 자동 상환 완료] 상환액=$%.2f · 잔여수혈잔액=$%.2f · 예비한도 복구=%d/%d회분",
+                "🎓 [Case 77/91 0주 졸업 온디맨드 예비시드 자동 상환 완료] 상환액=$%.2f · 잔여수혈잔액=$%.2f · 잔여수혈=%d회분(누적총 %d회)",
                 repaid_this_time,
                 next_inj_res_usd,
-                MAX_RESERVE_PORTIONS - next_used_res_cnt,
-                MAX_RESERVE_PORTIONS,
+                next_used_res_cnt,
+                safe_int(st.get("total_reserve_injected_cnt"), 0),
             )
 
     now_sell_epoch = time.time()
@@ -1720,6 +1729,13 @@ async def _commit_filled_sell_and_reanchor_ledger(
         cyc_sign = "+" if cur_cyc_net >= 0.0 else "-"
         cum_sign = "+" if cum_net >= 0.0 else "-"
         sess_tag = " · 🌃장외익절" if is_ext_sell else ""
+        credit_mode_desc = (
+            "현금금고 적립(💵인출형 · 당일실현 +${:,.2f} 인출가능!)".format(
+                max(0.0, day_net)
+            )
+            if is_simple_mode
+            else "시드 복리산입!"
+        )
         if is_sub_without_main_sell:
             grid_sh = sum(b.qty for b in rem_buckets)
             sub_sh = sum(sb.qty for sb in rem_sub_buckets)
@@ -1736,7 +1752,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
             )
             body_msg = (
-                f"세후순익 {sign}${abs(net_pnl):,.2f} 시드 복리산입! · "
+                f"세후순익 {sign}${abs(net_pnl):,.2f} {credit_mode_desc} · "
                 f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                 f"{sub_state_note} · 본그리드({len(rem_buckets)}개층·{grid_sh}주) 무결성 유지 · "
                 f"가용현금 ${free_cash_now:,.2f}"
@@ -1751,10 +1767,9 @@ async def _commit_filled_sell_and_reanchor_ledger(
             if is_graduated_zero:
                 repay_note = ""
                 if repaid_this_time > 0.0:
-                    avail_p = max(0, MAX_RESERVE_PORTIONS - next_used_res_cnt)
                     repay_note = (
                         f" · 💉예비시드 원금 ${repaid_this_time:,.2f} 자동상환 완료"
-                        f"(예비한도 {avail_p}/{MAX_RESERVE_PORTIONS}회분 복구!)"
+                        f"(잔여 시멘트추가 {next_used_res_cnt}회분 · ${next_inj_res_usd:,.2f}!)"
                     )
                 if is_ext_sell:
                     next_entry_guide = "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 첫 1층 진입 대기!"
@@ -1832,7 +1847,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 f"{sold_q}주 @ ${fill_p:.2f} ({r_sign}{net_rate:.2f}%)"
             )
             body_msg = (
-                f"세후순익 {sign}${abs(net_pnl):,.2f} 시드 복리산입! · "
+                f"세후순익 {sign}${abs(net_pnl):,.2f} {credit_mode_desc} · "
                 f"{note_str} · 가용현금 ${free_cash_now:,.2f}"
             )
         await context.send_slim_alert(title=title_msg, body=body_msg)
@@ -2054,7 +2069,7 @@ async def sync_pending_sell_order_plugin(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 24시간 전 세션(프리·정규·애프터·데이마켓) 매수 후 최초 60초 타임쉴드 & 이후 보유 중 매 1.5초 실시간 다중 익절(본+서브) + 방안 C 오버나이트 통합이평 사수 + 윗꼬리 즉시 체결 모니터 (Case 69 ~ 88)
+# [핵심 3] 24시간 전 세션(프리·정규·애프터·데이마켓) 매수 후 최초 60초 타임쉴드 & 이후 보유 중 매 1.5초 실시간 다중 익절(본+서브) + 방안 C 오버나이트 통합이평 사수 + 윗꼬리 즉시 체결 모니터 (Case 69 ~ 91)
 # ---------------------------------------------------------------------------
 async def execute_1m_sniper_sell_and_reanchor_plugin(
     context: Any,
@@ -2063,7 +2078,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
     now_est: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 88 (방안 C 오버나이트 통합이평 사수 하이브리드 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 & 본+서브 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가)]:
+    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 91 (방안 C 오버나이트 통합이평 사수 하이브리드 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 & 본+서브 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가)]:
     """
     global _LAST_CONSUMED_WICK_TRADE_TS
 

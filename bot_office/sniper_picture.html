@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체 · 사무실 v1.2.8: 층 영역 지하층 줄(황금 칸)·상단 지하 주수) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체 · 사무실 v1.2.8: 층 영역 지하층 줄(황금 칸)·상단 지하 주수 · 사무실 vNEXT: Case 91 시멘트추가 횟수·운용 모드 줄) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
 <!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
@@ -65,6 +65,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     <div id="subwma" aria-label="서브 통합이평"></div>
     <div id="subnote" class="note"></div>
   </div>
+  <p class="note" id="modeline" hidden></p>
   <div class="warn" id="reservewarn" hidden></div>
   <div class="card" id="basementcard" hidden>
     <div class="legend"><span>지하층 (옛 골든포켓 보관분 · 새로 사지 않음 · 목표가에 전량 매도 · 본·서브 계산 제외)</span></div>
@@ -242,7 +243,10 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     drawCycle(d);
     draw(d);drawBasement(d);drawSub(d);
     var rw=$('reservewarn');
-    if(d.reserve&&d.reserve.injected_usd>0){rw.hidden=false;rw.textContent='⚠️ 예비수혈 사용 중: '+usd(d.reserve.injected_usd)+' ('+d.reserve.used_portions+'회분) · 남은 회분 '+d.reserve.avail_portions+'/'+d.reserve.max_portions+' — 2번 수혈은 3번 적립 달러까지 쓸 수 있어요';}else rw.hidden=true;
+    // 사무실 vNEXT · Case 91: 시멘트추가는 무제한 — 남은 회분 분수 없이 금액 · 총 횟수만
+    if(d.reserve&&d.reserve.injected_usd>0){rw.hidden=false;var rc=Math.max(d.reserve.total_injected_cnt||0,d.reserve.used_portions||0);rw.textContent='⚠️ 시멘트추가 사용 중: '+usd(d.reserve.injected_usd)+' (총 '+rc+'회) — 2번 시멘트추가는 3번 적립 달러까지 쓸 수 있어요';}else rw.hidden=true;
+    // 사무실 vNEXT · Case 91: 운용 모드 작은 줄 (모드 정보 없으면 숨김 · 지어내지 않음)
+    var ml=$('modeline');if(d.mode&&d.mode.label){ml.hidden=false;ml.textContent='운용 모드: '+d.mode.label+(d.mode.simple?' · 1회분 기준 = 초기 시드 고정':' · 1회분 기준 = 코어 자산');}else ml.hidden=true;
     // 사무실 v1.2.7: 지하층 카드 — 지하층이 있을 때만. 손익은 현재가를 알 때만, 모르면 '—'.
     var bc=$('basementcard'),bm=d.basement;
     if(bm&&bm.qty>0){bc.hidden=false;

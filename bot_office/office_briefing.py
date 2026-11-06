@@ -24,6 +24,11 @@
   ② 순수 코어 자산 = max(기준시드, 가용현금 + 본·서브 투입원가 − 예비수혈금) — 골든/지하층 원가는 넣지 않음 (sniper_plugin core_equity 와 같음)
   ③ 지하층(basement_pocket)이 원장에 있을 때만 참고 1줄(수량·비용) — 필요 달러·코어 자산·보유 차감 어디에도 넣지 않음, 없으면 줄 없음
 - 사무실 v1.3.2 (2026-11-05): '필요 금액' 표 한투에 USD 줄 추가 (USD 먼저·KRW 다음, 필요 '-', USD 조회 실패는 0 아님 + 노트) — kis_balances() 1번 호출, 그 밖 로직 그대로
+- 사무실 vNEXT (2026-11-06): 스나이퍼 v2.3.0(원작 a4b4790 Case 91) 대응 — 달러 계산 부분만, 형식 그대로
+  ① 원장 portion_mode 가 단리(SIMPLE_08PCT 등)일 때만 1회분 예산 기준 = 초기 시드 고정 (본 8%·서브 4%·서브 보호예수 0.5회분)
+     복리 또는 portion_mode 없음(구 원장) = 기존 공식 그대로 (순수 코어 자산)
+  ② 시멘트추가(예비시드) 무제한: 참고 1줄(현재 회분·금액·총 횟수)만 — 필요 달러 계산에는 넣지 않음 · 표시 문구 '수혈'→'시멘트추가'
+  ③ 지하층 참고 줄·보유 차감 1회·실패 조회 제외 목록 그대로
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
@@ -520,10 +525,10 @@ def sniper_ledger():
 #  · 토스 매수가능금액 0.2% 안전버퍼 = sniper_plugin (raw_bp × 0.998)
 # 필요 달러는 '주수 × 매수가'(수수료·버퍼 포함 보유액 기준). 예비수혈은 새 돈이 아니라 계좌 달러 용도 전환이라 더하지 않는다.
 SNIPER_BP_BUFFER_PCT = 0.2
-SNIPER_CONST_FALLBACK = {   # main 2026-11-03 toss_sniper v2.0.0 값 (toss_api.py · quant_engine.py)
+SNIPER_CONST_FALLBACK = {   # main 2026-11-03 toss_sniper v2.0.0 값 (toss_api.py · quant_engine.py) · 사무실 vNEXT: v2.3.0 무제한 시멘트추가 → MAX_RESERVE_PORTIONS 999999
     "ROUND_TRIP_FEE_RATE_PCT": 0.14, "PORTION_RATIO_LOCKED": 0.08, "SUB_PORTION_RATIO_4PCT": 0.04,
     "SUB_RESERVE_MAIN_PORTIONS": 0.5, "SUB_FROZEN_DAYS_TRIGGER": 5, "SUB_MAX_TOTAL_LOTS_4": 4,
-    "MAX_RESERVE_PORTIONS": 6, "MIN_DIP_BUDGET_RATIO": 0.30, "MIN_DIP_VS_L1_RATIO": 0.30,
+    "MAX_RESERVE_PORTIONS": 999999, "MIN_DIP_BUDGET_RATIO": 0.30, "MIN_DIP_VS_L1_RATIO": 0.30,
     "DEFAULT_INITIAL_SEED_USD": 10000.0, "REENTRY_PULLBACK_DROP_PCT": -1.0, "REENTRY_BREAKOUT_RISE_PCT": 1.0,
 }
 
@@ -566,11 +571,20 @@ def _cents_floor(p):
     return math.floor((p + 1e-9) * 100.0) / 100.0
 
 
+# 사무실 vNEXT · Case 91: = quant_engine.is_simple_income_mode (단리 표기). 서브 단리는 SIMPLE_04PCT.
+SNIPER_SIMPLE_MODES = ("SIMPLE_08PCT", "FIXED_800", "SIMPLE", "INCOME", "SIMPLE_04PCT")
+
+
+def sniper_is_simple(led):
+    """원장 portion_mode 가 단리(인출형)인지. 필드가 없으면(구 원장) 복리로 취급."""
+    return isinstance(led, dict) and str(led.get("portion_mode") or "COMP_08PCT").upper().strip() in SNIPER_SIMPLE_MODES
+
+
 def golden8_target_qty(anchor_price, equity, seed, mode, exec_price, ratio):
     """= quant_engine.compute_golden8_quota_qty → (목표 주수, 1회분 예산). equity 에는 순수 코어 자산을 넣는다.
-    COMP_08PCT: 예산 = max(기준시드, 코어 자산) × 비율 / FIXED_800: 예산 = 기준시드 × 비율"""
+    COMP_08PCT/SUB_04PCT(복리): 예산 = max(기준시드, 코어 자산) × 비율 / 단리(SIMPLE_08PCT·SIMPLE_04PCT·FIXED_800): 예산 = 기준시드 × 비율"""
     seed = max(100.0, seed)
-    budget = round((seed if mode == "FIXED_800" else max(seed, equity)) * ratio, 4)
+    budget = round((seed if mode in SNIPER_SIMPLE_MODES else max(seed, equity)) * ratio, 4)
     qty = max(1, int(math.floor((budget + 1e-9) / max(0.01, anchor_price))))
     if exec_price is not None and exec_price > 0:   # Case 67: 실제 매수가 기준 예산 상한 주수로 한 번 더 캡핑
         qty = min(max(1, int(math.floor((budget + 1e-9) / max(0.01, exec_price)))), qty)
@@ -681,10 +695,11 @@ def sniper_next_buy(led, live_price, consts):
         return {"state": "unavailable", "why": "원장에 기준시드·가용현금 없음"}
     c = sniper_core(led, consts)
     ratio, fee, free, buckets = consts["PORTION_RATIO_LOCKED"], c["fee"], c["free"], c["main"]
-    mode = "COMP_08PCT"
-    raw_mode = str(led.get("portion_mode") or mode).upper().strip()
-    base = {"free": round(free, 2), "fee": fee, "core": c["core"], "inj": c["inj"], "used_res": c["used_res"],
-            "note": "" if raw_mode == mode else f"원장 표기 {raw_mode} → 스나이퍼는 COMP_08PCT로 계산"}
+    # 사무실 vNEXT · Case 91: 단리면 SIMPLE_08PCT(초기 시드 고정), 아니면(없음 포함) COMP_08PCT(기존 공식)
+    simple = sniper_is_simple(led)
+    mode = "SIMPLE_08PCT" if simple else "COMP_08PCT"
+    base = {"free": round(free, 2), "fee": fee, "core": c["core"], "seed": c["seed"], "simple": simple,
+            "inj": c["inj"], "used_res": c["used_res"], "note": ""}
     if str(led.get("buy_order_id") or "").strip():   # 이미 낸 주문이 '다음 1회' (따로 또 세지 않음)
         q, p = max(1, _int(led.get("ordered_qty"))), num(led.get("buy_price"))
         tag = str(led.get("pending_lot_type") or "").upper()
@@ -780,7 +795,9 @@ def sniper_sub_next_buy(led, live_price, consts):
     fee = c["fee"]
     # = compute_sub_grid_available_idle_cash (코어 자산 하한 DEFAULT_INITIAL_SEED_USD · 본 1회분 × 0.5 보호예수)
     c_eq = max(consts["DEFAULT_INITIAL_SEED_USD"], c["core"])
-    reserved = round(round(c_eq * consts["PORTION_RATIO_LOCKED"], 4) * consts["SUB_RESERVE_MAIN_PORTIONS"], 4)
+    simple = sniper_is_simple(led)   # 사무실 vNEXT · Case 91: 단리면 보호예수 기준도 초기 시드
+    base_eq = c["seed"] if simple else c_eq
+    reserved = round(round(base_eq * consts["PORTION_RATIO_LOCKED"], 4) * consts["SUB_RESERVE_MAIN_PORTIONS"], 4)
     idle = round(max(0.0, c["free"] - reserved), 4)
     base = {"free": round(c["free"], 2), "fee": fee, "reserved": round(reserved, 2), "idle": round(idle, 2),
             "lots": lots, "cap": cap}
@@ -828,7 +845,7 @@ def sniper_sub_next_buy(led, live_price, consts):
         if topup:
             tq, budget = topup["rem"], topup["budget"]
         else:   # = compute_sub4_quota_qty (4% · Case 67 이중 캡핑)
-            tq, budget = golden8_target_qty(ref_p, c["core"], c["seed"], "SUB_04PCT", px, consts["SUB_PORTION_RATIO_4PCT"])
+            tq, budget = golden8_target_qty(ref_p, c["core"], c["seed"], "SIMPLE_04PCT" if simple else "SUB_04PCT", px, consts["SUB_PORTION_RATIO_4PCT"])
         min_req = max(px * (1.0 + fee / 100.0), budget * consts["MIN_DIP_BUDGET_RATIO"])
         q, spent = affordable_buy_qty(tq, px, idle, idle, budget, fee) if idle >= min_req or topup else (0, 0.0)
         cur = {"qty": q, "price": px, "budget": budget, "target": tq, "order_usd": round(spent, 2), "min_req": round(min_req, 2)}
@@ -1101,11 +1118,11 @@ def section_dollar_check(now=None, info=None):
         sn_need = sn["need_usd"]
         lines.append(f"🎯 2번 본 그리드 다음 1회 · {sn['branch']}: {sn['qty']}주 × ${sn['price']:,.2f} = ${sn['order_usd']:,.2f}")
         lines.append(f"   ↳ {sn['cond']}" + (" · 현재가 조회 불가→조건가 기준" if live is None else ""))
-        lines.append(f"   ↳ 1회분 예산 ${sn['budget']:,.2f} (순수 코어 자산 ${sn['core']:,.2f}) · 수수료 {sn['fee']:.2f}%·안전버퍼 포함 필요 ${sn_need:,.2f}")
+        lines.append(f"   ↳ 1회분 예산 ${sn['budget']:,.2f} " + (f"(인출형·단리 · 초기 시드 ${sn['seed']:,.2f} 고정)" if sn.get("simple") else f"(순수 코어 자산 ${sn['core']:,.2f})") + f" · 수수료 {sn['fee']:.2f}%·안전버퍼 포함 필요 ${sn_need:,.2f}")
         if sn["guard"] == "reserve":
             unalloc = (usd - sn["free"]) if usd is not None else None
             _keep(warn, f"   ↳ 💉 장부 가용현금 ${sn['free']:,.2f} < 30% 가드 ${sn['min_req']:,.2f} → 계좌 여유 달러에서 +{sn['inj_portions']}회분"
-                         f"(${sn['inj_usd']:,.2f}) 수혈 후 매수 (수혈은 필요액에 따로 더하지 않음)"
+                         f"(${sn['inj_usd']:,.2f}) 시멘트추가 후 매수 (시멘트추가는 필요액에 따로 더하지 않음)"
                          + ("" if unalloc is None or unalloc > 0 else " · 지금 계좌 여유 달러 없음 → 입금 전엔 매수 보류"))
         if usd is not None:
             now_q = sniper_qty_with_bp(sn, usd)
@@ -1114,7 +1131,7 @@ def section_dollar_check(now=None, info=None):
     elif sn["state"] == "deposit_wait":
         unalloc = max(0.0, usd - sn["free"]) if usd is not None else 0.0
         rec = max(sn["budget"], sn["inj_portions"] * sn["budget"] - unalloc)
-        _keep(state, f"🎯 2번 본 그리드: 시드고갈 · 예비수혈 {sn['used_res']}/{max_res}회분 소진 → 입금 대기 (매수 없음 · 합산 제외)")
+        _keep(state, f"🎯 2번 본 그리드: 시드고갈 · 계좌 여유 달러 부족(시멘트추가 {sn['used_res']}회 사용 중) → 입금 대기 (매수 없음 · 합산 제외)")
         _keep(state, f"   ↳ {sn['branch']} 최소 필요 현금 ${sn['min_req']:,.2f} · 스나이퍼 권장 입금 약 ${rec:,.2f}")
     elif sn["state"] == "no_cash":
         _keep(state, f"🎯 2번 본 그리드 다음 1회: 매수 불가 — 장부 가용현금 ${sn['free']:,.2f}가 수수료 포함 1주 ${sn['unit']:,.2f}보다 적음"
@@ -1140,11 +1157,11 @@ def section_dollar_check(now=None, info=None):
         else:
             excluded.append(f"2번 서브 {html.escape(str(sb.get('why') or '계산 불가'))}")
     if led and bool(led.get("is_active", True)):
+        # 사무실 vNEXT · Case 91: 시멘트추가(예비시드)는 무제한 — 참고 1줄(수량·금액)만, 필요 달러 계산 제외
         used = max(0, int(num(led.get("used_reserve_portions_cnt"))))
-        if used < max_res or num(led.get("injected_reserve_usd")) > 0:
-            _keep(warn, f"⚠️ 2번 예비수혈: 시드 고갈 때 토스 계좌 여유 달러를 최대 {max_res - used}회분 더 씀"
-                         f" (사용 {used}/{max_res} · 누적 ${num(led.get('injected_reserve_usd')):,.2f}, 0주 졸업 때 상환)"
-                         " — 2·3번 같은 계좌라 3번 적립용 달러까지 쓸 수 있음 (보유 달러는 한 번만 뺌)")
+        tot_cnt = max(used, int(num(led.get("total_reserve_injected_cnt"))))
+        _keep(warn, f"⚠️ 2번 시멘트추가: 현재 {used}회분 ${num(led.get('injected_reserve_usd')):,.2f} (총 {tot_cnt}회 · 0주 졸업 때 상환)"
+                     " · 시드 고갈 때 토스 계좌 여유 달러를 횟수 제한 없이 씀 — 2·3번 같은 계좌라 3번 적립용 달러까지 쓸 수 있음 (필요 달러 계산 제외)")
     # 사무실 v1.2.7: 지하층(옛 골든포켓 보관분) 참고 1줄 — 원장에 있을 때만. 필요 달러·코어 자산·보유 차감에 넣지 않음.
     bp = led.get("basement_pocket") if isinstance(led, dict) and isinstance(led.get("basement_pocket"), dict) else {}
     if _int(bp.get("qty")) > 0 and num(bp.get("actual_cost_usd")) > 0:
