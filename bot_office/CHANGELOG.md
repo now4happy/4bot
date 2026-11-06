@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.3.5 · 2026-11-06 13:28 (KST)
+- 파일: fanding_vr6.py
+- 내용: VR6 판독 날짜 기준 수정 fanding_vr6 2.6.1 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.3.4 · 2026-11-06 10:23 (KST)
 - 파일: fanding_trade.py
 - 내용: 팬딩 검산 오탐 + 주문 버튼 사라짐 수정 fanding_trade 1.14.4 (사무실 vNEXT)
