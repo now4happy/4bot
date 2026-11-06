@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
-# vNEXT: 수익률 추가 — 월별 표 '입력정리'!A67:H78 에서 B(총자산)가 있는 마지막 월의 월 수익률(D)·1년 수익률(H)만 %로 저장
+# v1.4.2: 수익률 추가 — 월별 표 '입력정리'!A67:H78 에서 B(총자산)가 있는 마지막 월의 월 수익률(D)·1년 수익률(H)만 %로 저장
 #        (returns = {month, monthly, yearly} · 총자산 금액은 저장 안 함 · 표가 비었거나 D·H가 비면 returns 없음, 오류 아님)
 # v1.3.8: 자산 구성(mix) 도넛에서만 비율 1% 미만 항목 숨김 (합계·다른 항목 % 그대로) · mix 기본 이름 '간접자산'
 # v1.3.7: 신규. 상황판 '자산 현황' 도넛 2개용 자료를 구글 시트에서 읽어 비율(%)만 저장
@@ -251,7 +251,7 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "vNEXT", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "v1.4.2", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
     if prev.get("returns"):

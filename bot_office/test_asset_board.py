@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
 # 사무실 v1.3.8: 자산 구성 1% 미만 숨김 테스트 추가
-# 사무실 vNEXT: 수익률(월별 표 A67:H78 → returns) · office_board returns 전달 · 보드 하이브리드(도넛+막대) 테스트 추가
+# 사무실 v1.4.2: 수익률(월별 표 A67:H78 → returns) · office_board returns 전달 · 보드 하이브리드(도넛+막대) 테스트 추가
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from datetime import datetime
@@ -203,7 +203,7 @@ class T(unittest.TestCase):
         self.assertEqual(AB.HIDE_BELOW, {"mix": 1.0})
         self.assertEqual(AB.CHARTS[0][3][3], "간접자산")
 
-    # ---- vNEXT: 수익률 (월별 표)
+    # ---- v1.4.2: 수익률 (월별 표)
     def test_returns_current_month(self):
         rec, disk = self.run_update(Http(sheet(MIX, STOCK)))
         self.assertEqual(disk["returns"], {"month": "2026-11", "monthly": -7.7, "yearly": 0.5})

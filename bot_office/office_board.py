@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_board.py   (사무실 v1.3.7 · 2026-11-06)
-#  · 사무실 vNEXT: assets 에 수익률 returns {month, monthly, yearly} 전달 (월 'YYYY-MM'·숫자만 검사 · 이상하면 뺌, 도넛·막대는 그대로)
+#  · 사무실 v1.4.2: assets 에 수익률 returns {month, monthly, yearly} 전달 (월 'YYYY-MM'·숫자만 검사 · 이상하면 뺌, 도넛·막대는 그대로)
 #  · 사무실 v1.3.7: 상황판 '자산 현황'(도넛 2개) 자료 assets 추가 — asset_board.py 가 만든 assets.json 을 읽기만 함
 #    (시트에 직접 닿지 않아 화면이 멈추지 않음 · 못 가져오면 마지막 값 + stale 표시) · 봇 신호등 표시는 board.html 에서 뺌, services 필드는 그대로
 #    · 금액 규칙 예외는 자산 현황(assets)에만: 이름·비율(%)·기준일만 보냄 (금액·계좌번호·토큰·주소 원문 없음)

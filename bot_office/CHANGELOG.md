@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.4.2 · 2026-11-06 17:39 (KST)
+- 파일: asset_board.py, board.html, office_board.py, test_asset_board.py
+- 내용: 자산 현황 하이브리드: 도넛+막대+수익률 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.4.1 · 2026-11-06 17:13 (KST)
 - 파일: board.html
 - 내용: 자산 현황 도넛 2개 파이 지름 같게 (사무실 vNEXT)
