@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: toss_api.py (원작 toss_api_core.py + 원작 toss_api.py 병합)
+# 4bot 2번 v2.3.1 (2026-11-06): R1·R2 수동 주문 보호 — 04:00·16:00 일괄 취소와 익절 스윕의 미체결 매도 취소를 봇 주문(장부 orderId·봇 등록부)만 대상으로 제한, 사용자 토스 앱 주문은 취소하지 않고 남김/기다림
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
@@ -35,7 +36,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:  # [🔗토스 토큰 공유 HOOK] 2번·3번·브리핑이 같은 토큰을 같이 씀 (없으면 원작 그대로)
     import toss_token_share as _TTS
@@ -345,6 +346,160 @@ def generate_client_order_id(prefix: str = "SNIPER") -> str:
     rand_part = uuid.uuid4().hex[:12]
     cid = f"{clean_prefix}-{ts_part}-{rand_part}"
     return cid[:36]
+
+
+# ---------------------------------------------------------------------------
+# [4bot 2번 v2.3.1 · R1/R2 수동 주문 보호] 봇 주문 식별기
+#  - 토스 GET /api/v1/orders 목록(Order 스키마)에는 clientOrderId 가 없다 (API.txt 확인).
+#    그래서 봇 주문은 orderId 로만 식별한다:
+#    ① 장부의 buy_order_id / sell_order_id / basement_pocket.sell_order_id
+#    ② create_order 성공 때 받은 orderId 등록부(파일 보존, 4일 · 최대 1000건)
+#  - 둘 다 아닌 미체결 주문 = 사용자(토스 앱) 주문으로 보고 절대 취소하지 않는다.
+# ---------------------------------------------------------------------------
+BOT_ORDER_REGISTRY_TTL_SEC: float = 4 * 86400.0
+BOT_ORDER_REGISTRY_MAX: int = 1000
+_BOT_ORDER_REGISTRY_LOCK = threading.RLock()
+_BOT_ORDER_REGISTRY: Dict[str, Dict[str, Any]] = {}
+_BOT_ORDER_REGISTRY_LOADED: bool = False
+
+
+def _bot_order_registry_path() -> str:
+    try:
+        slug = get_folder_slug()
+    except Exception:
+        slug = "default"
+    return os.path.join(get_bot_base_dir(), f"soxl_bot_order_ids_{slug}.json")
+
+
+def _bot_order_registry_prune_locked(now_ts: float) -> None:
+    for oid in [k for k, v in _BOT_ORDER_REGISTRY.items()
+                if now_ts - float((v or {}).get("ts") or 0.0) > BOT_ORDER_REGISTRY_TTL_SEC]:
+        _BOT_ORDER_REGISTRY.pop(oid, None)
+    if len(_BOT_ORDER_REGISTRY) > BOT_ORDER_REGISTRY_MAX:
+        for oid, _ in sorted(_BOT_ORDER_REGISTRY.items(),
+                             key=lambda kv: float((kv[1] or {}).get("ts") or 0.0))[
+                : len(_BOT_ORDER_REGISTRY) - BOT_ORDER_REGISTRY_MAX]:
+            _BOT_ORDER_REGISTRY.pop(oid, None)
+
+
+def _bot_order_registry_load_locked() -> None:
+    global _BOT_ORDER_REGISTRY_LOADED
+    if _BOT_ORDER_REGISTRY_LOADED:
+        return
+    _BOT_ORDER_REGISTRY_LOADED = True
+    try:
+        with open(_bot_order_registry_path(), "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        if isinstance(raw, dict):
+            for oid, meta in raw.items():
+                if str(oid).strip() and isinstance(meta, dict):
+                    _BOT_ORDER_REGISTRY.setdefault(str(oid).strip(), meta)
+    except Exception:
+        pass
+    _bot_order_registry_prune_locked(time.time())
+
+
+def register_bot_order_id(order_id: Any, client_order_id: Any = "") -> None:
+    """봇이 낸 주문의 orderId 를 등록한다. 실패해도 매매에는 영향 없음 (조용히 넘어감)."""
+    oid = str(order_id or "").strip()
+    if not oid:
+        return
+    try:
+        with _BOT_ORDER_REGISTRY_LOCK:
+            _bot_order_registry_load_locked()
+            _BOT_ORDER_REGISTRY[oid] = {
+                "cid": str(client_order_id or "")[:36],
+                "ts": round(time.time(), 3),
+            }
+            _bot_order_registry_prune_locked(time.time())
+            path = _bot_order_registry_path()
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(_BOT_ORDER_REGISTRY, fh, ensure_ascii=False)
+            os.replace(tmp, path)
+    except Exception as exc:
+        logger.debug("봇 주문 등록부 저장 실패(무시, 메모리에는 남음): %s", exc)
+
+
+def is_registered_bot_order_id(order_id: Any) -> bool:
+    oid = str(order_id or "").strip()
+    if not oid:
+        return False
+    with _BOT_ORDER_REGISTRY_LOCK:
+        _bot_order_registry_load_locked()
+        return oid in _BOT_ORDER_REGISTRY
+
+
+def collect_bot_order_ids(state: Optional[Dict[str, Any]]) -> set:
+    """장부 state 에 저장된 봇 주문 ID 모음 (본·서브 buy/sell + 지하층 sell)."""
+    ids = set()
+    st = state if isinstance(state, dict) else {}
+    for key in ("buy_order_id", "sell_order_id"):
+        v = str(st.get(key) or "").strip()
+        if v:
+            ids.add(v)
+    bp = st.get(BASEMENT_POCKET_KEY)
+    if isinstance(bp, dict):
+        v = str(bp.get("sell_order_id") or "").strip()
+        if v:
+            ids.add(v)
+    return ids
+
+
+def is_bot_order_id(order_id: Any, ledger_bot_ids: Optional[Iterable] = None) -> bool:
+    oid = str(order_id or "").strip()
+    if not oid:
+        return False
+    if ledger_bot_ids and oid in {str(x).strip() for x in ledger_bot_ids}:
+        return True
+    return is_registered_bot_order_id(oid)
+
+
+async def split_open_orders_by_owner(
+    api: Any,
+    symbol: str,
+    side: Optional[str] = None,
+    ledger_bot_ids: Optional[Iterable] = None,
+) -> Tuple[List[str], List[str]]:
+    """미체결 주문을 (봇 orderId 목록, 사용자 orderId 목록) 으로 나눈다. 목록 순서는 토스 응답 순서 그대로."""
+    orders = await api.get_open_orders(symbol=symbol)
+    target_side = str(side or "").upper().strip()
+    bot_ids: List[str] = []
+    user_ids: List[str] = []
+    for o in orders or []:
+        if not isinstance(o, dict):
+            continue
+        if target_side and str(o.get("side") or "").upper().strip() != target_side:
+            continue
+        oid = str(o.get("orderId") or "").strip()
+        if not oid:
+            continue
+        (bot_ids if is_bot_order_id(oid, ledger_bot_ids) else user_ids).append(oid)
+    return bot_ids, user_ids
+
+
+async def cancel_bot_open_orders(
+    api: Any,
+    symbol: str,
+    ledger_bot_ids: Optional[Iterable] = None,
+) -> int:
+    """[R1] 봇이 낸 미체결 주문만 취소한다. 사용자 주문은 남긴다. 반환: 취소한 건수."""
+    bot_ids, user_ids = await split_open_orders_by_owner(
+        api, symbol, side=None, ledger_bot_ids=ledger_bot_ids
+    )
+    canceled = 0
+    for oid in bot_ids:
+        try:
+            await api.cancel_order(oid)
+            canceled += 1
+        except Exception:
+            pass
+    if user_ids:
+        logger.info(
+            "🛡️ [수동 주문 보호] %s 미체결 중 사용자 주문 %d건은 취소하지 않고 남김 (봇 주문 %d건 취소)",
+            symbol, len(user_ids), canceled,
+        )
+    return canceled
 
 
 class _NonRetryableApiError(Exception):
@@ -3520,6 +3675,9 @@ class TossApiClient:
             rate_group="ORDER",
         )
         r_obj = res.get("result") if isinstance(res, dict) else {}
+        if isinstance(r_obj, dict):
+            # [4bot v2.3.1 R1/R2] 봇 주문 orderId 등록 (사용자 주문과 구분용 · 실패해도 주문 결과는 그대로)
+            register_bot_order_id(r_obj.get("orderId"), cid)
         return r_obj if isinstance(r_obj, dict) else {}
 
     async def modify_order(
@@ -3545,6 +3703,8 @@ class TossApiClient:
             rate_group="ORDER",
         )
         r_obj = res.get("result") if isinstance(res, dict) else {}
+        if isinstance(r_obj, dict) and is_registered_bot_order_id(oid):
+            register_bot_order_id(r_obj.get("orderId"), r_obj.get("clientOrderId"))
         return r_obj if isinstance(r_obj, dict) else {}
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:

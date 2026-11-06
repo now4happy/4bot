@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_exit_plugin.py
+# 4bot 2번 v2.3.1 (2026-11-06): R1·R2 수동 주문 보호 — 04:00·16:00 일괄 취소와 익절 스윕의 미체결 매도 취소를 봇 주문(장부 orderId·봇 등록부)만 대상으로 제한, 사용자 토스 앱 주문은 취소하지 않고 남김/기다림
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
@@ -94,10 +95,12 @@ from toss_api import (
     EST_TZ,
     TARGET_SYMBOL,
     _NonRetryableApiError,
+    collect_bot_order_ids,
     generate_client_order_id,
     safe_float,
     safe_int,
     sanitize_basement_pocket_dict,
+    split_open_orders_by_owner,
 )
 
 logger = logging.getLogger("toss_sniper.sniper_exit_plugin")
@@ -777,9 +780,31 @@ async def execute_bulletproof_sell_sweep(
                 "reason": reason_tag,
             }
 
-        latest_open = await context.api.find_latest_open_order_id(
-            sym, side="SELL"
+        # [4bot v2.3.1 R2] 미체결 SELL 정리는 봇 주문만. 사용자(토스 앱) SELL 이 있으면 취소하지 않고 기다린다
+        #   (지하층 경로와 같은 원칙 · 5초 뒤 다시 확인 · 봇 주문만 있을 때는 예전처럼 최신 1건 취소)
+        bot_sell_ids, user_sell_ids = await split_open_orders_by_owner(
+            context.api, sym, side="SELL", ledger_bot_ids=collect_bot_order_ids(st)
         )
+        if user_sell_ids:
+            mark_extended_sell_restriction_cooldown(
+                context,
+                symbol=sym,
+                cooldown_sec=EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
+                reason="WAIT_USER_OPEN_SELL",
+            )
+            logger.info(
+                "🛡️ [%s 수동 매도 보호] 사용자 미체결 매도 %d건 → 봇 익절 발주 보류·취소 안 함 (%.1f초 후 재확인)",
+                sym,
+                len(user_sell_ids),
+                EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
+            )
+            return {
+                "status": "WAIT_USER_OPEN_SELL",
+                "symbol": sym,
+                "user_open_sell_count": len(user_sell_ids),
+                "retry_after_sec": EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
+            }
+        latest_open = bot_sell_ids[0] if bot_sell_ids else ""
         if latest_open:
             try:
                 await context.api.cancel_order(latest_open)

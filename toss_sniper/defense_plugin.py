@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: defense_plugin.py
+# 4bot 2번 v2.3.1 (2026-11-06): R1·R2 수동 주문 보호 — 04:00·16:00 일괄 취소와 익절 스윕의 미체결 매도 취소를 봇 주문(장부 orderId·봇 등록부)만 대상으로 제한, 사용자 토스 앱 주문은 취소하지 않고 남김/기다림
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
@@ -82,6 +83,8 @@ from toss_api import (
     DEFAULT_INITIAL_SEED_USD,
     EST_TZ,
     TARGET_SYMBOL,
+    cancel_bot_open_orders,
+    collect_bot_order_ids,
     get_basement_qty,
     get_folder_slug,
     safe_float,
@@ -1772,7 +1775,10 @@ async def execute_0400_premarket_stabilization_plugin(
     )
     if has_pending_pre:
         try:
-            await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
+            # [4bot v2.3.1 R1] 봇 주문만 취소 (사용자 토스 앱 주문은 남김)
+            await cancel_bot_open_orders(
+                context.api, TARGET_SYMBOL, collect_bot_order_ids(st_pre)
+            )
         except Exception:
             pass
         if str(st_pre.get("sell_order_id") or "").strip():
@@ -1810,8 +1816,11 @@ async def execute_0400_premarket_stabilization_plugin(
 
     setattr(context, "last_0400_sync_date", today_str)
 
-    canceled_cnt = await context.api.cancel_all_open_orders(
-        symbol=TARGET_SYMBOL
+    # [4bot v2.3.1 R1] 04:00 EST 일괄 취소 → 봇 주문(장부 ID·봇 등록부)만 취소, 사용자 주문은 남김
+    canceled_cnt = await cancel_bot_open_orders(
+        context.api,
+        TARGET_SYMBOL,
+        collect_bot_order_ids(context.ledger.get_state(TARGET_SYMBOL)),
     )
     st_after_cancel = context.ledger.get_state(TARGET_SYMBOL)
     if str(st_after_cancel.get("sell_order_id") or "").strip():
@@ -2003,7 +2012,12 @@ async def execute_1600_daily_closing_settlement_plugin(
                 "sell_order_id": st_recheck.get("sell_order_id"),
             }
 
-    await context.api.cancel_all_open_orders(symbol=TARGET_SYMBOL)
+    # [4bot v2.3.1 R1-b] 16:00 마감 일괄 취소도 봇 주문만 (사용자 주문은 남김)
+    await cancel_bot_open_orders(
+        context.api,
+        TARGET_SYMBOL,
+        collect_bot_order_ids(context.ledger.get_state(TARGET_SYMBOL)),
+    )
 
     st_after_cancel = context.ledger.get_state(TARGET_SYMBOL)
     if str(st_after_cancel.get("buy_order_id") or "").strip():
