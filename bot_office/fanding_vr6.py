@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.6.0)
+# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.6.1)
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
+#  2.6.1 (2026-11-06, 사무실 vNEXT) 날짜 기준 수정: 표 맨 위 날짜(start_md)를 표 기간 시작일로 삼는다.
+#    진행일(next_due)과 정확히 같아야 하던 점검 → '표 시작일이 진행일 기준 14일(interval_days) 안' + '직전 회차 표 시작일과 비교
+#    (같으면 중복 표 실패, 14일의 배수만큼 뒤면 다음 회차 정상, 그 밖은 다른 회차 의심 실패)'. 길이(10~12일)·첫 발주일은
+#    표 시작일 기준 그대로. next_due·last_done·interval_days·/vr6일정·AI 2회 판독·가격 범위·매도 합계·주문 로직은 그대로.
 #  2.6.0 (2026-11-04, 사무실 v1.2.4) 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 첫 발주일 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
 #  2.5.0 (2026-11-04) 자동환전을 주문표 알림 '전'에 실행(알림은 환전 후 달러+환전 줄, 중단·시간 밖이면 바로 알림+수동 버튼) · 정/역방향 우대 시간 평일 09:00~15:30 만 · VR6 원화 역자동환전(💱 역자동환전 토글, 기본 꺼짐, 메리츠 mnec_clcd 2)
 #  2.4.0 (2026-11-04) 환전 직관화(💱 환전 → 금액 고르기 버튼 → 확인 → [✅ $XXX 환전 실행]) + VR6 부족금 자동환전(💱 자동환전 토글, 기본 꺼짐, 추정 기준·$10 반올림·회차당 1번, VR6 키만)
@@ -47,7 +51,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -467,6 +471,31 @@ def table_dates(p, ref):
         return None, None
 
 
+def table_start_checks(plan, st):
+    """2.6.1: 표 맨 위 날짜(표 기간 시작일) 기준 날짜 점검 → [(ok, msg)].
+    ① 범위: 진행일-interval_days ≤ 표 시작일 ≤ 진행일 (예: 진행일 11-09 → 10-26~11-09 시작 표 정상)
+    ② 직전 회차 표(다른 회차 중 가장 최근 회차)가 있으면 시작일끼리 비교: 같음=중복 표, interval_days 배수만큼 뒤=다음 회차, 그 밖=다른 회차 의심"""
+    s, nd = _d(plan["start"]), _d(plan["cycle"])
+    iv = max(1, int(st.get("interval_days") or 14))
+    out = []
+    lo = nd - timedelta(days=iv)
+    in_range = lo <= s <= nd
+    out.append((in_range, f"표 시작일 {s}({_wd(s)}) · 표 맨 위 날짜 기준 (진행일 {nd} 기준 {lo}~{nd} 안이면 정상)"
+                + ("" if in_range else " → 다른 회차 표 의심, 자동주문 안 함")))
+    prev = [(k, pl.get("start")) for k, pl in (st.get("plans") or {}).items()
+            if k < plan["cycle"] and isinstance(pl, dict) and pl.get("start")]
+    if prev:
+        pk, ps = max(prev)
+        diff = (s - _d(ps)).days
+        if diff == 0:
+            out.append((False, f"직전 회차({pk}) 표 시작일 {ps} 와 같음 → 같은 표 중복 의심, 자동주문 안 함"))
+        elif diff > 0 and diff % iv == 0:
+            out.append((True, f"직전 회차({pk}) 표 시작일 {ps} → {diff}일 뒤 (다음 회차 표)"))
+        else:
+            out.append((False, f"직전 회차({pk}) 표 시작일 {ps} 와 {diff:+d}일 차이 ({iv}일 배수 아님) → 다른 회차 표 의심, 자동주문 안 함"))
+    return out
+
+
 def expected_period(cycle):
     """진행일 기준 기대 표 기간: 시작=진행일(월요일), 끝=진행일+11일(다음 주 금요일)."""
     ref = _d(cycle)
@@ -599,9 +628,10 @@ def run_checks(plan, st, now):
         exp_s, exp_e = expected_period(plan["cycle"])
         if plan.get("date_corrected"):
             add(True, f"표 기간 날짜 정정됨: 1차 판독 날짜와 달라 2차 판독 날짜로 바로잡음 (기대 {exp_s}~{exp_e})")
-        add(s == exp_s.isoformat(), f"표 기간 시작 {s} (기대 {exp_s} · 진행일과 일치)" + ("" if s == exp_s.isoformat() else " → 날짜 오독 의심, 자동주문 안 함"))
+        for ok_d, msg_d in table_start_checks(plan, st):      # 2.6.1: 진행일 일치 대신 표 시작일 기준
+            add(ok_d, msg_d)
         span = (_d(e) - _d(s)).days if e else -1
-        add(10 <= span <= 12, f"표 기간 {s}~{e} · 길이 {span}일 (기대 {exp_s}~{exp_e}, 보통 11일)" + ("" if 10 <= span <= 12 else " → 기간이 기대와 다름"))
+        add(10 <= span <= 12, f"표 기간 {s}~{e} · 길이 {span}일 (표 시작일 기준, 보통 11일)" + ("" if 10 <= span <= 12 else " → 기간이 기대와 다름"))
         add(bool(plan.get("order_start")), f"첫 발주일 {plan.get('order_start')} (미국 날짜)" if plan.get("order_start")
             else "표 기간 안에 예약 마감 전인 날이 남지 않음")
     add(1 <= k <= 50, f"배수 ×{k}")
