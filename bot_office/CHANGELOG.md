@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.3.8 · 2026-11-06 16:51 (KST)
+- 파일: asset_board.py, test_asset_board.py
+- 내용: 자산 구성 도넛 1% 미만 숨김 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.3.7 · 2026-11-06 15:30 (KST)
 - 파일: asset_board.py, board.html, office_board.py, test_asset_board.py
 - 내용: 상황판 자산 현황 도넛 2개 (사무실 vNEXT)

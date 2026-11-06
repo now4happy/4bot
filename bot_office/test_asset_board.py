@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
-# 사무실 vNEXT: 자산 구성 1% 미만 숨김 테스트 추가
+# 사무실 v1.3.8: 자산 구성 1% 미만 숨김 테스트 추가
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from datetime import datetime
@@ -148,7 +148,7 @@ class T(unittest.TestCase):
             self.skipTest("openssl 없음")
         self.assertEqual(len(AB.rs256_sign(key.stdout, b"hello")), 256)
 
-    # ---- vNEXT: 자산 구성(mix)만 1% 미만 숨김
+    # ---- v1.3.8: 자산 구성(mix)만 1% 미만 숨김
     MIX_NOW = [427, 323, 1, 249]                      # 현재 비율과 같은 예시 (코인 0.1%)
     STOCK_NOW = [34, 493, 71, 38, 264, 89, 8, 3]      # 토스 해외주식 0.8% · 코인 0.3%
 

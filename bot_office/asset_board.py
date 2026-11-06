@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
-# vNEXT: 자산 구성(mix) 도넛에서만 비율 1% 미만 항목 숨김 (합계·다른 항목 % 그대로) · mix 기본 이름 '간접자산'
+# v1.3.8: 자산 구성(mix) 도넛에서만 비율 1% 미만 항목 숨김 (합계·다른 항목 % 그대로) · mix 기본 이름 '간접자산'
 # v1.3.7: 신규. 상황판 '자산 현황' 도넛 2개용 자료를 구글 시트에서 읽어 비율(%)만 저장
 #        (버전 번호는 승인 때 채움)
 # 읽기 전용: 시트 '읽기' 권한(spreadsheets.readonly)만 요청. 시트에 쓰지 않음.
@@ -212,7 +212,7 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "vNEXT", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "v1.3.8", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
     try:
