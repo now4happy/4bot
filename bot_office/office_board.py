@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_board.py   (사무실 v1.0.61 · 2026-11-01)
+# FILE: /opt/bot-office/office_board.py   (사무실 vNEXT · 2026-11-06)
+#  · 사무실 vNEXT: 상황판 '자산 현황'(도넛 2개) 자료 assets 추가 — asset_board.py 가 만든 assets.json 을 읽기만 함
+#    (시트에 직접 닿지 않아 화면이 멈추지 않음 · 못 가져오면 마지막 값 + stale 표시) · 봇 신호등 표시는 board.html 에서 뺌, services 필드는 그대로
+#    · 금액 규칙 예외는 자산 현황(assets)에만: 이름·비율(%)·기준일만 보냄 (금액·계좌번호·토큰·주소 원문 없음)
 #  · 사무실 v1.0.61: 상황판 신호등 표시 순서 번호순(1·2·3·4·5·6·7·8) · 오늘 할 일·주문 안내 UI 삭제는 board.html에서, /api/board todo 필드는 그대로
 #  · 사무실 v1.0.60: 상황판 표시만 5번 사무실 비서 → 8번 사무실 비서로 변경 (서비스·기능 변경 없음, 통합 아님)
 #  · 사무실 v1.0.59: 팬딩룸 가격표 모음 = 과거 수집 + 매일 받는 가격표(날짜 기준 중복 없이) · 기간(가장 옛날~최근)·마지막 추가 시각
@@ -9,6 +12,7 @@
 # 사무실 상황판 데이터 (/api/board · 로그인 필요 · 보기 전용)
 #  · 주문·승인·설정 변경 기능 없음 — 웹에서 하는 일은 '서버 정리 실행' 요청 하나뿐 (server.py /api/server-care)
 #  · 금액·잔고·수량·계좌·토큰·주소 원문은 넣지 않음 (상태 글자·시각·버전만)
+#    — 예외: assets(자산 현황)만 이름·비율(%)·기준일 (사용자 승인 2026-11-06). 계좌번호·토큰·주소 원문은 여기도 없음
 #  · 읽는 곳: systemctl show(서비스 상태) · /var/lib/bot-office/status.md(업데이트 비서가 쓰는 STATUS 복사본)
 #            · 팬딩/PC 감시 상태 파일 · office_health.json(바깥 접속 감시) · /proc(메모리·스왑)
 #  · 한계: 웹서버 계정은 서버 기록(journal)을 못 읽어 '마지막으로 실제 일한 시각' 대신 '실행 시작 시각'을 보여 줌
@@ -17,9 +21,11 @@ import json, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "v1.0.61"
+VERSION = "vNEXT"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
+ASSETS_FILE = R / "var/lib/bot-office/assets/assets.json"   # asset_board.py --write (타이머) 가 씀
+ASSETS_OLD_MIN = 180                                          # 마지막 성공이 이보다 오래되면 '오래된 값'
 KST = timezone(timedelta(hours=9))
 
 # (방, 번호·이름, 서비스)
@@ -239,6 +245,39 @@ def todo(svc, st, fd, pcw, hl, sv, cr=None):
     return [{"level": a, "text": b} for a, b in t]
 
 
+def assets(now=None):
+    """자산 현황 (도넛 2개): 이름·비율(%)·기준일만. 파일이 없거나 깨져도 예외 없이 ok False"""
+    try:
+        d = json.loads(ASSETS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"ok": False, "why": "no_file"}
+    except (OSError, ValueError):
+        return {"ok": False, "why": "unreadable"}
+    if not isinstance(d, dict):
+        return {"ok": False, "why": "unreadable"}
+    charts = []
+    for c in d.get("charts") or []:
+        try:
+            items = [{"name": str(i.get("name", ""))[:20], "pct": float(i.get("pct") or 0)}
+                     for i in (c.get("items") or []) if isinstance(i, dict) and float(i.get("pct") or 0) > 0]
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if items:
+            charts.append({"key": str(c.get("key", ""))[:10], "title": str(c.get("title", ""))[:20], "items": items[:12],
+                           "check": str(c.get("check", "")), "zero": [str(z)[:20] for z in (c.get("zero") or [])][:12]})
+    fetched = str(d.get("fetched_kst") or "")
+    age = None
+    try:
+        t = datetime.strptime(fetched, "%Y-%m-%d %H:%M").replace(tzinfo=KST)
+        age = int(((now or datetime.now(KST)) - t).total_seconds() // 60)
+    except ValueError:
+        pass
+    err = str(d.get("error") or "")[:120]
+    stale = bool(err) or age is None or age > ASSETS_OLD_MIN
+    return {"ok": bool(charts), "why": "" if charts else "no_data", "base_date": str(d.get("base_date") or "")[:12],
+            "fetched_kst": fetched[5:], "age_min": age, "stale": stale, "error": err, "charts": charts}
+
+
 def board():
     if _CACHE["data"] and time.monotonic() - _CACHE["at"] < 15:
         return _CACHE["data"]
@@ -249,7 +288,7 @@ def board():
     data = {"version": VERSION, "observed_kst": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
             "read_only": True, "services": svc, "todo": todo(svc, st, fd, pcw, hl, sv, cr), "care": cr,
             "status_updated": st.get("updated", ""), "recent": st.get("recent", []), "pending": st.get("pending", []),
-            "fanding": fd, "pc": pcw, "health": hl, "server": sv}
+            "fanding": fd, "pc": pcw, "health": hl, "server": sv, "assets": assets()}
     _CACHE.update(at=time.monotonic(), data=data)
     return data
 
