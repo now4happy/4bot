@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
+# 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from datetime import datetime

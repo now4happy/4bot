@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.3.7 · 2026-11-06 15:30 (KST)
+- 파일: asset_board.py, board.html, office_board.py, test_asset_board.py
+- 내용: 상황판 자산 현황 도넛 2개 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.3.6 · 2026-11-06 13:33 (KST)
 - 파일: kiwoom_holdings.py
 - 내용: 키움 보유 종목 서버 가져오기 신규 (사무실 vNEXT)

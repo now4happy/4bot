@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/asset_board.py   (사무실 vNEXT)
-# vNEXT: 신규. 상황판 '자산 현황' 도넛 2개용 자료를 구글 시트에서 읽어 비율(%)만 저장
+# FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
+# v1.3.7: 신규. 상황판 '자산 현황' 도넛 2개용 자료를 구글 시트에서 읽어 비율(%)만 저장
 #        (버전 번호는 승인 때 채움)
 # 읽기 전용: 시트 '읽기' 권한(spreadsheets.readonly)만 요청. 시트에 쓰지 않음.
 #  - 비밀값(새로 필요 · 사용자 승인·작업): 구글 서비스 계정 키 /etc/bot-office/google_sa.json (root 전용)
@@ -208,7 +208,7 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "vNEXT", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "v1.3.7", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
     try:

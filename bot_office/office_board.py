@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_board.py   (사무실 vNEXT · 2026-11-06)
-#  · 사무실 vNEXT: 상황판 '자산 현황'(도넛 2개) 자료 assets 추가 — asset_board.py 가 만든 assets.json 을 읽기만 함
+# FILE: /opt/bot-office/office_board.py   (사무실 v1.3.7 · 2026-11-06)
+#  · 사무실 v1.3.7: 상황판 '자산 현황'(도넛 2개) 자료 assets 추가 — asset_board.py 가 만든 assets.json 을 읽기만 함
 #    (시트에 직접 닿지 않아 화면이 멈추지 않음 · 못 가져오면 마지막 값 + stale 표시) · 봇 신호등 표시는 board.html 에서 뺌, services 필드는 그대로
 #    · 금액 규칙 예외는 자산 현황(assets)에만: 이름·비율(%)·기준일만 보냄 (금액·계좌번호·토큰·주소 원문 없음)
 #  · 사무실 v1.0.61: 상황판 신호등 표시 순서 번호순(1·2·3·4·5·6·7·8) · 오늘 할 일·주문 안내 UI 삭제는 board.html에서, /api/board todo 필드는 그대로
@@ -21,7 +21,7 @@ import json, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "vNEXT"
+VERSION = "v1.3.7"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
 ASSETS_FILE = R / "var/lib/bot-office/assets/assets.json"   # asset_board.py --write (타이머) 가 씀
