@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.3.4 · 2026-11-06 10:23 (KST)
+- 파일: fanding_trade.py
+- 내용: 팬딩 검산 오탐 + 주문 버튼 사라짐 수정 fanding_trade 1.14.4 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.3.3 · 2026-11-06 10:12 (KST)
 - 파일: office_briefing.py, sniper_picture.html, sniper_picture.py
 - 내용: 2번 스나이퍼 Case 91 이식 v2.3.0 (복리/단리 모드 + 무제한 시멘트추가 + 지하층 보존, 사무실 vNEXT)
