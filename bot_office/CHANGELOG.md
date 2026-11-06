@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.4.1 · 2026-11-06 17:13 (KST)
+- 파일: board.html
+- 내용: 자산 현황 도넛 2개 파이 지름 같게 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.4.0 · 2026-11-06 17:00 (KST)
 - 파일: kiwoom_holdings.py, price_watch.py
 - 내용: 파기 파일 삭제: bot_office/price_watch.py (가격·비용 메뉴 삭제)
