@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
+# vNEXT: 자산 구성(mix) 도넛에서만 비율 1% 미만 항목 숨김 (합계·다른 항목 % 그대로) · mix 기본 이름 '간접자산'
 # v1.3.7: 신규. 상황판 '자산 현황' 도넛 2개용 자료를 구글 시트에서 읽어 비율(%)만 저장
 #        (버전 번호는 승인 때 채움)
 # 읽기 전용: 시트 '읽기' 권한(spreadsheets.readonly)만 요청. 시트에 쓰지 않음.
@@ -32,10 +33,11 @@ TAB = "입력정리"
 DATE_RANGE = f"'{TAB}'!A14:Z14"
 # (키, 제목, 범위(이름 A열 + 값 B열, 마지막 줄 = 합계), 이름 칸이 비었을 때 쓸 이름)
 CHARTS = (
-    ("mix", "자산 구성", f"'{TAB}'!A83:B87", ("현금", "주식·ETF", "코인", "보험·연금·오피스텔")),
+    ("mix", "자산 구성", f"'{TAB}'!A83:B87", ("현금", "주식·ETF", "코인", "간접자산")),
     ("stock", "투자 종목", f"'{TAB}'!A91:B99",
      ("미국", "한국관련주", "중국관련주", "일본관련주", "SOXL", "TQQQ", "토스 해외주식", "코인")),
 )
+HIDE_BELOW = {"mix": 1.0}   # 차트별: 반올림한 % 가 이 값 미만이면 그림에서만 숨김 (합계에는 포함) · stock 은 숨기지 않음
 READ_RANGES = (DATE_RANGE,) + tuple(c[2] for c in CHARTS)
 TOTAL_TOL = 0.005          # 항목 합 vs 시트 합계 차이 허용 (0.5%)
 PCT_PREFIX = re.compile(r"^\s*[-+]?\d+(?:[.,]\d+)?\s*%\s*")   # A열 '42.7% 현금' 의 앞 퍼센트
@@ -153,8 +155,9 @@ def base_date(row_values):
     return ""
 
 
-def chart(rows, defaults):
-    """rows = A·B 열 (항목 n줄 + 합계 1줄) → {"items":[{"name","pct"}], "check":"ok|diff|no_total", "zero":[...]}"""
+def chart(rows, defaults, hide_below=0.0):
+    """rows = A·B 열 (항목 n줄 + 합계 1줄) → {"items":[{"name","pct"}], "check":"ok|diff|no_total", "zero":[...]}
+    hide_below: pct(전체 합 대비, 소수 첫째 자리 반올림) < hide_below 인 항목은 items 에서만 뺌 (pct == hide_below 는 보임)"""
     n = len(defaults)
     rows = list(rows) + [[]] * (n + 1 - len(rows))
     names, vals = [], []
@@ -174,6 +177,7 @@ def chart(rows, defaults):
     tot = _num((list(rows[n]) + ["", ""])[1])
     check = "no_total" if not tot else ("ok" if abs(tot - s) <= abs(tot) * TOTAL_TOL else "diff")
     items = [{"name": nm, "pct": round(v * 100 / s, 1)} for nm, v in zip(names, vals) if v > 0]
+    items = [i for i in items if i["pct"] >= hide_below]
     return {"items": items, "check": check, "zero": [nm for nm, v in zip(names, vals) if v <= 0]}
 
 
@@ -181,7 +185,7 @@ def build(values):
     out = {"base_date": base_date(values.get(DATE_RANGE, [])), "charts": [], "errors": []}
     for key, title, rng, defaults in CHARTS:
         try:
-            c = chart(values.get(rng, []), defaults)
+            c = chart(values.get(rng, []), defaults, HIDE_BELOW.get(key, 0.0))
             c.update(key=key, title=title)
             out["charts"].append(c)
         except SheetError as e:
@@ -208,7 +212,7 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "v1.3.7", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "vNEXT", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
     try:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
+# 사무실 vNEXT: 자산 구성 1% 미만 숨김 테스트 추가
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from datetime import datetime
@@ -18,10 +19,10 @@ SA.write_text(json.dumps({"client_email": "test@example.iam.gserviceaccount.com"
 FAKE_SIGN = lambda key, data: b"sig"
 
 
-MIX_NAMES = ("현금", "주식·ETF", "코인", "보험·연금·오피스텔")
+MIX_NAMES = ("현금", "주식·ETF", "코인", "간접자산")
 STOCK_NAMES = ("미국", "한국관련주", "중국관련주", "일본관련주", "SOXL", "TQQQ", "토스 해외주식", "코인")
 # 실제 시트 A열 형식 (퍼센트가 앞에 붙어 있음 · 퍼센트 숫자는 예시)
-MIX_REAL = ("42.7% 현금", "32.3% 주식·ETF", "0.1% 코인", "24.9% 보험·연금·오피스텔")
+MIX_REAL = ("42.7% 현금", "32.3% 주식·ETF", "0.1% 코인", "24.9% 간접자산")
 STOCK_REAL = ("3.4% 미국", "49.3% 한국관련주", "7.1% 중국관련주", "3.8% 일본관련주", "26.4% SOXL", "8.9% TQQQ",
               "0.8% 토스 해외주식", "0.3% 코인")
 
@@ -146,6 +147,46 @@ class T(unittest.TestCase):
         if key.returncode != 0:
             self.skipTest("openssl 없음")
         self.assertEqual(len(AB.rs256_sign(key.stdout, b"hello")), 256)
+
+    # ---- vNEXT: 자산 구성(mix)만 1% 미만 숨김
+    MIX_NOW = [427, 323, 1, 249]                      # 현재 비율과 같은 예시 (코인 0.1%)
+    STOCK_NOW = [34, 493, 71, 38, 264, 89, 8, 3]      # 토스 해외주식 0.8% · 코인 0.3%
+
+    def charts_of(self, mix, stock):
+        _, disk = self.run_update(Http(sheet(mix, stock, mix_names=MIX_REAL, stock_names=STOCK_REAL)))
+        return {c["key"]: c for c in disk["charts"]}
+
+    def test_mix_hides_coin_below_1pct(self):
+        c = self.charts_of(self.MIX_NOW, self.STOCK_NOW)
+        self.assertEqual([i["name"] for i in c["mix"]["items"]], ["현금", "주식·ETF", "간접자산"])
+        self.assertEqual({i["name"]: i["pct"] for i in c["mix"]["items"]}, {"현금": 42.7, "주식·ETF": 32.3, "간접자산": 24.9})
+        self.assertEqual(c["mix"]["check"], "ok")          # 숨긴 코인 금액도 합계에 포함 → 시트 합계와 일치
+        self.assertEqual(c["mix"]["zero"], [])
+
+    def test_stock_keeps_small_items(self):
+        c = self.charts_of(self.MIX_NOW, self.STOCK_NOW)
+        st = {i["name"]: i["pct"] for i in c["stock"]["items"]}
+        self.assertEqual(len(st), 8)
+        self.assertEqual((st["코인"], st["토스 해외주식"], st["한국관련주"]), (0.3, 0.8, 49.3))
+        self.assertEqual(c["stock"]["check"], "ok")
+
+    def test_mix_coin_returns_at_1pct(self):
+        c = self.charts_of([4170, 3230, 100, 2500], self.STOCK_NOW)    # 코인 1.0% → 보임 (경계)
+        self.assertIn({"name": "코인", "pct": 1.0}, c["mix"]["items"])
+        c = self.charts_of([4170, 3230, 96, 2504], self.STOCK_NOW)     # 0.96% → 반올림 1.0% → 보임
+        self.assertIn({"name": "코인", "pct": 1.0}, c["mix"]["items"])
+        c = self.charts_of([4170, 3230, 95, 2505], self.STOCK_NOW)     # 0.95% → 기존 round() 로 0.9% → 숨김 (계산 방식 그대로)
+        self.assertNotIn("코인", [i["name"] for i in c["mix"]["items"]])
+        c = self.charts_of([4170, 3230, 94, 2506], self.STOCK_NOW)     # 0.94% → 0.9% → 숨김
+        self.assertNotIn("코인", [i["name"] for i in c["mix"]["items"]])
+
+    def test_hiding_does_not_change_other_pct(self):
+        a = AB.chart([["현금", 427], ["주식·ETF", 323], ["코인", 1], ["간접자산", 249], ["합계", 1000]], MIX_NAMES)
+        b = AB.chart([["현금", 427], ["주식·ETF", 323], ["코인", 1], ["간접자산", 249], ["합계", 1000]], MIX_NAMES, 1.0)
+        self.assertEqual([i for i in a["items"] if i["name"] != "코인"], b["items"])
+        self.assertEqual((a["check"], a["zero"]), (b["check"], b["zero"]))
+        self.assertEqual(AB.HIDE_BELOW, {"mix": 1.0})
+        self.assertEqual(AB.CHARTS[0][3][3], "간접자산")
 
     def test_date_formats(self):
         for txt, want in (("2026.11.6", "2026.11.6"), ("2026. 11. 6", "2026.11.6"), ("2026-11-06", "2026.11.6"),
