@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.4.6 · 2026-11-08 03:52 (KST)
+- 파일: bot_updater.py
+- 내용: meritz settings.example.json 제거 (구버전 업데이터가 .json을 거부해 묶음 적용이 막힘 — 서버 설정은 이미 /etc/meritz-laoer/settings.json으로 설치됨)
+- 브랜치: staging
+
 ## v1.4.5 · 2026-11-07 13:46 (KST)
 - 파일: office_briefing.py, office_secretary.py
 - 내용: 브리핑 수동 --manual + 메뉴 사무실 주소 버튼 삭제 (office_briefing.py·office_secretary.py vNEXT)

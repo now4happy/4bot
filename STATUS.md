@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-07 13:46 (KST) · 계기: 업데이트 적용 (staging: 브리핑 수동 --manual + 메뉴 사무실 주소 버튼 삭제 (office_briefing.py·office_secretary.py vNEXT))
+- 갱신: 2026-11-08 03:52 (KST) · 계기: 업데이트 적용 (staging: meritz settings.example.json 제거 (구버전 업데이터가 .json을 거부해 묶음 적용이 막힘 — 서버 설정은 이미 /etc/meritz-laoer/settings.json으로 설치됨))
 
 ## 봇별 현재 상태
 
@@ -13,7 +13,7 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-07 13:24 KST부터) | v1.2.0 | 2026-11-07 13:25 | 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT) |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (11-05 09:02 KST부터) | v4.3.8 | 2026-11-05 09:02 | 3번 토스 적립 v4.3.8: R1 단계 단조화 + 정지·결정 중 알림 + 가격 0 가드 + N7 지수 20 |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-01 14:57 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-07 13:45 KST부터) | v1.4.5 | 2026-11-07 13:46 | 브리핑 수동 --manual + 메뉴 사무실 주소 버튼 삭제 (office_briefing.py·office |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-07 13:45 KST부터) | v1.4.6 | 2026-11-08 03:52 | meritz settings.example.json 제거 (구버전 업데이터가 .json을 거부해 묶음 적용이 |
 
 ## 사무실 상시 서비스
 
@@ -26,6 +26,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-08 03:52 · 5번 사무실 비서 v1.4.6 · bot_updater.py · meritz settings.example.json 제거 (구버전 업데이터가 .json을 거부해 묶음 적용이
 - 2026-11-07 13:46 · 5번 사무실 비서 v1.4.5 · office_briefing.py, office_secretary.py · 브리핑 수동 --manual + 메뉴 사무실 주소 버튼 삭제 (office_briefing.py·office
 - 2026-11-07 13:25 · 5번 사무실 비서 v1.4.4 · bot_updater.py, office_secretary.py · 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT)
 - 2026-11-07 13:25 · 2번 토스 스나이퍼 v1.2.0 · main.py, tg_ui_plugin.py · 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT)
@@ -35,7 +36,6 @@
 - 2026-11-06 17:13 · 5번 사무실 비서 v1.4.1 · board.html · 자산 현황 도넛 2개 파이 지름 같게 (사무실 vNEXT)
 - 2026-11-06 17:00 · 5번 사무실 비서 v1.4.0 · kiwoom_holdings.py, price_watch.py · 파기 파일 삭제: bot_office/price_watch.py (가격·비용 메뉴 삭제)
 - 2026-11-06 16:57 · 5번 사무실 비서 v1.3.9 · bot_updater.py, office_briefing.py, office_secretary.py · 가격·비용 메뉴 삭제 + 파기 파일 2개 삭제 준비 (사무실 vNEXT)
-- 2026-11-06 16:51 · 5번 사무실 비서 v1.3.8 · asset_board.py, test_asset_board.py · 자산 구성 도넛 1% 미만 숨김 (사무실 vNEXT)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
