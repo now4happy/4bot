@@ -42,6 +42,7 @@
 #  · 사무실 v1.4.6 (2026-11-08): ① .gitignore·*.example.json은 저장소 전용 문서라 classify에서 거부하지 않고 넘김
 #                       (alert-hub와 같은 방식 — 서버 적용 대상이 아님, 같이 묶인 다른 봇 업데이트가 막히지 않게 함)
 #                       ② NAMES에 meritz_laoer.service 추가 (메리츠 SOXL 무매) — targets.json 등록 뒤 적용 가능
+#  · 사무실 vNEXT: NAMES에 meritz_dca.service 추가 (메리츠 적립) — targets.json 등록 뒤 적용 가능
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -90,7 +91,7 @@ CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
          "toss_dca.service": "3번 토스 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서",
-         "meritz_laoer.service": "메리츠 SOXL 무매"}
+         "meritz_laoer.service": "메리츠 SOXL 무매", "meritz_dca.service": "메리츠 적립"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
 HUB_DIR = os.path.join(REPO, "alert-hub")
