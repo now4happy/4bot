@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: plugin_updater.py
+# 4bot 2번 v2.4.0 (2026-11-07): 원작 c4ad8d6 Case 93 — REQUIRED_CORE_MODULES 에 assassin_plugin.py 등록 (모의 암살자 원장 assassin_sim_ledger*.json 은 기존 *ledger*.json 보호 대상에 이미 포함)
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.0.0 (2026-11-03): 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(🐂 SOXL 단독) 매수 04:07 ~ 16:00 EST 제한
@@ -68,13 +69,14 @@ logger = logging.getLogger("toss_sniper.plugin_updater")
 # ---------------------------------------------------------------------------
 # [핵심 상수] 13대 필수 코어 모듈 및 영구 폐기 레거시 파일 목록 (제3헌법)
 # ---------------------------------------------------------------------------
-REQUIRED_CORE_MODULES: Tuple[str, ...] = (  # [4bot] 단일파일 구조 9개 (원작 *_core.py·main_runtime.py 분할 없음)
+REQUIRED_CORE_MODULES: Tuple[str, ...] = (  # [4bot] 단일파일 구조 10개 (원작 *_core.py·main_runtime.py 분할 없음 · v2.4.0 Case 93 assassin_plugin.py 추가)
     "toss_api.py",
     "quant_indicators_plugin.py",
     "quant_engine.py",
     "sniper_plugin.py",
     "sniper_exit_plugin.py",
     "defense_plugin.py",
+    "assassin_plugin.py",
     "tg_ui_plugin.py",
     "plugin_updater.py",
     "main.py",

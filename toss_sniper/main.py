@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main.py (원작 main_runtime.py + 원작 main.py 병합)
+# 4bot 2번 v2.4.0 (2026-11-07): 원작 c4ad8d6 Case 93 [모의] 암살자 결속 — 메인 루프 끝에 상시 실행(예외 격리·15초 제한)·점화 시 0.40초 가속·QQQ 시세/1분봉 암살자 전용 수집·/assassin·/reset_assassin·부팅 TDD (실주문 하드락 · 스나이퍼 동작 무변경)
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
@@ -53,6 +54,14 @@ import quant_indicators_plugin
 import tg_ui_plugin
 import toss_api
 from defense_plugin import reconcile_stratum_with_broker_holdings_plugin
+# [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 (모의 전용 · ASSASSIN_LIVE_ORDER_HARD_LOCK = True)
+from assassin_plugin import (
+    MACRO_REF_SYMBOL,
+    build_assassin_detail_dashboard_html,
+    ensure_assassin_ledger,
+    execute_simulated_assassin_tick_plugin,
+    run_assassin_plugin_tdd,
+)
 from plugin_updater import (
     execute_git_pull_and_preflight,
     perform_self_restart_execv,
@@ -71,6 +80,7 @@ from quant_engine import (
     summarize_stratum_portfolio,
 )
 from quant_indicators_plugin import (
+    compute_qqq_macro_metrics_1m,
     compute_soxl_quant_metrics_1m,
     refresh_metrics_with_live_tick,
 )
@@ -1830,6 +1840,53 @@ class _AdaptiveTelegramBridge:
             reply_markup=kb,
         )
 
+    async def _render_and_send_assassin_dashboard(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
+    ) -> None:
+        """
+        # NEW [4bot v2.4.0 · 원작 c4ad8d6 Case 93]: /assassin 🗡️ [모의] 암살자 상세 관제 보드 (모의 전용 · 실주문 없음)
+        """
+        live_p, _ = await self._refresh_live_price_and_metrics()
+        try:
+            msg = await asyncio.wait_for(
+                build_assassin_detail_dashboard_html(
+                    context=self.context, live_price=live_p
+                ),
+                timeout=20.0,
+            )
+        except Exception as exc:
+            logger.warning("🗡️ /assassin 관제 보드 생성 예외: %s", exc)
+            msg = "🗡️ <b>[[모의] 암살자]</b>\n▫️ 관제 보드를 만들지 못했습니다. 잠시 후 다시 시도하세요."
+        kb = (
+            None
+            if (edit_msg_id is not None and edit_msg_id > 0)
+            else _build_main_reply_keyboard()
+        )
+        await self.edit_or_send_message(
+            chat_id=chat_id,
+            message_id=edit_msg_id,
+            text=msg,
+            reply_markup=kb,
+        )
+
+    async def _reset_assassin_stats_command(self, chat_id: str) -> None:
+        """
+        # NEW [4bot v2.4.0 · 원작 c4ad8d6 Case 93]: /reset_assassin — 모의 암살자 누적 전적만 0점 (스나이퍼 원장 무접촉)
+        """
+        st_sp = self.context.ledger.get_state(TARGET_SYMBOL)
+        init_seed = safe_float(st_sp.get("initial_seed_usd"), 10000.0)
+        assn_ledger = ensure_assassin_ledger(self.context)
+        await assn_ledger.reset_assassin_stats_only(sniper_seed_usd=init_seed)
+        await self.send_message(
+            chat_id=chat_id,
+            text=(
+                "🧹 <b>[[모의] 암살자 누적 전적 초기화 완료]</b>\n"
+                f"▫️ 기준 시드: <b>${init_seed:,.2f}</b>\n"
+                "▫️ 누적 출격일 / 단리·복리 실현익이 0점으로 초기화되었습니다."
+            ),
+            reply_markup=_build_main_reply_keyboard(),
+        )
+
     async def _render_and_send_settlement(
         self, chat_id: str, edit_msg_id: Optional[int] = None
     ) -> None:
@@ -2283,6 +2340,18 @@ class _AdaptiveTelegramBridge:
             or text == "⚙️ 전술 제어반"
         ):
             await self._render_and_send_settlement(chat_id=chat_id)
+            return
+
+        # [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 상세 관제 / 누적 전적 초기화
+        if first_token == "/assassin" or text in (
+            "🗡️ 모의 암살자",
+            "🗡️ 암살자 레이더",
+        ):
+            await self._render_and_send_assassin_dashboard(chat_id=chat_id)
+            return
+
+        if first_token == "/reset_assassin":
+            await self._reset_assassin_stats_command(chat_id=chat_id)
             return
 
         if first_token in ("/mode", "/portion_mode"):
@@ -2856,8 +2925,29 @@ class SniperAppContext:
             context=self
         )
 
+        # [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 전용 상태 (스나이퍼 원장·지표 캐시와 분리)
+        self.latest_prices.setdefault(MACRO_REF_SYMBOL, 0.0)
+        self.last_soxl_live_price: float = 0.0
+        self.last_qqq_live_price: float = 0.0
+        self.assassin_high_freq_active: bool = False
+        self.assassin_metrics_cache: Dict[str, Dict[str, Any]] = {}
+        self.assassin_disabled: bool = False
+        self._assn_qqq_price_mono: float = 0.0
+        self._assn_qqq_candle_mono: float = 0.0
+        self.assassin_ledger: Any = None
+        try:
+            self.assassin_ledger = ensure_assassin_ledger(self)
+        except Exception as assn_exc:
+            logger.warning("⚠️ [모의 암살자 원장 준비 실패 · 스나이퍼는 정상 가동]: %s", assn_exc)
+
     async def send_slim_alert(self, title: str, body: str = "") -> bool:
         return await self.tg.send_slim_alert(title=title, body=body)
+
+    async def send_assassin_html(self, text: str) -> bool:
+        """
+        # NEW [4bot v2.4.0 · Case 93]: 🗡️ [모의] 암살자 HTML 전문 알림 (send_slim_alert 동작은 그대로 둠)
+        """
+        return await self.tg.send_message(text=str(text))
 
     async def send_strike_hold_alert_once(
         self,
@@ -3093,6 +3183,67 @@ async def _run_basement_exit_step(
         return False
 
 
+async def _run_assassin_step(context: SniperAppContext, now_est: datetime) -> None:
+    """
+    # NEW [4bot 2번 v2.4.0 · 원작 c4ad8d6 Case 93]: 🗡️ [모의] 암살자 상시 실행 (스나이퍼 ON/OFF·보유 수량 무관).
+    - 스나이퍼 한 바퀴가 끝난 뒤 실행 · 모든 예외 격리 · 최대 15초 · 실주문 0건(ASSASSIN_LIVE_ORDER_HARD_LOCK = True)
+    - QQQ 현재가(3초 간격)·QQQ 1분봉(60초 간격)은 암살자 전용으로 따로 조회 (스나이퍼 SOXL 시세 호출은 그대로)
+    - 스나이퍼 원장·지표 캐시·주문은 건드리지 않는다 (암살자 원장 assassin_sim_ledger*.json 만 기록)
+    """
+    if bool(getattr(context, "assassin_disabled", False)):
+        context.assassin_high_freq_active = False
+        return
+    try:
+        hm = now_est.hour * 100 + now_est.minute
+        soxl_p = safe_float(context.latest_prices.get(TARGET_SYMBOL), 0.0)
+        if soxl_p > 0.0:
+            context.last_soxl_live_price = soxl_p
+        now_m = time.monotonic()
+        if 400 <= hm <= 1605 and now_est.weekday() < 5:
+            if (now_m - safe_float(getattr(context, "_assn_qqq_price_mono", 0.0), 0.0)) >= 3.0:
+                context._assn_qqq_price_mono = now_m
+                try:
+                    q_map = await context.api.get_current_prices_batch(
+                        (MACRO_REF_SYMBOL,)
+                    )
+                    q_p = safe_float((q_map or {}).get(MACRO_REF_SYMBOL), 0.0)
+                    if q_p > 0.0:
+                        context.latest_prices[MACRO_REF_SYMBOL] = q_p
+                        context.last_qqq_live_price = q_p
+                except Exception as q_exc:
+                    logger.debug("암살자 QQQ 시세 폴백(묵음): %s", q_exc)
+            if (now_m - safe_float(getattr(context, "_assn_qqq_candle_mono", 0.0), 0.0)) >= 60.0:
+                context._assn_qqq_candle_mono = now_m
+                try:
+                    q_1m = await context.api.get_candles_1m(
+                        symbol=MACRO_REF_SYMBOL, total_count=60
+                    )
+                    if q_1m:
+                        q_met = await asyncio.to_thread(
+                            compute_qqq_macro_metrics_1m,
+                            q_1m,
+                            safe_float(context.latest_prices.get(MACRO_REF_SYMBOL), 0.0),
+                            now_est,
+                        )
+                        context.assassin_metrics_cache[MACRO_REF_SYMBOL] = q_met
+                except Exception as qc_exc:
+                    logger.debug("암살자 QQQ 1분봉 폴백(묵음): %s", qc_exc)
+        await asyncio.wait_for(
+            execute_simulated_assassin_tick_plugin(
+                context=context,
+                now_est=now_est,
+            ),
+            timeout=15.0,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as assn_exc:
+        logger.warning(
+            "⚠️ [모의 암살자 예외 격리 · 실전 스나이퍼 무중단 유지]: %s",
+            assn_exc,
+        )
+
+
 async def main_sniper_loop(context: SniperAppContext) -> None:
     """
     # MODIFIED [Case 01, Case 65, Case 66, Case 70 ~ Case 89 (방안 C 오버나이트 통합이평 사수 · Default-ON 3층 서브 그리드 · 16:00 마감 72번 버킷 보호)]:
@@ -3107,6 +3258,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
         try:
             if _check_weekend_nyse_closed_dynamic(now_est):
                 context.fast_shield_mode = False
+                context.assassin_high_freq_active = False
                 try:
                     await asyncio.wait_for(
                         context.shutdown_event.wait(), timeout=15.0
@@ -3339,6 +3491,8 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 exc_info=True,
             )
 
+        # [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 상시 실행 (스나이퍼 한 바퀴 뒤 · 예외 격리)
+        await _run_assassin_step(context, now_est)
         if context.fast_shield_mode:
             loop_wait = FAST_SHIELD_LOOP_INTERVAL_SEC
         elif is_ext_sell_only:
@@ -3362,6 +3516,9 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
             )
         else:
             loop_wait = NORMAL_LOOP_INTERVAL_SEC
+        # [4bot v2.4.0 · Case 93] 암살자 +1.00% 트레일링 점화 중이면 0.40초로 가속
+        if bool(getattr(context, "assassin_high_freq_active", False)):
+            loop_wait = min(loop_wait, FAST_SHIELD_LOOP_INTERVAL_SEC)
 
         context.wakeup_event.clear()
         try:
@@ -3489,6 +3646,14 @@ async def async_main() -> None:
 
     context = SniperAppContext(base_dir=base_dir)
 
+    # [4bot v2.4.0 · Case 93] 🗡️ 암살자 10대 진성 게이트 TDD — 실패해도 스나이퍼는 기동, 암살자만 끔
+    try:
+        run_assassin_plugin_tdd()
+        logger.info("✅ [Assassin 10 Truth Gates TDD 통과] [모의] 암살자 가동 (실주문 하드락)")
+    except Exception as assn_tdd_exc:
+        context.assassin_disabled = True
+        logger.error("🚨 [Assassin TDD 실패 → 모의 암살자만 끔 · 스나이퍼 정상]: %s", assn_tdd_exc)
+
     loop = asyncio.get_running_loop()
 
     def _on_signal() -> None:
@@ -3543,6 +3708,14 @@ async def async_main() -> None:
                         us_commission_rate=us_comm,
                         round_trip_fee_rate_pct=rt_pct,
                     )
+                    if context.assassin_ledger is not None:
+                        try:
+                            await context.assassin_ledger.update_state(
+                                us_commission_rate=us_comm,
+                                round_trip_fee_rate_pct=rt_pct,
+                            )
+                        except Exception:
+                            pass
                     logger.info(
                         "💰 [계좌별 미국 주식 수수료율 자동 락온 완료 · 폴더=%s] 편도=%.4f%% (왕복=%.2f%%)",
                         context.folder_slug,

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_indicators_plugin.py
+# 4bot 2번 v2.4.0 (2026-11-07): 원작 c4ad8d6 Case 93 [모의] 암살자용 지표 추가 — QQQ 지표(compute_qqq_macro_metrics_1m)·전일종가/04:07프리시가/프리VWAP 래치·단기 변화율 (기존 키 값은 그대로, 새 키만 추가)
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.0.0 (2026-11-03): 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
 인피니트 스노우볼 (Infinite Snowball) v3.0 — 순수 롱(SOXL) 매수 04:07 ~ 16:00 EST 제한
@@ -65,6 +66,88 @@ NEW_CYCLE_BUY_CUTOFF_HM: int = safe_int(_API_NEW_CYCLE_BUY_CUTOFF_HM, 1530)
 _LIVE_1M_BAR_LOCK = threading.RLock()
 _LIVE_1M_BAR_STORE: Dict[str, List[Dict[str, Any]]] = {TARGET_SYMBOL: []}
 _MAX_MEMORY_1M_BARS: int = 360
+
+# [4bot v2.4.0 · 원작 c4ad8d6 Case 93 · 암살자 전용] [Case 93]: 정규장 진입 및 장 마감 후에도 당일 한번 진성으로 확보된 전일 정규장 종가 · 04:07 프리장 시가 · 프리장 누적 VWAP을 보존하는 당일 인메모리 래치
+_DAILY_ANCHOR_LOCK = threading.RLock()
+_DAILY_SESSION_ANCHOR_STORE: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def _is_collapsed_anchor_triplet(
+    prev_c: float, pre_o: float, pre_v: float
+) -> bool:
+    """
+    전일 정규장 종가(prev_c), 당일 04:07 프리장 시가(pre_o), 프리장 누적 VWAP(pre_v) 3개 값이
+    모두 양수이면서 동일한 단일 현재가 폴백값으로 뭉개져 있는지 판별한다.
+    """
+    if prev_c <= 0.0 or pre_o <= 0.0 or pre_v <= 0.0:
+        return False
+    return bool(
+        abs(prev_c - pre_o) < 1e-6 and abs(pre_v - prev_c) < 1e-6
+    )
+
+
+def _get_daily_anchor_latch(symbol: str, target_date: str) -> Dict[str, Any]:
+    sym = str(symbol or TARGET_SYMBOL).upper().strip()
+    d_key = str(target_date or "").strip()
+    if not d_key:
+        return {}
+    with _DAILY_ANCHOR_LOCK:
+        saved = _DAILY_SESSION_ANCHOR_STORE.get((sym, d_key))
+        if not isinstance(saved, dict):
+            return {}
+        s_prev = safe_float(saved.get("prev_reg_close"), 0.0)
+        s_open = safe_float(saved.get("pre_open_price"), 0.0)
+        s_stats = saved.get("pre_stats")
+        s_vwap = (
+            safe_float(s_stats.get("vwap"), 0.0)
+            if isinstance(s_stats, dict)
+            else 0.0
+        )
+        if _is_collapsed_anchor_triplet(s_prev, s_open, s_vwap) and not bool(
+            saved.get("verified_distinct", False)
+        ):
+            _DAILY_SESSION_ANCHOR_STORE.pop((sym, d_key), None)
+            return {}
+        return dict(saved)
+
+
+def _update_daily_anchor_latch(
+    symbol: str,
+    target_date: str,
+    prev_reg_close: float = 0.0,
+    pre_open_price: float = 0.0,
+    pre_stats: Optional[Dict[str, float]] = None,
+    verified_distinct: bool = False,
+) -> None:
+    """
+    # MODIFIED [Case 93 : 오직 실제 차트(1d/1m)에서 확인된 진성 앵커만 당일 인메모리 래치에 저장]:
+    현재가나 정규장 시가/정규장 VWAP 폴백으로 채워진 가짜 데이터는 래치에 절대 저장하지 않는다.
+    """
+    sym = str(symbol or TARGET_SYMBOL).upper().strip()
+    d_key = str(target_date or "").strip()
+    if not d_key:
+        return
+
+    with _DAILY_ANCHOR_LOCK:
+        if len(_DAILY_SESSION_ANCHOR_STORE) > 12:
+            oldest_keys = sorted(_DAILY_SESSION_ANCHOR_STORE.keys())[:-6]
+            for ok in oldest_keys:
+                _DAILY_SESSION_ANCHOR_STORE.pop(ok, None)
+
+        entry = _DAILY_SESSION_ANCHOR_STORE.setdefault((sym, d_key), {})
+        if prev_reg_close > 0.0:
+            entry["prev_reg_close"] = round(float(prev_reg_close), 4)
+        if pre_open_price > 0.0:
+            entry["pre_open_price"] = round(float(pre_open_price), 4)
+        if (
+            isinstance(pre_stats, dict)
+            and safe_float(pre_stats.get("vwap"), 0.0) > 0.0
+        ):
+            entry["pre_stats"] = dict(pre_stats)
+        if verified_distinct:
+            entry["verified_distinct"] = True
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -612,10 +695,24 @@ def _compute_vectorized_heikin_ashi_and_rsi(
             rs = last_g / last_l
             rsi_val = 100.0 - (100.0 / (1.0 + rs))
 
+    # [4bot v2.4.0 · 원작 c4ad8d6 Case 93 · 암살자 전용 새 키] 3분/10분 전 종가 · 단기 변화율 (기존 키 무변경)
+    cur_c_v = float(closes[-1])
+    c_3m_ago = float(closes[-4]) if n >= 4 else float(closes[0])
+    c_10m_ago = float(closes[-11]) if n >= 11 else float(closes[0])
+    vel_1m_pct = ((cur_c_v - prev_bar_close) / prev_bar_close) * 100.0 if prev_bar_close > 0.0 else 0.0
+    vel_3m_pct = ((cur_c_v - c_3m_ago) / c_3m_ago) * 100.0 if c_3m_ago > 0.0 else 0.0
+    vel_10m_pct = ((cur_c_v - c_10m_ago) / c_10m_ago) * 100.0 if c_10m_ago > 0.0 else 0.0
+
     return {
         "rsi_14": round(rsi_val, 2),
         "rsi_ready": bool(n >= 14),
         "candle_count": int(n),
+        "close_3m_ago": round(c_3m_ago, 4),
+        "close_10m_ago": round(c_10m_ago, 4),
+        "vel_1m_pct": round(vel_1m_pct, 4),
+        "vel_3m_pct": round(vel_3m_pct, 4),
+        "vel_10m_pct": round(vel_10m_pct, 4),
+        "vel_max_3m_10m_pct": round(max(vel_3m_pct, vel_10m_pct), 4),
         "prev_bar_close": round(prev_bar_close, 4),
         "prev_avg_gain": round(prev_avg_g, 6),
         "prev_avg_loss": round(prev_avg_l, 6),
@@ -728,14 +825,318 @@ def _calc_session_vwap_and_bands(
     }
 
 
+# [4bot v2.4.0 · 원작 c4ad8d6 Case 93 · 암살자 전용 앵커 추출기 — 원작 그대로]
+def _extract_daily_candle_date_str(
+    dc: Dict[str, Any],
+) -> Tuple[str, str]:
+    """
+    # MODIFIED [Case 93 : 토스 일봉(1d) KST +09:00 ➔ EST 변환 시 날짜 하루 밀림 버그 원천 제거]:
+    토스 API 일봉(interval="1d")의 "timestamp": "2026-11-06T09:00:00+09:00" 을 EST로 변환해
+    "2026-11-05" 로 하루 밀리게 하던 타임존 변환을 제거하고,
+    일봉의 고유 명목 거래일(raw_date = ts_raw[:10])을 그대로 반환한다.
+    """
+    ts_raw = str(
+        dc.get("timestamp") or dc.get("date") or dc.get("dt") or ""
+    ).strip()
+    raw_date = ts_raw[:10] if len(ts_raw) >= 10 else ""
+    return raw_date, raw_date
+
+
+def _resolve_active_us_trading_date(
+    df_all: pd.DataFrame,
+    today_est_str: str,
+) -> str:
+    """
+    # NEW [Case 93 : EST 자정(00:00 ~ 04:06 EST) 데이마켓 및 주말 기동 시 합성 분봉 날짜 선점 방어]:
+    공식 API 분봉(~df_all["is_synthetic"]) 중 실제 장중 세션(04:00 ~ 16:00 EST) 데이터가 존재하는
+    최신 미국 거래일을 우선 target_date 로 선택한다.
+    """
+    if df_all is None or df_all.empty or "Date" not in df_all.columns:
+        return today_est_str
+
+    has_syn = "is_synthetic" in df_all.columns
+    df_api = df_all[~df_all["is_synthetic"]] if has_syn else df_all
+
+    if not df_api.empty:
+        df_api_sess = df_api[
+            (df_api["hm"] >= 400) & (df_api["hm"] <= 1600)
+        ]
+        if not df_api_sess.empty:
+            if (df_api_sess["Date"] == today_est_str).any():
+                return today_est_str
+            return str(df_api_sess["Date"].iloc[-1])
+        if (df_api["Date"] == today_est_str).any():
+            return today_est_str
+        return str(df_api["Date"].iloc[-1])
+
+    if (df_all["Date"] == today_est_str).any():
+        return today_est_str
+    return str(df_all["Date"].iloc[-1])
+
+
+def _extract_prev_reg_close_and_pre_open(
+    df_all: pd.DataFrame,
+    target_date: str,
+    daily_candles: Optional[List[Dict[str, Any]]] = None,
+    explicit_prev_close: float = 0.0,
+    fallback_price: float = 0.0,
+    symbol: str = TARGET_SYMBOL,
+) -> Tuple[float, float, bool, bool]:
+    """
+    # MODIFIED [Case 93 : 암살자 정찰병 필수 조건 3(전날 정규장 종가 prev_reg_close) & 조건 4(당일 04:07 프리장 시가 pre_open_price) 무오염 분리 및 가짜 정규장 시가 폴백 영구 소각]:
+    1) prev_reg_close (전일 정규장 종가):
+       - explicit_prev_close > 0.0 이면 최우선 채택
+       - 일봉(daily_candles)의 고유 명목 거래일(raw_d)을 기준으로 당일 진행 일봉(raw_d >= target_date)이면
+         직전 확정 일봉(sorted_d[-2])의 종가를, 당일 일봉 생성 전(raw_d < target_date)이면 최신 확정 일봉(sorted_d[-1])의 종가를 추출
+       - 부재 시 공식 1분봉(df_all) 내 target_date 이전 영업일의 정규장(09:30 ~ 16:00 EST) 마지막 완성봉 종가(C)만 추출하며,
+         전날 밤 23:59 EST 데이마켓 야간봉으로 빠지던 왜곡 폴백은 영구 삭제!
+    2) pre_open_price (당일 04:07 프리장 시가):
+       - 당일(target_date) 실제 API 1분봉(_synthetic == False) 중 04:07 ~ 09:29 EST (또는 04:00 ~ 09:29 EST) 첫 봉의 시가(O)만 추출
+       - 장 마감 후 1분봉 조회 윈도우 이탈 등으로 당일 04:00 ~ 09:29 EST 봉이 없고 인메모리 래치에도 없을 때는,
+         일봉의 정규장 시가(09:30 EST Open)나 정규장 1분봉 시가/전일종가/현재가로 덮어쓰지 않고 정확히 0.0 (found_true_pre_open = False)을 반환한다!
+    """
+    latch = _get_daily_anchor_latch(symbol, target_date)
+    prev_reg_c = safe_float(explicit_prev_close, 0.0)
+    found_true_prev_close = bool(prev_reg_c > 0.0)
+
+    pre_open_p = 0.0
+    found_true_pre_open = False
+
+    # 1단계: 일봉(1d)에서 고유 거래일(raw_d) 기준 직전 영업일 확정 정규장 종가 추출 (일봉 시가는 정규장 09:30 시가이므로 프리시가에 절대 사용하지 않음)
+    if isinstance(daily_candles, list) and len(daily_candles) >= 1:
+        try:
+            valid_d = [
+                c
+                for c in daily_candles
+                if isinstance(c, dict)
+                and safe_float(c.get("closePrice") or c.get("close"), 0.0)
+                > 0.0
+            ]
+            sorted_d = sorted(
+                valid_d,
+                key=lambda x: _extract_daily_candle_date_str(x)[0],
+            )
+            if sorted_d:
+                last_dc = sorted_d[-1]
+                raw_d, _ = _extract_daily_candle_date_str(last_dc)
+                last_close = safe_float(
+                    last_dc.get("closePrice") or last_dc.get("close"), 0.0
+                )
+
+                if raw_d and raw_d >= target_date:
+                    if prev_reg_c <= 0.0:
+                        prior_list = [
+                            c
+                            for c in sorted_d
+                            if _extract_daily_candle_date_str(c)[0]
+                            < target_date
+                        ]
+                        if prior_list:
+                            c_val = safe_float(
+                                prior_list[-1].get("closePrice")
+                                or prior_list[-1].get("close"),
+                                0.0,
+                            )
+                            if c_val > 0.0:
+                                prev_reg_c = c_val
+                                found_true_prev_close = True
+                        elif len(sorted_d) >= 2:
+                            c_val = safe_float(
+                                sorted_d[-2].get("closePrice")
+                                or sorted_d[-2].get("close"),
+                                0.0,
+                            )
+                            if c_val > 0.0:
+                                prev_reg_c = c_val
+                                found_true_prev_close = True
+                else:
+                    if prev_reg_c <= 0.0 and last_close > 0.0:
+                        prev_reg_c = last_close
+                        found_true_prev_close = True
+        except Exception:
+            pass
+
+    # 2단계: 공식 API 1분봉(df_all)에서 당일 04:07 프리장 시가 및 전일 정규장(09:30 ~ 16:00 EST) 마감 종가 추출
+    if df_all is not None and not df_all.empty and "Date" in df_all.columns:
+        has_syn_col = "is_synthetic" in df_all.columns
+        df_api_all = (
+            df_all[~df_all["is_synthetic"]] if has_syn_col else df_all
+        )
+
+        df_today_api = df_api_all[df_api_all["Date"] == target_date]
+        if not df_today_api.empty:
+            pre_0407 = df_today_api[
+                (df_today_api["hm"] >= 407) & (df_today_api["hm"] <= 929)
+            ]
+            if not pre_0407.empty:
+                pre_open_p = float(pre_0407["O"].iloc[0])
+                found_true_pre_open = True
+            else:
+                pre_0400 = df_today_api[
+                    (df_today_api["hm"] >= 400) & (df_today_api["hm"] <= 929)
+                ]
+                if not pre_0400.empty:
+                    pre_open_p = float(pre_0400["O"].iloc[0])
+                    found_true_pre_open = True
+
+        # 전일 정규장(09:30 ~ 16:00 EST) 봉이 실제로 존재할 때만 종가 채택 (23:59 EST 야간봉 폴백 영구 금지!)
+        if prev_reg_c <= 0.0:
+            df_prev_api = df_api_all[df_api_all["Date"] < target_date]
+            if not df_prev_api.empty:
+                reg_prev_all = df_prev_api[
+                    (df_prev_api["hm"] >= 930) & (df_prev_api["hm"] <= 1600)
+                ]
+                if not reg_prev_all.empty:
+                    prev_reg_c = float(reg_prev_all["C"].iloc[-1])
+                    found_true_prev_close = True
+
+    # 3단계: 당일 인메모리 래치(_DAILY_SESSION_ANCHOR_STORE) 복원 및 진성값만 갱신
+    latched_prev_c = safe_float(latch.get("prev_reg_close"), 0.0)
+    latched_pre_o = safe_float(latch.get("pre_open_price"), 0.0)
+
+    if not found_true_prev_close and latched_prev_c > 0.0:
+        prev_reg_c = latched_prev_c
+        found_true_prev_close = True
+    if not found_true_pre_open and latched_pre_o > 0.0:
+        pre_open_p = latched_pre_o
+        found_true_pre_open = True
+
+    if found_true_prev_close or found_true_pre_open:
+        _update_daily_anchor_latch(
+            symbol=symbol,
+            target_date=target_date,
+            prev_reg_close=(prev_reg_c if found_true_prev_close else 0.0),
+            pre_open_price=(pre_open_p if found_true_pre_open else 0.0),
+            verified_distinct=bool(
+                found_true_prev_close
+                and found_true_pre_open
+                and abs(prev_reg_c - pre_open_p) > 1e-6
+            ),
+        )
+
+    # 4단계: 전일 종가만 최후 안전 폴백 적용 (프리시가 pre_open_p 는 미확보 시 정규장 가격으로 덮어쓰지 않고 0.0 유지!)
+    fb = safe_float(fallback_price, 0.0)
+    if prev_reg_c <= 0.0:
+        prev_reg_c = pre_open_p if pre_open_p > 0.0 else fb
+
+    return (
+        round(prev_reg_c, 4),
+        round(pre_open_p, 4) if found_true_pre_open else 0.0,
+        found_true_prev_close,
+        found_true_pre_open,
+    )
+
+
+def _compute_assassin_anchor_fields(
+    api_candles: Optional[List[Dict[str, Any]]],
+    daily_candles: Optional[List[Dict[str, Any]]],
+    dt_now: datetime,
+    today_str: str,
+    lp: float,
+    ma5_amp: float,
+    reg_vwap_existing: float,
+    prev_day_close: float = 0.0,
+    symbol: str = TARGET_SYMBOL,
+) -> Dict[str, Any]:
+    """
+    # NEW [4bot 2번 v2.4.0 · 원작 c4ad8d6 Case 93 · 🗡️ 암살자 4대 지표 전용 · 새 키만 반환]:
+    브로커 API 1분봉(api_candles — 인메모리 합성봉 제외)만으로 전일 정규장 종가(prev_reg_close) · 당일 04:07 프리장 시가(pre_open_price) ·
+    04:07 프리장 누적 VWAP(assn_premarket_vwap)을 산출하고 당일 래치에 보존한다.
+    기존 스나이퍼 지표 키(premarket_vwap 등)는 건드리지 않는다. 예외 시 빈 dict.
+    """
+    sym = str(symbol or TARGET_SYMBOL).upper().strip()
+    try:
+        df = pd.DataFrame([c for c in (api_candles or []) if isinstance(c, dict)])
+        if not df.empty:
+            ts_col = next((c for c in ("timestamp", "dt", "dateTime") if c in df.columns), None)
+            if ts_col is None:
+                df = pd.DataFrame()
+            else:
+                ts_est = _parse_timestamp_series_to_est(df[ts_col])
+                df = df.loc[ts_est.notna()].copy()
+                if not df.empty:
+                    df["dt_est"] = ts_est[ts_est.notna()].dt.tz_convert(EST_TZ)
+                    for col, keys in (("O", ("openPrice", "open")), ("H", ("highPrice", "high")), ("L", ("lowPrice", "low")), ("C", ("closePrice", "close"))):
+                        src = next((k for k in keys if k in df.columns), None)
+                        df[col] = pd.to_numeric(df[src], errors="coerce") if src else np.nan
+                    v_src = "volume" if "volume" in df.columns else None
+                    df["V"] = pd.to_numeric(df[v_src], errors="coerce").fillna(0.0) if v_src else 0.0
+                    df = df.dropna(subset=["O", "H", "L", "C"])
+                    df = df[(df["O"] > 0.0) & (df["C"] > 0.0)].copy()
+                    df = df.sort_values("dt_est")
+                    df["Date"] = df["dt_est"].dt.strftime("%Y-%m-%d")
+                    df["hm"] = df["dt_est"].dt.hour * 100 + df["dt_est"].dt.minute
+        target_date = _resolve_active_us_trading_date(df, today_str) if not df.empty else today_str
+        prev_reg_c, pre_open_p, found_prev, found_open = _extract_prev_reg_close_and_pre_open(
+            df_all=df if not df.empty else None,
+            target_date=target_date,
+            daily_candles=daily_candles,
+            explicit_prev_close=safe_float(prev_day_close, 0.0),
+            fallback_price=lp,
+            symbol=sym,
+        )
+        pre_vwap = 0.0
+        found_pre_vwap = False
+        if not df.empty:
+            df_t = df[df["Date"] == target_date]
+            df_pre = df_t[(df_t["hm"] >= 407) & (df_t["hm"] <= 929)]
+            if df_pre.empty:
+                df_pre = df_t[(df_t["hm"] >= 400) & (df_t["hm"] <= 929)]
+            pre_stats = _calc_session_vwap_and_bands(df_pre, ma5_amp)
+            if safe_float(pre_stats.get("vwap"), 0.0) > 0.0:
+                pre_vwap = safe_float(pre_stats.get("vwap"), 0.0)
+                found_pre_vwap = True
+                _update_daily_anchor_latch(
+                    symbol=sym,
+                    target_date=target_date,
+                    pre_stats=pre_stats,
+                    verified_distinct=bool(
+                        found_prev and found_open
+                        and not _is_collapsed_anchor_triplet(prev_reg_c, pre_open_p, pre_vwap)
+                    ),
+                )
+        if not found_pre_vwap:
+            l_stats = _get_daily_anchor_latch(sym, target_date).get("pre_stats")
+            if isinstance(l_stats, dict) and safe_float(l_stats.get("vwap"), 0.0) > 0.0:
+                pre_vwap = safe_float(l_stats.get("vwap"), 0.0)
+                found_pre_vwap = True
+        bear_drop = (
+            max(0.0, (pre_open_p - lp) / pre_open_p * 100.0)
+            if pre_open_p > 0.0 and lp > 0.0
+            else 0.0
+        )
+        anchors_ready = bool(
+            found_prev
+            and (found_open or found_pre_vwap or safe_float(reg_vwap_existing, 0.0) > 0.0)
+            and not _is_collapsed_anchor_triplet(prev_reg_c, pre_open_p, pre_vwap)
+        )
+        return {
+            "anchors_ready": anchors_ready,
+            "found_true_prev_close": bool(found_prev),
+            "found_true_pre_open": bool(found_open),
+            "found_true_pre_vwap": bool(found_pre_vwap),
+            "prev_reg_close": prev_reg_c,
+            "prev_day_close": prev_reg_c,
+            "pre_open_price": pre_open_p,
+            "assn_premarket_vwap": round(pre_vwap, 4),
+            "bear_drop_amp_pct": round(bear_drop, 4),
+            "api_candle_count": len(api_candles) if isinstance(api_candles, list) else 0,
+        }
+    except Exception as exc:
+        logger.debug("암살자 4대 지표 앵커 산출 폴백(묵음 · 스나이퍼 지표 무영향): %s", exc)
+        return {}
+
+
 def compute_soxl_quant_metrics_1m(
     candles: List[Dict[str, Any]],
     live_price: float = 0.0,
     now_est: Optional[datetime] = None,
     daily_candles: Optional[List[Dict[str, Any]]] = None,
+    prev_day_close: float = 0.0,
+    symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    🎯 2 & Case 01, 15, 79, 84, 88:
+    🎯 2 & Case 01, 15, 79, 84, 88 (+ 4bot v2.4.0 Case 93: symbol·prev_day_close 인자 · 암살자 새 키 추가, 기존 키 값 동일):
     토스 Open API 1분봉(candles), 인메모리 실시간 합성 1분봉(_LIVE_1M_BAR_STORE) 및 일봉(daily_candles)을 입력받아:
     1) 당일 프리장(04:00 ~ 09:29 EST) VWAP · 고/저가 진폭 · 예상 변동 밴드
     2) 당일 정규장(09:30 ~ 16:00 EST) VWAP · 고/저가 진폭 · 예상 변동 밴드
@@ -750,12 +1151,13 @@ def compute_soxl_quant_metrics_1m(
         now_est=dt_now, buy_interval_min=LOCKED_BUY_INTERVAL_MIN
     )
     lp = safe_float(live_price, 0.0)
+    sym = str(symbol or TARGET_SYMBOL).upper().strip()
     cur_min_key, _ = _record_live_tick_to_memory_bar(
-        TARGET_SYMBOL, lp, now_est=dt_now
+        sym, lp, now_est=dt_now
     )
 
     default_out: Dict[str, Any] = {
-        "symbol": TARGET_SYMBOL,
+        "symbol": sym,
         "live_price": round(lp, 4),
         "ma5_amp_pct": 6.50,
         "rsi_14": 50.0,
@@ -799,7 +1201,7 @@ def compute_soxl_quant_metrics_1m(
         "updated_est": dt_now.strftime("%m-%d %H:%M:%S EST"),
     }
 
-    merged_candles = _merge_api_and_memory_candles(candles, TARGET_SYMBOL)
+    merged_candles = _merge_api_and_memory_candles(candles, sym)
     if not merged_candles:
         default_out["ma5_amp_pct"] = _compute_5ma_intraday_amp_pct_vectorized(
             daily_candles, None
@@ -873,7 +1275,7 @@ def compute_soxl_quant_metrics_1m(
         df.sort_values("dt_min", ascending=True, inplace=True)
 
         # API + 메모리 병합 정제본을 인메모리 1분봉 저장소에 다시 동기화하여 히스토리 영구 보존
-        _sync_api_candles_into_memory_store(TARGET_SYMBOL, df)
+        _sync_api_candles_into_memory_store(sym, df)
 
         df["Date"] = df["dt_est"].dt.strftime("%Y-%m-%d")
         df["hm"] = df["dt_est"].dt.hour * 100 + df["dt_est"].dt.minute
@@ -962,20 +1364,70 @@ def compute_soxl_quant_metrics_1m(
                 "day_amp_pct": all_stats["amp_pct"],
             }
         )
-        return refresh_metrics_with_live_tick(out, lp, now_est=dt_now)
+        # [4bot v2.4.0 · Case 93] 🗡️ 암살자 4대 지표 새 키만 추가 (자체 예외 격리 · 기존 키 무변경)
+        assn_fields = _compute_assassin_anchor_fields(
+            api_candles=candles,
+            daily_candles=daily_candles,
+            dt_now=dt_now,
+            today_str=today_str,
+            lp=lp,
+            ma5_amp=ma5_amp,
+            reg_vwap_existing=safe_float(reg_stats.get("vwap"), 0.0),
+            prev_day_close=prev_day_close,
+            symbol=sym,
+        )
+        for a_key, a_val in assn_fields.items():
+            if a_key not in out:
+                out[a_key] = a_val
+        return refresh_metrics_with_live_tick(out, lp, now_est=dt_now, symbol=sym)
     except Exception as exc:
         # Case 79: 데이마켓 등 장외 시간대 캔들 결측 시에도 소음 없이 조용히 디버그 로깅
         logger.debug("compute_soxl_quant_metrics_1m 연산 폴백(묵음): %s", exc)
-        return refresh_metrics_with_live_tick(default_out, lp, now_est=dt_now)
+        # [4bot v2.4.0 · Case 93] 위 연산이 실패해도 암살자 4대 지표 새 키는 API 1분봉만으로 따로 산출 (기존 키 무변경)
+        fb_out = dict(default_out)
+        for a_key, a_val in _compute_assassin_anchor_fields(
+            api_candles=candles,
+            daily_candles=daily_candles,
+            dt_now=dt_now,
+            today_str=today_str,
+            lp=lp,
+            ma5_amp=6.50,
+            reg_vwap_existing=0.0,
+            prev_day_close=prev_day_close,
+            symbol=sym,
+        ).items():
+            if a_key not in fb_out:
+                fb_out[a_key] = a_val
+        return refresh_metrics_with_live_tick(fb_out, lp, now_est=dt_now, symbol=sym)
 
 
 # ---------------------------------------------------------------------------
 # [핵심 4] 실시간 틱(live_price) O(1) 무부하 합성기 (refresh_metrics_with_live_tick — Case 84 & Case 88)
 # ---------------------------------------------------------------------------
+# [4bot v2.4.0 · 원작 c4ad8d6 Case 93 · 암살자 전용] QQQ 방향성 안전망 지표 (원작 그대로)
+def compute_qqq_macro_metrics_1m(
+    candles: List[Dict[str, Any]],
+    live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """
+    # NEW: 나스닥 100 추종 QQQ 1분봉 기반 방향성 인지 3단계 안전망 지표 산출기
+    """
+    return compute_soxl_quant_metrics_1m(
+        candles=candles,
+        live_price=live_price,
+        now_est=now_est,
+        daily_candles=None,
+        prev_day_close=0.0,
+        symbol="QQQ",
+    )
+
+
 def refresh_metrics_with_live_tick(
     base_metrics: Optional[Dict[str, Any]],
     live_price: float,
     now_est: Optional[datetime] = None,
+    symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     # [Case 84 & Case 88 : 실시간 틱 O(1) 합성 · dt_now.minute 변수명 정합성 락온 · 장마감 30분전 0주/돌파 컷오프 상태 동기화]:
@@ -999,8 +1451,10 @@ def refresh_metrics_with_live_tick(
     else:
         met["live_price"] = round(lp, 4)
 
+    # [4bot v2.4.0 · Case 93] symbol 미지정(기존 스나이퍼 호출)이면 SOXL 저장소 그대로 사용
+    sym = str(symbol or TARGET_SYMBOL).upper().strip()
     cur_min_key, mem_bar_cnt = _record_live_tick_to_memory_bar(
-        TARGET_SYMBOL, lp, now_est=dt_now
+        sym, lp, now_est=dt_now
     )
     prev_min_key = str(met.get("cur_bar_minute_key") or "")
 
@@ -1009,7 +1463,7 @@ def refresh_metrics_with_live_tick(
         safe_float(met.get("prev_bar_close"), 0.0) <= 0.0
         or (prev_min_key and prev_min_key != cur_min_key)
     ):
-        mem_ha_rsi = _recompute_ha_rsi_from_memory_store(TARGET_SYMBOL)
+        mem_ha_rsi = _recompute_ha_rsi_from_memory_store(sym)
         if isinstance(mem_ha_rsi, dict):
             met.update(mem_ha_rsi)
 
@@ -1099,7 +1553,78 @@ def refresh_metrics_with_live_tick(
     met["next_gate_hm_str"] = gate_info.get("next_gate_hm_str", "04:07 EST")
     met["session_label"] = gate_info.get("session_label", "")
     met["updated_est"] = dt_now.strftime("%m-%d %H:%M:%S EST")
+    _refresh_assassin_tick_fields(met, lp, dt_now, sym)
     return met
+
+
+def _refresh_assassin_tick_fields(
+    met: Dict[str, Any], lp: float, dt_now: datetime, sym: str
+) -> None:
+    """
+    # NEW [4bot 2번 v2.4.0 · 원작 c4ad8d6 Case 93 · 🗡️ 암살자 전용 새 키만 O(1) 갱신 · 기존 스나이퍼 키 무변경]:
+    단기 변화율(vel_1m/3m/10m) · 당일 래치의 전일종가/04:07 프리시가/프리VWAP 복원 · 04:07~09:29 첫 틱 프리시가 래치 ·
+    프리시가 대비 하락 진폭(bear_drop_amp_pct). 예외는 묵음 처리한다.
+    """
+    try:
+        if lp <= 0.0:
+            return
+        today_str = dt_now.strftime("%Y-%m-%d")
+        hm = dt_now.hour * 100 + dt_now.minute
+        prev_b_close = safe_float(met.get("prev_bar_close"), 0.0)
+        if prev_b_close > 0.0:
+            met["vel_1m_pct"] = round((lp - prev_b_close) / prev_b_close * 100.0, 4)
+        c_3m = safe_float(met.get("close_3m_ago"), prev_b_close)
+        c_10m = safe_float(met.get("close_10m_ago"), prev_b_close)
+        if c_3m > 0.0:
+            met["vel_3m_pct"] = round((lp - c_3m) / c_3m * 100.0, 4)
+        if c_10m > 0.0:
+            met["vel_10m_pct"] = round((lp - c_10m) / c_10m * 100.0, 4)
+        met["vel_max_3m_10m_pct"] = round(
+            max(safe_float(met.get("vel_3m_pct"), 0.0), safe_float(met.get("vel_10m_pct"), 0.0)), 4
+        )
+
+        latch = _get_daily_anchor_latch(sym, today_str)
+        latched_prev_c = safe_float(latch.get("prev_reg_close"), 0.0)
+        latched_pre_o = safe_float(latch.get("pre_open_price"), 0.0)
+        latched_pre_stats = latch.get("pre_stats")
+        if latched_prev_c > 0.0:
+            met["prev_reg_close"] = latched_prev_c
+            met["prev_day_close"] = latched_prev_c
+            met["found_true_prev_close"] = True
+        if latched_pre_o > 0.0:
+            met["pre_open_price"] = latched_pre_o
+            met["found_true_pre_open"] = True
+        if isinstance(latched_pre_stats, dict) and safe_float(latched_pre_stats.get("vwap"), 0.0) > 0.0:
+            if (
+                safe_float(met.get("assn_premarket_vwap"), 0.0) <= 0.0
+                or hm > 929
+                or not bool(met.get("found_true_pre_vwap", False))
+            ):
+                met["assn_premarket_vwap"] = round(safe_float(latched_pre_stats.get("vwap"), 0.0), 4)
+                met["found_true_pre_vwap"] = True
+        if 407 <= hm <= 929 and safe_float(met.get("assn_premarket_vwap"), 0.0) <= 0.0:
+            # 프리장 첫 틱: 원작처럼 현재가로 임시 표시 (진성 래치에는 저장하지 않음)
+            met["assn_premarket_vwap"] = round(lp, 4)
+
+        pre_open_p = safe_float(met.get("pre_open_price"), 0.0)
+        if pre_open_p <= 0.0 and 407 <= hm <= 929:
+            pre_open_p = round(lp, 4)
+            met["pre_open_price"] = pre_open_p
+            met["found_true_pre_open"] = True
+            _update_daily_anchor_latch(symbol=sym, target_date=today_str, pre_open_price=pre_open_p)
+        if pre_open_p > 0.0:
+            met["bear_drop_amp_pct"] = round(max(0.0, (pre_open_p - lp) / pre_open_p * 100.0), 4)
+        else:
+            met["pre_open_price"] = 0.0
+            met["bear_drop_amp_pct"] = 0.0
+        if safe_float(met.get("prev_reg_close"), 0.0) <= 0.0:
+            met["prev_reg_close"] = round(
+                safe_float(met.get("prev_day_close"), pre_open_p if pre_open_p > 0.0 else lp), 4
+            )
+        if safe_float(met.get("prev_day_close"), 0.0) <= 0.0:
+            met["prev_day_close"] = met["prev_reg_close"]
+    except Exception as exc:
+        logger.debug("암살자 틱 지표 갱신 폴백(묵음): %s", exc)
 
 
 # 하위 호환 별칭 (타 모듈 임포트 호환 100% 보장)

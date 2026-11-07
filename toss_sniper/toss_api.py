@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: toss_api.py (원작 toss_api_core.py + 원작 toss_api.py 병합)
+# 4bot 2번 v2.4.0 (2026-11-07): 원작 c4ad8d6 Case 93 [모의] 암살자 결속 — get_candles_1m count/total_count 호환·400봉 상한, get_candles_1d **kwargs, place_limit_order 어댑터(create_order 경유 · 현재 미사용)
 # 4bot 2번 v2.3.1 (2026-11-06): R1·R2 수동 주문 보호 — 04:00·16:00 일괄 취소와 익절 스윕의 미체결 매도 취소를 봇 주문(장부 orderId·봇 등록부)만 대상으로 제한, 사용자 토스 앱 주문은 취소하지 않고 남김/기다림
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
@@ -3266,12 +3267,20 @@ class TossApiClient:
         symbol: str = TARGET_SYMBOL,
         total_count: int = 300,
         adjusted: bool = True,
+        count: Optional[int] = None,
+        before: Optional[str] = None,
+        **kwargs: Any,
     ) -> List[Dict[str, Any]]:
-        target_cnt = max(1, min(600, safe_int(total_count, 300)))
+        # [4bot 2번 v2.4.0 · 원작 c4ad8d6 Case 93] count / total_count 양방향 호환 + 최대 400분봉(2페이지) 상한.
+        # 기존 호출(total_count 만, 300 이하)은 결과가 그대로다. count 를 함께 주면 둘 중 큰 값을 쓴다.
+        req_cnt = max(safe_int(total_count, 0), safe_int(count, 0))
+        if req_cnt <= 0:
+            req_cnt = 300
+        target_cnt = max(1, min(400, req_cnt))
         collected: List[Dict[str, Any]] = []
         seen_ts: Set[str] = set()
-        before_cursor: Optional[str] = None
-        max_pages = max(1, int(math.ceil(target_cnt / 200.0)) + 1)
+        before_cursor: Optional[str] = str(before).strip() if before else None
+        max_pages = max(1, min(2, int(math.ceil(target_cnt / 200.0))) + 1)
 
         for page_idx in range(max_pages):
             rem = max(1, min(200, target_cnt - len(collected) + 1))
@@ -3338,6 +3347,7 @@ class TossApiClient:
         symbol: str = TARGET_SYMBOL,
         count: int = 10,
         adjusted: bool = True,
+        **kwargs: Any,
     ) -> List[Dict[str, Any]]:
         try:
             batch, _ = await self.get_candles(
@@ -3679,6 +3689,32 @@ class TossApiClient:
             # [4bot v2.3.1 R1/R2] 봇 주문 orderId 등록 (사용자 주문과 구분용 · 실패해도 주문 결과는 그대로)
             register_bot_order_id(r_obj.get("orderId"), cid)
         return r_obj if isinstance(r_obj, dict) else {}
+
+    async def place_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: int,
+        price: float,
+        time_in_force: str = "DAY",
+        client_order_id: Optional[str] = None,
+        enforce_daymarket_block: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        # NEW [4bot 2번 v2.4.0 · 원작 c4ad8d6 Case 93]: assassin_plugin.py Dual-Ready 주문 어댑터 호환 메서드.
+        현재 암살자는 ASSASSIN_LIVE_ORDER_HARD_LOCK = True 라서 이 메서드를 부르지 않는다 (모의 전용).
+        부르면 기존 create_order(SOXL 화이트리스트·시간창 차단·봇 주문 등록 그대로)로만 간다.
+        """
+        return await self.create_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=price,
+            order_type="LIMIT",
+            time_in_force=time_in_force,
+            client_order_id=client_order_id,
+            enforce_daymarket_block=enforce_daymarket_block,
+        )
 
     async def modify_order(
         self,

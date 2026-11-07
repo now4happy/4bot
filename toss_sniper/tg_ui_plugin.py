@@ -571,6 +571,29 @@ def _format_sub_grid_stratum_lines(
     return lines
 
 
+
+def _append_assassin_slim_block(lines: List[str], context: Any, lp: float) -> None:
+    """
+    # NEW [4bot 2번 v2.4.0 · 원작 c4ad8d6 Case 93]: /avwap · /sync · /settlement 하단에 🗡️ [모의] 암살자 요약 블록(format_assassin_slim_radar_block)을
+    마지막 시각(🕒) 줄 바로 위에 끼워 넣는다. 암살자 모듈이 없거나 예외가 나면 아무것도 넣지 않는다 (스나이퍼 보드 무영향).
+    """
+    if context is None or not lines:
+        return
+    try:
+        from assassin_plugin import format_assassin_slim_radar_block
+
+        assn_block = format_assassin_slim_radar_block(context=context, live_price=lp)
+    except Exception:
+        return
+    if not assn_block:
+        return
+    last = lines[-1]
+    if str(last).startswith("🕒"):
+        lines.insert(len(lines) - 1, assn_block)
+    else:
+        lines.append(assn_block)
+
+
 def build_avwap_radar_message(
     context: Any,
     st: Dict[str, Any],
@@ -876,6 +899,7 @@ def build_avwap_radar_message(
             f"🕒 {dt_now.strftime('%m-%d %H:%M:%S EST')}",
         ]
     )
+    _append_assassin_slim_block(lines, context, lp)  # [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 요약 (시각 줄 바로 위)
     return "\n".join(lines)
 
 
@@ -1049,6 +1073,7 @@ def build_sync_instruction_message(
         f"▫️ 적용 수수료: 편도 {us_comm_pct:.3g}% / 왕복 <b>{rt_fee_pct:.2f}%</b>",
         f"🕒 동기화: {dt_now.strftime('%m-%d %H:%M:%S EST')}",
     ]
+    _append_assassin_slim_block(lines, context, lp)  # [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 요약 (시각 줄 바로 위)
     return "\n".join(lines)
 
 
@@ -1138,6 +1163,7 @@ def build_settlement_control_message(
         "💡 아래 버튼으로 전원 · 운용모드 · 시드를 설정하세요.",
         f"🕒 기준 시각: {dt_now.strftime('%m-%d %H:%M:%S EST')}",
     ]
+    _append_assassin_slim_block(lines, context, lp)  # [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 요약 (시각 줄 바로 위)
     return "\n".join(lines)
 # ---------------------------------------------------------------------------
 # [핵심 2] 텔레그램 명령어 및 콜백 비동기 컨트롤러 (TelegramCommandController — Case 81 불사조 폴링 & Case 88 서브그리드 & Case 91 복리/단리 전환 · 무제한 수혈 카운트 연동 탑재)
