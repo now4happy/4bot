@@ -39,12 +39,6 @@
 /bithumb_laoeo_bot/*
 !/bithumb_laoeo_bot/*.py
 !/bithumb_laoeo_bot/README.md
-
-!/meritz_laoer/
-/meritz_laoer/*
-!/meritz_laoer/*.py
-!/meritz_laoer/README.md
-!/meritz_laoer/settings.example.json
 !/bot_office/
 /bot_office/*
 !/bot_office/*.py
