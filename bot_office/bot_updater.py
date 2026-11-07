@@ -37,6 +37,8 @@
 #                       hub.db·hub.db-wal·hub.db-shm 0666 으로 정리 (다른 계정으로 도는 봇도 신호를 쓸 수 있게 · best-effort · 예외 없음)
 #                       ② 8번 사무실 비서 대리 신호 — 사무실 웹(127.0.0.1:8765/healthz)이 200이면 60초에 1번 hub에 신호
 #                          (bot-office.service 의 ProtectHome 보호로 server.py 가 hub 폴더를 못 볼 수 있어서 · 웹 코드·유닛 무변경)
+#  · 사무실 vNEXT (2026-11-07): 하단 메뉴 2개 [🔄 업데이트 확인 | ☰ 메뉴] — 나머지 버튼은 ☰ 메뉴 안(menu_sub_keyboard) · ⬅ 처음 화면
+#                       '메뉴'·'/menu' = 하위 메뉴 펼치기 · /start·/help·도움말·? = 사용법 + 처음 2개 (버튼 글자·명령 그대로)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -881,8 +883,10 @@ def show_diff(st, key):
  
 # ---------------------------------------------------------------- 하단 버튼 메뉴 (/start 로 뜸)
 # 버튼은 기존 글자 명령과 똑같이 처리된다. 승인·코드 보기·무시·일시중지·재개는 업데이트 알림 안의 버튼으로 이미 처리한다.
-MENU_ALIAS = {"🔄 업데이트 확인": "업데이트 확인", "⏸ 거래 상태": "거래 상태", "🔎 원작 확인": "원작 확인", "❓ 도움말": "/help", "🧹 충돌 정리": "충돌 정리"}
+MENU_ALIAS = {"🔄 업데이트 확인": "업데이트 확인", "⏸ 거래 상태": "거래 상태", "🔎 원작 확인": "원작 확인", "❓ 도움말": "/help", "🧹 충돌 정리": "충돌 정리",
+              "☰ 메뉴": "메뉴", "⬅ 처음 화면": "처음 화면"}
 HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
+             "▫️ 아래 버튼은 <b>🔄 업데이트 확인</b> · <b>☰ 메뉴</b> 2개 — 나머지 버튼은 ☰ 메뉴 안에 있습니다 (⬅ 처음 화면으로 돌아감)\n"
              "▫️ <b>🔄 업데이트 확인</b> : GitHub에 올라온 수정 확인 → 새 알림의 버튼(✅ 적용 · 🔍 코드 보기 · 🗑 무시)\n"
              "▫️ <b>🧹 충돌 정리</b> : 이전 변경 파일 선택 → 확인 → 원래 브랜치를 백업 후 정리 → 별도 업데이트 승인\n"
              "▫️ <b>⏸ 거래 상태</b> : 업데이트용 일시중지·대기 중인 봇 보기 → ▶ 재개 버튼\n"
@@ -892,9 +896,15 @@ HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
 
 
 def menu_keyboard():
-    rows = [["🔄 업데이트 확인", "⏸ 거래 상태"], ["🔎 원작 확인", "❓ 도움말"] if SU else ["❓ 도움말"]]
-    if UC:
-        rows.insert(1, ["🧹 충돌 정리"])
+    """처음 화면: 2개만 (나머지는 ☰ 메뉴 안)."""
+    return [[{"text": "🔄 업데이트 확인"}, {"text": "☰ 메뉴"}]]
+
+
+def menu_sub_keyboard():
+    """☰ 메뉴 안: 예전 버튼 전부 (충돌 정리는 UC, 원작 확인은 SU 있을 때만 — 예전과 같은 조건) + ⬅ 처음 화면."""
+    rows = [["⏸ 거래 상태", "🧹 충돌 정리"] if UC else ["⏸ 거래 상태"],
+            ["🔎 원작 확인", "❓ 도움말"] if SU else ["❓ 도움말"],
+            ["⬅ 처음 화면"]]
     return [[{"text": t} for t in r] for r in rows]
 
 
@@ -962,8 +972,12 @@ def handle(st, upd):
     elif msg and str(msg.get("chat", {}).get("id")) == str(CFG.get("chat_id")):
         txt = (msg.get("text") or "").strip()
         txt = MENU_ALIAS.get(txt, txt)   # 하단 버튼 글자 → 같은 명령
-        if txt in ("/start", "/help", "도움말", "메뉴", "/menu", "?"):
+        if txt in ("/start", "/help", "도움말", "?"):
             say(HELP_TEXT, keyboard=menu_keyboard())
+        elif txt in ("메뉴", "/menu"):   # ☰ 메뉴 → 하위 메뉴 펼치기
+            say("☰ <b>메뉴</b>", keyboard=menu_sub_keyboard())
+        elif txt == "처음 화면":   # ⬅ 처음 화면 → 처음 2개로 돌아가기
+            say("⬅ 처음 화면", keyboard=menu_keyboard())
         elif txt in ("충돌 정리", "/conflicts") and UC:
             live = live_branches()
             if live is None:

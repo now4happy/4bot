@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: tg_ui_plugin.py
+# 4bot 2번 v2.3.1 (2026-11-07): 하단 메뉴 2개 [📈 현황판 | ☰ 메뉴] + ☰ 메뉴 안에 기존 4버튼·⬅️ 메인 메뉴 (_build_menu_reply_keyboard 신설 · 버튼 글자·동작·글자 명령 그대로)
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
@@ -201,8 +202,29 @@ def _read_office_picture_url() -> str:
 
 def _build_main_reply_keyboard() -> Dict[str, Any]:
     """
-    # [4대 핵심 메뉴(2x2) 단일화]:
-    사용자 중심 4대 핵심 버튼(스나이퍼 레이더 · 잔고 동기화 · 전술 제어반 · 시스템 업데이트)으로 구성한다.
+    # [4bot v2.3.1 처음 화면 2버튼]:
+    📈 현황판 · ☰ 메뉴. 4대 핵심 버튼은 ☰ 메뉴 안(_build_menu_reply_keyboard)으로 옮긴다.
+    """
+    return {
+        "keyboard": [
+            [
+                {"text": "📈 현황판"},
+                {"text": MENU_OPEN_TEXT},
+            ],
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True,
+    }
+
+
+# [4bot v2.3.1] ☰ 메뉴 펼치기 버튼 글자 (main.py 브릿지와 폴백 컨트롤러가 같이 씀)
+MENU_OPEN_TEXT = "☰ 메뉴"
+
+
+def _build_menu_reply_keyboard() -> Dict[str, Any]:
+    """
+    # [4bot v2.3.1 ☰ 메뉴 안]:
+    기존 4대 핵심 버튼(글자·동작 그대로) + ⬅️ 메인 메뉴(처음 화면으로 돌아가기).
     """
     return {
         "keyboard": [
@@ -215,7 +237,7 @@ def _build_main_reply_keyboard() -> Dict[str, Any]:
                 {"text": "🚀 시스템 업데이트"},
             ],
             [
-                {"text": "📈 현황판"},
+                {"text": "⬅️ 메인 메뉴"},
             ],
         ],
         "resize_keyboard": True,
@@ -291,6 +313,8 @@ def build_start_schedule_message(
     lines = [
         f"🐂 <b>[SOXL 스나이퍼 ({escape_html(dst_str)})]</b>",
         "──────────────",
+        "📈 <b>현황판</b> : 사무실 현황판 열기",
+        "☰ <b>메뉴</b> 안 ↓",
         "🔫 <b>스나이퍼 레이더</b> : 타점 · 지층 조회",
         "🔄 <b>잔고 동기화</b> : 잔고 · 수익 · 인출안내",
         "⚙️ <b>전술 제어반</b> : 전원 · 복리/인출모드 · 시드",
@@ -2056,6 +2080,15 @@ class TelegramCommandController:
                 chat_id=chat_id,
                 text=msg,
                 reply_markup=_build_main_reply_keyboard(),
+            )
+            return
+
+        # [4bot v2.3.1] ☰ 메뉴: 하위 메뉴(기존 4버튼 + ⬅️ 메인 메뉴) 펼치기
+        if text == MENU_OPEN_TEXT:
+            await self.send_message(
+                chat_id=chat_id,
+                text="☰ <b>[메뉴]</b>",
+                reply_markup=_build_menu_reply_keyboard(),
             )
             return
 

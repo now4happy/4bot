@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main.py (원작 main_runtime.py + 원작 main.py 병합)
+# 4bot 2번 v2.4.1 (2026-11-07): 하단 메뉴 2개 — ☰ 메뉴 분기 추가(tg_ui_plugin._build_menu_reply_keyboard 사용) · /menu·⬅️ 메인 메뉴 = 처음 화면 (매매 로직 무변경)
 # 4bot 2번 v2.4.0 (2026-11-07): 원작 c4ad8d6 Case 93 [모의] 암살자 결속 — 메인 루프 끝에 상시 실행(예외 격리·15초 제한)·점화 시 0.40초 가속·QQQ 시세/1분봉 암살자 전용 수집·/assassin·/reset_assassin·부팅 TDD (실주문 하드락 · 스나이퍼 동작 무변경)
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
@@ -87,7 +88,9 @@ from quant_indicators_plugin import (
 from sniper_plugin import mark_reserve_deposit_check_shield
 from tg_ui_plugin import (
     SEED_INPUT_PROMPT_TIMEOUT_SEC,
+    MENU_OPEN_TEXT,
     _build_main_reply_keyboard,
+    _build_menu_reply_keyboard,
     _read_office_picture_url,
     _build_settlement_inline_keyboard,
     _format_case67_quota_badge,
@@ -2313,6 +2316,15 @@ class _AdaptiveTelegramBridge:
                 chat_id=chat_id,
                 text=msg,
                 reply_markup=_build_main_reply_keyboard(),
+            )
+            return
+
+        # [4bot v2.4.1] ☰ 메뉴: 하위 메뉴(기존 4버튼 + ⬅️ 메인 메뉴) 펼치기
+        if text == MENU_OPEN_TEXT:
+            await self.send_message(
+                chat_id=chat_id,
+                text="☰ <b>[메뉴]</b>",
+                reply_markup=_build_menu_reply_keyboard(),
             )
             return
 

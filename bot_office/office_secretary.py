@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 vNEXT (2026-11-07): 하단 메뉴 2개 [🗞 브리핑 | ☰ 메뉴] — 나머지는 ☰ 메뉴 안 · 📊 조회 글자도 메뉴를 보여 줌 (버튼 글자·명령 그대로)
 # 사무실 v1.0.57 (2026-10-28): ① 🏢 사무실 버튼 (지금 사무실 주소를 바로 여는 버튼) ② ✍️ 수정 요청·결재(옛 결재함)·📋 현황 기능 삭제
 #                         ③ 📊 조회 → 💰 잔액 하나로 모으고 다음 단계에서 회사 선택 (한국투자·토스·메리츠·빗썸·전체)
 # 사무실 v1.0.48 (2026-10-28): ① 🖥 PC 상태 메뉴·PC 끊김/매직스플릿 알림 복구 (10/27 '메리츠 잔액 표시' 업로드 때 지워졌던 것)
@@ -8,7 +9,7 @@
 # V4 (2026-10-26): 비서봇에서 팬딩 모듈 import 및 팬딩 콜백 제거. 팬딩은 전용 봇에서만 처리.
 # V3 (2026-10-26): 하단 메인 메뉴·하위 메뉴 정리
 # 텔레그램 "사무실 비서" 대화 담당 (항상 실행: bot-office-secretary.service)
-#  - 하단 메뉴: 📊 조회(브리핑·잔액·PC 상태·사무실 주소) · 🏢 사무실 · ❓ 도움말
+#  - 하단 메뉴: 🗞 브리핑 · ☰ 메뉴(잔액·PC 상태·사무실 주소·사무실·도움말·메인 메뉴)
 #  - 코드 수정은 GitHub staging → 6. Update 승인 방식만 씀 (이 비서는 수정 요청·결재를 받지 않음)
 #  안전: 등록된 대표님 채팅방(chat_id)에서 온 것만 처리.
 # ==========================================================
@@ -54,11 +55,11 @@ BRIEFING = os.environ.get("OFFICE_BRIEFING", "/opt/bot-office/office_briefing.py
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 
 HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
-        "▫️ <b>🏢 사무실</b> : 사무실 상황판을 바로 여는 버튼\n"
+        "▫️ <b>☰ 메뉴 → 🏢 사무실</b> : 사무실 상황판을 바로 여는 버튼\n"
         "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
-        "▫️ <b>📊 조회 → 💰 잔액</b> → 회사 선택(한국투자·토스·메리츠·빗썸·전체) : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
-        "▫️ <b>📊 조회 → 🖥 PC 상태</b> : 한국 PC 연결·매직스플릿 실행 확인\n"
-        "▫️ <b>📊 조회 → 🔗 사무실 주소</b> : 지금 주소·한국 PC 주소 바꾸는 한 줄 (/주소변경 으로 고정 도메인 이동)\n"
+        "▫️ <b>☰ 메뉴 → 💰 잔액</b> → 회사 선택(한국투자·토스·메리츠·빗썸·전체) : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
+        "▫️ <b>☰ 메뉴 → 🖥 PC 상태</b> : 한국 PC 연결·매직스플릿 실행 확인\n"
+        "▫️ <b>☰ 메뉴 → 🔗 사무실 주소</b> : 지금 주소·한국 PC 주소 바꾸는 한 줄 (/주소변경 으로 고정 도메인 이동)\n"
         "▫️ 봇 코드 수정은 Claude·GPT 에게 맡겨 GitHub staging 에 올리고 6. Update 에서 승인해요.")
 
 
@@ -150,9 +151,10 @@ class TG:
 # 버튼은 기존 글자 명령과 똑같이 처리된다. 글자를 꼭 입력해야 하는 기능(수정 내용·상품명·금액)은
 # 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안 · 취소는 아래 다른 버튼).
 HOME = "🏠 메인 메뉴"
-MAIN_LABELS = [["📊 조회", "🏢 사무실"], ["❓ 도움말"]]
+MENU_OPEN = "☰ 메뉴"
+MAIN_LABELS = [["🗞 브리핑", MENU_OPEN]]
 SUB_LABELS = {
-    "view": [["🗞 브리핑", "💰 잔액"], ["🖥 PC 상태", "🔗 사무실 주소"], [HOME]],
+    "menu": [["💰 잔액", "🖥 PC 상태"], ["🔗 사무실 주소", "🏢 사무실"], ["❓ 도움말", HOME]],
 
 }
 MENU_KB = [[{"text": t} for t in row] for row in MAIN_LABELS]
@@ -163,7 +165,7 @@ BAL_ROWS = [[{"text": "🏦 한국투자", "callback_data": "bl:kis"}, {"text": 
             [{"text": "🏛 메리츠", "callback_data": "bl:meritz"}, {"text": "🪙 빗썸", "callback_data": "bl:bithumb"}],
             [{"text": "🧾 전체", "callback_data": "bl:all"}, {"text": "✖ 닫기", "callback_data": "mn:x"}]]
 BAL_NAME = {v: k for k, v in BAL_ACTIONS.items()}
-MENU_SPECIAL = ("📊 조회", "🏢 사무실", "💰 잔액", HOME)
+MENU_SPECIAL = (MENU_OPEN, "📊 조회", "🏢 사무실", "💰 잔액", HOME)
 CANCEL_WORDS = ("브리핑", "잔액", "도움말", "help", "?")
 CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
 def office_open(tg):
@@ -199,8 +201,8 @@ def handle_message(tg, st, msg):
             return
     if raw == HOME:
         tg.send("🏠 <b>메인 메뉴</b> · 아래 버튼을 눌러 주세요", keyboard=MENU_KB); return
-    if raw == "📊 조회":
-        tg.send("📊 <b>조회</b> · 아래 버튼을 눌러 주세요", keyboard=SUB_KB["view"]); return
+    if raw in (MENU_OPEN, "📊 조회"):   # 📊 조회 = 옛 습관용 (같은 메뉴)
+        tg.send("☰ <b>메뉴</b> · 아래 버튼을 눌러 주세요", keyboard=SUB_KB["menu"]); return
     if raw == "🏢 사무실":
         office_open(tg); return
     if raw == "💰 잔액":
