@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
-# vNEXT: (1) 자산 구성(mix)에서 '현금' 항목만 금액 amt 저장 — 시트 현금(만원) ÷ 10 반올림 정수 (예외: 다른 mix 항목엔 amt 없음)
+# v1.4.3: (1) 자산 구성(mix)에서 '현금' 항목만 금액 amt 저장 — 시트 현금(만원) ÷ 10 반올림 정수 (예외: 다른 mix 항목엔 amt 없음)
 #        (2) 투자 종목(stock) 항목마다 증권사별 구간 segments=[{"broker","val"(만원)}] 저장 — E열 구성 칸
 #            E27:E30·E34:E35·E37:E38 을 추가로 읽음 (기존 범위 그대로) · val 0 구간은 뺌 · pct 는 지금처럼 B열 기준
 #            미국·한국·중국·일본관련주 = 키움(B열 값 그대로 1구간) · SOXL = 한투 E28 + 메리츠 E29 + 토스 E34
@@ -18,9 +18,9 @@
 #  - 독립 파일: 서명(openssl)·HTTP 부품을 이 파일 안에 둠 (kiwoom_holdings.py 를 쓰지 않음)
 #  - 이름: A열 글자에서 앞에 붙은 '42.7% ' 같은 퍼센트를 떼고 씀 (보드가 계산한 % 와 이중 표시 방지)
 #  - 읽는 칸 (코드에 고정): '입력정리'!A14:Z14 (기준일), A83:B87 (자산 구성), A91:B99 (투자 종목), A67:H78 (월별 수익률)
-#                          + vNEXT: E27:E30, E34:E35, E37:E38 (투자 종목 증권사별 구성)
+#                          + v1.4.3: E27:E30, E34:E35, E37:E38 (투자 종목 증권사별 구성)
 #  - 저장: /var/lib/bot-office/assets/assets.json (0644) — 이름·비율(%)·기준일·가져온 시각·수익률(%)만.
-#          금액·계좌번호·토큰·주소는 저장하지 않음. 예외(vNEXT): 현금 amt 1개 · stock segments 의 증권사별 val(만원)만. 웹서버(office_board.py)는 이 파일만 읽음.
+#          금액·계좌번호·토큰·주소는 저장하지 않음. 예외(v1.4.3): 현금 amt 1개 · stock segments 의 증권사별 val(만원)만. 웹서버(office_board.py)는 이 파일만 읽음.
 #  - 시트에 못 닿으면 이전 자료를 그대로 두고 error·tried 만 갱신 → 상황판은 '오래된 값'으로 표시
 # 사용:
 #   python3 asset_board.py            # dry-run (기본, 파일 안 씀) — 이름·비율만 출력
@@ -50,7 +50,7 @@ HIDE_BELOW = {"mix": 1.0}   # 차트별: 반올림한 % 가 이 값 미만이면
 # 월별 표 (2026-01~12): A=월 B=총자산(만원) C=전월 차액 D=월 수익률 E=연초 대비 F=연초 수익률 G=전년 동월 H=1년 수익률
 RETURNS_RANGE = f"'{TAB}'!A67:H78"
 RETURNS_YEAR = 2026        # A열 글자에서 월을 못 읽을 때만 '행 순서 = 1~12월'로 씀
-# vNEXT: 투자 종목 증권사별 구성 칸 (E열) · 행 번호 → 범위 안 위치
+# v1.4.3: 투자 종목 증권사별 구성 칸 (E열) · 행 번호 → 범위 안 위치
 SEG_RANGES = (f"'{TAB}'!E27:E30", f"'{TAB}'!E34:E35", f"'{TAB}'!E37:E38")
 SEG_ROWS = {27: (0, 0), 28: (0, 1), 29: (0, 2), 30: (0, 3), 34: (1, 0), 35: (1, 1), 37: (2, 0), 38: (2, 1)}
 KIWOOM = "키움"
@@ -208,8 +208,8 @@ def segments(seg_values, idx, b_val):
 def chart(rows, defaults, hide_below=0.0, amt_names=(), seg_values=None):
     """rows = A·B 열 (항목 n줄 + 합계 1줄) → {"items":[{"name","pct"}], "check":"ok|diff|no_total", "zero":[...]}
     hide_below: pct(전체 합 대비, 소수 첫째 자리 반올림) < hide_below 인 항목은 items 에서만 뺌 (pct == hide_below 는 보임)
-    amt_names: 이 이름 항목에만 "amt"(만원 ÷ 10 반올림 정수) 추가 (vNEXT · mix 의 현금만)
-    seg_values: 주면 각 항목에 증권사별 "segments" 추가 (vNEXT · stock 만, E열 구성 칸 값)"""
+    amt_names: 이 이름 항목에만 "amt"(만원 ÷ 10 반올림 정수) 추가 (v1.4.3 · mix 의 현금만)
+    seg_values: 주면 각 항목에 증권사별 "segments" 추가 (v1.4.3 · stock 만, E열 구성 칸 값)"""
     n = len(defaults)
     rows = list(rows) + [[]] * (n + 1 - len(rows))
     names, vals = [], []
@@ -309,7 +309,7 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "vNEXT", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "v1.4.3", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
     if prev.get("returns"):

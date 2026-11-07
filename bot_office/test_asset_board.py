@@ -2,7 +2,7 @@
 # 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
 # 사무실 v1.3.8: 자산 구성 1% 미만 숨김 테스트 추가
 # 사무실 v1.4.2: 수익률(월별 표 A67:H78 → returns) · office_board returns 전달 · 보드 하이브리드(도넛+막대) 테스트 추가
-# 사무실 vNEXT: 현금 amt(만원÷10 정수, 현금만) · stock 증권사별 segments (E27:E30·E34:E35·E37:E38) · 옛 assets.json 호환 테스트 추가
+# 사무실 v1.4.3: 현금 amt(만원÷10 정수, 현금만) · stock 증권사별 segments (E27:E30·E34:E35·E37:E38) · 옛 assets.json 호환 테스트 추가
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from decimal import Decimal, ROUND_HALF_UP
@@ -99,7 +99,7 @@ class T(unittest.TestCase):
         self.assertEqual(len(stock["items"]), 8)                       # 8개 항목 모두
         self.assertAlmostEqual(sum(i["pct"] for i in stock["items"]), 100, delta=0.3)
         self.assertEqual({i["name"]: i["pct"] for i in stock["items"]}["한국관련주"], round(2000 * 100 / 4030, 1))
-        strip = json.loads(json.dumps(disk))                            # vNEXT 예외(현금 amt·stock segments) 를 뺀 나머지
+        strip = json.loads(json.dumps(disk))                            # v1.4.3 예외(현금 amt·stock segments) 를 뺀 나머지
         for c in strip["charts"]:
             for i in c["items"]:
                 i.pop("amt", None), i.pop("segments", None)
@@ -325,7 +325,7 @@ class T(unittest.TestCase):
         self.assertFalse(a["stale"])
         self.assertEqual(len(a["charts"]), 2)
 
-    # ---- vNEXT: 현금 amt · 증권사별 segments
+    # ---- v1.4.3: 현금 amt · 증권사별 segments
     def items_of(self, disk, key):
         return {i["name"]: i for c in disk["charts"] if c["key"] == key for i in c["items"]}
 
@@ -411,16 +411,16 @@ class T(unittest.TestCase):
 
     def test_board_html_amt_segments(self):
         html = (HERE / "board.html").read_text(encoding="utf-8")
-        self.assertIn("사무실 vNEXT", html)
+        self.assertIn("사무실 v1.4.3", html)
         self.assertIn("ch.key==='mix'&&it.name==='현금'&&typeof it.amt==='number'", html)
         self.assertIn("var BROKER={'토스':'#2f6fd6','빗썸':'#d23a2a','한투':'#2f8a57','메리츠':'#7b4bc4'}", html)
         self.assertIn("BROKER[g.broker]||c", html)                            # 키움 = 지금 색
         self.assertIn("segments:i.segments", html)
 
     def test_versions_vnext(self):
-        self.assertEqual(OB.VERSION, "vNEXT")
+        self.assertEqual(OB.VERSION, "v1.4.3")
         rec, _ = self.run_update(Http(sheet(MIX, STOCK)))
-        self.assertEqual(rec["version"], "vNEXT")
+        self.assertEqual(rec["version"], "v1.4.3")
 
     def test_board_has_assets_and_services_kept(self):
         src = (HERE / "office_board.py").read_text(encoding="utf-8")

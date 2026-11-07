@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_board.py   (사무실 v1.3.7 · 2026-11-06)
-#  · 사무실 vNEXT: assets 예외 2가지 전달 — (1) mix '현금' 항목의 amt(만원 ÷ 10 정수, 현금만) (2) stock 항목의 segments
+#  · 사무실 v1.4.3: assets 예외 2가지 전달 — (1) mix '현금' 항목의 amt(만원 ÷ 10 정수, 현금만) (2) stock 항목의 segments
 #    [{"broker": 키움·한투·메리츠·토스·빗썸, "val": 만원}] (증권사 이름·val 만 · 색은 board.html 이 정함 · 이상한 구간은 뺌)
 #  · 사무실 v1.4.2: assets 에 수익률 returns {month, monthly, yearly} 전달 (월 'YYYY-MM'·숫자만 검사 · 이상하면 뺌, 도넛·막대는 그대로)
 #  · 사무실 v1.3.7: 상황판 '자산 현황'(도넛 2개) 자료 assets 추가 — asset_board.py 가 만든 assets.json 을 읽기만 함
 #    (시트에 직접 닿지 않아 화면이 멈추지 않음 · 못 가져오면 마지막 값 + stale 표시) · 봇 신호등 표시는 board.html 에서 뺌, services 필드는 그대로
-#    · 금액 규칙 예외는 자산 현황(assets)에만: 이름·비율(%)·기준일만 보냄 (금액·계좌번호·토큰·주소 원문 없음) · vNEXT: + 현금 amt · stock segments
+#    · 금액 규칙 예외는 자산 현황(assets)에만: 이름·비율(%)·기준일만 보냄 (금액·계좌번호·토큰·주소 원문 없음) · v1.4.3: + 현금 amt · stock segments
 #  · 사무실 v1.0.61: 상황판 신호등 표시 순서 번호순(1·2·3·4·5·6·7·8) · 오늘 할 일·주문 안내 UI 삭제는 board.html에서, /api/board todo 필드는 그대로
 #  · 사무실 v1.0.60: 상황판 표시만 5번 사무실 비서 → 8번 사무실 비서로 변경 (서비스·기능 변경 없음, 통합 아님)
 #  · 사무실 v1.0.59: 팬딩룸 가격표 모음 = 과거 수집 + 매일 받는 가격표(날짜 기준 중복 없이) · 기간(가장 옛날~최근)·마지막 추가 시각
@@ -15,7 +15,7 @@
 # 사무실 상황판 데이터 (/api/board · 로그인 필요 · 보기 전용)
 #  · 주문·승인·설정 변경 기능 없음 — 웹에서 하는 일은 '서버 정리 실행' 요청 하나뿐 (server.py /api/server-care)
 #  · 금액·잔고·수량·계좌·토큰·주소 원문은 넣지 않음 (상태 글자·시각·버전만)
-#    — 예외: assets(자산 현황)만 이름·비율(%)·기준일 (사용자 승인 2026-11-06) · vNEXT: + 현금 amt(만원÷10) · stock 증권사별 segments val(만원). 계좌번호·토큰·주소 원문은 여기도 없음
+#    — 예외: assets(자산 현황)만 이름·비율(%)·기준일 (사용자 승인 2026-11-06) · v1.4.3: + 현금 amt(만원÷10) · stock 증권사별 segments val(만원). 계좌번호·토큰·주소 원문은 여기도 없음
 #  · 읽는 곳: systemctl show(서비스 상태) · /var/lib/bot-office/status.md(업데이트 비서가 쓰는 STATUS 복사본)
 #            · 팬딩/PC 감시 상태 파일 · office_health.json(바깥 접속 감시) · /proc(메모리·스왑)
 #  · 한계: 웹서버 계정은 서버 기록(journal)을 못 읽어 '마지막으로 실제 일한 시각' 대신 '실행 시작 시각'을 보여 줌
@@ -24,7 +24,7 @@ import json, math, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "vNEXT"
+VERSION = "v1.4.3"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
 ASSETS_FILE = R / "var/lib/bot-office/assets/assets.json"   # asset_board.py --write (타이머) 가 씀
