@@ -3,21 +3,21 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-07 12:06 (KST) · 계기: 업데이트 적용 (staging: 사무실 vNEXT: 현금 금액 표기 + 투자 종목 증권사별 색)
+- 갱신: 2026-11-07 13:25 (KST) · 계기: 업데이트 적용 (staging: 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT))
 
 ## 봇별 현재 상태
 
 | 봇 | 서비스 | 상태 | 버전 | 마지막 적용 | 내용 |
 |---|---|---|---|---|---|
 | 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-01 17:16 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
-| 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-07 09:42 KST부터) | v1.1.9 | 2026-11-07 09:43 | 2번 스나이퍼 v2.4.0 Case 93 [모의] 암살자 이식 (하드락 True, 실주문 없음) |
+| 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-07 13:24 KST부터) | v1.2.0 | 2026-11-07 13:25 | 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT) |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (11-05 09:02 KST부터) | v4.3.8 | 2026-11-05 09:02 | 3번 토스 적립 v4.3.8: R1 단계 단조화 + 정지·결정 중 알림 + 가격 0 가드 + N7 지수 20 |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-01 14:57 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-07 12:06 KST부터) | v1.4.3 | 2026-11-07 12:06 | 사무실 vNEXT: 현금 금액 표기 + 투자 종목 증권사별 색 |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-07 13:24 KST부터) | v1.4.4 | 2026-11-07 13:25 | 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT) |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-06 16:57 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-07 13:25 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-06 13:28 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-06 16:57 KST부터)
@@ -26,6 +26,8 @@
 
 ## 최근 적용 10건
 
+- 2026-11-07 13:25 · 5번 사무실 비서 v1.4.4 · bot_updater.py, office_secretary.py · 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT)
+- 2026-11-07 13:25 · 2번 토스 스나이퍼 v1.2.0 · main.py, tg_ui_plugin.py · 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT)
 - 2026-11-07 12:06 · 5번 사무실 비서 v1.4.3 · asset_board.py, board.html, office_board.py, test_asset_boar · 사무실 vNEXT: 현금 금액 표기 + 투자 종목 증권사별 색
 - 2026-11-07 09:43 · 2번 토스 스나이퍼 v1.1.9 · assassin_plugin.py, main.py, plugin_updater.py, quant_engine · 2번 스나이퍼 v2.4.0 Case 93 [모의] 암살자 이식 (하드락 True, 실주문 없음)
 - 2026-11-06 17:39 · 5번 사무실 비서 v1.4.2 · asset_board.py, board.html, office_board.py, test_asset_boar · 자산 현황 하이브리드: 도넛+막대+수익률 (사무실 vNEXT)
@@ -34,8 +36,6 @@
 - 2026-11-06 16:57 · 5번 사무실 비서 v1.3.9 · bot_updater.py, office_briefing.py, office_secretary.py · 가격·비용 메뉴 삭제 + 파기 파일 2개 삭제 준비 (사무실 vNEXT)
 - 2026-11-06 16:51 · 5번 사무실 비서 v1.3.8 · asset_board.py, test_asset_board.py · 자산 구성 도넛 1% 미만 숨김 (사무실 vNEXT)
 - 2026-11-06 15:30 · 5번 사무실 비서 v1.3.7 · asset_board.py, board.html, office_board.py, test_asset_boar · 상황판 자산 현황 도넛 2개 (사무실 vNEXT)
-- 2026-11-06 13:33 · 5번 사무실 비서 v1.3.6 · kiwoom_holdings.py · 키움 보유 종목 서버 가져오기 신규 (사무실 vNEXT)
-- 2026-11-06 13:28 · 5번 사무실 비서 v1.3.5 · fanding_vr6.py · VR6 판독 날짜 기준 수정 fanding_vr6 2.6.1 (사무실 vNEXT)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 

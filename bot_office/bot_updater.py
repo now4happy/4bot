@@ -37,7 +37,7 @@
 #                       hub.db·hub.db-wal·hub.db-shm 0666 으로 정리 (다른 계정으로 도는 봇도 신호를 쓸 수 있게 · best-effort · 예외 없음)
 #                       ② 8번 사무실 비서 대리 신호 — 사무실 웹(127.0.0.1:8765/healthz)이 200이면 60초에 1번 hub에 신호
 #                          (bot-office.service 의 ProtectHome 보호로 server.py 가 hub 폴더를 못 볼 수 있어서 · 웹 코드·유닛 무변경)
-#  · 사무실 vNEXT (2026-11-07): 하단 메뉴 2개 [🔄 업데이트 확인 | ☰ 메뉴] — 나머지 버튼은 ☰ 메뉴 안(menu_sub_keyboard) · ⬅ 처음 화면
+#  · 사무실 v1.4.4 (2026-11-07): 하단 메뉴 2개 [🔄 업데이트 확인 | ☰ 메뉴] — 나머지 버튼은 ☰ 메뉴 안(menu_sub_keyboard) · ⬅ 처음 화면
 #                       '메뉴'·'/menu' = 하위 메뉴 펼치기 · /start·/help·도움말·? = 사용법 + 처음 2개 (버튼 글자·명령 그대로)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
