@@ -42,7 +42,7 @@
 #  · 사무실 v1.4.6 (2026-11-08): ① .gitignore·*.example.json은 저장소 전용 문서라 classify에서 거부하지 않고 넘김
 #                       (alert-hub와 같은 방식 — 서버 적용 대상이 아님, 같이 묶인 다른 봇 업데이트가 막히지 않게 함)
 #                       ② NAMES에 meritz_laoer.service 추가 (메리츠 SOXL 무매) — targets.json 등록 뒤 적용 가능
-#  · 사무실 vNEXT: NAMES에 meritz_dca.service 추가 (메리츠 적립) — targets.json 등록 뒤 적용 가능
+#  · 사무실 v1.4.7: NAMES에 meritz_dca.service 추가 (메리츠 적립) — targets.json 등록 뒤 적용 가능
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
