@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.1.9 · 2026-11-07 09:43 (KST)
+- 파일: assassin_plugin.py, main.py, plugin_updater.py, quant_engine.py, quant_indicators_plugin.py, sniper_plugin.py, tg_ui_plugin.py, toss_api.py
+- 내용: 2번 스나이퍼 v2.4.0 Case 93 [모의] 암살자 이식 (하드락 True, 실주문 없음)
+- 브랜치: staging
+
 ## v1.1.8 · 2026-11-06 11:57 (KST)
 - 파일: defense_plugin.py, sniper_exit_plugin.py, toss_api.py
 - 내용: 2번 스나이퍼 v2.3.1 R1·R2 수동 주문 보호 (04:00·16:00 일괄 취소와 익절 스윕을 봇 주문만 대상으로 제한)
