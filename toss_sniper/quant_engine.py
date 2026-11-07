@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_engine.py (원작 quant_engine_core.py + 원작 quant_engine.py 병합)
+# 4bot 2번 v2.3.2 (2026-11-07): 원작 88298dc Case 92 이식 — 1층 공석 +1.00% 상승돌파 시 1분봉 Wilder RSI(14) <= 50.0 필터(REENTRY_BREAKOUT_MAX_RSI_50 · HOLD_BREAKOUT_RSI_OVER_50), -1.00% 눌림목은 무필터 그대로
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
@@ -108,6 +109,10 @@ SUB_UNLOCK_DROP_FROM_L1_PCT: float = float(
 # 🎯 4 & Case 59, Case 71, Case 72, Case 73, Case 84, Case 88: 상단 그리드 보유 중 1층 공석 시 60초 주기 눌림목/상승돌파 임계치(%)
 REENTRY_PULLBACK_DROP_PCT: float = -1.00
 REENTRY_BREAKOUT_RISE_PCT: float = 1.00
+# NEW [4bot v2.3.2 · 원작 88298dc Case 92 : 1층 공석 +1.00% 상승돌파(BREAKOUT_RELOAD) 전용 1분봉 Wilder RSI(14) <= 50.0 필터 상한 상수]
+REENTRY_BREAKOUT_MAX_RSI_50: float = float(
+    getattr(toss_api, "REENTRY_BREAKOUT_MAX_RSI_50", 50.0)
+)
 
 # [Case 84 & Case 88]: 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)
 NEW_CYCLE_BUY_CUTOFF_HM: int = int(
@@ -1054,16 +1059,20 @@ def evaluate_l2_only_hybrid_reentry_signal(
     min_upper_tier_price: float = 0.0,
     is_late_new_cycle_cutoff: bool = False,
     is_late_cutoff: Optional[bool] = None,
+    rsi_14: Optional[float] = None,
+    breakout_max_rsi: float = REENTRY_BREAKOUT_MAX_RSI_50,
 ) -> Dict[str, Any]:
     """
-    # [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73, Case 84 & Case 88]:
+    # MODIFIED [🎯 4 & Case 59, Case 67, Case 71, Case 72, Case 73, Case 84, Case 88 & Case 92]:
     본 그리드 상단 2층 ~ 7층(GRID_L2 ~ GRID_L7) 또는 서브 그리드 상단 2층 ~ 3층(GRID_L2 ~ GRID_L3) 지층이 존재하는 상태에서 1층이 공석일 때:
     - 현재가 > 2층 단가(ceil_p) 시에는 1층 > 2층 단가 역전을 막기 위해 HOLD_PREVENT_INVERSION 으로 차단(Case 73)하고,
     - 현재가 <= 2층 단가 안전 영역 내에서는:
-      1) 직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD)은 04:07 ~ 16:00 EST 전 매수 구간에서 100% 정상 승인하고,
-      2) 직전 익절가 대비 +1.00% 이상 상승돌파(BREAKOUT_RELOAD)는 04:07 ~ 15:29 EST 구간에서만 승인하되,
-         정규장 마감 30분 전(15:30 ~ 16:00 EST, late_cutoff == True) 구간에서는 장 막판 데드캣 숏스퀴즈 고점 추격으로 인한
-         시드고갈을 막기 위해 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단한다! (Case 84)
+      1) 직전 익절가 대비 -1.00% 이하 눌림목(PULLBACK_RELOAD)은 무필터(RSI 무관)로 04:07 ~ 16:00 EST 전 매수 구간에서 100% 정상 승인하고,
+      2) 직전 익절가 대비 +1.00% 이상 상승돌파(BREAKOUT_RELOAD)는:
+         - 정규장 마감 30분 전(15:30 ~ 16:00 EST, late_cutoff == True) 구간에서는 HOLD_LATE_SESSION_BREAKOUT_CUTOFF 로 원천 차단(Case 84)하며,
+         - 04:07 ~ 15:29 EST 구간에서는 1분봉 Wilder RSI(14) <= 50.0 (breakout_max_rsi) 조건을 결합하여,
+           단기 과열 구간(RSI(14) > 50.0) 돌파는 HOLD_BREAKOUT_RSI_OVER_50 으로 차단해 저점 -1.00% 눌림목 진입으로 유도하고
+           과매도 회복 초입(RSI(14) <= 50.0) 진성 추세 전환 돌파만 승인한다! (Case 92)
     """
     lp = safe_float(live_price, 0.0)
     anc = safe_float(anchor_price, 0.0)
@@ -1076,6 +1085,19 @@ def evaluate_l2_only_hybrid_reentry_signal(
         is_late_cutoff
         if is_late_cutoff is not None
         else is_late_new_cycle_cutoff
+    )
+
+    max_rsi_cap = safe_float(breakout_max_rsi, REENTRY_BREAKOUT_MAX_RSI_50)
+    has_rsi_filter = bool(
+        rsi_14 is not None
+        and safe_float(rsi_14, -1.0) > 0.0
+        and max_rsi_cap > 0.0
+    )
+    eff_rsi_val = (
+        round(safe_float(rsi_14, 50.0), 2) if rsi_14 is not None else 50.0
+    )
+    is_breakout_rsi_blocked = bool(
+        has_rsi_filter and eff_rsi_val > (max_rsi_cap + 1e-6)
     )
 
     ref_anchor = (
@@ -1105,6 +1127,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": is_breakout_rsi_blocked,
         }
 
     chg_from_exit_pct = ((lp - ref_anchor) / ref_anchor) * 100.0
@@ -1120,9 +1145,12 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": is_breakout_rsi_blocked,
         }
 
-    # 조건 A : -1.00% 이하 눌림목 재장전 (04:07 ~ 16:00 EST 전 매수 구간 100% 정상 허용)
+    # 조건 A : -1.00% 이하 눌림목 재장전 (무필터 · 04:07 ~ 16:00 EST 전 매수 구간 100% 정상 허용)
     if chg_from_exit_pct <= REENTRY_PULLBACK_DROP_PCT:
         return {
             "should_buy": True,
@@ -1133,9 +1161,12 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": False,
         }
 
-    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 : 15:30 ~ 16:00 EST 구간에서는 돌파 추격 원천 차단!)
+    # 조건 B : +1.00% 이상 상승돌파 재장전 (Case 84 15:30 돌파 차단 & Case 92 RSI(14) <= 50.0 필터 결합)
     if chg_from_exit_pct >= REENTRY_BREAKOUT_RISE_PCT:
         if late_cutoff:
             return {
@@ -1147,6 +1178,24 @@ def evaluate_l2_only_hybrid_reentry_signal(
                 "pullback_target_price": pullback_target_p,
                 "breakout_target_price": breakout_target_p,
                 "l2_ceiling_price": round(ceil_p, 4),
+                "rsi_14": eff_rsi_val,
+                "breakout_max_rsi": round(max_rsi_cap, 2),
+                "breakout_rsi_blocked": is_breakout_rsi_blocked,
+            }
+        # 🚨 [Case 92 핵심 방어 : +1.00% 상승돌파 시 1분봉 Wilder RSI(14) > 50.0 과열 구간이면 고점 추격 차단 -> -1.00% 눌림목 유도]
+        if is_breakout_rsi_blocked:
+            return {
+                "should_buy": False,
+                "signal_type": "HOLD_BREAKOUT_RSI_OVER_50",
+                "ref_anchor": round(ref_anchor, 4),
+                "quota_ref_price": round(ref_anchor, 4),
+                "chg_from_exit_pct": round(chg_from_exit_pct, 2),
+                "pullback_target_price": pullback_target_p,
+                "breakout_target_price": breakout_target_p,
+                "l2_ceiling_price": round(ceil_p, 4),
+                "rsi_14": eff_rsi_val,
+                "breakout_max_rsi": round(max_rsi_cap, 2),
+                "breakout_rsi_blocked": True,
             }
         return {
             "should_buy": True,
@@ -1157,6 +1206,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
             "pullback_target_price": pullback_target_p,
             "breakout_target_price": breakout_target_p,
             "l2_ceiling_price": round(ceil_p, 4),
+            "rsi_14": eff_rsi_val,
+            "breakout_max_rsi": round(max_rsi_cap, 2),
+            "breakout_rsi_blocked": False,
         }
 
     return {
@@ -1168,6 +1220,9 @@ def evaluate_l2_only_hybrid_reentry_signal(
         "pullback_target_price": pullback_target_p,
         "breakout_target_price": breakout_target_p,
         "l2_ceiling_price": round(ceil_p, 4),
+        "rsi_14": eff_rsi_val,
+        "breakout_max_rsi": round(max_rsi_cap, 2),
+        "breakout_rsi_blocked": is_breakout_rsi_blocked,
     }
 
 
@@ -3975,6 +4030,40 @@ def run_quant_engine_tdd() -> bool:
             sig_pull_ok["should_buy"] is True
             and sig_pull_ok["signal_type"] == "PULLBACK_RELOAD"
         ), f"TDD 실패(Case 73/84 눌림목 재장전 승인): {sig_pull_ok}"
+
+        # 5-b) [4bot v2.3.2 · 원작 88298dc Case 92] +1.00% 돌파 RSI(14) <= 50.0 필터 / -1.00% 눌림목 무필터 검증
+        assert abs(REENTRY_BREAKOUT_MAX_RSI_50 - 50.0) < 1e-6, "TDD 실패(Case 92 돌파 RSI 상한 상수 위반)"
+        _c92_brk = dict(
+            live_price=84.30,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            is_late_new_cycle_cutoff=False,
+        )
+        sig_brk_rsi_blocked = evaluate_l2_only_hybrid_reentry_signal(rsi_14=54.2, **_c92_brk)
+        assert (
+            sig_brk_rsi_blocked["should_buy"] is False
+            and sig_brk_rsi_blocked["signal_type"] == "HOLD_BREAKOUT_RSI_OVER_50"
+            and sig_brk_rsi_blocked["breakout_rsi_blocked"] is True
+        ), f"TDD 실패(Case 92 1층공석 +1.0% 돌파 시 RSI(14)>50 과열 차단 미작동): {sig_brk_rsi_blocked}"
+        sig_brk_rsi_ok = evaluate_l2_only_hybrid_reentry_signal(rsi_14=48.5, **_c92_brk)
+        assert (
+            sig_brk_rsi_ok["should_buy"] is True
+            and sig_brk_rsi_ok["signal_type"] == "BREAKOUT_RELOAD"
+            and sig_brk_rsi_ok["breakout_rsi_blocked"] is False
+        ), f"TDD 실패(Case 92 RSI<=50 안전 돌파 승인): {sig_brk_rsi_ok}"
+        sig_pull_rsi_hi = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=82.50,
+            anchor_price=83.41,
+            l2_book_price=85.00,
+            min_upper_tier_price=85.00,
+            is_late_new_cycle_cutoff=False,
+            rsi_14=62.5,
+        )
+        assert (
+            sig_pull_rsi_hi["should_buy"] is True
+            and sig_pull_rsi_hi["signal_type"] == "PULLBACK_RELOAD"
+        ), f"TDD 실패(Case 92 눌림목 무필터 재장전 승인): {sig_pull_rsi_hi}"
 
         reloaded_grid = vrev_add_quota_lot_and_merge_2tier(
             rem_uppers, 10, 80.50, 805.0, "REENTRY_1FL"
