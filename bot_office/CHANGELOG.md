@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.4.5 · 2026-11-07 13:46 (KST)
+- 파일: office_briefing.py, office_secretary.py
+- 내용: 브리핑 수동 --manual + 메뉴 사무실 주소 버튼 삭제 (office_briefing.py·office_secretary.py vNEXT)
+- 브랜치: staging
+
 ## v1.4.4 · 2026-11-07 13:25 (KST)
 - 파일: bot_updater.py, office_secretary.py
 - 내용: 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT)
