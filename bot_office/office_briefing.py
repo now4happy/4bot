@@ -29,6 +29,7 @@
      복리 또는 portion_mode 없음(구 원장) = 기존 공식 그대로 (순수 코어 자산)
   ② 시멘트추가(예비시드) 무제한: 참고 1줄(현재 회분·금액·총 횟수)만 — 필요 달러 계산에는 넣지 않음 · 표시 문구 '수혈'→'시멘트추가'
   ③ 지하층 참고 줄·보유 차감 1회·실패 조회 제외 목록 그대로
+- 사무실 vNEXT (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
@@ -1687,6 +1688,13 @@ def scheduled_run(now=None):
             commit_seen()
 
 
+def manual_run():
+    """7번 비서 🗞 브리핑 버튼용 수동 브리핑 — 주말·휴장에도 바로 보냄.
+    정기 일정(state.json)·휴장 알림(notice_sent)·'마지막으로 보여 준 값'(commit_seen)은 건드리지 않는다."""
+    sent = send(build())
+    print("전송 결과:", sent)
+
+
 
 if __name__ == "__main__":
     if "--balances" in sys.argv:
@@ -1696,5 +1704,7 @@ if __name__ == "__main__":
         print(text) if "--print" in sys.argv else send(text)
     elif "--print" in sys.argv:
         print(build())
+    elif "--manual" in sys.argv:
+        manual_run()
     else:
         scheduled_run()
