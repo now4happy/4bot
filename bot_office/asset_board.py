@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
+# vNEXT: (1) 자산 구성(mix)에서 '현금' 항목만 금액 amt 저장 — 시트 현금(만원) ÷ 10 반올림 정수 (예외: 다른 mix 항목엔 amt 없음)
+#        (2) 투자 종목(stock) 항목마다 증권사별 구간 segments=[{"broker","val"(만원)}] 저장 — E열 구성 칸
+#            E27:E30·E34:E35·E37:E38 을 추가로 읽음 (기존 범위 그대로) · val 0 구간은 뺌 · pct 는 지금처럼 B열 기준
+#            미국·한국·중국·일본관련주 = 키움(B열 값 그대로 1구간) · SOXL = 한투 E28 + 메리츠 E29 + 토스 E34
+#            TQQQ = 한투 E27 + 메리츠 E30 · 토스 해외주식 = 토스 E35 · 코인 = 빗썸 E37+E38 (1구간)
+#            E칸이 숫자가 아니면 그 항목만 segments 없음 (보드는 한 색으로 그림 · 오류 아님)
 # v1.4.2: 수익률 추가 — 월별 표 '입력정리'!A67:H78 에서 B(총자산)가 있는 마지막 월의 월 수익률(D)·1년 수익률(H)만 %로 저장
 #        (returns = {month, monthly, yearly} · 총자산 금액은 저장 안 함 · 표가 비었거나 D·H가 비면 returns 없음, 오류 아님)
 # v1.3.8: 자산 구성(mix) 도넛에서만 비율 1% 미만 항목 숨김 (합계·다른 항목 % 그대로) · mix 기본 이름 '간접자산'
@@ -12,15 +18,16 @@
 #  - 독립 파일: 서명(openssl)·HTTP 부품을 이 파일 안에 둠 (kiwoom_holdings.py 를 쓰지 않음)
 #  - 이름: A열 글자에서 앞에 붙은 '42.7% ' 같은 퍼센트를 떼고 씀 (보드가 계산한 % 와 이중 표시 방지)
 #  - 읽는 칸 (코드에 고정): '입력정리'!A14:Z14 (기준일), A83:B87 (자산 구성), A91:B99 (투자 종목), A67:H78 (월별 수익률)
+#                          + vNEXT: E27:E30, E34:E35, E37:E38 (투자 종목 증권사별 구성)
 #  - 저장: /var/lib/bot-office/assets/assets.json (0644) — 이름·비율(%)·기준일·가져온 시각·수익률(%)만.
-#          금액·계좌번호·토큰·주소는 저장하지 않음. 웹서버(office_board.py)는 이 파일만 읽음.
+#          금액·계좌번호·토큰·주소는 저장하지 않음. 예외(vNEXT): 현금 amt 1개 · stock segments 의 증권사별 val(만원)만. 웹서버(office_board.py)는 이 파일만 읽음.
 #  - 시트에 못 닿으면 이전 자료를 그대로 두고 error·tried 만 갱신 → 상황판은 '오래된 값'으로 표시
 # 사용:
 #   python3 asset_board.py            # dry-run (기본, 파일 안 씀) — 이름·비율만 출력
 #   python3 asset_board.py --write    # 파일에 기록 (타이머 bot-office-assets.timer 가 부르는 것)
 #   python3 asset_board.py --probe    # 시트에서 읽은 이름 칸·기준일 칸만 출력 (금액 출력 안 함)
 # ==========================================================
-import argparse, base64, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse, base64, json, math, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -43,7 +50,18 @@ HIDE_BELOW = {"mix": 1.0}   # 차트별: 반올림한 % 가 이 값 미만이면
 # 월별 표 (2026-01~12): A=월 B=총자산(만원) C=전월 차액 D=월 수익률 E=연초 대비 F=연초 수익률 G=전년 동월 H=1년 수익률
 RETURNS_RANGE = f"'{TAB}'!A67:H78"
 RETURNS_YEAR = 2026        # A열 글자에서 월을 못 읽을 때만 '행 순서 = 1~12월'로 씀
-READ_RANGES = (DATE_RANGE,) + tuple(c[2] for c in CHARTS) + (RETURNS_RANGE,)
+# vNEXT: 투자 종목 증권사별 구성 칸 (E열) · 행 번호 → 범위 안 위치
+SEG_RANGES = (f"'{TAB}'!E27:E30", f"'{TAB}'!E34:E35", f"'{TAB}'!E37:E38")
+SEG_ROWS = {27: (0, 0), 28: (0, 1), 29: (0, 2), 30: (0, 3), 34: (1, 0), 35: (1, 1), 37: (2, 0), 38: (2, 1)}
+KIWOOM = "키움"
+# stock 항목 순서(B91~B98)별 구간: (증권사, [E열 행]) · None = 키움 (B열 값 그대로 1구간)
+STOCK_SEGS = (None, None, None, None,
+              (("한투", (28,)), ("메리츠", (29,)), ("토스", (34,))),   # SOXL
+              (("한투", (27,)), ("메리츠", (30,))),                    # TQQQ
+              (("토스", (35,)),),                                      # 토스 해외주식
+              (("빗썸", (37, 38)),))                                   # 코인 (BTC+ETH)
+AMT_NAMES = {"mix": ("현금",)}   # 차트별: 금액(amt)을 저장하는 항목 이름 — 현금만
+READ_RANGES = (DATE_RANGE,) + tuple(c[2] for c in CHARTS) + SEG_RANGES + (RETURNS_RANGE,)
 TOTAL_TOL = 0.005          # 항목 합 vs 시트 합계 차이 허용 (0.5%)
 PCT_PREFIX = re.compile(r"^\s*[-+]?\d+(?:[.,]\d+)?\s*%\s*")   # A열 '42.7% 현금' 의 앞 퍼센트
 MONTH_RE = re.compile(r"(20\d\d)\s*[./\-년]\s*(\d{1,2})")
@@ -161,9 +179,37 @@ def base_date(row_values):
     return ""
 
 
-def chart(rows, defaults, hide_below=0.0):
+def amt10(v):
+    """만원 → ÷10 반올림(0.5 는 올림) 정수 · 예: 23481 → 2348"""
+    return int(math.floor(v / 10 + 0.5))
+
+
+def segments(seg_values, idx, b_val):
+    """stock 항목 idx 의 증권사별 구간 [{"broker","val"}] · val 0 구간 뺌 · E칸이 숫자가 아니면 None"""
+    spec = STOCK_SEGS[idx] if idx < len(STOCK_SEGS) else None
+    if spec is None:
+        return [{"broker": KIWOOM, "val": round(b_val, 1)}] if b_val > 0 else None
+    out = []
+    for broker, rows in spec:
+        tot = 0.0
+        for row in rows:
+            ri, pos = SEG_ROWS[row]
+            rng = list(seg_values[ri]) if ri < len(seg_values) else []
+            cell = (list(rng[pos]) if pos < len(rng) else []) + [""]
+            v = _num(cell[0])
+            if v is None or v < 0:
+                return None
+            tot += v
+        if tot > 0:
+            out.append({"broker": broker, "val": round(tot, 1)})
+    return out or None
+
+
+def chart(rows, defaults, hide_below=0.0, amt_names=(), seg_values=None):
     """rows = A·B 열 (항목 n줄 + 합계 1줄) → {"items":[{"name","pct"}], "check":"ok|diff|no_total", "zero":[...]}
-    hide_below: pct(전체 합 대비, 소수 첫째 자리 반올림) < hide_below 인 항목은 items 에서만 뺌 (pct == hide_below 는 보임)"""
+    hide_below: pct(전체 합 대비, 소수 첫째 자리 반올림) < hide_below 인 항목은 items 에서만 뺌 (pct == hide_below 는 보임)
+    amt_names: 이 이름 항목에만 "amt"(만원 ÷ 10 반올림 정수) 추가 (vNEXT · mix 의 현금만)
+    seg_values: 주면 각 항목에 증권사별 "segments" 추가 (vNEXT · stock 만, E열 구성 칸 값)"""
     n = len(defaults)
     rows = list(rows) + [[]] * (n + 1 - len(rows))
     names, vals = [], []
@@ -182,7 +228,18 @@ def chart(rows, defaults, hide_below=0.0):
         raise SheetError("항목 합이 0")
     tot = _num((list(rows[n]) + ["", ""])[1])
     check = "no_total" if not tot else ("ok" if abs(tot - s) <= abs(tot) * TOTAL_TOL else "diff")
-    items = [{"name": nm, "pct": round(v * 100 / s, 1)} for nm, v in zip(names, vals) if v > 0]
+    items = []
+    for k, (nm, v) in enumerate(zip(names, vals)):
+        if v <= 0:
+            continue
+        it = {"name": nm, "pct": round(v * 100 / s, 1)}
+        if nm in amt_names:
+            it["amt"] = amt10(v)
+        if seg_values is not None:
+            sg = segments(seg_values, k, v)
+            if sg:
+                it["segments"] = sg
+        items.append(it)
     items = [i for i in items if i["pct"] >= hide_below]
     return {"items": items, "check": check, "zero": [nm for nm, v in zip(names, vals) if v <= 0]}
 
@@ -224,7 +281,8 @@ def build(values):
         out["returns"] = ret
     for key, title, rng, defaults in CHARTS:
         try:
-            c = chart(values.get(rng, []), defaults, HIDE_BELOW.get(key, 0.0))
+            segv = [values.get(r, []) for r in SEG_RANGES] if key == "stock" else None
+            c = chart(values.get(rng, []), defaults, HIDE_BELOW.get(key, 0.0), AMT_NAMES.get(key, ()), segv)
             c.update(key=key, title=title)
             out["charts"].append(c)
         except SheetError as e:
@@ -251,7 +309,7 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "v1.4.2", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "vNEXT", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
     if prev.get("returns"):

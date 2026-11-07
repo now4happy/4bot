@@ -2,8 +2,10 @@
 # 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
 # 사무실 v1.3.8: 자산 구성 1% 미만 숨김 테스트 추가
 # 사무실 v1.4.2: 수익률(월별 표 A67:H78 → returns) · office_board returns 전달 · 보드 하이브리드(도넛+막대) 테스트 추가
+# 사무실 vNEXT: 현금 amt(만원÷10 정수, 현금만) · stock 증권사별 segments (E27:E30·E34:E35·E37:E38) · 옛 assets.json 호환 테스트 추가
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from pathlib import Path
 
@@ -40,13 +42,19 @@ def ret_rows(upto=11, nov_d=-0.0773, nov_h=0.00466):
     return rows
 
 
+# 가짜 E열 구성 칸 (STOCK 기준: SOXL 380 = 한투 200 + 메리츠 100 + 토스 80 · TQQQ 250 = 한투 150 + 메리츠 100
+#                  · 토스 해외주식 140 · 코인 220 = BTC 200 + ETH 20)
+SEG = ([[150], [200], [100], [100]], [[80], [140]], [[200], [20]])   # E27:E30 · E34:E35 · E37:E38
+
+
 def sheet(mix, stock, date="2026.11.6", mix_total=None, stock_total=None, mix_names=MIX_NAMES, stock_names=STOCK_NAMES,
-          ret=None):
+          ret=None, seg=SEG):
     rows = lambda names, vals, tot: [[n, v] for n, v in zip(names, vals)] + [["합계", sum(v for v in vals if isinstance(v, int)) if tot is None else tot]]
     return {"valueRanges": [{"values": [["기준일", date]]},
                             {"values": rows(mix_names, mix, mix_total)},
-                            {"values": rows(stock_names, stock, stock_total)},
-                            {"values": ret_rows() if ret is None else ret}]}
+                            {"values": rows(stock_names, stock, stock_total)}]
+            + [{"values": v} for v in seg]
+            + [{"values": ret_rows() if ret is None else ret}]}
 
 
 class Http:
@@ -91,7 +99,11 @@ class T(unittest.TestCase):
         self.assertEqual(len(stock["items"]), 8)                       # 8개 항목 모두
         self.assertAlmostEqual(sum(i["pct"] for i in stock["items"]), 100, delta=0.3)
         self.assertEqual({i["name"]: i["pct"] for i in stock["items"]}["한국관련주"], round(2000 * 100 / 4030, 1))
-        raw = json.dumps(disk, ensure_ascii=False)
+        strip = json.loads(json.dumps(disk))                            # vNEXT 예외(현금 amt·stock segments) 를 뺀 나머지
+        for c in strip["charts"]:
+            for i in c["items"]:
+                i.pop("amt", None), i.pop("segments", None)
+        raw = json.dumps(strip, ensure_ascii=False)
         for amount in ("4030", "3000", "2000", "5000"):                   # 금액·합계 원문이 파일에 없음
             self.assertNotIn(amount, raw)
         self.assertEqual(oct((TMP / "assets.json").stat().st_mode & 0o777), "0o644")
@@ -312,6 +324,103 @@ class T(unittest.TestCase):
         self.assertTrue(a["ok"])
         self.assertFalse(a["stale"])
         self.assertEqual(len(a["charts"]), 2)
+
+    # ---- vNEXT: 현금 amt · 증권사별 segments
+    def items_of(self, disk, key):
+        return {i["name"]: i for c in disk["charts"] if c["key"] == key for i in c["items"]}
+
+    def test_cash_amt_only(self):
+        for cash, want in ((23481, 2348), (23485, 2349), (500, 50), (1004, 100), (1005, 101)):
+            _, disk = self.run_update(Http(sheet([cash, 3000, 900, 600], STOCK)))
+            mix = self.items_of(disk, "mix")
+            self.assertEqual(mix["현금"]["amt"], want)
+            self.assertIsInstance(mix["현금"]["amt"], int)
+            self.assertEqual(mix["현금"]["amt"], int(Decimal(cash / 10).quantize(Decimal(1), ROUND_HALF_UP)))
+            self.assertFalse([n for n, i in mix.items() if n != "현금" and "amt" in i])   # 현금 외 mix 엔 amt 없음
+            self.assertFalse([n for n, i in self.items_of(disk, "stock").items() if "amt" in i])
+        _, disk = self.run_update(Http(sheet(MIX, STOCK, mix_names=MIX_REAL, stock_names=STOCK_REAL)))   # '42.7% 현금' 도
+        self.assertEqual(self.items_of(disk, "mix")["현금"]["amt"], 50)
+
+    def test_stock_segments(self):
+        _, disk = self.run_update(Http(sheet(MIX, STOCK)))
+        st = self.items_of(disk, "stock")
+        soxl = st["SOXL"]["segments"]
+        self.assertEqual([g["broker"] for g in soxl], ["한투", "메리츠", "토스"])
+        self.assertEqual(sum(g["val"] for g in soxl), STOCK[4])                    # = B95
+        self.assertEqual([g["broker"] for g in st["TQQQ"]["segments"]], ["한투", "메리츠"])
+        self.assertEqual(sum(g["val"] for g in st["TQQQ"]["segments"]), STOCK[5])  # = B96
+        for name in ("미국", "한국관련주", "중국관련주", "일본관련주"):
+            self.assertEqual(st[name]["segments"], [{"broker": "키움", "val": STOCK[STOCK_NAMES.index(name)]}])
+        self.assertEqual(st["토스 해외주식"]["segments"], [{"broker": "토스", "val": 140}])
+        self.assertEqual(st["코인"]["segments"], [{"broker": "빗썸", "val": 220}])   # BTC+ETH 1구간
+        self.assertEqual({n: i["pct"] for n, i in st.items()}["한국관련주"], round(2000 * 100 / 4030, 1))   # % 는 B열 기준 그대로
+        self.assertFalse([i for i in self.items_of(disk, "mix").values() if "segments" in i])
+        self.assertEqual(AB.SEG_RANGES, ("'입력정리'!E27:E30", "'입력정리'!E34:E35", "'입력정리'!E37:E38"))
+        self.assertEqual(AB.READ_RANGES[:4], ("'입력정리'!A14:Z14", "'입력정리'!A83:B87", "'입력정리'!A91:B99", "'입력정리'!E27:E30"))
+
+    def test_segments_zero_dropped_and_bad_cell(self):
+        seg = ([[150], [380], [0], [100]], [[""], [140]], [[200], [20]])          # 메리츠 P·토스 스나이퍼 0/빈칸
+        _, disk = self.run_update(Http(sheet(MIX, STOCK, seg=seg)))
+        self.assertEqual(self.items_of(disk, "stock")["SOXL"]["segments"], [{"broker": "한투", "val": 380}])
+        seg = ([[150], ["#REF!"], [100], [100]], [[80], [140]], [[200], [20]])
+        rec, disk = self.run_update(Http(sheet(MIX, STOCK, seg=seg)))
+        st = self.items_of(disk, "stock")
+        self.assertNotIn("segments", st["SOXL"])                               # 그 항목만 한 색 · 오류 아님
+        self.assertIn("segments", st["TQQQ"])
+        self.assertEqual(rec["error"], "")
+        _, disk = self.run_update(Http(sheet(MIX, STOCK, seg=([], [], []))))     # E칸 모두 빈칸
+        st = self.items_of(disk, "stock")
+        self.assertNotIn("segments", st["SOXL"])
+        self.assertEqual(len(st["미국"]["segments"]), 1)
+
+    def test_office_board_passes_amt_segments(self):
+        self.run_update(Http(sheet(MIX, STOCK)))
+        OB.ASSETS_FILE = TMP / "assets.json"
+        a = OB.assets()
+        mix = {i["name"]: i for c in a["charts"] if c["key"] == "mix" for i in c["items"]}
+        st = {i["name"]: i for c in a["charts"] if c["key"] == "stock" for i in c["items"]}
+        self.assertEqual(mix["현금"]["amt"], 50)
+        self.assertFalse([n for n, i in mix.items() if n != "현금" and "amt" in i])
+        self.assertEqual([g["broker"] for g in st["SOXL"]["segments"]], ["한투", "메리츠", "토스"])
+        for g in st["SOXL"]["segments"]:
+            self.assertEqual(set(g), {"broker", "val"})                       # 색 코드 없음
+        p = TMP / "seg_bad.json"
+        d = json.loads(OB.ASSETS_FILE.read_text(encoding="utf-8"))
+        d["charts"][1]["items"][4]["segments"] = [{"broker": "해킹", "val": 1}, {"broker": "토스", "val": "x"},
+                                                  {"broker": "한투", "val": float("nan")}, "oops", {"broker": "메리츠", "val": 5}]
+        d["charts"][0]["items"][1]["amt"] = 999                               # 현금 아닌 항목 amt → 버림
+        p.write_text(json.dumps(d))
+        OB.ASSETS_FILE = p
+        a = OB.assets()
+        st = {i["name"]: i for c in a["charts"] if c["key"] == "stock" for i in c["items"]}
+        self.assertEqual(st["SOXL"]["segments"], [{"broker": "메리츠", "val": 5.0}])
+        self.assertFalse([i for c in a["charts"] for i in c["items"] if "amt" in i and i["name"] != "현금"])
+
+    def test_old_assets_json_without_amt_segments(self):
+        old = {"version": "v1.4.2", "fetched_kst": "2026-11-06 10:00", "base_date": "2026.11.6", "error": "",
+               "charts": [{"key": "mix", "title": "자산 구성", "check": "ok", "zero": [],
+                           "items": [{"name": "현금", "pct": 42.7}, {"name": "주식·ETF", "pct": 57.3}]},
+                          {"key": "stock", "title": "투자 종목", "check": "ok", "zero": [],
+                           "items": [{"name": "SOXL", "pct": 60.0}, {"name": "미국", "pct": 40.0}]}]}
+        p = TMP / "old.json"
+        p.write_text(json.dumps(old, ensure_ascii=False))
+        OB.ASSETS_FILE = p
+        a = OB.assets()
+        self.assertTrue(a["ok"])
+        self.assertFalse([i for c in a["charts"] for i in c["items"] if "amt" in i or "segments" in i])
+
+    def test_board_html_amt_segments(self):
+        html = (HERE / "board.html").read_text(encoding="utf-8")
+        self.assertIn("사무실 vNEXT", html)
+        self.assertIn("ch.key==='mix'&&it.name==='현금'&&typeof it.amt==='number'", html)
+        self.assertIn("var BROKER={'토스':'#2f6fd6','빗썸':'#d23a2a','한투':'#2f8a57','메리츠':'#7b4bc4'}", html)
+        self.assertIn("BROKER[g.broker]||c", html)                            # 키움 = 지금 색
+        self.assertIn("segments:i.segments", html)
+
+    def test_versions_vnext(self):
+        self.assertEqual(OB.VERSION, "vNEXT")
+        rec, _ = self.run_update(Http(sheet(MIX, STOCK)))
+        self.assertEqual(rec["version"], "vNEXT")
 
     def test_board_has_assets_and_services_kept(self):
         src = (HERE / "office_board.py").read_text(encoding="utf-8")
