@@ -1,4 +1,4 @@
-# 메리츠 SOXL 무한매수 봇 (meritz_laoer) — v1.0.0
+# 메리츠 SOXL 무한매수 봇 (meritz_laoer) — v1.0.2
 
 메리츠 3번 계좌(Super365)에서 SOXL 라오어 무한매수(V14)를 돌리는 **새 봇**. hantu_laoer 는 수정하지 않는다.
 
@@ -15,3 +15,6 @@
 4. 입고 확인 → `transfer_confirmed=true`, 토스 스나이퍼 정지·미체결 0건 → `toss_sniper_stopped_confirmed=true`.
 5. `python3 main.py --inject-start` (메리츠 잔고 = start.qty 일 때만 장부 시작).
 6. `enabled=true` (dry_run=true 로 며칠 모의) → 승인 뒤 `dry_run=false`.
+
+## 직접 산 주식 반영 (v1.0.2)
+`python3 main.py --add-shares --qty N --avg X` — 메리츠 잔고 = 장부 + N 일 때만 수량 +N, 원금 +N×X, 평단 = 원금÷수량. enabled=true·미국장 주문 시간(미 동부 order_time_et~order_deadline_et)엔 거부. 주문 안 냄. 전후를 텔레그램·`data/add_shares_log.json` 에 남김.

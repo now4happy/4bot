@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v1.0.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v1.0.2)
 # 메리츠 SOXL 무한매수(V14) 새 봇 — 실행·안전장치
+# v1.0.2 (2026-11-08): --add-shares --qty N --avg X 추가 (직접 산 주식을 지정 평단으로 장부 반영)
+#   - 메리츠 잔고 == 장부 + N 일 때만 · enabled=true·미국장 주문 시간이면 거부 · 주문 없음 · 전후 로그·텔레그램
 # v1.0.0 (2026-11-08): 첫 버전
 #   - 전략: hantu_laoer/strategy_v14.py 를 그대로 복사해 씀 (분할 매수 · 평단 익절 후 처음부터 다시 시작)
 #   - 주문: 메리츠 즉시주문 (LOC·MOC·지정가). 미국 동부 order_time_et~order_deadline_et 에 하루 1번
@@ -13,6 +15,7 @@
 #   python3 main.py --check            주문 없이 점검 + 오늘 주문 계획 미리보기 (enabled 와 무관)
 #   python3 main.py --inject-start     입고 확인 뒤 장부 시작 (settings.start 로 원금·수량 덮어쓰기)
 #   python3 main.py --clear-halt       정지 표시 해제 (원인 확인 후)
+#   python3 main.py --add-shares --qty N --avg X   직접 산 N주를 평단 $X 로 장부에 더함 (주문 없음)
 #   python3 main.py                    상시 실행 (서비스용)
 # ==========================================================
 import argparse
@@ -35,7 +38,7 @@ from config import ConfigManager, load_settings, validate_settings   # noqa: E40
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
 from notifier import Notifier, _read_token, token_fp   # noqa: E402
 
-BOT_VERSION = "v1.0.0"
+BOT_VERSION = "v1.0.2"
 EST = ZoneInfo("America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -380,6 +383,72 @@ def cmd_check(s):
     return 0
 
 
+# ---------------------------------------------------------------- 추가 투입 (주문 없음)
+def t_and_target(s, cfg, pos):
+    """표시용: strategy_v14 와 같은 식 (T = 수량×평단 ÷ (시드÷분할), 목표 = 평단×(1+익절%) 올림)"""
+    from strategy_v14 import V14Strategy
+    t = s["symbol"]
+    split, seed = cfg.get_split_count(t), cfg.get_seed(t)
+    avg = cfg.avg_price(pos)
+    portion = seed / split if split > 0 else 0.0
+    tv = round(int(pos["qty"]) * avg / portion, 4) if portion > 0 else 0.0
+    tgt = V14Strategy(cfg)._ceil(avg * (1 + cfg.get_target_profit(t) / 100.0)) if avg > 0 else 0.0
+    return tv, tgt
+
+
+def cmd_add_shares(s, qty, avg, api=None):
+    """메리츠 잔고 == 장부 + qty 일 때만 장부 갱신 → 0(성공)/1(거부)"""
+    bad = []
+    if qty is None or qty < 1:
+        bad.append("--qty 는 1 이상 정수")
+    if avg is None or not (avg > 0) or avg != avg or avg == float("inf"):
+        bad.append("--avg 는 0 보다 큰 숫자")
+    if s.get("enabled"):
+        bad.append("enabled=true — 봇을 끄고(enabled=false) 다시 실행")
+    n = now_et()
+    if n.weekday() < 5 and _hm(s["order_time_et"], datetime.time(10, 5)) <= n.time() <= _hm(s["order_deadline_et"], datetime.time(15, 40)):
+        bad.append(f"미국장 주문 시간 (미 동부 {s['order_time_et']}~{s['order_deadline_et']}) — 끝난 뒤 다시 실행")
+    bad += validate_settings(s) + check_identity(s)[0]
+    state = s["state_dir"]
+    os.makedirs(os.path.join(state, "data"), exist_ok=True)
+    with in_dir(state):
+        cfg = ConfigManager(s)
+        pos = cfg.get_position()
+        if not pos:
+            bad.append("장부 시작 전 (--inject-start 먼저)")
+        if bad:
+            print("✗ 추가 투입 반영 안 함:\n" + "\n".join("- " + b for b in bad))
+            return 1
+        api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
+        hold, _, _ = api.holding(s["symbol"])
+        want = int(pos["qty"]) + qty
+        note = Notifier(s["telegram_file"], dry_run=s.get("dry_run", True))
+        if hold != want:
+            msg = f"✗ 추가 투입 반영 안 함: 메리츠 잔고 {hold}주 ≠ 장부 {pos['qty']}주 + {qty}주 = {want}주 (주문 없음)"
+            print(msg)
+            logging.warning(msg)
+            note.send("⛔ " + msg[2:])
+            return 1
+        t0, g0 = t_and_target(s, cfg, pos)
+        before, after = cfg.add_shares(qty, avg, n.strftime("%Y-%m-%d"))
+        t1, g1 = t_and_target(s, cfg, after)
+        a0, a1 = cfg.avg_price(before), cfg.avg_price(after)
+        msg = (f"➕ 추가 투입 반영 {qty}주 @ ${avg:.4f} (주문 없음)\n"
+               f"전: {before['qty']}주 · 원금 ${before['principal']:,.2f} · 평단 ${a0:.4f} · T {t0:.2f} · 목표 ${g0:.2f}\n"
+               f"후: {after['qty']}주 · 원금 ${after['principal']:,.2f} · 평단 ${a1:.4f} · T {t1:.2f} · 목표 ${g1:.2f}")
+        hist = cfg._load_json("data/add_shares_log.json", [])
+        hist.append({"at": n.isoformat(), "qty": qty, "avg": avg, "hold": hold,
+                     "before": {"qty": before["qty"], "principal": before["principal"], "avg": a0},
+                     "after": {"qty": after["qty"], "principal": after["principal"], "avg": a1}})
+        cfg._save_json("data/add_shares_log.json", hist)
+        logging.info(msg.replace("\n", " | "))
+        print(msg)
+        if cfg.get_halt():
+            print(f"ℹ️ 정지 표시는 그대로 있음: {cfg.get_halt().get('reason')} (확인 후 --clear-halt)")
+        note.send(msg)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="메리츠 SOXL 무한매수 봇")
     g = ap.add_mutually_exclusive_group()
@@ -387,7 +456,10 @@ def main(argv=None):
     g.add_argument("--check", action="store_true")
     g.add_argument("--inject-start", action="store_true")
     g.add_argument("--clear-halt", action="store_true")
+    g.add_argument("--add-shares", action="store_true", help="직접 산 주식을 지정 평단으로 장부 반영 (--qty N --avg X)")
     ap.add_argument("--overwrite", action="store_true", help="--inject-start 때 기존 장부 덮어쓰기")
+    ap.add_argument("--qty", type=int, help="--add-shares: 추가한 주식 수 (1 이상)")
+    ap.add_argument("--avg", type=float, help="--add-shares: 추가한 주식의 평단 (달러)")
     a = ap.parse_args(argv)
     s = load_settings()
     if a.fingerprint:
@@ -395,6 +467,8 @@ def main(argv=None):
         return 0
     if a.check:
         return cmd_check(s)
+    if a.add_shares:
+        return cmd_add_shares(s, a.qty, a.avg)
     state = s["state_dir"]
     os.makedirs(os.path.join(state, "data"), exist_ok=True)
     if a.clear_halt:

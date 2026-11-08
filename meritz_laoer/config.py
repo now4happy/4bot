@@ -1,6 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v1.0.0)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v1.0.2)
 # 메리츠 SOXL 무한매수(V14) 새 봇 — 설정·장부
+# v1.0.2 (2026-11-08): add_shares 추가 — 사용자가 직접 산 주식을 지정 평단으로 장부에 더함 (기존 장부 형식 그대로)
 # v1.0.0 (2026-11-08): 첫 버전. hantu_laoer/config.py 에서 V14 가 쓰는 함수만 같은 이름·같은 동작으로 옮김
 #   - 옮긴 함수(동작 그대로): get_reverse_state, set_reverse_state, apply_reverse_daily_settlement,
 #     increment_reverse_day, get_seed/set_seed, get_split_count, get_target_profit, get_fee, get_compound_rate
@@ -288,6 +289,30 @@ class ConfigManager:
                    "source": "settings.start (입고 평단 미사용)"}
             self._save_json(self.FILES["POSITION"], pos)
             return pos, True
+
+    def add_shares(self, qty, avg, date_et):
+        """사용자가 직접 추가한 주식을 지정 평단으로 장부에 더함 → (변경 전, 변경 후).
+        수량 += qty, 원금 += qty × avg, 평단 = 원금 ÷ 수량 (avg_price 와 같은 4자리 규칙). 입고 평단은 쓰지 않음"""
+        qty, avg = int(qty), _f(avg)
+        if qty < 1 or avg <= 0:
+            raise ValueError("qty 는 1 이상 정수, avg 는 0 보다 커야 함")
+        with GlobalThrottle.get_file_lock(self.FILES["POSITION"]):
+            pos = self.get_position()
+            if not pos:
+                raise RuntimeError("장부 없음 (start 주입 전)")
+            before = dict(pos)
+            amt = qty * avg
+            pos["qty"] = int(pos["qty"]) + qty
+            pos["principal"] = round(_f(pos["principal"]) + amt, 4)
+            pos["cycle_buy_total"] = round(_f(pos.get("cycle_buy_total")) + amt, 4)
+            ledger = self._load_json(self.FILES["LEDGER"], [])
+            ledger.append({"id": len(ledger) + 1, "date": date_et, "ticker": pos["ticker"], "side": "BUY",
+                           "price": avg, "qty": qty, "avg_price": self.avg_price(before),
+                           "exec_id": f"add_{datetime.datetime.now(EST).strftime('%Y%m%dT%H%M%S')}",
+                           "is_reverse": bool(self.get_reverse_state(pos["ticker"]).get("is_active"))})
+            self._save_json(self.FILES["LEDGER"], ledger)
+            self._save_json(self.FILES["POSITION"], pos)
+            return before, pos
 
     def avg_price(self, pos):
         q = int(_f((pos or {}).get("qty")))
