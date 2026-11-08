@@ -1,3 +1,10 @@
+# 메리츠 SOXL 무매 변경 기록
+
+## v1.0.2 · 2026-11-08 10:11 (KST)
+- 파일: config.py, main.py
+- 내용: 메리츠 무매 평단 조절 추가 meritz_laoer v1.0.2
+- 브랜치: staging
+
 # meritz_laoer.service 변경 기록
 
 ## v1.0.1 · 2026-11-08 03:52 (KST)
