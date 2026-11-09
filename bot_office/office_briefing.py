@@ -29,6 +29,7 @@
      복리 또는 portion_mode 없음(구 원장) = 기존 공식 그대로 (순수 코어 자산)
   ② 시멘트추가(예비시드) 무제한: 참고 1줄(현재 회분·금액·총 횟수)만 — 필요 달러 계산에는 넣지 않음 · 표시 문구 '수혈'→'시멘트추가'
   ③ 지하층 참고 줄·보유 차감 1회·실패 조회 제외 목록 그대로
+- 사무실 vNEXT (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
@@ -1423,81 +1424,155 @@ def _lt(text):
     return str(text).replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _hantu_need():
+    """한투 1회분 2종 합계. 파일 조회 실패와 정상적인 설정 기본값을 구분한다."""
+    data = HOME / "hantu_laoer/data"
+    missing = object()
+    seed = load(data / "seed_config.json", missing)
+    split = load(data / "split_config.json", missing)
+    reverse = load(data / "reverse_config.json", missing)
+    if not all(isinstance(x, dict) for x in (seed, split, reverse)):
+        return None
+    total, valid = 0.0, 0
+    for ticker in ("SOXL", "TQQQ"):
+        try:
+            rev = reverse.get(ticker) or {}
+            if not isinstance(rev, dict):
+                raise ValueError("reverse config")
+            if rev.get("is_active", False):
+                amount = float(rev.get("rem_cash", 0.0))
+                portion = amount / 4.0 if amount > 0 else 0.0
+            else:
+                portion = float(seed.get(ticker, 6720.0)) / float(split.get(ticker, 40.0))
+            if not math.isfinite(portion) or portion < 0:
+                raise ValueError("invalid portion")
+            total += portion
+            valid += 1
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+    return total if valid else None
+
+
+def _fanding_need(kind, now=None):
+    """기존 팬딩 계산 함수 우선, import 불가 시 동일한 상태·매수 줄 공식 적용."""
+    path = R / "var/lib/bot-office/fanding" / ("state.json" if kind == "P" else "vr6.json")
+    missing = object()
+    st = load(path, missing)
+    if not isinstance(st, dict):
+        return None
+    try:
+        if kind == "P":
+            import fanding_trade as ft
+            sheet = ft.fx_current_sheet(st, now=now)
+            return 0.0 if sheet is None else (float(v) if (v := ft.fx_need(sheet)) is not None else None)
+        import fanding_vr6 as fv
+        plan = fv._fx_plan(st, now=now)
+        return 0.0 if plan is None else float(fv.need_usd(plan))
+    except Exception:
+        pass
+    try:
+        if kind == "P":
+            today = (now or datetime.now(KST)).strftime("%Y%m%d")
+            plans = st.get("sheets") or {}
+            selected = next((p for _, p in sorted(plans.items(), reverse=True)
+                             if p.get("status") not in ("cancelled", "expired")
+                             and str(p.get("us_date") or "") >= today), None)
+        else:
+            today = (now or datetime.now(KST)).date().isoformat()
+            plans = st.get("plans") or {}
+            selected = next((p for _, p in sorted(plans.items(), reverse=True)
+                             if p.get("status") not in ("cancelled", "expired")
+                             and (p.get("end") or "") >= today), None)
+        if selected is None:
+            return 0.0
+        from decimal import Decimal
+        mult = int(selected["mult"])
+        buys = selected["parsed"]["buys"]
+        # P: raw_lines의 qty * mult; VR6: 줄마다 mult주.
+        amount = sum((Decimal(str(row["price"])) *
+                      (int(row["qty"]) * mult if kind == "P" else mult)
+                      for row in buys), Decimal(0))
+        return float(amount) if kind == "P" else round(float(amount), 2)
+    except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
+        return None
+
+
+def _bithumb_need(now, accounts):
+    missing = object()
+    cfg = load(BITHUMB_DIR / "bot_config.json", missing)
+    st = load(BITHUMB_DIR / "bot_state.json", missing)
+    if not isinstance(cfg, dict) or not isinstance(st, dict):
+        return None
+    try:
+        if not cfg.get("power", True):
+            return 0.0
+        coins = cfg.get("coins") or {}
+        methods = cfg.get("coin_methods") or {}
+        done = st.get("last_action_date") or {}
+        today = (now or datetime.now(KST)).astimezone(KST).date().isoformat()
+        total = 0.0
+        for coin, base in coins.items():
+            base = float(base)
+            if not math.isfinite(base):
+                return None
+            if base <= 0 or int(methods.get(coin, 1)) == 2 or done.get(coin) == today:
+                continue
+            a = (accounts or {}).get(coin, {})
+            bal, avg = float(a.get("balance") or 0), float(a.get("avg_buy_price") or 0)
+            cur = float(bithumb_price(coin)) if bal > 0 and avg > 0 else 0.0
+            half = bal > 0 and avg > 0 and cur > 0 and (cur / avg - 1) * 100 >= 1.0
+            total += max(5000, int(base / 2) if half else base)
+        return total
+    except (TypeError, ValueError, KeyError, ArithmeticError, OSError):
+        return None
+    except Exception:
+        return None
+
+
 def section_need(now, notes):
-    """💰 필요 금액 — 토스 달러 필요액은 section_dollar_check(v1.1.5 계산) 결과를 그대로 쓴다."""
+    """💰 필요 금액: 오늘 매수 예정 합계 (부족액이 아님)."""
     info = {}
     section_dollar_check(now, info)
     toss = info["toss"]
     usd, total = info["usd"], info["total"]
-    if usd is None:
-        notes.append("토스 달러 보유 조회 실패 → 충전 필요 판정 보류")
     try:
         krw = toss.buying_power("KRW")
-    except Exception as e:
+    except Exception:
         krw = None
-        notes.append(f"토스 원화 보유 조회 실패({html.escape(type(e).__name__)})")
     krw_need = info["krw_need"] if info["master"] else None
     groups = [("토스", [("USD", _cell(usd, "USD"), _cell(total, "USD"), _icon(usd, total)),
                         ("KRW", _cell(krw, "KRW"), _cell(krw_need, "KRW"), _icon(krw, krw_need))])]
-
     meritz = []
     for label, by_currency, reason in meritz_fetch():
         est = _meritz_amount(by_currency, "USD", "estm_frcr_amt") if by_currency is not None else None
-        if est is None:
-            notes.append(f"메리츠 {label} 보유 조회 실패" + (f"({html.escape(str(reason)[:60])})" if reason else ""))
-        meritz.append((label, _cell(est, "USD"), DASH, ""))
+        need = _fanding_need(label, now)
+        meritz.append((label, _cell(est, "USD"), _cell(need, "USD"), _icon(est, need)))
     groups.append(("메리츠", meritz))
-    notes.append("메리츠 필요: 계산식 없음 → '-' (지어내지 않음)")
-
     try:
-        kis = kis_balances()   # v1.3.2: 1번만 호출해 KRW·USD 둘 다 받는다
+        kis = kis_balances()
     except Exception:
         kis = {}
     kis_krw, kis_usd = kis.get("KRW"), kis.get("USD")
-    if kis_usd is None:
-        notes.append("한투 달러: 잔고를 못 받아 조회 불가로 표시")
-    if kis_krw is None:
-        notes.append("한투 원화: 잔고를 못 받아 0원으로 표시 (표의 KRW 0)")
-    groups.append(("한투", [("USD", _cell(kis_usd, "USD"), DASH, ""),
+    h_need = _hantu_need()
+    groups.append(("한투", [("USD", _cell(kis_usd, "USD"), _cell(h_need, "USD"), _icon(kis_usd, h_need)),
                            ("KRW", _cell(kis_krw or 0.0, "KRW"), DASH, "")]))
-
     try:
-        bt = balance_value(bithumb_accounts().get("KRW", {}).get("balance"))
+        accs = bithumb_accounts()
+        bt = balance_value(accs.get("KRW", {}).get("balance"))
     except Exception:
-        bt = None
-        notes.append("빗썸 원화 보유 조회 실패")
-    groups.append(("빗썸", [("KRW", _cell(bt, "KRW"), DASH, "")]))
-
+        accs, bt = None, None
+    b_need = _bithumb_need(now, accs)
+    groups.append(("빗썸", [("KRW", _cell(bt, "KRW"), _cell(b_need, "KRW"), _icon(bt, b_need))]))
     table = need_table(groups)
-    out = ["💰 <b>필요 금액</b>", "<pre>" + "\n".join(html.escape(x, quote=False) for x in table) + "</pre>",
-           f"{ICON_NEED} 충전 필요 · {ICON_OK} 충분 · KRW 단위 원",
-           "🧾 토스 달러 필요 = " + info["sn_part"] + " + " + info["dca_part"]]
-    out += [_lt(x.strip()) for x in info["state"] + info["warn"]]
-    if info["acct"]:
-        notes.append(info["acct"])
-    notes += [_lt(x.strip().removeprefix("↳ ")) for x in info["note"]]
-    if info["excluded"]:
-        notes.append("토스 달러 합산 제외: " + "; ".join(info["excluded"]) + " → 실제 필요액은 더 클 수 있음")
-    return out
+    return ["💰 <b>필요 금액</b>", "<pre>" + "\n".join(html.escape(x, quote=False) for x in table) + "</pre>"]
 
 
 def build(now=None, notes=None):
-    """간결 브리핑 (v1.1.8): 필요 금액 표 · 봇 한 줄 · 이상 봇 · 전달 노트."""
-    notes = list(notes or [])
+    """정기·수동 브리핑 본문은 필요 금액 표만 표시."""
     try:
-        out = section_need(now, notes)
-    except Exception as e:
-        out = ["💰 <b>필요 금액</b>", "계산 실패"]
-        notes.append(f"필요 금액 계산 실패({html.escape(type(e).__name__)})")
-    try:
-        out += ["", status_one_line()]
-        bot_lines, _ = section_bots()
-        if bot_lines:
-            out.extend(bot_lines)
+        out = section_need(now, list(notes or []))
     except Exception:
-        out.extend(["", "⚠️ <b>봇 상태</b>", "🔴 상태 조회 실패"])
-    if notes:
-        out += ["", "📝 <b>전달 노트</b>"] + ["· " + n for n in notes]
+        out = ["💰 <b>필요 금액</b>", "계산 실패"]
     return with_separators(out)
 
 
