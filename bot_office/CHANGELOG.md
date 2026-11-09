@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.1 · 2026-11-09 13:45 (KST)
+- 파일: fanding_trade.py
+- 내용: 팬딩 배수 맞추기(따라잡기 매수) 추가 fanding_trade vNEXT (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.5.0 · 2026-11-09 13:09 (KST)
 - 파일: bot_updater.py, office_briefing.py, office_secretary.py
 - 내용: 사무실 vNEXT: 비서 브리핑 텔레그램 중단 + need.json 발행 + 브리핑 버튼 제거 (A안 뮤즈 브리핑)
