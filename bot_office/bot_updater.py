@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-09): need.json 상태 업로드 경로 추가
 # BOT_UPDATER_V2 — GitHub에 올라온 수정(main 이외의 브랜치)을 감지 → 텔레그램 [✅ 업데이트] 버튼 → 안전 확인 후 적용
 #  · Gemini/Jules/딥시크 등 누가 올려도 main 이 아닌 브랜치면 감지 (main 은 서버가 적용한 결과만 올라가는 곳)
 #  · 1~4번 봇 + 5번 사무실 비서(저장소 bot_office/ → 서버 /opt/bot-office) · 업데이트 비서 자신도 업데이트(실패 시 2분 뒤 자동 복구)
@@ -439,6 +440,7 @@ def offer(st, br, sha):
 # ---------------------------------------------------------------- STATUS.md (자동 현재 상태)
 STATUS_FILE = "STATUS.md"
 SNIPER_TIERS_FILE = "sniper_tiers.json"
+NEED_FILE = "need.json"
 EXTRA_UNITS = {SECRETARY_UNIT: "7번 비서(브리핑·PC감시)", FANDING_UNIT: "5번 팬딩 가격표", "bot-office-tunnel.service": "사무실 터널",
                SELF_UNIT: "6번 업데이트 비서"}
 _CL_RE = re.compile(r"^## (\S+) · ([\d-]+ [\d:]+) \(KST\)\n((?:- .*\n?)*)", re.M)
@@ -643,9 +645,11 @@ def status_daily(st, force=False):
         return "staging 에 대기 중인 업로드가 있어 건너뜀"
     changed = write_status("매일 점검" if not force else "수동 기록")
     tiers_written = write_sniper_tiers()
-    if not changed and not tiers_written:
+    need_exists = os.path.exists(os.path.join(REPO, NEED_FILE))
+    if not changed and not tiers_written and not need_exists:
         return "바뀐 내용 없음"
-    git("add", "-f", "--", *([STATUS_FILE] if changed else []), *([SNIPER_TIERS_FILE] if tiers_written else []))
+    git("add", "-f", "--", *([STATUS_FILE] if changed else []), *([SNIPER_TIERS_FILE] if tiers_written else []),
+        *([NEED_FILE] if need_exists else []))
     if not git("diff", "--cached", "--name-only")[1].strip():
         return "바뀐 내용 없음"
     git("commit", "-qm", "상태 기록: STATUS.md")
@@ -920,6 +924,8 @@ def apply(st, key):
             git("add", "-f", "--", STATUS_FILE)
         if write_sniper_tiers():
             git("add", "-f", "--", SNIPER_TIERS_FILE)
+        if os.path.exists(os.path.join(REPO, NEED_FILE)):
+            git("add", "-f", "--", NEED_FILE)
     except Exception as e:
         print("STATUS.md 작성 실패:", type(e).__name__, e, flush=True)
     if git("diff", "--cached", "--name-only")[1].strip():

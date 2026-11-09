@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""사무실 비서 정기 브리핑 (평일 09:00 · 16:30 KST, systemd timer)
+"""사무실 비서 필요 금액 JSON 발행 (평일 09:00 · 16:30 KST, systemd timer)
 - 읽기 전용: 주문·설정 변경 없음. 잔고 조회만 합니다.
-- 시장분석실 점수 / 오늘 필요한 달러·원화 / 봇 상태 / 결재·리스크 현황을 사무실 비서 텔레그램으로 보냅니다.
+- 오늘 필요한 달러·원화와 보유 현금은 need.json에 기록합니다 (텔레그램 정기 전송 없음).
 - 사무실 v1.0.47 (2026-10-28): ① 토스 토큰 공유 연결 복구(10/27 다른 업로드로 지워졌던 것) — 2·3번 봇과 같은 토큰 사용
   ② 스나이퍼 현 장부 {"SOXL": {...}} 읽기 복구 ③ 간결 브리핑에 '토스 달러 확인'(2번 다음 1회분 + 3번 미국 적립 vs 보유 달러)
   ④ 봇 5개·서버 상태 한 줄 요약 (이상 있으면 기존처럼 상세)
@@ -29,11 +29,12 @@
      복리 또는 portion_mode 없음(구 원장) = 기존 공식 그대로 (순수 코어 자산)
   ② 시멘트추가(예비시드) 무제한: 참고 1줄(현재 회분·금액·총 횟수)만 — 필요 달러 계산에는 넣지 않음 · 표시 문구 '수혈'→'시멘트추가'
   ③ 지하층 참고 줄·보유 차감 1회·실패 조회 제외 목록 그대로
+- 사무실 vNEXT (2026-11-09): need.json 발행·정기 텔레그램 중단 (A안)
 - 사무실 v1.4.9 (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
-import base64, hashlib, hmac, html, json, math, os, subprocess, sys, time, urllib.parse, urllib.request, uuid
+import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -45,6 +46,7 @@ except Exception:
 
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "home/gieokkim"
+REPO = Path(os.environ.get("U_REPO", "/home/gieokkim"))
 TOSS_DIR, SNIPER_DIR, BITHUMB_DIR = HOME / "toss_dca_bot", HOME / "toss_sniper", HOME / "bithumb_laoeo_bot"
 TELEGRAM_CFG = R / "etc/bot-office/telegram.json"
 OFFICE_URL = R / "etc/bot-office/office_url"
@@ -886,19 +888,6 @@ SEEN = R / "var/lib/bot-office/briefing-calendar/seen.json"
 _NEW_SEEN = {}
 
 
-def commit_seen():
-    """정기 전송이 성공했을 때만 '마지막으로 보여 준 값'을 저장한다(수동 미리보기는 저장 안 함)."""
-    if not _NEW_SEEN:
-        return
-    data = load(SEEN, {})
-    data.update(_NEW_SEEN)
-    SEEN.parent.mkdir(parents=True, exist_ok=True)
-    tmp = SEEN.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    tmp.replace(SEEN)
-    _NEW_SEEN.clear()
-
-
 def section_money(now):
     """필요 달러/원화 계산. (lines, 조언 목록)"""
     now_kst, now_est = now.astimezone(KST), now.astimezone(EST)
@@ -1347,83 +1336,6 @@ def section_server_care():
         lines.append("🚨 실패한 서비스: 조회 실패")
     return lines
 
-def with_separators(lines):
-    """섹션 사이 빈 줄을 구분선으로 바꾼다(연속/처음/끝 구분선 제거)."""
-    out = []
-    for line in lines:
-        line = SEP if line == "" else line
-        if line == SEP and (not out or out[-1] == SEP):
-            continue
-        out.append(line)
-    while out and out[-1] == SEP:
-        out.pop()
-    return "\n".join(out)
-
-
-# ------------------------------------------------------------------ v1.1.8 필요 금액 표 (형식만)
-ICON_NEED, ICON_OK = "🚨", "😌"   # 범례: 🚨 충전 필요 / 😌 충분
-DASH = "-"   # 고정폭 표 안에서는 ASCII 하이픈 (en dash '–'는 글꼴마다 폭이 달라 줄이 어긋남)
-
-
-def disp_width(text, hangul=2.0):
-    """고정폭 칸 수: 전각(W/F) hangul 칸(기본 2), 나머지 1칸, 결합 문자 0칸.
-    hangul 값을 바꿔 폰 글꼴(한글 ≈1.5~1.9칸)에서도 줄이 맞는지 검증할 때 쓴다."""
-    import unicodedata
-    w = 0.0
-    for ch in text:
-        if unicodedata.combining(ch):
-            continue
-        w += hangul if unicodedata.east_asian_width(ch) in ("W", "F") else 1
-    return w
-
-
-def _pad(text, width, right=False):
-    gap = " " * max(0, int(round(width - disp_width(text))))
-    return gap + text if right else text + gap
-
-
-def _cell(value, cur):
-    """표 칸은 ASCII 만 (한글 폭이 폰마다 달라 숫자 열이 어긋나지 않게). 통화는 구분 칸(USD·KRW)에 적는다."""
-    if value is None:
-        return DASH
-    return f"${value:,.2f}" if cur == "USD" else f"{value:,.0f}"
-
-
-def _icon(have, need):
-    if have is None or need is None:
-        return ""
-    return ICON_NEED if have + 0.005 < need else ICON_OK
-
-
-def need_table(groups):
-    """groups = [(계좌, [(구분, 보유 칸, 필요 칸, 아이콘), ...]), ...] → 고정폭 줄 목록 (HTML 이스케이프 전).
-    · 머리말 '계좌 보유 필요'는 맨 위 1번. 계좌 이름은 묶음마다 1번, 그 아래 구분 줄(USD·KRW·P·VR6)을 묶는다.
-    · 숫자 줄은 왼쪽부터 ASCII 만 써서 어느 글꼴에서도 열이 맞는다. 아이콘은 줄 끝(정렬 밖)."""
-    rows = [(sub, have, need, icon) for _, items in groups for sub, have, need, icon in items]
-    w_sub = max([len(r[0]) for r in rows] + [0])
-    w_label = max(int(disp_width("계좌")), 2 + w_sub)
-    w_have = max([len(r[1]) for r in rows] + [int(disp_width("보유"))])
-    w_need = max([len(r[2]) for r in rows] + [int(disp_width("필요"))])
-    # 머리말 여백은 한글 1.75칸 기준(폰 ≈1.5칸 ~ PC 2칸의 가운데)으로 잡아 어느 글꼴에서도 어긋남을 줄인다.
-    h = 1.75
-    end_have = w_label + 1 + w_have
-    end_need = end_have + 1 + w_need
-    gap1 = max(1, int(round(end_have - 2 * h - 2 * h)))
-    gap2 = max(1, int(round(end_need - end_have - 2 * h)))
-    out = ["계좌" + " " * gap1 + "보유" + " " * gap2 + "필요"]
-    for name, items in groups:
-        out.append(name)
-        for sub, have, need, icon in items:
-            out.append(("  " + sub.ljust(w_label - 2) + " " + have.rjust(w_have) + " " + need.rjust(w_need)
-                        + (" " + icon if icon else "")).rstrip())
-    return out
-
-
-def _lt(text):
-    """태그 없는 문장의 < > 만 이스케이프 (이미 들어간 &amp; 등은 그대로)."""
-    return str(text).replace("<", "&lt;").replace(">", "&gt;")
-
-
 def _hantu_need():
     """한투 1회분 2종 합계. 파일 조회 실패와 정상적인 설정 기본값을 구분한다."""
     data = HOME / "hantu_laoer/data"
@@ -1529,51 +1441,130 @@ def _bithumb_need(now, accounts):
         return None
 
 
-def section_need(now, notes):
-    """💰 필요 금액: 오늘 매수 예정 합계 (부족액이 아님)."""
+def _auto_fx(kind):
+    """메리츠 자동환전 토글: 키 미설정은 off, 상태 읽기 실패는 unknown."""
+    path = R / "var/lib/bot-office/fanding" / ("state.json" if kind == "P" else "vr6.json")
+    missing = object()
+    st = load(path, missing)
+    if not isinstance(st, dict):
+        return "unknown"
+    try:
+        if kind == "P":
+            import fanding_trade as ft
+            on = ft.auto_fx_state(st)[0]
+        else:
+            import fanding_vr6 as fv
+            on = fv.auto_fx_state(st)[0]
+        return "on" if on else "off"
+    except Exception:
+        # 함수 import 실패 시 같은 상태 JSON의 auto_fx.on을 직접 읽는다.
+        state = st.get("auto_fx", {})
+        if not isinstance(state, dict):
+            return "unknown"
+        return "on" if bool(state.get("on", False)) else "off"
+
+
+def _need_number(value):
+    """JSON number 또는 null만 허용. 비정상적인 잔고/계산값은 null."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _need_line(currency, holding, need, auto_fx, label=None):
+    holding, need = _need_number(holding), _need_number(need)
+    line = {"currency": currency, "holding": holding, "need": need,
+            "sufficient": holding >= need if holding is not None and need is not None else None,
+            "auto_fx": auto_fx}
+    if label is not None:
+        line = {"label": label, **line}
+    return line
+
+
+def need_data(now=None):
+    """오늘 매수 예정 합계·보유 현금·자동환전 상태 (읽기 전용)."""
+    now = (now or datetime.now(KST)).astimezone(KST)
     info = {}
-    section_dollar_check(now, info)
+    section_dollar_check(now, info)  # 토스 계산식·원장 읽기 변경 없음
     toss = info["toss"]
-    usd, total = info["usd"], info["total"]
     try:
         krw = toss.buying_power("KRW")
     except Exception:
         krw = None
     krw_need = info["krw_need"] if info["master"] else None
-    groups = [("토스", [("USD", _cell(usd, "USD"), _cell(total, "USD"), _icon(usd, total)),
-                        ("KRW", _cell(krw, "KRW"), _cell(krw_need, "KRW"), _icon(krw, krw_need))])]
+    accounts = [{"name": "토스", "lines": [
+        _need_line("USD", info["usd"], info["total"], "unavailable"),
+        _need_line("KRW", krw, krw_need, "unavailable")]}]
+
     meritz = []
     for label, by_currency, reason in meritz_fetch():
         est = _meritz_amount(by_currency, "USD", "estm_frcr_amt") if by_currency is not None else None
-        need = _fanding_need(label, now)
-        meritz.append((label, _cell(est, "USD"), _cell(need, "USD"), _icon(est, need)))
-    groups.append(("메리츠", meritz))
+        meritz.append(_need_line("USD", est, _fanding_need(label, now), _auto_fx(label), label=label))
+    accounts.append({"name": "메리츠", "lines": meritz})
+
     try:
         kis = kis_balances()
     except Exception:
         kis = {}
-    kis_krw, kis_usd = kis.get("KRW"), kis.get("USD")
-    h_need = _hantu_need()
-    groups.append(("한투", [("USD", _cell(kis_usd, "USD"), _cell(h_need, "USD"), _icon(kis_usd, h_need)),
-                           ("KRW", _cell(kis_krw or 0.0, "KRW"), DASH, "")]))
+    accounts.append({"name": "한투", "lines": [
+        _need_line("USD", kis.get("USD"), _hantu_need(), "unavailable"),
+        _need_line("KRW", kis.get("KRW"), None, "unavailable")]})
+
     try:
         accs = bithumb_accounts()
         bt = balance_value(accs.get("KRW", {}).get("balance"))
     except Exception:
         accs, bt = None, None
-    b_need = _bithumb_need(now, accs)
-    groups.append(("빗썸", [("KRW", _cell(bt, "KRW"), _cell(b_need, "KRW"), _icon(bt, b_need))]))
-    table = need_table(groups)
-    return ["💰 <b>필요 금액</b>", "<pre>" + "\n".join(html.escape(x, quote=False) for x in table) + "</pre>"]
+    accounts.append({"name": "빗썸", "lines": [
+        _need_line("KRW", bt, _bithumb_need(now, accs), "na")]})
+
+    totals = {"USD": 0.0, "KRW": 0.0}
+    for account in accounts:
+        for line in account["lines"]:
+            if line["need"] is not None:
+                totals[line["currency"]] += line["need"]
+    return {"ok": True, "as_of_kst": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "accounts": accounts, "total_need_usd": totals["USD"],
+            "total_need_krw": totals["KRW"]}
 
 
-def build(now=None, notes=None):
-    """정기·수동 브리핑 본문은 필요 금액 표만 표시."""
+def write_need_json(now=None):
+    """REPO/need.json 원자적 발행. 계산 오류도 ok=false JSON으로 발행."""
+    stamp = (now or datetime.now(KST)).astimezone(KST).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        out = section_need(now, list(notes or []))
-    except Exception:
-        out = ["💰 <b>필요 금액</b>", "계산 실패"]
-    return with_separators(out)
+        result = need_data(now)
+    except Exception as exc:
+        result = {"ok": False, "error": (type(exc).__name__ + ": " + str(exc))[:160],
+                  "as_of_kst": stamp}
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=REPO,
+                                         prefix=".need_", suffix=".tmp", delete=False) as out:
+            tmp = out.name
+            json.dump(result, out, ensure_ascii=False, allow_nan=False, indent=2)
+            out.write("\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, REPO / "need.json")
+        tmp = None
+        try:
+            owner = pwd.getpwuid(REPO.stat().st_uid)
+            os.chown(REPO / "need.json", owner.pw_uid, owner.pw_gid)
+        except OSError:
+            pass
+        return True
+    except Exception as exc:
+        print("need.json 기록 실패:", type(exc).__name__, str(exc)[:120], flush=True)
+        return False
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def message_chunks(text, limit=3500):
@@ -1671,104 +1662,13 @@ def send(text):
 
 
 
-# Official NYSE full-day calendar, reviewed 2026-10-25. Early closes are open.
-# https://www.nyse.com/trade/hours-calendars
-US_CLOSED = {
-    2026: "01-01 01-19 02-16 04-03 05-25 06-19 07-03 09-07 11-26 12-25",
-    2027: "01-01 01-18 02-15 03-26 05-31 06-18 07-05 09-06 11-25 12-24",
-    2028: "01-17 02-21 04-14 05-29 06-19 07-04 09-04 11-23 12-25",
-}
-
-
-def korean_session(day):
-    """Read existing KIS token only. Never infer open from missing data."""
-    try:
-        env = read_env(Path(os.environ.get("BRIEF_KIS_ENV", str(HOME / ".env"))))
-        key, secret, cano = (os.environ.get(k) or env.get(k, "") for k in ("APP_KEY", "APP_SECRET", "CANO"))
-        if not key or not secret or not cano.isdigit() or len(cano) != 8:
-            return None
-        token = load(Path(os.environ.get("BRIEF_KIS_TOKEN", str(HOME / "data" / f"token_{cano}.dat"))), {}).get("token")
-        if not token:
-            return None
-        params = {"BASS_DT": day.strftime("%Y%m%d"), "CTX_AREA_FK": "", "CTX_AREA_NK": ""}
-        result = http("GET", "https://openapi.koreainvestment.com:9443/uapi/domestic-stock/v1/quotations/chk-holiday?" + urllib.parse.urlencode(params),
-                      {"authorization": "Bearer " + token, "appkey": key, "appsecret": secret,
-                       "tr_id": "CTCA0903R", "custtype": "P"})
-        if result.get("rt_cd") != "0":
-            return None
-        rows = result.get("output", [])
-        rows = [rows] if isinstance(rows, dict) else rows
-        matches = [r for r in rows if isinstance(r, dict) and r.get("bass_dt") == params["BASS_DT"]]
-        if len(matches) == 1 and matches[0].get("opnd_yn") in ("Y", "N"):
-            return matches[0]["opnd_yn"] == "Y"
-    except Exception:
-        pass
-    return None
-
-
-def kr_label(kr, now_kst):
-    if kr is False:
-        return "휴장"
-    if kr is None:
-        return "일정 확인 불가 (한국투자 조회)"
-    hm = now_kst.strftime("%H:%M")
-    if hm < "09:00":
-        return "개장일 · 09:00 정규장 시작 예정"
-    if hm < "15:30":
-        return "개장일 · 정규장 진행 중 (09:00~15:30)"
-    return "개장일 · 정규장 마감 (15:30)"
-
-
 def scheduled_run(now=None):
-    """Scheduled delivery only; manual balances and preview remain available."""
-    import fcntl
+    """평일 정기 실행: 텔레그램 전송 없이 need.json만 발행."""
     now = (now or datetime.now(KST)).astimezone(KST)
-    day = now.date()
-    if day.weekday() >= 5:
+    if now.weekday() >= 5:
         print("주말 정기 브리핑 생략 (KST)")
         return
-    folder = R / "var/lib/bot-office/briefing-calendar"
-    folder.mkdir(parents=True, exist_ok=True)
-    with (folder / "lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        path = folder / "state.json"
-        cache = load(path, {})
-        if cache.get("date") != day.isoformat():
-            # Cache even a failed query: KIS asks for at most one daily lookup.
-            cache = {"date": day.isoformat(), "kr": korean_session(day), "notice_sent": False}
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(cache), encoding="utf-8")
-            tmp.replace(path)
-        kr = cache.get("kr")
-        # Same calendar date as KST: the US session opening tonight, not NY's previous day.
-        us = None if day.year not in US_CLOSED else day.strftime("%m-%d") not in US_CLOSED[day.year].split()
-        # v1.1.8: 평일 휴장일만 알린다 (진행 중·예정 문구 없음). 조회 실패는 휴장으로 단정하지 않고 전달 노트로.
-        closed = (["🇰🇷 한국장 휴장"] if kr is False else []) + (["🇺🇸 미국장 휴장 (오늘 밤 정규장)"] if us is False else [])
-        notes = (["한국장 일정 조회 실패(한국투자) → 휴장 여부 미확인"] if kr is None else []) + \
-                (["미국장 일정 확인 불가(달력 갱신 필요) → 휴장 여부 미확인"] if us is None else [])
-        lines = (["📅 <b>휴장 · " + day.isoformat() + "</b>"] + closed) if closed else []
-        if closed and not cache.get("notice_sent"):
-            if send("\n".join(lines)):
-                cache["notice_sent"] = True
-                tmp = path.with_suffix(".tmp")
-                tmp.write_text(json.dumps(cache), encoding="utf-8")
-                tmp.replace(path)
-        if kr is False and us is False:
-            print("양 시장 휴장: 일반 브리핑 생략")
-            return
-        text = ("\n".join(lines) + "\n" + SEP + "\n" if lines else "") + build(notes=notes)
-        sent = send(text)
-        print("전송 결과:", sent)
-        if sent:
-            commit_seen()
-
-
-def manual_run():
-    """7번 비서 🗞 브리핑 버튼용 수동 브리핑 — 주말·휴장에도 바로 보냄.
-    정기 일정(state.json)·휴장 알림(notice_sent)·'마지막으로 보여 준 값'(commit_seen)은 건드리지 않는다."""
-    sent = send(build())
-    print("전송 결과:", sent)
-
+    print("need.json 발행 결과:", write_need_json(now))
 
 
 if __name__ == "__main__":
@@ -1778,8 +1678,6 @@ if __name__ == "__main__":
         text = section_balances(which=which)
         print(text) if "--print" in sys.argv else send(text)
     elif "--print" in sys.argv:
-        print(build())
-    elif "--manual" in sys.argv:
-        manual_run()
+        print(json.dumps(need_data(), ensure_ascii=False, allow_nan=False, indent=2))
     else:
         scheduled_run()

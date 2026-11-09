@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 vNEXT (2026-11-09): 브리핑 버튼·명령 제거, 잔액·메뉴 유지
 # 사무실 v1.4.4 (2026-11-07): 하단 메뉴 2개 [🗞 브리핑 | ☰ 메뉴] — 나머지는 ☰ 메뉴 안 · 📊 조회 글자도 메뉴를 보여 줌 (버튼 글자·명령 그대로)
 # 사무실 v1.4.5 (2026-11-07): ① 🗞 브리핑 = 수동 브리핑(--manual, 주말에도 전송) ② ☰ 메뉴에서 🔗 사무실 주소 버튼 삭제 (🏢 사무실만 · /주소 글자 명령 그대로)
 # 사무실 v1.0.57 (2026-10-28): ① 🏢 사무실 버튼 (지금 사무실 주소를 바로 여는 버튼) ② ✍️ 수정 요청·결재(옛 결재함)·📋 현황 기능 삭제
@@ -10,7 +11,7 @@
 # V4 (2026-10-26): 비서봇에서 팬딩 모듈 import 및 팬딩 콜백 제거. 팬딩은 전용 봇에서만 처리.
 # V3 (2026-10-26): 하단 메인 메뉴·하위 메뉴 정리
 # 텔레그램 "사무실 비서" 대화 담당 (항상 실행: bot-office-secretary.service)
-#  - 하단 메뉴: 🗞 브리핑 · ☰ 메뉴(잔액·PC 상태·사무실·도움말·메인 메뉴)
+#  - 하단 메뉴: ☰ 메뉴(잔액·PC 상태·사무실·도움말·메인 메뉴)
 #  - 코드 수정은 GitHub staging → 6. Update 승인 방식만 씀 (이 비서는 수정 요청·결재를 받지 않음)
 #  안전: 등록된 대표님 채팅방(chat_id)에서 온 것만 처리.
 # ==========================================================
@@ -57,7 +58,6 @@ KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 
 HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "▫️ <b>☰ 메뉴 → 🏢 사무실</b> : 사무실 상황판을 바로 여는 버튼\n"
-        "▫️ <b>브리핑</b> : 지금 바로 비서 브리핑 받기\n"
         "▫️ <b>☰ 메뉴 → 💰 잔액</b> → 회사 선택(한국투자·토스·메리츠·빗썸·전체) : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
         "▫️ <b>☰ 메뉴 → 🖥 PC 상태</b> : 한국 PC 연결·매직스플릿 실행 확인\n"
         "▫️ /주소 : 지금 사무실 주소 확인 (/주소변경 으로 고정 도메인 이동)\n"
@@ -153,21 +153,21 @@ class TG:
 # 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안 · 취소는 아래 다른 버튼).
 HOME = "🏠 메인 메뉴"
 MENU_OPEN = "☰ 메뉴"
-MAIN_LABELS = [["🗞 브리핑", MENU_OPEN]]
+MAIN_LABELS = [[MENU_OPEN]]
 SUB_LABELS = {
     "menu": [["💰 잔액", "🖥 PC 상태"], ["🏢 사무실", "❓ 도움말"], [HOME]],
 
 }
 MENU_KB = [[{"text": t} for t in row] for row in MAIN_LABELS]
 SUB_KB = {k: [[{"text": t} for t in row] for row in v] for k, v in SUB_LABELS.items()}
-MENU_ALIAS = {"🗞 브리핑": "브리핑", "❓ 도움말": "/help", "🖥 PC 상태": "/pc_status"}
+MENU_ALIAS = {"❓ 도움말": "/help", "🖥 PC 상태": "/pc_status"}
 BAL_ACTIONS = {"🏦 한국투자": "kis", "🔷 토스": "toss", "🏛 메리츠": "meritz", "🪙 빗썸": "bithumb", "🧾 전체": "all"}
 BAL_ROWS = [[{"text": "🏦 한국투자", "callback_data": "bl:kis"}, {"text": "🔷 토스", "callback_data": "bl:toss"}],
             [{"text": "🏛 메리츠", "callback_data": "bl:meritz"}, {"text": "🪙 빗썸", "callback_data": "bl:bithumb"}],
             [{"text": "🧾 전체", "callback_data": "bl:all"}, {"text": "✖ 닫기", "callback_data": "mn:x"}]]
 BAL_NAME = {v: k for k, v in BAL_ACTIONS.items()}
 MENU_SPECIAL = (MENU_OPEN, "📊 조회", "🏢 사무실", "💰 잔액", HOME)
-CANCEL_WORDS = ("브리핑", "잔액", "도움말", "help", "?")
+CANCEL_WORDS = ("잔액", "도움말", "help", "?")
 CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
 def office_open(tg):
     """🏢 사무실: 지금 사무실 주소를 여는 버튼 (주소는 /etc/bot-office/office_url · 임시 터널이면 바뀔 때마다 자동 갱신)"""
@@ -217,9 +217,6 @@ def handle_message(tg, st, msg):
         balance(tg, "all"); return
     if low in ("/사무실", "사무실", "/office"):
         office_open(tg); return
-    if low in ("/brief", "브리핑", "/briefing"):
-        tg.send("🗞 브리핑을 준비하고 있어요…")
-        subprocess.Popen([sys.executable, BRIEFING, "--manual"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return
     if text.startswith("/"):
         tg.send("모르는 명령이에요. <b>도움말</b>을 보내 보세요."); return
     tg.send("아래 버튼 메뉴로 써 주세요. 봇 코드 수정은 이제 GitHub staging → 6. Update 승인으로만 해요.", keyboard=MENU_KB)
