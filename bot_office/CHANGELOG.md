@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.2 · 2026-11-09 16:02 (KST)
+- 파일: office_briefing.py
+- 내용: 사무실 vNEXT: 토스 준비금 스나이퍼만 계산 — 3번 적립 합산 제외 (office_briefing vNEXT)
+- 브랜치: staging
+
 ## v1.5.1 · 2026-11-09 13:45 (KST)
 - 파일: fanding_trade.py
 - 내용: 팬딩 배수 맞추기(따라잡기 매수) 추가 fanding_trade vNEXT (사무실 vNEXT)

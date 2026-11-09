@@ -1,8 +1,8 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-09 13:45:24",
+  "as_of_kst": "2026-11-09 16:02:51",
   "symbol": "SOXL",
-  "live_price": 45.9,
+  "live_price": 43.54,
   "price_note": "",
   "tiers": [
     {
@@ -170,9 +170,9 @@
     "cost_usd": 6002.4,
     "target_price": 76.16,
     "target_pct": 1.51,
-    "live": 45.9,
-    "pnl_usd": -2330.4,
-    "pnl_pct": -38.82,
+    "live": 43.54,
+    "pnl_usd": -2519.2,
+    "pnl_pct": -41.97,
     "reached": false,
     "pending_sell": false,
     "realized_net_usd": null
