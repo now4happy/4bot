@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.4.8 · 2026-11-09 11:09 (KST)
+- 파일: bot_updater.py
+- 내용: 사무실 vNEXT: STATUS.md 기록 시 스나이퍼 층별 공개 JSON(sniper_tiers.json) 동시 생성·업로드
+- 브랜치: staging
+
 ## v1.4.7 · 2026-11-08 05:25 (KST)
 - 파일: bot_updater.py
 - 내용: 업데이터: NAMES에 meritz_dca.service 추가 (메리츠 적립, 사무실 vNEXT)
