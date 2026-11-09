@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-09 11:09 (KST) · 계기: 업데이트 적용 (staging: 사무실 vNEXT: STATUS.md 기록 시 스나이퍼 층별 공개 JSON(sniper_tiers.json) 동시 생성·업로드)
+- 갱신: 2026-11-09 11:53 (KST) · 계기: 업데이트 적용 (staging: 사무실 vNEXT: 비서 브리핑 필요 금액 표 한투·메리츠·빗썸 계산 및 본문 표만 표시)
 
 ## 봇별 현재 상태
 
@@ -13,21 +13,22 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-09 09:56 KST부터) | v1.2.2 | 2026-11-09 09:57 | 2번 스나이퍼 v2.5.1 암살자 c9c5f84 후속 다듬기 이식 (안전망 SN4/SN3 결합·복기 일지 5 |
 | 3번 토스 적립 | `toss_dca` | 🟢 실행 중 (11-05 09:02 KST부터) | v4.3.8 | 2026-11-05 09:02 | 3번 토스 적립 v4.3.8: R1 단계 단조화 + 정지·결정 중 알림 + 가격 0 가드 + N7 지수 20 |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-01 14:57 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-07 13:45 KST부터) | v1.4.8 | 2026-11-09 11:09 | 사무실 vNEXT: STATUS.md 기록 시 스나이퍼 층별 공개 JSON(sniper_tiers.json) |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-09 11:53 KST부터) | v1.4.9 | 2026-11-09 11:53 | 사무실 vNEXT: 비서 브리핑 필요 금액 표 한투·메리츠·빗썸 계산 및 본문 표만 표시 |
 | 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-08 10:11 KST부터) | v1.0.2 | 2026-11-08 10:11 | 메리츠 무매 평단 조절 추가 meritz_laoer v1.0.2 |
 | 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-08 05:25 KST부터) | v1.0.0 | 2026-11-08 05:25 | 업데이터: NAMES에 meritz_dca.service 추가 (메리츠 적립, 사무실 vNEXT) |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-07 13:45 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-09 11:53 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-06 13:28 KST부터)
 - 사무실 터널 `bot-office-tunnel`: 🟢 실행 중 (10-20 22:54 KST부터)
-- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-08 05:25 KST부터)
+- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-09 11:09 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
 - 디스크 사용: 37% (남은 13.1GB)
 
 ## 최근 적용 10건
 
+- 2026-11-09 11:53 · 5번 사무실 비서 v1.4.9 · office_briefing.py · 사무실 vNEXT: 비서 브리핑 필요 금액 표 한투·메리츠·빗썸 계산 및 본문 표만 표시
 - 2026-11-09 11:09 · 5번 사무실 비서 v1.4.8 · bot_updater.py · 사무실 vNEXT: STATUS.md 기록 시 스나이퍼 층별 공개 JSON(sniper_tiers.json)
 - 2026-11-09 09:57 · 2번 토스 스나이퍼 v1.2.2 · assassin_plugin.py · 2번 스나이퍼 v2.5.1 암살자 c9c5f84 후속 다듬기 이식 (안전망 SN4/SN3 결합·복기 일지 5
 - 2026-11-08 10:35 · 2번 토스 스나이퍼 v1.2.1 · assassin_plugin.py · 2번 스나이퍼 v2.5.0 암살자 업뎃 이식 (원작 91b5650, 하드락 True, 실주문 없음)
@@ -37,7 +38,6 @@
 - 2026-11-08 03:52 · 메리츠 SOXL 무매 v1.0.1 · config.py, global_throttle.py, main.py, meritz_api.py, notif · meritz settings.example.json 제거 (구버전 업데이터가 .json을 거부해 묶음 적용이
 - 2026-11-08 03:52 · 5번 사무실 비서 v1.4.6 · bot_updater.py · meritz settings.example.json 제거 (구버전 업데이터가 .json을 거부해 묶음 적용이
 - 2026-11-07 13:46 · 5번 사무실 비서 v1.4.5 · office_briefing.py, office_secretary.py · 브리핑 수동 --manual + 메뉴 사무실 주소 버튼 삭제 (office_briefing.py·office
-- 2026-11-07 13:25 · 5번 사무실 비서 v1.4.4 · bot_updater.py, office_secretary.py · 하단 메뉴 2개로 줄이기 (2번 v2.4.1·tg_ui v2.3.1·사무실 vNEXT)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
