@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.0 · 2026-11-09 13:09 (KST)
+- 파일: bot_updater.py, office_briefing.py, office_secretary.py
+- 내용: 사무실 vNEXT: 비서 브리핑 텔레그램 중단 + need.json 발행 + 브리핑 버튼 제거 (A안 뮤즈 브리핑)
+- 브랜치: staging
+
 ## v1.4.9 · 2026-11-09 11:53 (KST)
 - 파일: office_briefing.py
 - 내용: 사무실 vNEXT: 비서 브리핑 필요 금액 표 한투·메리츠·빗썸 계산 및 본문 표만 표시
