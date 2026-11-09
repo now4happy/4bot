@@ -1,0 +1,79 @@
+{
+  "ok": true,
+  "as_of_kst": "2026-11-09 16:30:01",
+  "accounts": [
+    {
+      "name": "토스",
+      "lines": [
+        {
+          "currency": "USD",
+          "holding": 5084.66,
+          "need": 771.64,
+          "sufficient": true,
+          "auto_fx": "unavailable"
+        },
+        {
+          "currency": "KRW",
+          "holding": 18000.0,
+          "need": null,
+          "sufficient": null,
+          "auto_fx": "unavailable"
+        }
+      ]
+    },
+    {
+      "name": "메리츠",
+      "lines": [
+        {
+          "label": "P",
+          "currency": "USD",
+          "holding": 1563.62,
+          "need": 1554.35,
+          "sufficient": true,
+          "auto_fx": "on"
+        },
+        {
+          "label": "VR6",
+          "currency": "USD",
+          "holding": 396.59,
+          "need": 347.58,
+          "sufficient": true,
+          "auto_fx": "on"
+        }
+      ]
+    },
+    {
+      "name": "한투",
+      "lines": [
+        {
+          "currency": "USD",
+          "holding": 1691.86,
+          "need": 1506.875,
+          "sufficient": true,
+          "auto_fx": "unavailable"
+        },
+        {
+          "currency": "KRW",
+          "holding": 9584077.0,
+          "need": null,
+          "sufficient": null,
+          "auto_fx": "unavailable"
+        }
+      ]
+    },
+    {
+      "name": "빗썸",
+      "lines": [
+        {
+          "currency": "KRW",
+          "holding": 391246.430737,
+          "need": 60000.0,
+          "sufficient": true,
+          "auto_fx": "na"
+        }
+      ]
+    }
+  ],
+  "total_need_usd": 4180.445,
+  "total_need_krw": 60000.0
+}

@@ -1,21 +1,10 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-09 16:02:51",
+  "as_of_kst": "2026-11-10 06:10:18",
   "symbol": "SOXL",
-  "live_price": 43.54,
+  "live_price": 55.89,
   "price_note": "",
   "tiers": [
-    {
-      "tier": 1,
-      "kind": "l1",
-      "qty": 17,
-      "price": 49.46,
-      "lot_count": 1,
-      "lot_type": "REENTRY_1FL",
-      "target": 50.21,
-      "target_pct": 1.5,
-      "reached": false
-    },
     {
       "tier": 2,
       "kind": "upper",
@@ -73,17 +62,6 @@
     }
   ],
   "targets": [
-    {
-      "kind": "l1",
-      "price": 50.21,
-      "pct": 1.5,
-      "tiers": [
-        1
-      ],
-      "locked": true,
-      "reached": false,
-      "unlock_hm": "04:07"
-    },
     {
       "kind": "indiv",
       "price": 63.1,
@@ -159,10 +137,10 @@
   "sub_tiers": [],
   "sub_targets": [],
   "holding": {
-    "shares": 138,
+    "shares": 121,
     "sub_shares": 0,
     "basement_shares": 80,
-    "total_shares": 218
+    "total_shares": 201
   },
   "basement": {
     "qty": 80,
@@ -170,9 +148,9 @@
     "cost_usd": 6002.4,
     "target_price": 76.16,
     "target_pct": 1.51,
-    "live": 43.54,
-    "pnl_usd": -2519.2,
-    "pnl_pct": -41.97,
+    "live": 55.89,
+    "pnl_usd": -1531.2,
+    "pnl_pct": -25.51,
     "reached": false,
     "pending_sell": false,
     "realized_net_usd": null
