@@ -43,6 +43,7 @@
 #                       (alert-hub와 같은 방식 — 서버 적용 대상이 아님, 같이 묶인 다른 봇 업데이트가 막히지 않게 함)
 #                       ② NAMES에 meritz_laoer.service 추가 (메리츠 SOXL 무매) — targets.json 등록 뒤 적용 가능
 #  · 사무실 v1.4.7: NAMES에 meritz_dca.service 추가 (메리츠 적립) — targets.json 등록 뒤 적용 가능
+#  · 사무실 vNEXT (2026-11-09): STATUS.md 기록 시 스나이퍼 층별 공개 JSON 동시 생성·업로드 (실패 격리)
 #  · 2번 스나이퍼: 원작자 새 버전 하루 1번(09:02 KST) 확인 → 🔴 중요 알림 (sniper_upstream.py · 알림 전용) · 6. Update 에 '원작 확인'
 import json, os, pwd, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -437,6 +438,7 @@ def offer(st, br, sha):
  
 # ---------------------------------------------------------------- STATUS.md (자동 현재 상태)
 STATUS_FILE = "STATUS.md"
+SNIPER_TIERS_FILE = "sniper_tiers.json"
 EXTRA_UNITS = {SECRETARY_UNIT: "7번 비서(브리핑·PC감시)", FANDING_UNIT: "5번 팬딩 가격표", "bot-office-tunnel.service": "사무실 터널",
                SELF_UNIT: "6번 업데이트 비서"}
 _CL_RE = re.compile(r"^## (\S+) · ([\d-]+ [\d:]+) \(KST\)\n((?:- .*\n?)*)", re.M)
@@ -543,6 +545,65 @@ def _status_copy(text):
         print("상황판용 STATUS 복사 실패:", type(e).__name__, flush=True)
 
 
+def write_sniper_tiers():
+    """스나이퍼 원장 읽기 전용 공개 투영. 오류여도 실패 JSON을 원자적으로 기록한다."""
+    stamp = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    result = {"ok": False, "error": "unknown", "as_of_kst": stamp}
+    try:
+        import importlib.util
+        source = os.path.join(OFFICE_DIR, "sniper_picture.py")
+        spec = importlib.util.spec_from_file_location("office_sniper_picture_export", source)
+        if not spec or not spec.loader:
+            raise RuntimeError("sniper_picture_unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        found, err = module._find_ledger()
+        if not found:
+            raise RuntimeError(str(err or "ledger_unavailable"))
+        _, state = found
+        live, note = module._snapshot_price(time.time())
+        data = module.build(state, live_price=live, price_note=note)
+        if not data.get("ok"):
+            raise RuntimeError(str(data.get("error") or "build_failed"))
+        holding = data.get("holding") or {}
+        result = {
+            "ok": True, "as_of_kst": stamp, "symbol": "SOXL",
+            "live_price": (data.get("price") or {}).get("live"),
+            "price_note": (data.get("price") or {}).get("note", ""),
+            "tiers": data.get("tiers") or [], "targets": data.get("targets") or [],
+            "sub_tiers": data.get("sub_tiers") or [], "sub_targets": data.get("sub_targets") or [],
+            "holding": {k: holding.get(k, 0) for k in ("shares", "sub_shares", "basement_shares", "total_shares")},
+            "basement": data.get("basement"),
+        }
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)[:160], "as_of_kst": stamp}
+    path = os.path.join(REPO, SNIPER_TIERS_FILE)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=REPO,
+                                         prefix=".sniper_tiers_", suffix=".tmp", delete=False) as out:
+            tmp = out.name
+            json.dump(result, out, ensure_ascii=False, allow_nan=False, indent=2)
+            out.write("\n")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+        tmp = None
+        try:
+            os.chown(path, OWNER.pw_uid, OWNER.pw_gid)
+        except OSError:
+            pass
+        return True
+    except Exception as exc:
+        print("sniper_tiers.json 기록 실패:", type(exc).__name__, str(exc)[:120], flush=True)
+        return False
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
 def write_status(reason):
     """STATUS.md 를 쓰고, '갱신' 줄 말고 실제 내용이 바뀌었으면 True"""
     path = os.path.join(REPO, STATUS_FILE)
@@ -580,9 +641,13 @@ def status_daily(st, force=False):
         return "서버와 GitHub main 이 달라 건너뜀"
     if rc_s == 0 and stg != head:
         return "staging 에 대기 중인 업로드가 있어 건너뜀"
-    if not write_status("매일 점검" if not force else "수동 기록"):
+    changed = write_status("매일 점검" if not force else "수동 기록")
+    tiers_written = write_sniper_tiers()
+    if not changed and not tiers_written:
         return "바뀐 내용 없음"
-    git("add", "-f", "--", STATUS_FILE)
+    git("add", "-f", "--", *([STATUS_FILE] if changed else []), *([SNIPER_TIERS_FILE] if tiers_written else []))
+    if not git("diff", "--cached", "--name-only")[1].strip():
+        return "바뀐 내용 없음"
     git("commit", "-qm", "상태 기록: STATUS.md")
     rc, out = git("push", "-q", "origin", "HEAD:main", "HEAD:staging")
     if rc:
@@ -853,6 +918,8 @@ def apply(st, key):
     try:   # 현재 상태 파일도 같은 기록에 함께 (실패해도 업데이트는 계속)
         if write_status(f"업데이트 적용 ({br}: {msgs.splitlines()[0] if msgs else ''})"):
             git("add", "-f", "--", STATUS_FILE)
+        if write_sniper_tiers():
+            git("add", "-f", "--", SNIPER_TIERS_FILE)
     except Exception as e:
         print("STATUS.md 작성 실패:", type(e).__name__, e, flush=True)
     if git("diff", "--cached", "--name-only")[1].strip():
