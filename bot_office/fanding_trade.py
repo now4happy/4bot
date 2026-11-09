@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_V1.14.4)
+# FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_vNEXT)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -78,6 +78,12 @@
 #        ③ 점검 미통과로 자동주문 시각에 '자동주문 안 함'이 되면 버튼을 지우던 것 → 상태는 결정 대기 그대로·버튼 유지
 #          (마감 전까지 ✅/❌ 로 직접 결정) · /가격표 다시 보내기도 버튼 붙음 · 버튼 붙은 메시지를 모두 기억해 마감·자동승인 때 함께 정리
 #        · 매수 범위·개수·매수 총액·매도 합계 검사, 자동주문 가능 판정, 버튼 문구·callback_data·주문 접수 흐름 불변
+# vNEXT: 배수 맞추기 (따라잡기 매수) — 배수를 올렸을 때 부족한 보유를 메뉴에서 정한 일수 동안 매일 예약매수에 조금씩 추가
+#        · P 메뉴 [📈 배수 맞추기] (/맞추기): 부족분(표 보유×배수−실제 보유)을 보여주고 일수(6/12/24일 + 직접 입력)를 고르면 확인 후 시작
+#        · 하루치 수량 = 부족분÷일수(내림), 나머지는 마지막 날에 몰아넣음 · 가장 낮은 매수가 줄에 더함 · 30분 VWAP 그대로
+#        · 하루치 수량은 그날 시트에 한 번만 계산해 저장(검산·접수·재시도·재예약이 같은 값 재사용 → 중복주문 방지)
+#        · 남은 수량은 매일 부족분으로 다시 계산(미체결은 다음 날로 이월, 종료일만 밀림) · 부족분 0이면 계획 종료 알림 · 메뉴에서 중단 가능
+#        · 검산 매수 총액에 따라잡기 포함(max_buy_usd 그대로) · 현금 부족 시 그날 수량 줄임·건너뜀 · 표 주문 계산(raw_lines)은 그대로
 # 1.14.3 (사무실 v1.3.1): 과거자료 다운을 버튼으로 (사용자 지시 2026-11-05) — 매매·주문·판독·알림 로직 불변
 #        ① loop() 의 past_sheet_telegram.tick() 호출 삭제 → 매일 자동 전송 없음
 #        ② 🛠 도구에 [📥 과거자료 다운] (/과거자료다운): 누르면 숫자 파일을 바로 갱신(history 가 바뀐 경우만) → 5칸 검사 →
@@ -143,7 +149,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "1.14.4"
+VERSION = "vNEXT"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -991,7 +997,13 @@ def run_checks(sheet, mult, market=None):
     bad_q = [r for r in p["buys"] + p["sells"] if not 1 <= r["qty"] <= 500]
     add(not bad_q, "개수 범위 정상" if not bad_q else f"이상한 개수: {bad_q}")
     buy_total = sum(r["price"] * r["qty"] * mult for r in p["buys"])
-    add(buy_total <= float(c["max_buy_usd"]), f"매수 총액 {fmt_money(buy_total)} (한도 {fmt_money(float(c['max_buy_usd']))})")
+    cq = int(sheet.get("catchup_qty") or 0)
+    cp = sheet.get("catchup_price")
+    cu_note = ""
+    if cq > 0 and cp is not None:
+        buy_total += float(cp) * cq
+        cu_note = f" · 따라잡기 {cq}주 × {cp:g} 포함"
+    add(buy_total <= float(c["max_buy_usd"]), f"매수 총액 {fmt_money(buy_total)} (한도 {fmt_money(float(c['max_buy_usd']))}){cu_note}")
     sell_qty = sum(r["qty"] * mult for r in p["sells"])
     if market and market.get("sellable") is not None:        # 1.9.0: 잔고 차이로 막지 않음
         s_ok = market["sellable"]
@@ -1129,6 +1141,94 @@ def cap_sells(lines, sellable):
     return out, cut
 
 
+# ---------------------------------------------------------- 배수 맞추기 (따라잡기 매수, vNEXT)
+CATCHUP_DAY_PRESETS = (6, 12, 24)
+
+
+def _catchup_int(value):
+    """수량·배수를 정수로. 없거나 이상하면 None."""
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        return int(float(str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def catchup_plan(st):
+    """활성 배수 맞추기 계획 dict. 없으면 None."""
+    p = (st or {}).get("catchup_plan")
+    return p if isinstance(p, dict) and p.get("active") else None
+
+
+def catchup_gap(sheet, mult, market):
+    """부족분 = 표 보유 × 목표 배수 − 실제 보유. 표 보유·실제 보유가 없으면 None."""
+    target = _catchup_int((sheet.get("parsed") or {}).get("holding_qty"))
+    actual = _catchup_int((market or {}).get("holding"))
+    m = _catchup_int(mult)
+    if target is None or actual is None or m is None:
+        return None
+    return target * m - actual
+
+
+def catchup_lowest_buy_price(sheet):
+    """표 매수 줄 중 가장 낮은 가격. 매수 줄이 없으면 None."""
+    buys = (sheet.get("parsed") or {}).get("buys") or []
+    if not buys:
+        return None
+    try:
+        return min(float(r["price"]) for r in buys)
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def catchup_daily_qty(plan, gap):
+    """그날 따라잡기 수량. gap: 오늘 부족분. 마지막 예정일이면 나머지를 더한다."""
+    if gap is None or gap <= 0:
+        return 0
+    daily = int(plan.get("daily") or 0)
+    if daily <= 0:
+        return 0
+    if int(plan.get("applied", 0)) + 1 == int(plan.get("days", 1)):
+        return min(daily + int(plan.get("remainder", 0)), gap)
+    return min(daily, gap)
+
+
+def apply_catchup_to_sheet(st, sheet, market):
+    """그날 시트에 따라잡기 수량·가격을 한 번만 계산해서 저장한다.
+    이미 저장돼 있으면(재판독 등) 그대로 둔다. 계획이 없거나 부족분이 없거나 매수 줄이 없으면 저장하지 않는다.
+    반환: (qty, price, ended). ended=True면 부족분이 없어 계획이 끝나서 지웠다는 뜻."""
+    if sheet.get("catchup_qty") is not None:
+        return int(sheet.get("catchup_qty") or 0), sheet.get("catchup_price"), False
+    plan = catchup_plan(st)
+    if not plan:
+        return 0, None, False
+    mult = int(plan.get("target_mult") or sheet.get("mult") or 0)
+    gap = catchup_gap(sheet, mult, market)
+    if gap is None:
+        return 0, None, False
+    if gap <= 0:
+        # 부족분이 없음 → 계획 종료 (알림은 호출한 쪽에서 보낸다)
+        st.pop("catchup_plan", None)
+        return 0, None, True
+    price = catchup_lowest_buy_price(sheet)
+    if price is None:
+        return 0, None, False  # 매수 줄이 없어서 오늘은 못 함
+    qty = catchup_daily_qty(plan, gap)
+    if qty <= 0:
+        return 0, None, False
+    sheet["catchup_qty"] = int(qty)
+    sheet["catchup_price"] = float(price)
+    plan["applied"] = int(plan.get("applied", 0)) + 1
+    return int(qty), float(price), False
+
+
+def clear_catchup_from_sheet(sheet):
+    """시트에 저장된 그날 따라잡기 수량·가격을 지운다 (계획 중단 시)."""
+    sheet.pop("catchup_qty", None)
+    sheet.pop("catchup_price", None)
+
+
 def raw_lines(sheet):
     mult = sheet["mult"]
     p = sheet["parsed"]
@@ -1137,8 +1237,20 @@ def raw_lines(sheet):
 
 
 def order_lines(sheet, keep_zero=False):
-    """실제로 넣을 주문. 매도가능이 모자라면 가장 높은 매도가부터 줄인 수량"""
+    """실제로 넣을 주문. 매도가능이 모자라면 가장 높은 매도가부터 줄인 수량.
+    배수 맞추기: 그날 시트에 저장된 따라잡기 수량을 가장 낮은 매수가 줄에 더한다.
+    (저장된 값만 써서 재시도·재예약 때도 같은 수량 → 중복주문 방지. 표 주문 계산은 그대로.)"""
     lines, _ = cap_sells(raw_lines(sheet), (sheet.get("market") or {}).get("sellable"))
+    cq = int(sheet.get("catchup_qty") or 0)
+    cp = sheet.get("catchup_price")
+    if cq > 0 and cp is not None:
+        buys = [(i, pr) for i, (s, pr, q) in enumerate(lines) if s == "buy"]
+        if buys:
+            bi, bpr = min(buys, key=lambda t: t[1])
+            if abs(float(bpr) - float(cp)) < 1e-6:
+                s, pr, q = lines[bi]
+                lines[bi] = (s, pr, q + cq)
+            # 저장된 가격과 안 맞으면(재판독으로 가격 변경) 그날 따라잡기를 넣지 않는다
     return lines if keep_zero else [x for x in lines if x[2] > 0]
 
 
@@ -1166,9 +1278,13 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
     L = [head, f"▫️ {c['symbol']} · {html.escape(p['close_date'])} 종가 {p['close']} · {html.escape(p.get('cycle') or '')}",
          f"▫️ 배수 <b>×{mult}</b> · 주문일(미국) {us:%m/%d} · Limit VWAP 예약 · <b>{RESERVE_NAMES.get(str(c.get('reserve_time', '2')), '')} 발주</b>"]
     for (side, price, rq), (_, _, qty) in zip(raw_lines(sheet), order_lines(sheet, keep_zero=True)):
-        cut = f" ← 매도가능 부족으로 {rq}에서 줄임" if qty != rq else ""
+        cut = f" ← 매도가능 부족으로 {rq}에서 줄임" if qty < rq else ""
         L.append(f"{'🔴 매수' if side == 'buy' else '🔵 매도'} <b>{price:g} × {qty}</b>"
                  f"  {fmt_money(price * qty)}{cut}")
+    cq = int(sheet.get("catchup_qty") or 0)
+    cp = sheet.get("catchup_price")
+    if cq > 0 and cp is not None:
+        L.append(f"📈 배수 맞추기: {cq}주가 가장 낮은 매수가({cp:g})에 포함돼 있어요  {fmt_money(float(cp) * cq)}")
     bad = [x for x in sheet["checks"] if not x["ok"]]
     if bad:
         L.append("\n⚠️ <b>확인 필요</b>")
@@ -2213,6 +2329,13 @@ def handle_image(tg, data, sha, meta):
                  "market": market, "mult": int(st["multiplier"]), "status": "pending", "ver": (old or {}).get("ver", 0) + 1,
                  "us_date": next_session_date(sd).strftime("%Y%m%d"), "received": now_kst().isoformat(),
                  "post": meta.get("post", ""), "orders": [], "alarm_sent": False, "msg_id": (old or {}).get("msg_id")}
+        # 배수 맞추기: 그날 따라잡기 수량을 한 번만 계산해 시트에 저장 (재판독이면 예전 저장값 재사용)
+        if old and old.get("catchup_qty") is not None and catchup_plan(st):
+            sheet["catchup_qty"] = old["catchup_qty"]
+            sheet["catchup_price"] = old.get("catchup_price")
+        _, _, cu_ended = apply_catchup_to_sheet(st, sheet, market)
+        if cu_ended:
+            tg.send("📈 <b>배수 맞추기 완료</b>\n부족분이 없어졌어요. 목표 배수에 맞는 보유가 됐습니다.")
         sheet["checks"], sheet["auto_ok"] = run_checks(sheet, sheet["mult"], market)
         log_history("sheet", {"date": date, "parsed": parsed, "reads_agree": agree, "market": market,
                               "mult": sheet["mult"], "us_date": sheet["us_date"], "post": sheet["post"], "img": img_name})
@@ -2480,6 +2603,7 @@ def loop():
 
 
 HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
+             "▫️ <b>/맞추기</b> 배수 맞추기(따라잡기) — 부족한 보유를 정한 일수 동안 매일 조금씩 추가 매수 · <b>/맞추기 12</b> 12일로 시작\n"
              "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황\n"
              "▫️ <b>/과거자료다운</b> 과거 숫자 파일 받기(누를 때만) · <b>/빠진날짜</b> 빠진 매매일 목록\n"
              "▫️ <b>/재판독</b> PC 사이트 재접속·최신 자료 요청 · <b>/진단</b> 단계별 상태\n"
@@ -2494,6 +2618,7 @@ HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <
 # 버튼은 기존 명령 글자와 똑같이 처리된다(새 기능이 아니라 같은 기능을 버튼으로 누르는 것).
 # (key, 버튼 글자, 명령) — key 는 알림 안 인라인 버튼(fm:key)에서도 씀
 MENU_ITEMS = [("pr", "📋 가격표", "/가격표"), ("fx", "💱 환전", "/환전"), ("mt", "📐 배수", "/배수"),
+              ("cu", "📈 배수 맞추기", "/맞추기"),
               ("dg", "🩺 진단", "/진단"), ("rs", "🔄 재판독", "/재판독"),
               ("rt", "⏱ 발주시간", "/발주시간"), ("rr", "🔁 재예약", "/재예약"), ("rf", "⚠️ 재예약 강제", "/재예약강제"),
               ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"), ("hp", "❓ P 도움말", "/help"),   # 1.10.0 글자
@@ -2523,6 +2648,7 @@ def menu_keyboard():
     auto = AUTO_OFF_BTN if cfg()["auto_order"] else AUTO_ON_BTN
     return [[{"text": "📋 가격표"}, {"text": "💱 환전"}], [{"text": auto}, {"text": "📐 배수"}],
             [{"text": auto_fx_label()}, {"text": auto_rfx_label()}],
+            [{"text": "📈 배수 맞추기"}],
             [{"text": P_TOOLS_LABEL}, {"text": HOME_LABEL}]]
 
 
@@ -2583,6 +2709,10 @@ def p_status_line():
     last = sheets[max(sheets)] if sheets else None
     head = (f"🅿 <b>P 매매</b> · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])} · 자동 {'켜짐' if c['auto_order'] else '꺼짐'}"
             f" · 자동환전 {'켜짐' if auto_fx_state(st)[0] else '꺼짐'} · 역자동환전 {'켜짐' if auto_rfx_state(st)[0] else '꺼짐'}")
+    plan = catchup_plan(st)
+    if plan:
+        head += (f"\n📈 배수 맞추기 진행 중: 목표 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · "
+                 f"{plan.get('days')}일 중 {int(plan.get('applied', 0)) + 1}일째")
     return head + ("\n최근 가격표: " + f"{last['date']} · {STATUS_KO.get(last['status'], last['status'])}" if last else "\n최근 가격표: 없음")
 
 
@@ -2898,6 +3028,181 @@ def _pending_sheet(st):
     return None
 
 
+# ---------------------------------------------------------- 배수 맞추기 — 메뉴·명령·버튼 (vNEXT)
+
+def _catchup_latest_sheet(st):
+    """가장 최근 시트(날짜 최대). 없으면 None."""
+    sheets = (st or {}).get("sheets") or {}
+    if not sheets:
+        return None
+    return sheets[max(sheets)]
+
+
+def _catchup_current_gap(st):
+    """지금 부족분. (gap, sheet, target_mult, table_holding, actual) 또는 (None, ...)"""
+    sheet = _catchup_latest_sheet(st)
+    if not sheet:
+        return None, None, None, None, None
+    mult = int(st.get("multiplier") or sheet.get("mult") or 0)
+    gap = catchup_gap(sheet, mult, sheet.get("market"))
+    table = _catchup_int((sheet.get("parsed") or {}).get("holding_qty"))
+    actual = _catchup_int((sheet.get("market") or {}).get("holding"))
+    return gap, sheet, mult, table, actual
+
+
+def _catchup_plan_params(total, days):
+    """(유효 일수, 하루 수량, 나머지). total이 days보다 작으면 1주씩 total일."""
+    if total <= 0 or days <= 0:
+        return 0, 0, 0
+    eff = min(int(days), int(total))
+    daily = int(total) // eff
+    remainder = int(total) - daily * eff
+    return eff, daily, remainder
+
+
+def catchup_setup(tg_s, st):
+    """📈 배수 맞추기 설정 화면. 진행 중이면 상태 + 중단 버튼, 아니면 부족분 + 일수 버튼."""
+    plan = catchup_plan(st)
+    if plan:
+        gap, sheet, mult, table, actual = _catchup_current_gap(st)
+        L = ["📈 <b>배수 맞추기 진행 중</b>",
+             f"▫️ 목표 배수 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · {plan.get('days')}일 중 {int(plan.get('applied', 0)) + 1}일째",
+             f"▫️ 하루 {plan.get('daily')}주씩" + (f" · 마지막 날 {int(plan.get('daily', 0)) + int(plan.get('remainder', 0))}주" if plan.get('remainder') else ""),
+             f"▫️ 시작 {plan.get('started')}"]
+        if gap is not None:
+            L.append(f"▫️ 지금 부족분 {gap}주" + ("" if gap > 0 else " (다 채워졌어요)"))
+        tg_s.send("\n".join(L), [[{"text": "⏸ 중단하기", "callback_data": "cu:stop"}]])
+        return True
+    gap, sheet, mult, table, actual = _catchup_current_gap(st)
+    if sheet is None or gap is None:
+        tg_s.send("📈 배수 맞추기를 시작하려면 가격표가 먼저 와야 해요. 오늘 가격표가 오면 다시 눌러 주세요.")
+        return True
+    if gap <= 0:
+        tg_s.send(f"📈 지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
+        return True
+    price = catchup_lowest_buy_price(sheet)
+    L = ["📈 <b>배수 맞추기</b> — 부족한 보유를 매일 조금씩 추가 매수해요",
+         f"▫️ 표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주 → <b>부족 {gap}주</b>",
+         f"▫️ 매수 가격: 가장 낮은 표 매수가 {price:g}" if price is not None else "▫️ 매수 가격: 표 매수가",
+         "▫️ 발주: 장마감 30분 전 (30분 VWAP) 그대로",
+         "",
+         "며칠에 나눠서 채울까요?"]
+    rows = [[{"text": f"{d}일 · 매일 약 {max(1, gap // d)}주", "callback_data": f"cu:day:{d}"}] for d in CATCHUP_DAY_PRESETS]
+    tg_s.send("\n".join(L), rows)
+    return True
+
+
+def catchup_confirm(tg_s, st, days):
+    """일수 선택 후 확인 화면. [✅ 시작하기] [❌ 취소]."""
+    if not 1 <= int(days) <= 60:
+        tg_s.send("일수는 1~60일 사이로 적어 주세요. (예: /맞추기 12)")
+        return True
+    gap, sheet, mult, table, actual = _catchup_current_gap(st)
+    if sheet is None or gap is None:
+        tg_s.send("📈 가격표가 아직 없어서 부족분을 못 재요. 오늘 가격표가 오면 다시 눌러 주세요.")
+        return True
+    if gap <= 0:
+        tg_s.send(f"📈 지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
+        return True
+    eff, daily, rem = _catchup_plan_params(gap, int(days))
+    price = catchup_lowest_buy_price(sheet)
+    L = ["📈 <b>배수 맞추기 확인</b>",
+         f"▫️ 목표 배수 ×{mult} · 부족분 <b>{gap}주</b> (표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주)",
+         f"▫️ 기간 {eff}일 · 매일 {daily}주씩" + (f" · 마지막 날 {daily + rem}주" if rem else ""),
+         f"▫️ 매수 가격: 가장 낮은 표 매수가 {price:g}" if price is not None else "▫️ 매수 가격: 표 매수가",
+         "▫️ 발주: 장마감 30분 전 (30분 VWAP) 그대로",
+         "▫️ 미체결이면 다음 날로 넘어가고, 부족분이 0이 되면 자동으로 끝나요"]
+    rows = [[{"text": "✅ 시작하기", "callback_data": f"cu:go:{eff}"},
+             {"text": "❌ 취소", "callback_data": "cu:cancel"}]]
+    tg_s.send("\n".join(L), rows)
+    return True
+
+
+def catchup_start(tg_s, st, days):
+    """계획 시작. st['catchup_plan'] 저장. 대기 중인 오늘 가격표가 있으면 바로 적용."""
+    if not 1 <= int(days) <= 60:
+        tg_s.send("일수는 1~60일 사이로 적어 주세요. (예: /맞추기 12)")
+        return True
+    if catchup_plan(st):
+        tg_s.send("📈 이미 진행 중인 배수 맞추기가 있어요. 먼저 중단한 뒤에 새로 시작해 주세요.")
+        return True
+    gap, sheet, mult, table, actual = _catchup_current_gap(st)
+    if sheet is None or gap is None:
+        tg_s.send("📈 가격표가 아직 없어서 부족분을 못 재요. 오늘 가격표가 오면 다시 눌러 주세요.")
+        return True
+    if gap <= 0:
+        tg_s.send(f"📈 지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
+        return True
+    eff, daily, rem = _catchup_plan_params(gap, int(days))
+    st["catchup_plan"] = {"active": True, "target_mult": int(mult), "total": int(gap),
+                          "days": int(eff), "daily": int(daily), "remainder": int(rem),
+                          "started": (sheet or {}).get("date") or now_kst().strftime("%Y-%m-%d"),
+                          "applied": 0}
+    # 대기 중인 오늘 가격표가 있으면 바로 적용하고 검산을 다시 돌린다
+    sh = _pending_sheet(st)
+    note = ""
+    if sh is not None:
+        apply_catchup_to_sheet(st, sh, sh.get("market"))
+        sh["checks"], sh["auto_ok"] = run_checks(sh, sh["mult"], sh.get("market"))
+        send_sheet_alert(TG(), sh, "📋 <b>배수 맞추기 적용된 가격표</b>", st)
+        note = "\n오늘 가격표에도 바로 적용했어요. 새 알림의 버튼으로 결정해 주세요."
+    tg_s.send(f"📈 <b>배수 맞추기 시작</b>\n▫️ 목표 배수 ×{mult} · 부족분 {gap}주\n"
+              f"▫️ {eff}일 · 매일 {daily}주씩" + (f" · 마지막 날 {daily + rem}주" if rem else "") + note)
+    return True
+
+
+def catchup_stop(tg_s, st):
+    """진행 중인 계획 중단. 대기 중인 오늘 가격표에 저장된 따라잡기도 지우고 검산을 다시 돌린다."""
+    plan = catchup_plan(st)
+    if not plan:
+        tg_s.send("📈 진행 중인 배수 맞추기가 없어요.")
+        return True
+    st.pop("catchup_plan", None)
+    sh = _pending_sheet(st)
+    if sh is not None and sh.get("catchup_qty") is not None:
+        clear_catchup_from_sheet(sh)
+        sh["checks"], sh["auto_ok"] = run_checks(sh, sh["mult"], sh.get("market"))
+    gap, sheet, mult, table, actual = _catchup_current_gap(st)
+    msg = (f"📈 <b>배수 맞추기 중단</b>\n총 {plan.get('total')}주 계획 중 {int(plan.get('applied', 0))}일 적용했어요."
+           + (f"\n지금 부족분 {gap}주" if gap is not None else ""))
+    tg_s.send(msg)
+    return True
+
+
+def cu_handle_callback(tg_s, cb):
+    """📈 배수 맞추기 인라인 버튼 (cu:day:<일수> · cu:go:<일수> · cu:cancel · cu:stop)."""
+    data = cb.get("data", "")
+    parts = data.split(":")
+    cb_id = cb.get("id")
+    msg_id = (cb.get("message") or {}).get("message_id")
+    kind = parts[1] if len(parts) > 1 else ""
+    arg = parts[2] if len(parts) > 2 else ""
+    tg_s.answer(cb_id)
+    if msg_id:
+        tg_s.buttons(msg_id, [])  # 예전 버튼 지우기 (두 번 누름 방지)
+    with locked_state() as st:
+        if kind == "day":
+            try:
+                days = int(arg)
+            except ValueError:
+                tg_s.send("일수를 못 읽었어요. 다시 눌러 주세요.")
+                return True
+            return catchup_confirm(tg_s, st, days)
+        if kind == "go":
+            try:
+                days = int(arg)
+            except ValueError:
+                tg_s.send("일수를 못 읽었어요. 다시 눌러 주세요.")
+                return True
+            return catchup_start(tg_s, st, days)
+        if kind == "cancel":
+            tg_s.send("📈 배수 맞추기를 취소했어요.")
+            return True
+        if kind == "stop":
+            return catchup_stop(tg_s, st)
+    return True
+
+
 def bot_message(tg_s, text):
     """처리했으면 True. tg_s 는 5번 팬딩 봇의 TG 객체"""
     t = text.strip()
@@ -2931,6 +3236,12 @@ def bot_message(tg_s, text):
             else:
                 tg_s.send(msg + "\n다음 가격표부터 적용돼요.", mult_rows(n))
         return True
+    m = re.fullmatch(r"(?:/맞추기|맞추기)\s*(\d+)?", t)
+    if m:
+        with locked_state() as st:
+            if m.group(1):
+                return catchup_confirm(tg_s, st, int(m.group(1)))
+            return catchup_setup(tg_s, st)
     if low in ("/자동", "자동", "/자동켜기", "/자동끄기") or low.startswith("/자동 "):
         if low in ("/자동켜기", "/자동 켜기", "/자동 on"):
             return p_auto_picker(tg_s)                 # 1.14.0: 바로 켜지 않고 시간 선택
@@ -3050,6 +3361,8 @@ def bot_callback(tg_s, cb):
         return True
     if data.startswith("fx:"):
         return fx_handle_callback(tg_s, cb)
+    if data.startswith("cu:"):
+        return cu_handle_callback(tg_s, cb)
     if not data.startswith("fd:"):
         return False
     _, kind, rest = data.split(":", 2)
