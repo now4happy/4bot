@@ -29,6 +29,7 @@
      복리 또는 portion_mode 없음(구 원장) = 기존 공식 그대로 (순수 코어 자산)
   ② 시멘트추가(예비시드) 무제한: 참고 1줄(현재 회분·금액·총 횟수)만 — 필요 달러 계산에는 넣지 않음 · 표시 문구 '수혈'→'시멘트추가'
   ③ 지하층 참고 줄·보유 차감 1회·실패 조회 제외 목록 그대로
+- 사무실 vNEXT (2026-11-09): 토스 준비금 스나이퍼만 계산 — 3번 적립 합산 제외
 - 사무실 v1.5.0 (2026-11-09): need.json 발행·정기 텔레그램 중단 (A안)
 - 사무실 v1.4.9 (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
@@ -1174,19 +1175,20 @@ def section_dollar_check(now=None, info=None):
         _keep(state, "🔁 3번 적립: 전체 전원 OFF → 매수 없음 (합산 제외)")
     else:
         lines.append(f"🔁 3번 적립 미국 {len(U['buy'])}종목: ${U['need']:,.2f}"
-                     + (f" [{', '.join(U['buy'])}]" if U["buy"] else " (예정 없음)"))
+                     + (f" [{', '.join(U['buy'])}]" if U["buy"] else " (예정 없음)")
+                     + " · 합산 제외(토스 준비금은 스나이퍼만)")
         if U["skip"]:
             _keep(note, "   ↳ 매수 없음: " + ", ".join(U["skip"]))
         if U["note"]:
             _keep(note, "   ↳ profit_lock 표시(" + ", ".join(U["note"]) + ")는 실제 주문 코드가 읽지 않아 매수로 셈")
         excluded += [f"3번 {f}" for f in U["fail"]]
 
-    total = round(sn_need + sb_need + U["need"], 2)
+    total = round(sn_need + sb_need, 2)
     sn_part = (f"2번 ${sn_need:,.2f}" if sn["state"] == "ok" else
                {"off": "2번 OFF", "no_cash": "2번 매수 불가", "deposit_wait": "2번 입금 대기"}.get(sn["state"], "2번 합산 제외"))
     sn_part += (f" + 2번 서브 ${sb_need:,.2f}" if sb_need > 0 else "")
-    dca_part = f"3번 ${U['need']:,.2f}" if dca["master"] else "3번 OFF"
-    lines.append(f"🧾 당일 예정 합계 ${total:,.2f} ({sn_part} + {dca_part}) · 보유 "
+    dca_part = "3번 합산 제외"
+    lines.append(f"🧾 당일 예정 합계 ${total:,.2f} ({sn_part} · {dca_part}) · 보유 "
                  + (f"${usd:,.2f}" if usd is not None else "조회 불가"))
     if usd is None:
         lines.append("❔ 보유 달러를 몰라 부족 여부 판정 보류")
@@ -1195,7 +1197,7 @@ def section_dollar_check(now=None, info=None):
     else:
         lines.append(("✅ 계산된 항목 기준 충분" if excluded else "✅ 토스 달러 충분") + f" (여유 ${usd - total:,.2f})")
     if sn["state"] == "ok":
-        extra = max(0.0, sn["free"] + U["need"] - usd) if usd is not None else 0.0
+        extra = max(0.0, sn["free"] - usd) if usd is not None else 0.0
         lines.append(f"➕ 2번 당일 추가 매수(조건 충족 때만 · 부족 판정 제외): 본 1회당 최대 ${sn['budget']:,.2f}"
                      f" · 장부 가용현금 ${sn['free']:,.2f}까지" + (f" → 다 쓰려면 약 ${extra:,.2f} 더" if extra > 0.005 else ""))
 
@@ -1208,13 +1210,13 @@ def section_dollar_check(now=None, info=None):
                 line += f" · 토스 원화 {K['need'] - krw:,.0f}원 부족" if krw < K["need"] else " · 원화 충분"
             except Exception:
                 line += " · 원화 잔액 조회 불가"
-        lines.append(line + " (달러 합산 제외)")
+        lines.append(line + " · 합산 제외(토스 준비금은 스나이퍼만)")
         excluded += [f"3번 {f}" for f in K["fail"]]
     if excluded:
         lines.append("⚠️ 합산 제외(조회 불가 등): " + "; ".join(excluded) + " → 실제 필요액은 더 클 수 있음")
     if info is not None:   # v1.1.8 표시용 — 위에서 계산한 값을 그대로 넘김 (새 계산 없음)
         info.update(usd=usd, total=total, sn_part=sn_part, dca_part=dca_part, master=dca["master"],
-                    krw_need=K["need"], acct=acct.strip(" ·"), warn=warn, state=state, note=note,
+                    krw_need=None, acct=acct.strip(" ·"), warn=warn, state=state, note=note,
                     excluded=list(excluded), toss=toss)
     return lines
 
