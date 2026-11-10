@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_plugin.py (원작 sniper_plugin_core.py + 원작 sniper_plugin.py 병합)
+# 4bot 2번 v2.5.2 (2026-11-10): 원작 1478200(sniper_plugin_core + sniper_plugin) 실전 수정 이식 — 매수 게이트·서브 엔진·미체결 매수 동기화의 holdings·prices 선택 인자(None/빈 값 → context.latest_* 자동 복원) · 프리/정규장 가격 폴백 순서 prices→context.latest_prices→캔들 캐시→잔고 last_price · 실시간 재조회 시 last_soxl_live_price 갱신 (매수 판정 로직 무변경)
 # 4bot 2번 v2.3.2 (2026-11-07): 원작 88298dc Case 92 이식 — 실시간 1분봉 Wilder RSI(14) 추출기 _get_live_soxl_rsi_14 + 본·서브 1층 공석 +1.00% 돌파 시 RSI(14) <= 50.0 필터(뮤텍스 2차 검문 포함), -1.00% 눌림목 무필터 그대로
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
@@ -574,14 +575,27 @@ def is_within_reserve_deposit_check_shield(
 
 def _get_live_soxl_price(
     context: Any,
-    prices: Dict[str, float],
-    holdings: Dict[str, Dict[str, Any]],
-    now_est: datetime,
+    prices: Optional[Dict[str, float]] = None,
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    now_est: Optional[datetime] = None,
 ) -> float:
     """
-    실시간 가격 딕셔너리(prices) -> 캔들 캐시 -> 보유 잔고 현재가 순으로 SOXL 현재가를 추출한다.
+    # MODIFIED [4bot v2.5.2 · 원작 1478200 인자 누락 방어]:
+    실시간 가격 딕셔너리(prices) -> context.latest_prices -> 캔들 캐시 -> 보유 잔고 현재가 순으로 SOXL 현재가를 추출한다.
+    (매수는 04:07 ~ 16:00 프리/정규장 전용이라 기존 폴백 순서를 유지 · prices/holdings 가 None·빈 값이면 context 로 복원)
     """
-    lp = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    eff_prices = (
+        prices
+        if isinstance(prices, dict) and prices
+        else (
+            getattr(context, "latest_prices", {})
+            if context is not None
+            and isinstance(getattr(context, "latest_prices", None), dict)
+            else {}
+        )
+    )
+    lp = safe_float((eff_prices or {}).get(TARGET_SYMBOL), 0.0)
     if lp > 0.0:
         return lp
     raw_cache = getattr(context, "candle_metrics_cache", {})
@@ -589,12 +603,49 @@ def _get_live_soxl_price(
         raw_cache.get(TARGET_SYMBOL) if isinstance(raw_cache, dict) else None
     )
     if isinstance(base_met, dict):
-        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=now_est)
+        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=dt)
         lp = safe_float(met.get("live_price"), 0.0)
         if lp > 0.0:
             return lp
-    h_info = (holdings or {}).get(TARGET_SYMBOL, {})
+    eff_holdings = (
+        holdings
+        if isinstance(holdings, dict) and holdings
+        else (
+            getattr(context, "latest_holdings", {})
+            if context is not None
+            and isinstance(getattr(context, "latest_holdings", None), dict)
+            else {}
+        )
+    )
+    h_info = (eff_holdings or {}).get(TARGET_SYMBOL, {})
+    if not isinstance(h_info, dict):
+        return 0.0
     return safe_float(h_info.get("last_price"), 0.0)
+
+
+def _resolve_holdings_prices(
+    context: Any,
+    holdings: Optional[Dict[str, Dict[str, Any]]],
+    prices: Optional[Dict[str, float]],
+    live_price: Any = 0.0,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, float]]:
+    """
+    # NEW [4bot v2.5.2 · 원작 1478200]: holdings·prices 가 None/빈 값이면 context.latest_* 로 복원 (TypeError 방지).
+    """
+    if isinstance(holdings, dict) and holdings:
+        eff_h = holdings
+    else:
+        ctx_h = getattr(context, "latest_holdings", None) if context is not None else None
+        eff_h = ctx_h if isinstance(ctx_h, dict) else {}
+    if isinstance(prices, dict) and prices:
+        eff_p = dict(prices)
+    else:
+        ctx_p = getattr(context, "latest_prices", None) if context is not None else None
+        eff_p = dict(ctx_p) if isinstance(ctx_p, dict) else {}
+    kw_lp = safe_float(live_price, 0.0)
+    if kw_lp > 0.0 and safe_float(eff_p.get(TARGET_SYMBOL), 0.0) <= 0.0:
+        eff_p[TARGET_SYMBOL] = kw_lp
+    return eff_h, eff_p
 
 
 async def _fetch_fresh_current_soxl_price(
@@ -612,6 +663,8 @@ async def _fetch_fresh_current_soxl_price(
         if fresh_p > 0.0:
             if isinstance(getattr(context, "latest_prices", None), dict):
                 context.latest_prices[TARGET_SYMBOL] = fresh_p
+            setattr(context, "last_soxl_live_price", fresh_p)
+            setattr(context, "last_soxl_live_price_mono", time.monotonic())
             if isinstance(getattr(context, "candle_metrics_cache", None), dict):
                 base_met = context.candle_metrics_cache.get(TARGET_SYMBOL)
                 if isinstance(base_met, dict):
@@ -1479,10 +1532,11 @@ async def _commit_filled_buy_to_stratum_ledger(
 
 async def sync_pending_buy_order_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
     force_settle: bool = False,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     # MODIFIED [🎯 1 & 🎯 5 & Case 19, 24, 59, 60, 61, 65, 66, 71, 72, 73, 76, 77, 78, Case 84, Case 87 & Case 88]:
@@ -1913,10 +1967,11 @@ logger = logging.getLogger("toss_sniper.sniper_plugin")
 # ---------------------------------------------------------------------------
 async def _execute_sub_grid_buy_engine_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
-    dt_now: datetime,
-    live_p: float,
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
+    dt_now: Optional[datetime] = None,
+    live_p: float = 0.0,
+    **kwargs: Any,
 ) -> Optional[Dict[str, Any]]:
     """
     # MODIFIED [Case 88, Case 91 & Case 92 : 🛡️ 13_SUB_L1L3_RESV05_CAP4L — Default-ON 3층 서브 그리드 매수 엔진 (자산증식형[복리] ⇄ 인출형[단리] 연동 & 서브 1층 공석 +1.00% 돌파 시 RSI(14) <= 50.0 필터 & 유휴현금 부족 시 10분 버킷 즉시 소모 & 60초 쉴드 & 뮤텍스 2차 타임쉴드 검문 강화)]:
@@ -1931,6 +1986,15 @@ async def _execute_sub_grid_buy_engine_plugin(
     5) 서브 10분 게이트(S-B2)에서 유휴현금 부족 시 해당 10분 버킷(sub_last_evaluated_buy_bucket_id)을 즉시 소모 처리하고,
        서브 0주(S-A) 및 서브 잔량 보충(S-B0)에서 유휴현금 부족 시 60.0초 쿨다운 쉴드를 각인하여 불필요한 반복 API 호출을 원천 차단한다.
     """
+    # [4bot v2.5.2 · 원작 1478200] 선택 인자 안전 기본값 · context 자동 복원
+    dt_now = dt_now.astimezone(EST_TZ) if dt_now else datetime.now(EST_TZ)
+    holdings, prices = _resolve_holdings_prices(context, holdings, prices)
+    live_p = safe_float(live_p, 0.0)
+    if live_p <= 0.0:
+        live_p = _get_live_soxl_price(context, prices, holdings, dt_now)
+    if live_p <= 0.0:
+        return None
+
     st = context.ledger.get_state(TARGET_SYMBOL)
     if str(st.get("buy_order_id") or "").strip() or str(
         st.get("sell_order_id") or ""
@@ -3143,16 +3207,21 @@ async def _execute_sub_grid_buy_engine_plugin(
 # ---------------------------------------------------------------------------
 async def execute_seed_protected_buy_gate_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     🎯 1, 🎯 2, 🎯 4 & Case 25 ~ 92 (챔피언 : 👑 06_L2L7_RATCHET_8PCT × 🛡️ 13_SUB_L1L3_RESV05_CAP4L[Default ON] × 💉 무제한 예비수혈 × 🔓 06_STEP2X_15PCT_C20 × 🛡️ Case 84 × 🔹 Case 92 돌파 RSI<=50 × 💵 Case 91 복리/단리 모드 연동):
     04:07:00 ~ 16:00:00 EST 운용 구간에서 작동하는 비대칭 매수 타격 엔진.
+    - [4bot v2.5.2 · 원작 1478200] holdings 또는 prices 가 None/빈 값이면 context.latest_holdings / context.latest_prices 로 자동 복원한다.
     """
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
+    holdings, prices = _resolve_holdings_prices(
+        context, holdings, prices, kwargs.get("live_price")
+    )
 
     # 1) 미체결 매수 주문이 있으면 먼저 체결 확인 수행
     st = context.ledger.get_state(TARGET_SYMBOL)

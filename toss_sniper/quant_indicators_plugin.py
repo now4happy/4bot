@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: quant_indicators_plugin.py
+# 4bot 2번 v2.5.2 (2026-11-10): 원작 1611d07 암살자용 새 지표 키만 추가 — 5분 전 종가 close_5m_ago · 5분 변화율 vel_5m_pct · 프리장 고점 대비 낙폭 dd_from_pre_high_pct (벡터 산출 + 실시간 O(1) 합성 · 기존 키 값·의미 무변경)
 # 4bot 2번 v2.4.0 (2026-11-07): 원작 c4ad8d6 Case 93 [모의] 암살자용 지표 추가 — QQQ 지표(compute_qqq_macro_metrics_1m)·전일종가/04:07프리시가/프리VWAP 래치·단기 변화율 (기존 키 값은 그대로, 새 키만 추가)
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
 # 4bot 2번 v2.0.0 (2026-11-03): 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
@@ -698,10 +699,13 @@ def _compute_vectorized_heikin_ashi_and_rsi(
     # [4bot v2.4.0 · 원작 c4ad8d6 Case 93 · 암살자 전용 새 키] 3분/10분 전 종가 · 단기 변화율 (기존 키 무변경)
     cur_c_v = float(closes[-1])
     c_3m_ago = float(closes[-4]) if n >= 4 else float(closes[0])
+    # [4bot v2.5.2 · 원작 1611d07] 5분 전 종가 (새 키 · DL10/DL_G6/SMART_WAIT 전용)
+    c_5m_ago = float(closes[-6]) if n >= 6 else float(closes[0])
     c_10m_ago = float(closes[-11]) if n >= 11 else float(closes[0])
     vel_1m_pct = ((cur_c_v - prev_bar_close) / prev_bar_close) * 100.0 if prev_bar_close > 0.0 else 0.0
     vel_3m_pct = ((cur_c_v - c_3m_ago) / c_3m_ago) * 100.0 if c_3m_ago > 0.0 else 0.0
     vel_10m_pct = ((cur_c_v - c_10m_ago) / c_10m_ago) * 100.0 if c_10m_ago > 0.0 else 0.0
+    vel_5m_pct = ((cur_c_v - c_5m_ago) / c_5m_ago) * 100.0 if c_5m_ago > 0.0 else 0.0
 
     return {
         "rsi_14": round(rsi_val, 2),
@@ -709,6 +713,8 @@ def _compute_vectorized_heikin_ashi_and_rsi(
         "candle_count": int(n),
         "close_3m_ago": round(c_3m_ago, 4),
         "close_10m_ago": round(c_10m_ago, 4),
+        "close_5m_ago": round(c_5m_ago, 4),
+        "vel_5m_pct": round(vel_5m_pct, 4),
         "vel_1m_pct": round(vel_1m_pct, 4),
         "vel_3m_pct": round(vel_3m_pct, 4),
         "vel_10m_pct": round(vel_10m_pct, 4),
@@ -1582,6 +1588,17 @@ def _refresh_assassin_tick_fields(
         met["vel_max_3m_10m_pct"] = round(
             max(safe_float(met.get("vel_3m_pct"), 0.0), safe_float(met.get("vel_10m_pct"), 0.0)), 4
         )
+        # [4bot v2.5.2 · 원작 1611d07] 새 키만 O(1) 갱신: 5분 변화율 · 프리장 고점 대비 낙폭 (기존 키 무변경)
+        c_5m = safe_float(met.get("close_5m_ago"), c_3m)
+        if c_5m > 0.0:
+            met["vel_5m_pct"] = round((lp - c_5m) / c_5m * 100.0, 4)
+        else:
+            met["vel_5m_pct"] = 0.0
+        eff_pre_h = safe_float(met.get("premarket_high"), 0.0)
+        if eff_pre_h > 0.0:
+            met["dd_from_pre_high_pct"] = round((lp - eff_pre_h) / eff_pre_h * 100.0, 4)
+        else:
+            met["dd_from_pre_high_pct"] = 0.0
 
         latch = _get_daily_anchor_latch(sym, today_str)
         latched_prev_c = safe_float(latch.get("prev_reg_close"), 0.0)

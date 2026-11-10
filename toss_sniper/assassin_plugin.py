@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """
+# 4bot 2번 v2.5.2 (2026-11-10): 원작 1611d07·a12ba3c·6d7c3ad 암살자 진화형 이식 — 14대 진성 게이트(10대 + 2순위 강세장 눌림목 UG1~UG4 · 01_ZERO/03_BRK 고점추격 배제 · 눌림/와이드/T03_A & 양봉 & 프리고점 DD<=-1%) · 출동 QQQ(entry_qqq_price) 고정 · 이원화 안전망 SN4_DEEP_1000_SN3_SMART_HYBRID_UG_QQQ100_IMMED (UG: 04:07~ 고정QQQ -1.00% 즉시 STAGE_UG_QQQ100_HARD_STOP · QQQ 미수신 시 SOXL -2.50% 폴백 / 10대: 08:15~ SN4×SN3 그대로) · 프리고점 today_pre_high_price 원장 박제 (v2.5.1 복기 일지 50건·55초 심볼별 워밍업·위 4bot 맞춤 6곳·하드락 True 그대로 · 원작 a12ba3c 의 복기 일지/워밍업 제거는 가져오지 않음)
 # 4bot 2번 v2.5.1 (2026-11-09): 원작 c9c5f84 후속 다듬기 이식 — T03_A 1분 눌림 진성 게이트 스캔 · 출동 QQQ 지수 기준 3단 안전망 · 진입 공용화 (위 4bot 맞춤 6곳·하드락 True 그대로)
 # 4bot 2번 v2.4.0 (2026-11-07): 원작 pipiosToss_bot c4ad8d6 Case 93 [모의] 암살자 신규 이식 — 원작 최종본 그대로 + 4bot 구조 맞춤 6곳
 #   ① 스나이퍼 지표 캐시(candle_metrics_cache)는 건드리지 않음 — 암살자 자체 캐시(context.assassin_metrics_cache)만 읽고 씀
@@ -108,6 +109,20 @@ SCOUT_T03A_DIP_SCAN_INTERVAL_SEC: float = 60.0
 _LAST_T03A_DIP_SCAN_KEY: str = ""
 _LAST_T03A_DIP_SCAN_TS: float = 0.0
 
+# NEW [4bot v2.5.2 · 원작 6d7c3ad Case 93 진화형 : 프리장 강세장 눌림목 전용 게이트 (UG1 ~ UG4) 상수]
+UG_MIN_PULLBACK_DD_PCT: float = -1.00    # 프리고점 또는 직전 정찰 앵커 대비 최소 눌림폭 (-1.00%)
+UG4_DEEP_PULLBACK_DD_PCT: float = -2.00  # UG4 강세일 일중 급눌림 최소 낙폭 (-2.00%)
+UG1_MAX_RSI: float = 44.0                # UG1(선행익절 >= 2회) 최대 허용 RSI(14)
+UG2_MAX_RSI: float = 45.0                # UG2(선행익절 >= 3회) 최대 허용 RSI(14)
+UG3_MAX_RSI: float = 48.0                # UG3(선행익절 >= 5회) 최대 허용 RSI(14)
+UG4_MAX_RSI: float = 38.0                # UG4(선행익절 >= 1회 & 전일>=0%) 최대 허용 RSI(14)
+# UG 게이트가 열릴 수 있는 눌림목 정찰 타점 (01_OPEN_0407 · 01_ZERO_REENTRY · 03_BRK_1PCT_RSI50 고점 추격은 제외)
+UG_PULLBACK_ENTRY_TYPES: Tuple[str, ...] = (
+    "02_PULL_1PCT_NOFILT",
+    "04_WIDE_GRID_DIP",
+    "T03A_DIP_SCAN",
+)
+
 ASSASSIN_SAFE_CAP_PCT: float = 5.00      # 본대 진입 직후 상단 안전 캡 (+5.00%)
 ASSASSIN_ARM_IGNITION_PCT: float = 1.00  # 트레일링 점화 및 최소 수익 보존선 (+1.00%)
 ASSASSIN_BOOST_TIER2_PCT: float = 2.00   # +2.00% 이상 구간 콜백 완화 기준
@@ -118,7 +133,8 @@ ASSASSIN_QQQ_SURGE_BYPASS_PCT: float = 0.20  # QQQ 3m/10m 변화율 >= +0.20% �
 # NEW & MODIFIED [Case 93 : 안전망 모드 ① SN4_DEEP_1000 / SN3_SMART_HYBRID 결합형 (장중 진성폭락 안전망 유지 · 승률 99.17%) 상수]
 # 1) SN4_DEEP_1000 : QQQ 2.00% 진폭의 50%인 -1.00% 딥 기준선으로 일원화하여 -0.80% ~ -0.99% 구간의 조기 손절 원천 차단
 # 2) SN3_SMART_HYBRID : QQQ -1.00% 도달 시에도 6대 상승/지지 조건 보호 및 SOXL 진성 손실(<= -1.50% & QQQ 하락 가속 또는 <= -3.00%) 교차 확인
-SAFETY_NET_MODE_DEFAULT: str = "SN4_DEEP_1000_SN3_SMART_HYBRID"
+# [4bot v2.5.2 · 원작 6d7c3ad] 이원화: UG1~UG4 출동 시 04:07~ 고정 QQQ -1.00% 즉시 손절 / 기존 10대 게이트는 08:15~ SN4×SN3 그대로
+SAFETY_NET_MODE_DEFAULT: str = "SN4_DEEP_1000_SN3_SMART_HYBRID_UG_QQQ100_IMMED"
 SAFETY_QQQ_BASE_AMP_PCT: float = 2.00         # QQQ 기준 진폭 비율 (2.00%)
 SAFETY_QQQ_AMP_CUT_RATIO: float = 0.50        # QQQ 진폭 대비 안전망 손절 비율 (50% = 0.50)
 SAFETY_DYN_QQQ_MIN_THR_PCT: float = 1.00      # SN4_DEEP_1000: QQQ 최소 손절 진폭 비율 (-1.00% 고정)
@@ -128,8 +144,15 @@ SAFETY_DYN_QQQ_MAX_THR_PCT: float = 1.00      # SN4_DEEP_1000: QQQ 최대 손절
 SAFETY_STAGE1_HEART_STOP_PCT: float = -3.00        # SOXL 3배 레버리지 등가 진성 급락 기준 (-3.00%)
 SAFETY_STAGE23_SOXL_LOSS_MAX_PCT: float = -1.50    # SN3_SMART_HYBRID: 경미 손실(-0.01% ~ -1.49%) 손절 보류 · 최소 -1.50% 이하 손실 시 발동
 SAFETY_STAGE23_QQQ_VEL3M_DROP_PCT: float = -0.25   # SN3_SMART_HYBRID: QQQ 3분 변화율 급락 가속 기준 (-0.25%)
+SAFETY_UG_QQQ_DROP_STOP_PCT: float = -1.00         # [v2.5.2] UG1~UG4 출동 시 고정 QQQ 대비 즉시 손절 임계치 (-1.00%)
+SAFETY_UG_SOXL_FALLBACK_STOP_PCT: float = -2.50    # [v2.5.2] QQQ 시세 미수신 시 UG 전용 SOXL 폴백 하드스탑 (-2.50%)
 
 ASSASSIN_MAX_JOURNAL_HISTORY: int = 50             # 원장 내 최근 매매 복기 일지 최대 보관 건수 (50건)
+
+
+def _is_ug_bull_pullback_gate(gate_id: Any) -> bool:
+    """# NEW [4bot v2.5.2 · 원작 6d7c3ad]: 진입 게이트 ID가 강세장 눌림목 전용 게이트(UG1 ~ UG4)인지 판별한다."""
+    return str(gate_id or "").strip().upper().startswith("UG")
 
 
 def _is_collapsed_assassin_anchors(
@@ -294,6 +317,7 @@ class AssassinSimLedger:
             "today_pre_open_price": 0.0,
             "today_premarket_vwap": 0.0,
             "today_regular_vwap": 0.0,
+            "today_pre_high_price": 0.0,
             # 04:07 ~ 08:14 EST 1주 가상 독립 정찰병 상태
             "scout_units": [],
             "day_scout_history": [],
@@ -384,6 +408,7 @@ class AssassinSimLedger:
             "exit_vwap_1500_cnt": 0,
             "exit_safety_stage1_cnt": 0,
             "exit_safety_stage23_cnt": 0,
+            "exit_ug_qqq_stop_cnt": 0,
             "exit_moc_cnt": 0,
             "simple_cum_net_usd": 0.0,
             "comp_free_cash_usd": clean_seed,
@@ -431,6 +456,12 @@ class AssassinSimLedger:
 
         base["entry_qqq_price"] = round(
             max(0.0, safe_float(base.get("entry_qqq_price"), 0.0)), 4
+        )
+        base["today_pre_high_price"] = round(
+            max(0.0, safe_float(base.get("today_pre_high_price"), 0.0)), 4
+        )
+        base["exit_ug_qqq_stop_cnt"] = max(
+            0, safe_int(base.get("exit_ug_qqq_stop_cnt"), 0)
         )
         base["qqq_chg_from_entry_pct"] = round(
             safe_float(base.get("qqq_chg_from_entry_pct"), 0.0), 3
@@ -691,6 +722,7 @@ class AssassinSimLedger:
             today_pre_open_price=0.0,
             today_premarket_vwap=0.0,
             today_regular_vwap=0.0,
+            today_pre_high_price=0.0,
             scout_units=[],
             day_scout_history=[],
             day_scout_seq=0,
@@ -788,6 +820,7 @@ class AssassinSimLedger:
             exit_vwap_1500_cnt=0,
             exit_safety_stage1_cnt=0,
             exit_safety_stage23_cnt=0,
+            exit_ug_qqq_stop_cnt=0,
             exit_moc_cnt=0,
             simple_cum_net_usd=0.0,
             comp_free_cash_usd=eff_seed,
@@ -838,8 +871,16 @@ def evaluate_10_truth_gates_signal(
     prior_scout_wins: int,
     is_bull_bar: bool,
     allow_sc1_dip_scan: bool = False,
+    entry_type: str = "",
+    dd_from_pre_high_pct: float = 0.0,
+    qqq_vel_1m_pct: float = 0.0,
 ) -> Tuple[bool, str, str]:
     """
+    # MODIFIED [4bot v2.5.2 · 원작 6d7c3ad : 14대 진성 게이트 = 1순위 기존 10대(G1~G5 + BG1~BG5) + 2순위 강세장 눌림목 4대(UG1~UG4)]
+    - UG1~UG4 는 10대가 모두 불발일 때만 판정하며, 고점 추격 타점(01_OPEN_0407 · 01_ZERO_REENTRY · 03_BRK_1PCT_RSI50)은 100% 배제한다.
+      오직 눌림목 타점(02_PULL_1PCT_NOFILT / 04_WIDE_GRID_DIP / T03_A 1분 눌림 스캔) & 프리고점 대비 DD <= -1.00% & 1분봉 양봉일 때만:
+      UG1 선행익절>=2 & RSI<=44 & VWAP -0.80%~+0.50% & 시가>=-0.50% / UG2 선행익절>=3 & RSI<=45 & VWAP 0~+1.50% & 시가>=+0.50% /
+      UG3 선행익절>=5 & RSI<=48 & VWAP 0~+3.50% & 전일>=0% & 시가>=+1.00% / UG4 선행익절>=1 & 전일>=0% & DD<=-2.00% & RSI<=38 & QQQ1m>=0%
     # [Case 93 : 10대 진성 게이트 판정 (T03_A_DIP10_ALL_SCOUT 완벽 지원)]:
     기본적으로 #1 선봉 정찰병(04:07 EST) 파견 순간에는 본대 진입을 보류(scout_seq >= 2 필수)하되,
     T03_A_DIP10_ALL_SCOUT 규율에 따라 #1 선봉 파견 이후 직전 정찰 저점 대비 -1.00% 이하 눌림 구간에서
@@ -912,6 +953,51 @@ def evaluate_10_truth_gates_signal(
             "폭락BG5(RSI≤45 · VWAP≤-1.5% · 전일≤-4.0% · 정찰익절≥1회)",
         )
 
+    # [2순위 · 4bot v2.5.2 · 원작 6d7c3ad] 강세장 눌림목 전용 BullGate (UG1 ~ UG4)
+    dd_high = safe_float(dd_from_pre_high_pct, 0.0)
+    q_vel1 = safe_float(qqq_vel_1m_pct, 0.0)
+    etype = str(entry_type or "").strip().upper()
+    is_pullback_dip = bool(
+        bool(allow_sc1_dip_scan) or etype in UG_PULLBACK_ENTRY_TYPES
+    )
+    if is_pullback_dip and bull and dd_high <= (UG_MIN_PULLBACK_DD_PCT + 1e-6):
+        if wins >= 2 and r <= UG1_MAX_RSI and -0.80 <= vw <= 0.50 and po >= -0.50:
+            return (
+                True,
+                "UG1",
+                f"강세눌림UG1(선행익절 {wins}회 · RSI {r:.1f}≤44 · VWAP {vw:+.2f}% · 고점DD {dd_high:+.2f}% · 양봉)",
+            )
+        if wins >= 3 and r <= UG2_MAX_RSI and 0.00 <= vw <= 1.50 and po >= 0.50:
+            return (
+                True,
+                "UG2",
+                f"강세눌림UG2(선행익절 {wins}회 · RSI {r:.1f}≤45 · VWAP {vw:+.2f}% 상단지지 · 시가 {po:+.2f}% · 양봉)",
+            )
+        if (
+            wins >= 5
+            and r <= UG3_MAX_RSI
+            and 0.00 <= vw <= 3.50
+            and pc >= 0.00
+            and po >= 1.00
+        ):
+            return (
+                True,
+                "UG3",
+                f"초강세눌림UG3(선행익절 {wins}회 · RSI {r:.1f}≤48 · VWAP {vw:+.2f}% · 전일 {pc:+.2f}%≥0% · 양봉)",
+            )
+        if (
+            wins >= 1
+            and pc >= 0.00
+            and dd_high <= (UG4_DEEP_PULLBACK_DD_PCT + 1e-6)
+            and r <= UG4_MAX_RSI
+            and q_vel1 >= 0.00
+        ):
+            return (
+                True,
+                "UG4",
+                f"강세급눌림UG4(선행익절 {wins}회 · 전일 {pc:+.2f}%≥0% · 고점DD {dd_high:+.2f}%≤-2% · RSI {r:.1f}≤38 · 양봉)",
+            )
+
     return False, "", "NO_GATE_MATCH"
 
 
@@ -934,6 +1020,7 @@ def evaluate_directional_3stage_safety_net_v2(
     qqq_chg_from_entry_pct: float = 0.0,
     entry_qqq_price: float = 0.0,
     qqq_live_price: float = 0.0,
+    entry_gate_id: str = "",
 ) -> Tuple[bool, str, str, float]:
     """
     # MODIFIED [Case 93 : 08:15 EST 이후 안전망 모드 ① — SN4_DEEP_1000 / SN3_SMART_HYBRID 결합형 (승률 99.17%)]:
@@ -968,12 +1055,41 @@ def evaluate_directional_3stage_safety_net_v2(
         2,
     )
 
-    if int(hm) < ASSASSIN_MACRO_CUTOFF_HM or bool(is_trailing_armed):
+    if bool(is_trailing_armed):
         return False, "", "PRE_0815_OR_ARMED", dyn_thr
 
     ep = max(0.01, safe_float(entry_price, 10.0))
     lp = max(0.01, safe_float(live_price, ep))
     cur_gain_pct = ((lp - ep) / ep) * 100.0
+
+    # [경로 A · 4bot v2.5.2 · 원작 6d7c3ad] 강세장 눌림목(UG1 ~ UG4) 출동 전용:
+    #   출동 직후(04:07 EST~ 프리장·정규장 전 구간) 고정 출동 QQQ(entry_qqq_price) 대비 -1.00% 이하 하락 & SOXL 손실 구간이면
+    #   전일종가/프리시가 지지 착시 홀딩 없이 즉시 칼손절 (QQQ 미수신 시 SOXL <= -2.50% 폴백)
+    if _is_ug_bull_pullback_gate(entry_gate_id):
+        if cur_gain_pct >= 0.0:
+            return False, "", "HOLD_UG_PROFIT_ZONE", dyn_thr
+        ug_eq = max(0.0, safe_float(entry_qqq_price, 0.0))
+        ug_lq = max(0.0, safe_float(qqq_live_price, 0.0))
+        if ug_eq > 0.0 and ug_lq > 0.0:
+            qqq_chg_ug = ((ug_lq - ug_eq) / ug_eq) * 100.0
+            if qqq_chg_ug <= (SAFETY_UG_QQQ_DROP_STOP_PCT + 1e-6):
+                desc_ug = (
+                    f"UG 강세눌림 안전망(고정QQQ ${ug_eq:.2f}➔${ug_lq:.2f} "
+                    f"[{qqq_chg_ug:+.2f}%≤{SAFETY_UG_QQQ_DROP_STOP_PCT:.2f}%]) 즉시 칼손절(SOXL {cur_gain_pct:+.2f}%)"
+                )
+                return True, "STAGE_UG_QQQ100_HARD_STOP", desc_ug, dyn_thr
+            return False, "", "HOLD_UG_QQQ100_MONITOR", dyn_thr
+        if cur_gain_pct <= SAFETY_UG_SOXL_FALLBACK_STOP_PCT:
+            desc_fb = (
+                f"UG 강세눌림 폴백 안전망(QQQ 미수신 · SOXL {cur_gain_pct:+.2f}%"
+                f"≤{SAFETY_UG_SOXL_FALLBACK_STOP_PCT:.2f}%) 즉시 칼손절"
+            )
+            return True, "STAGE_UG_QQQ100_HARD_STOP", desc_fb, dyn_thr
+        return False, "", "HOLD_UG_FALLBACK_MONITOR", dyn_thr
+
+    # [경로 B] 기존 10대 급락 게이트(G1~G5, BG1~BG5): 08:15 EST 이후 SN4_DEEP_1000 × SN3_SMART_HYBRID (기존 그대로)
+    if int(hm) < ASSASSIN_MACRO_CUTOFF_HM:
+        return False, "", "PRE_0815_OR_ARMED", dyn_thr
 
     # 출동 순간 QQQ 지수(entry_qqq_price) 대비 현재 QQQ 등락률(%) 산출
     eq_p = max(0.0, safe_float(entry_qqq_price, 0.0))
@@ -1404,6 +1520,32 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         else (led_reg_v if led_reg_v > 0.0 else live_p)
     )
 
+    # [4bot v2.5.2 · 원작 6d7c3ad] 당일 프리장 최고가(pre_high_price) 및 프리고점 대비 낙폭(dd_from_pre_high_pct) 산출
+    #   원장 박제값 · 암살자 지표 premarket_high · 당일 정찰 진입가 최고치 · 정찰 앵커 · 선봉가 · 검증 프리시가 · (09:29 이전) 현재 1분봉 고가/현재가 중 최대
+    saved_pre_high = safe_float(st_led.get("today_pre_high_price"), 0.0)
+    max_scout_entry_p = 0.0
+    for h_item in st_led.get("day_scout_history") or []:
+        if isinstance(h_item, dict):
+            max_scout_entry_p = max(
+                max_scout_entry_p, safe_float(h_item.get("entry_price"), 0.0)
+            )
+    cur_bar_high_p = max(live_p, safe_float(soxl_m.get("cur_bar_high"), live_p))
+    eff_pre_high = max(
+        saved_pre_high,
+        safe_float(soxl_m.get("premarket_high"), 0.0),
+        max_scout_entry_p,
+        safe_float(st_led.get("scout_anchor_price"), 0.0),
+        safe_float(st_led.get("scout1_open_price"), 0.0),
+        pre_open_price if pre_open_verified else 0.0,
+        cur_bar_high_p if hm <= 929 else 0.0,
+        live_p if hm <= 929 else 0.0,
+    )
+    dd_from_pre_high_pct = (
+        ((live_p - eff_pre_high) / eff_pre_high) * 100.0
+        if (live_p > 0.0 and eff_pre_high > 0.0)
+        else 0.0
+    )
+
     # 검증된 앵커가 새로 확보되었거나 구버전 오염이 치유된 경우 원장에 영속화
     if ledger is not None and live_p > 0.0:
         need_save = False
@@ -1445,6 +1587,11 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
             upd_kw["today_regular_vwap"] = round(reg_vwap, 4)
             need_save = True
 
+        # [4bot v2.5.2 · 원작 6d7c3ad] 당일 프리장 최고가(today_pre_high_price) 원장 박제 (04:00 ~ 09:29 EST 갱신분만)
+        if hm <= 929 and eff_pre_high > 0.0 and (eff_pre_high - saved_pre_high) > 1e-4:
+            upd_kw["today_pre_high_price"] = round(eff_pre_high, 4)
+            need_save = True
+
         upd_kw["today_anchors_locked"] = bool(
             prev_close_verified and pre_open_verified and pre_vwap_verified
         )
@@ -1480,6 +1627,8 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         "vs_pre_open_pct": vs_pre_open_pct,
         "is_bull_bar": bool(soxl_m.get("is_bull_bar", True)),
         "is_ha_bull": bool(soxl_m.get("is_ha_bull", True)),
+        "pre_high_price": round(eff_pre_high, 4) if eff_pre_high > 0.0 else round(live_p, 4),
+        "dd_from_pre_high_pct": round(dd_from_pre_high_pct, 2),
         "qqq_live_price": round(qqq_lp, 4),
         "qqq_vel_1m_pct": round(
             safe_float(qqq_m.get("qqq_vel_1m_pct"), 0.0), 3
@@ -1807,8 +1956,13 @@ async def _send_3_gate10_main_entry_alert(
         f"• 작동게이트: <b>{html.escape(gid)}</b> ({html.escape(gdesc)})\n"
         f"• 포착경로: <code>{html.escape(trig_mode)}</code> · 정찰 <b>#{sc_seq}</b> (선행익절 <b>{pr_wins}회</b>)\n"
         f"• 진입단가: <b>${ep:,.2f}</b> (<code>{html.escape(str(st.get('entry_time_est') or ''))} EST</code> · 가상 <b>{s_qty:,}주</b> / ${s_inv:,.2f})\n"
-        f"• 출동QQQ: <b>${eq_qqq:,.2f}</b> (1m <code>{eq_v1:+.2f}%</code> · 3m <code>{eq_v3:+.2f}%</code> · SN4×SN3 안전망 <code>-{dyn_thr:.2f}%</code>)\n"
-        f"• 진입지표①: RSI(14) <b>{safe_float(st.get('entry_rsi_14'), 50.0):.1f}</b> ({e_bull}/{e_ha}) · 프리VWAP <code>{vwap_txt}</code>\n"
+        f"• 고정QQQ: <b>${eq_qqq:,.2f}</b> (1m <code>{eq_v1:+.2f}%</code> · 3m <code>{eq_v3:+.2f}%</code> · "
+        + (
+            f"UG 안전망 <code>04:07~ 고정QQQ {SAFETY_UG_QQQ_DROP_STOP_PCT:.2f}% 즉시손절</code>)\n"
+            if _is_ug_bull_pullback_gate(gid)
+            else f"SN4×SN3 안전망 <code>08:15~ -{dyn_thr:.2f}%</code>)\n"
+        )
+        + f"• 진입지표①: RSI(14) <b>{safe_float(st.get('entry_rsi_14'), 50.0):.1f}</b> ({e_bull}/{e_ha}) · 프리VWAP <code>{vwap_txt}</code>\n"
         f"• 진입지표②: 전일종가 <code>{prev_txt}</code> · 04:07시가 <code>{open_txt}</code> · 선봉대비 <code>{sc1_pct:+.2f}%</code>\n"
         f"• 선장전캡: 상단 안전캡 <b>${cap_p:,.2f} (+5.00%)</b> 대기 / 점화목표 <b>${arm_p:,.2f} (+1.00%)</b>"
     )
@@ -2036,6 +2190,7 @@ def evaluate_assassin_ha_trailing_and_exits(
     nq_entry_bear_amp_pct: float,
     entry_qqq_price: float = 0.0,
     qqq_live_price: float = 0.0,
+    entry_gate_id: str = "",
 ) -> Dict[str, Any]:
     """
     # MODIFIED [Case 93 : 본대 보유 중 통합 출구(Exit) 판정 엔진 — 안전망 모드 ① SN4_DEEP_1000 / SN3_SMART_HYBRID 결합형 연동]:
@@ -2223,7 +2378,7 @@ def evaluate_assassin_ha_trailing_and_exits(
             "active_stop_floor_price": round(lp, 2),
         }
 
-    # 6) 미점화 상태: 08:15 EST 이후 SN4_DEEP_1000 / SN3_SMART_HYBRID 결합형 3단계 안전망 검문
+    # 6) 미점화 상태: [v2.5.2] UG1~UG4 출동은 04:07~ 고정 QQQ -1.00% 즉시 손절 / 10대 게이트는 08:15 EST 이후 SN4_DEEP_1000 / SN3_SMART_HYBRID 결합형 3단계 안전망 검문
     eq_p = safe_float(entry_qqq_price, 0.0)
     lq_p = safe_float(qqq_live_price, 0.0)
     qqq_chg_pct = (
@@ -2249,6 +2404,7 @@ def evaluate_assassin_ha_trailing_and_exits(
             qqq_chg_from_entry_pct=qqq_chg_pct,
             entry_qqq_price=eq_p,
             qqq_live_price=lq_p,
+            entry_gate_id=entry_gate_id,
         )
     )
     if trig_safe:
@@ -2511,6 +2667,20 @@ async def _dispatch_new_scout_unit_and_check_gates(
         safe_int(st.get("scout_ratchet_max_lots"), 0), len(units)
     )
 
+    # [4bot v2.5.2 · 원작 6d7c3ad] 프리고점(직전까지) 대비 낙폭 → UG 게이트 판정용 · 이번 정찰가로 프리고점 갱신
+    prev_pre_high = max(
+        safe_float(st.get("today_pre_high_price"), 0.0),
+        safe_float(feat.get("pre_high_price"), 0.0),
+        safe_float(st.get("scout_anchor_price"), 0.0),
+        sc1_p,
+    )
+    dd_from_high = (
+        ((lp - prev_pre_high) / prev_pre_high) * 100.0
+        if prev_pre_high > 0.0
+        else safe_float(feat.get("dd_from_pre_high_pct"), 0.0)
+    )
+    new_pre_high = round(max(prev_pre_high, lp), 4)
+
     prior_wins = safe_int(st.get("prior_scout_wins_today"), 0)
     gate_hit, gate_id, gate_desc = evaluate_10_truth_gates_signal(
         scout_seq=new_seq,
@@ -2522,6 +2692,9 @@ async def _dispatch_new_scout_unit_and_check_gates(
         prior_scout_wins=prior_wins,
         is_bull_bar=new_scout.is_bull_bar,
         allow_sc1_dip_scan=False,
+        entry_type=entry_type,
+        dd_from_pre_high_pct=round(dd_from_high, 2),
+        qqq_vel_1m_pct=safe_float(feat.get("qqq_vel_1m_pct"), 0.0),
     )
 
     _LAST_T03A_DIP_SCAN_KEY = now_est.strftime("%Y-%m-%d %H:%M")
@@ -2537,6 +2710,7 @@ async def _dispatch_new_scout_unit_and_check_gates(
         "today_pre_open_verified": True,
         "today_premarket_vwap": round(eff_pre_vwap, 4),
         "today_pre_vwap_verified": True,
+        "today_pre_high_price": new_pre_high,
         "scout_anchor_price": round(lp, 4),
         "scout_cycle_min_buy_price": new_min_p,
         "scout_ratchet_max_lots": new_ratchet,
@@ -2691,6 +2865,11 @@ async def _evaluate_t03a_1m_dip_truth_gates_scan(
     rsi_now = safe_float(feat.get("rsi_14"), 50.0)
     is_bull_now = bool(feat.get("is_bull_bar", True))
     prior_wins = safe_int(st.get("prior_scout_wins_today"), 0)
+    # [4bot v2.5.2 · 원작 6d7c3ad] UG 판정용 낙폭 = min(프리고점 대비 DD, 직전 정찰 저점 대비 변화율)
+    dd_from_high = min(
+        safe_float(feat.get("dd_from_pre_high_pct"), 0.0),
+        chg_from_dip_low,
+    )
 
     gate_hit, gate_id, gate_desc = evaluate_10_truth_gates_signal(
         scout_seq=cur_seq,
@@ -2702,6 +2881,9 @@ async def _evaluate_t03a_1m_dip_truth_gates_scan(
         prior_scout_wins=prior_wins,
         is_bull_bar=is_bull_now,
         allow_sc1_dip_scan=True,
+        entry_type="T03A_DIP_SCAN",
+        dd_from_pre_high_pct=round(dd_from_high, 2),
+        qqq_vel_1m_pct=safe_float(feat.get("qqq_vel_1m_pct"), 0.0),
     )
     if not gate_hit:
         return None
@@ -2837,6 +3019,7 @@ async def execute_simulated_assassin_tick_plugin(
             ),
             entry_qqq_price=entry_qqq_p,
             qqq_live_price=qqq_lp,
+            entry_gate_id=str(st.get("entry_gate_id") or ""),
         )
 
         new_armed = bool(exit_eval.get("is_trailing_armed", False))
@@ -3104,6 +3287,10 @@ async def execute_simulated_assassin_tick_plugin(
             upd_exit["exit_safety_stage23_cnt"] = (
                 safe_int(st.get("exit_safety_stage23_cnt"), 0) + 1
             )
+        elif exit_code == "STAGE_UG_QQQ100_HARD_STOP":
+            upd_exit["exit_ug_qqq_stop_cnt"] = (
+                safe_int(st.get("exit_ug_qqq_stop_cnt"), 0) + 1
+            )
         else:
             upd_exit["exit_moc_cnt"] = safe_int(st.get("exit_moc_cnt"), 0) + 1
 
@@ -3179,6 +3366,10 @@ async def execute_simulated_assassin_tick_plugin(
                 scout_units=[u.to_dict() for u in kept_units],
                 scout_has_active_l1=new_has_l1,
                 scout_anchor_price=round(lp, 4),
+                # [4bot v2.5.2 · 원작 6d7c3ad] 정찰 익절가로 프리고점 갱신 (UG 낙폭 기준)
+                today_pre_high_price=round(
+                    max(safe_float(st.get("today_pre_high_price"), 0.0), lp), 4
+                ),
                 last_scout_sell_ts=now_ts,
                 last_scout_reentry_eval_ts=now_ts,
                 prior_scout_wins_today=safe_int(
@@ -3393,7 +3584,7 @@ def format_assassin_slim_radar_block(
             cur_g = ((lp - ep) / ep) * 100.0 if (lp > 0.0 and ep > 0.0) else 0.0
             armed = bool(st.get("is_trailing_armed", False))
             status_line = (
-                f"🔥본대보유({_esc(st.get('entry_gate_id'))}·${ep:.2f}➔{cur_g:+.2f}%·{'HA추적중' if armed else 'SN4×SN3대기'})"
+                f"🔥본대보유({_esc(st.get('entry_gate_id'))}·${ep:.2f}➔{cur_g:+.2f}%·{'HA추적중' if armed else ('UG QQQ-1%감시' if _is_ug_bull_pullback_gate(st.get('entry_gate_id')) else 'SN4×SN3대기')})"
             )
         elif bool(st.get("is_session_done", False)):
             if phase == "NO_TRADE_OFFWORK_0815":
@@ -3492,7 +3683,7 @@ async def build_assassin_detail_dashboard_html(
 
     lines: List[str] = [
         "🗡️ <b>[인피니트 스노우볼 · 암살자(Assassin) 관제 보드]</b>",
-        "⚙️ 운용모드: <b>🧪 모의 상시 작동 (T03_A · SN4_DEEP_1000 / SN3_SMART_HYBRID)</b>",
+        "⚙️ 운용모드: <b>🧪 모의 상시 작동 (14대게이트[10대+강세UG1~4] · T03_A · UG 고정QQQ-1% / SN4×SN3)</b>",
         f"💵 기준시드: <b>${init_s:,.2f}</b> | 연속복리자산: <b>${comp_eq:,.2f}</b>",
         "━━━━━━━━━━━━━━━━━━",
         "📊 <b>[실시간 SOXL · QQQ 4대 지표 스냅샷]</b>",
@@ -3533,7 +3724,7 @@ async def build_assassin_detail_dashboard_html(
                 f"• 작동게이트: <b>{_esc(st.get('entry_gate_id'))}</b> ({_esc(st.get('entry_gate_desc'))})",
                 f"• 진입단가: <b>${ep:.2f}</b> ({_esc(st.get('entry_time_est'))} EST · {_esc(trig_m)}) ➔ 현재 <b>{cur_g:+.2f}%</b>",
                 f"• 진입지표: RSI <b>{e_rsi:.1f}</b> · VWAP <code>{e_vw_pct:+.2f}%</code> · 전일 <code>{e_pc_pct:+.2f}%</code> · 시가 <code>{e_po_pct:+.2f}%</code>",
-                f"• 출동QQQ: <b>${eq_qqq:.2f}</b> ➔ 현재 <b>${qqq_lp:.2f}</b> (<b>{qqq_chg:+.2f}%</b> / 안전망 <b>-{dyn_thr:.2f}%</b>)",
+                f"• 출동QQQ: <b>${eq_qqq:.2f}</b> ➔ 현재 <b>${qqq_lp:.2f}</b> (<b>{qqq_chg:+.2f}%</b> / {('UG 고정QQQ ' + format(SAFETY_UG_QQQ_DROP_STOP_PCT, '.2f') + '% 즉시손절') if _is_ug_bull_pullback_gate(st.get('entry_gate_id')) else ('SN4×SN3 -' + format(dyn_thr, '.2f') + '%')})",
                 f"• 보유수량: 단리 <b>{safe_int(st.get('simple_held_qty'), 0)}주</b> / 복리 <b>{safe_int(st.get('comp_held_qty'), 0)}주</b>",
                 f"• 목표/방어: 캡 <b>${cap_p:.2f}</b>(+5%) · 점화 <b>${arm_p:.2f}</b>(+1%) · 최고 <b>${pk_p:.2f}</b> · 스탑 <b>${fl_p:.2f}</b> ({'HA추적중' if armed else '점화대기'})",
                 "━━━━━━━━━━━━━━━━━━",
@@ -3549,7 +3740,7 @@ async def build_assassin_detail_dashboard_html(
             lines.extend(
                 [
                     "🏠 <b>[금일 세션 상태 : 08:15 EST 무매매 안전 퇴근 완료]</b>",
-                    "• 04:07 ~ 08:14 EST 구간 10대 진성 게이트 미충족 (익일 04:07 EST 재출격)",
+                    "• 04:07 ~ 08:14 EST 구간 14대 진성 게이트(10대+강세UG1~4) 미충족 (익일 04:07 EST 재출격)",
                     "━━━━━━━━━━━━━━━━━━",
                 ]
             )
@@ -3629,7 +3820,7 @@ async def build_assassin_detail_dashboard_html(
             "🏆 <b>[[모의] 암살자 누적 성적표 (초기화: /reset_assassin)]</b>",
             f"• 총 출격일: <b>{tot_d}일</b> (<b>{win_d}승 {loss_d}패</b> · 승률 <b>{wr:.2f}%</b>) | 무매매퇴근: <b>{no_tr_d}일</b>",
             f"• 게이트분포: <code>{gate_stat_str}</code>",
-            f"• 출구분포: +5%홈런 <b>{safe_int(st.get('exit_cap500_cnt'), 0)}회</b> · HA부스트 <b>{safe_int(st.get('exit_ha_boost_cnt'), 0)}회</b> · +1%보존 <b>{safe_int(st.get('exit_floor100_cnt'), 0)}회</b> · VWAP <b>{safe_int(st.get('exit_vwap_1500_cnt'), 0)}회</b> · 안전망 <b>{safe_int(st.get('exit_safety_stage1_cnt'), 0) + safe_int(st.get('exit_safety_stage23_cnt'), 0)}회</b> · MOC <b>{safe_int(st.get('exit_moc_cnt'), 0)}회</b>",
+            f"• 출구분포: +5%홈런 <b>{safe_int(st.get('exit_cap500_cnt'), 0)}회</b> · HA부스트 <b>{safe_int(st.get('exit_ha_boost_cnt'), 0)}회</b> · +1%보존 <b>{safe_int(st.get('exit_floor100_cnt'), 0)}회</b> · VWAP <b>{safe_int(st.get('exit_vwap_1500_cnt'), 0)}회</b> · 안전망 <b>{safe_int(st.get('exit_safety_stage1_cnt'), 0) + safe_int(st.get('exit_safety_stage23_cnt'), 0) + safe_int(st.get('exit_ug_qqq_stop_cnt'), 0)}회</b> · MOC <b>{safe_int(st.get('exit_moc_cnt'), 0)}회</b>",
             f"• 💵 단리 누적순익: <b>{s_cum:+,.2f}$</b> (<b>{s_roi:+.2f}%</b>)",
             f"• 📈 복리 누적순익: <b>{c_cum:+,.2f}$</b> (<b>{c_roi:+.2f}%</b> · MDD <b>{safe_float(st.get('comp_max_dd_pct'), 0.0):.2f}%</b>)",
         ]
@@ -3661,7 +3852,13 @@ def run_assassin_plugin_tdd() -> bool:
     assert _is_collapsed_assassin_anchors(45.74, 45.74, 45.74) is True
     assert _is_collapsed_assassin_anchors(44.10, 45.20, 45.74) is False
     assert _is_collapsed_assassin_anchors(47.20, 0.0, 0.0) is False
-    assert SAFETY_NET_MODE_DEFAULT == "SN4_DEEP_1000_SN3_SMART_HYBRID"
+    assert (
+        SAFETY_NET_MODE_DEFAULT
+        == "SN4_DEEP_1000_SN3_SMART_HYBRID_UG_QQQ100_IMMED"
+    )
+    assert abs(SAFETY_UG_QQQ_DROP_STOP_PCT - (-1.00)) < 1e-6
+    assert abs(SAFETY_UG_SOXL_FALLBACK_STOP_PCT - (-2.50)) < 1e-6
+    assert ASSASSIN_LIVE_ORDER_HARD_LOCK is True
     assert abs(SAFETY_DYN_QQQ_MIN_THR_PCT - 1.00) < 1e-6
     assert abs(SAFETY_DYN_QQQ_MAX_THR_PCT - 1.00) < 1e-6
 
@@ -3718,6 +3915,76 @@ def run_assassin_plugin_tdd() -> bool:
         is_bull_bar=False,
     )
     assert hit_bg1 and gid_bg1 == "BG1", "폭락장 BearGate 1 격발 검증 실패"
+
+    # [4bot v2.5.2 · 원작 6d7c3ad] 강세장 눌림목 UG1 ~ UG4 검증
+    hit_zero_chase, _, _ = evaluate_10_truth_gates_signal(
+        scout_seq=5, rsi_14=41.0, vs_vwap_pct=0.20, vs_prev_close_pct=1.50,
+        vs_pre_open_pct=2.00, vs_scout1_pct=1.80, prior_scout_wins=10,
+        is_bull_bar=True, allow_sc1_dip_scan=False,
+        entry_type="01_ZERO_REENTRY", dd_from_pre_high_pct=-1.50,
+    )
+    assert not hit_zero_chase, "01_ZERO_REENTRY 고점 재진입에서는 UG 게이트가 차단되어야 합니다."
+    hit_ug1, gid_ug1, _ = evaluate_10_truth_gates_signal(
+        scout_seq=4, rsi_14=42.4, vs_vwap_pct=-0.54, vs_prev_close_pct=-2.65,
+        vs_pre_open_pct=-0.25, vs_scout1_pct=-0.75, prior_scout_wins=2,
+        is_bull_bar=True, allow_sc1_dip_scan=False,
+        entry_type="02_PULL_1PCT_NOFILT", dd_from_pre_high_pct=-1.64,
+    )
+    assert hit_ug1 and gid_ug1 == "UG1", "강세장 눌림목 UG1 격발 검증 실패"
+    hit_ug1_bear, _, _ = evaluate_10_truth_gates_signal(
+        scout_seq=4, rsi_14=42.4, vs_vwap_pct=-0.54, vs_prev_close_pct=-2.65,
+        vs_pre_open_pct=-0.25, vs_scout1_pct=-0.75, prior_scout_wins=2,
+        is_bull_bar=False, allow_sc1_dip_scan=False,
+        entry_type="02_PULL_1PCT_NOFILT", dd_from_pre_high_pct=-1.64,
+    )
+    assert not hit_ug1_bear, "UG 게이트는 1분봉 양봉에서만 열려야 합니다."
+    hit_ug2, gid_ug2, _ = evaluate_10_truth_gates_signal(
+        scout_seq=7, rsi_14=41.3, vs_vwap_pct=1.11, vs_prev_close_pct=-0.17,
+        vs_pre_open_pct=2.30, vs_scout1_pct=1.77, prior_scout_wins=5,
+        is_bull_bar=True, allow_sc1_dip_scan=False,
+        entry_type="04_WIDE_GRID_DIP", dd_from_pre_high_pct=-1.33,
+    )
+    assert hit_ug2 and gid_ug2 == "UG2", "강세장 눌림목 UG2 격발 검증 실패"
+    hit_ug3, gid_ug3, _ = evaluate_10_truth_gates_signal(
+        scout_seq=9, rsi_14=47.5, vs_vwap_pct=1.11, vs_prev_close_pct=0.20,
+        vs_pre_open_pct=2.67, vs_scout1_pct=2.15, prior_scout_wins=7,
+        is_bull_bar=True, allow_sc1_dip_scan=False,
+        entry_type="04_WIDE_GRID_DIP", dd_from_pre_high_pct=-1.45,
+    )
+    assert hit_ug3 and gid_ug3 == "UG3", "초강세장 눌림목 UG3 격발 검증 실패"
+    hit_ug4, gid_ug4, _ = evaluate_10_truth_gates_signal(
+        scout_seq=3, rsi_14=36.0, vs_vwap_pct=-0.20, vs_prev_close_pct=0.40,
+        vs_pre_open_pct=-0.80, vs_scout1_pct=-1.10, prior_scout_wins=1,
+        is_bull_bar=True, allow_sc1_dip_scan=True,
+        entry_type="T03A_DIP_SCAN", dd_from_pre_high_pct=-2.30, qqq_vel_1m_pct=0.05,
+    )
+    assert hit_ug4 and gid_ug4 == "UG4", "강세일 급눌림 UG4 격발 검증 실패"
+
+    # [4bot v2.5.2] UG 출동 시 08:15 이전(hm=557)이라도 고정 QQQ -1.10% & SOXL 손실 → 즉시 STAGE_UG_QQQ100_HARD_STOP
+    trig_ug_stop, ug_scode, _, _ = evaluate_directional_3stage_safety_net_v2(
+        hm=557, is_trailing_armed=False, entry_price=116.21, live_price=114.66,
+        post_entry_min_price=114.66, prev_reg_close=110.00, pre_open_price=112.00,
+        is_bull_bar=True, is_ha_bull=True, nq_entry_bear_amp_pct=2.00,
+        qqq_vel_1m_pct=0.05, qqq_vel_3m_pct=0.05,
+        entry_qqq_price=500.00, qqq_live_price=494.50, entry_gate_id="UG1",
+    )
+    assert trig_ug_stop and ug_scode == "STAGE_UG_QQQ100_HARD_STOP", "UG 고정 QQQ -1.00% 즉시 칼손절 검증 실패"
+    trig_ug_hold, _, _, _ = evaluate_directional_3stage_safety_net_v2(
+        hm=557, is_trailing_armed=False, entry_price=116.21, live_price=114.66,
+        post_entry_min_price=114.66, prev_reg_close=110.00, pre_open_price=112.00,
+        is_bull_bar=True, is_ha_bull=True, nq_entry_bear_amp_pct=2.00,
+        qqq_vel_1m_pct=0.05, qqq_vel_3m_pct=0.05,
+        entry_qqq_price=500.00, qqq_live_price=496.00, entry_gate_id="UG1",
+    )
+    assert not trig_ug_hold, "UG 고정 QQQ -0.80% 구간에서는 손절하면 안 됩니다."
+    trig_g_pre, _, _, _ = evaluate_directional_3stage_safety_net_v2(
+        hm=557, is_trailing_armed=False, entry_price=116.21, live_price=110.00,
+        post_entry_min_price=110.00, prev_reg_close=120.00, pre_open_price=120.00,
+        is_bull_bar=False, is_ha_bull=False, nq_entry_bear_amp_pct=2.00,
+        qqq_vel_1m_pct=-0.50, qqq_vel_3m_pct=-0.80,
+        entry_qqq_price=500.00, qqq_live_price=490.00, entry_gate_id="G2",
+    )
+    assert not trig_g_pre, "기존 10대 게이트는 08:15 이전에 안전망이 작동하면 안 됩니다."
 
     # [검증 A : SN4_DEEP_1000]: 출동 QQQ($500.0) 대비 -0.85%($495.75) 하락 시 -1.00% 미만이므로 조기 손절 원천 차단 검증
     trig_sn4_hold, _, _, dyn_sn4 = evaluate_directional_3stage_safety_net_v2(

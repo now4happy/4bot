@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: main.py (원작 main_runtime.py + 원작 main.py 병합)
+# 4bot 2번 v2.5.2 (2026-11-10): 원작 1478200 실전 수정 이식 — _call_plugin_adaptive holdings·prices·now_est 자동 보충(TypeError 방지) · STEP 호출에 holdings=context.latest_holdings·prices=live_prices_dict({SOXL}+QQQ>0) 완비 · last_soxl_live_price(+mono) 매 틱 갱신 · 장중 1분봉 300→400봉 · 16:00~16:59 결산 last_closing_report_date 키 유지 · 암살자 14대 게이트 TDD 문구
 # 4bot 2번 v2.4.1 (2026-11-07): 하단 메뉴 2개 — ☰ 메뉴 분기 추가(tg_ui_plugin._build_menu_reply_keyboard 사용) · /menu·⬅️ 메인 메뉴 = 처음 화면 (매매 로직 무변경)
 # 4bot 2번 v2.4.0 (2026-11-07): 원작 c4ad8d6 Case 93 [모의] 암살자 결속 — 메인 루프 끝에 상시 실행(예외 격리·15초 제한)·점화 시 0.40초 가속·QQQ 시세/1분봉 암살자 전용 수집·/assassin·/reset_assassin·부팅 TDD (실주문 하드락 · 스나이퍼 동작 무변경)
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
@@ -133,11 +134,35 @@ async def _call_plugin_adaptive(
     **kwargs: Any,
 ) -> Any:
     """
-    🚨 Case 13:
+    🚨 Case 13 (4bot v2.5.2 · 원작 1478200 강화판):
     플러그인 함수의 시그니처(인자 목록 및 **kwargs 수용 여부)를 동적으로 검사하여
     허용된 인자만 안전하게 주입하고 동기/비동기 함수를 모두 실행한다.
+    - 호출부에서 holdings, prices, now_est 를 빠뜨리거나 None 으로 넘겨도 context 로부터 복원·주입하여
+      missing required positional argument (TypeError) 를 막는다. (시그니처에 없는 인자는 아래 필터로 걸러진다)
     """
     sig = inspect.signature(func)
+    # [4bot v2.5.2] 자동 보충은 함수 시그니처에 그 이름의 인자가 실제로 있을 때만 (**kwargs 로 흘려보내 다른 곳에 새지 않게)
+    named_params = set(sig.parameters.keys())
+    ctx = kwargs.get("context")
+    if ctx is not None:
+        if "holdings" in named_params and kwargs.get("holdings") is None:
+            ctx_h = getattr(ctx, "latest_holdings", None)
+            kwargs["holdings"] = ctx_h if isinstance(ctx_h, dict) else {}
+        if "prices" in named_params and kwargs.get("prices") is None:
+            lp_val = safe_float(kwargs.get("live_price"), 0.0)
+            ctx_p = getattr(ctx, "latest_prices", None)
+            if isinstance(ctx_p, dict) and ctx_p:
+                merged_p = dict(ctx_p)
+                if lp_val > 0.0:
+                    merged_p[TARGET_SYMBOL] = lp_val
+                kwargs["prices"] = merged_p
+            elif lp_val > 0.0:
+                kwargs["prices"] = {TARGET_SYMBOL: lp_val}
+            else:
+                kwargs["prices"] = {}
+        if "now_est" in named_params and kwargs.get("now_est") is None:
+            kwargs["now_est"] = datetime.now(EST_TZ)
+
     accepts_var_kw = any(
         p.kind == inspect.Parameter.VAR_KEYWORD
         for p in sig.parameters.values()
@@ -2940,6 +2965,8 @@ class SniperAppContext:
         # [4bot v2.4.0 · Case 93] 🗡️ [모의] 암살자 전용 상태 (스나이퍼 원장·지표 캐시와 분리)
         self.latest_prices.setdefault(MACRO_REF_SYMBOL, 0.0)
         self.last_soxl_live_price: float = 0.0
+        # [4bot v2.5.2 · 원작 1478200] 마지막 SOXL 실시간 시세 수신 시각 (데이/애프터마켓 10초 신선도 판정용)
+        self.last_soxl_live_price_mono: float = 0.0
         self.last_qqq_live_price: float = 0.0
         self.assassin_high_freq_active: bool = False
         self.assassin_metrics_cache: Dict[str, Dict[str, Any]] = {}
@@ -3019,7 +3046,7 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
 
         try:
             candles_1m = await context.api.get_candles_1m(
-                symbol=TARGET_SYMBOL, total_count=(300 if in_market else 200)
+                symbol=TARGET_SYMBOL, total_count=(400 if in_market else 200)  # [4bot v2.5.2 · 원작 1478200] 장중 300→400
             )
             candles_1d = await context.api.get_candles_1d(
                 symbol=TARGET_SYMBOL, count=10
@@ -3290,6 +3317,9 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
             live_p = fresh_tick_p
             if live_p > 0.0:
                 context.latest_prices[TARGET_SYMBOL] = live_p
+                # [4bot v2.5.2 · 원작 1478200] 실시간 시세 수신 시각 기록 (데이/애프터마켓 10초 신선도 판정)
+                context.last_soxl_live_price = live_p
+                context.last_soxl_live_price_mono = time.monotonic()
 
             holdings_map, fetch_ok = (
                 await context.api.get_holdings_map_with_status()
@@ -3320,7 +3350,19 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                     )
                 )
 
-            prices = dict(context.latest_prices)
+            # [4bot v2.5.2 · 원작 1478200] STEP 1/4/6/8/9 공용 시세 묶음: {SOXL: live_p} + QQQ(0보다 클 때)
+            #   live_p 가 0이면 SOXL 은 직전 시세(context.latest_prices)로 둔다 (기존 동작 유지)
+            live_prices_dict: Dict[str, float] = {
+                TARGET_SYMBOL: (
+                    live_p
+                    if live_p > 0.0
+                    else safe_float(context.latest_prices.get(TARGET_SYMBOL), 0.0)
+                )
+            }
+            qqq_p = safe_float(context.latest_prices.get(MACRO_REF_SYMBOL), 0.0)
+            if qqq_p > 0.0:
+                live_prices_dict[MACRO_REF_SYMBOL] = qqq_p
+            prices = live_prices_dict
             prices_for_sell = (
                 {TARGET_SYMBOL: fresh_tick_p}
                 if is_ext_sell_only
@@ -3658,10 +3700,10 @@ async def async_main() -> None:
 
     context = SniperAppContext(base_dir=base_dir)
 
-    # [4bot v2.4.0 · Case 93] 🗡️ 암살자 10대 진성 게이트 TDD — 실패해도 스나이퍼는 기동, 암살자만 끔
+    # [4bot v2.4.0 · Case 93 / v2.5.2] 🗡️ 암살자 14대 진성 게이트(10대 + UG1~UG4) TDD — 실패해도 스나이퍼는 기동, 암살자만 끔
     try:
         run_assassin_plugin_tdd()
-        logger.info("✅ [Assassin 10 Truth Gates TDD 통과] [모의] 암살자 가동 (실주문 하드락)")
+        logger.info("✅ [Assassin 14 Truth Gates TDD 통과] [모의] 암살자 가동 (실주문 하드락)")
     except Exception as assn_tdd_exc:
         context.assassin_disabled = True
         logger.error("🚨 [Assassin TDD 실패 → 모의 암살자만 끔 · 스나이퍼 정상]: %s", assn_tdd_exc)

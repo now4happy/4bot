@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 # MODIFIED: sniper_exit_plugin.py
+# 4bot 2번 v2.5.2 (2026-11-10): 원작 1478200 실전 수정 이식 — holdings·prices 선택 인자(None/빈 값 → context.latest_* 자동 복원)로 목표가 초과 시 미매도 TypeError 제거 · 데이/애프터마켓 10초 내 last live price 인정 · 익절 스윕 미체결 SELL 다건 정리(봇 주문만 · 사용자 SELL은 취소 안 하고 대기 · R2 유지)
 # 4bot 2번 v2.3.1 (2026-11-06): R1·R2 수동 주문 보호 — 04:00·16:00 일괄 취소와 익절 스윕의 미체결 매도 취소를 봇 주문(장부 orderId·봇 등록부)만 대상으로 제한, 사용자 토스 앱 주문은 취소하지 않고 남김/기다림
 # 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
 # 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
@@ -97,6 +98,7 @@ from toss_api import (
     _NonRetryableApiError,
     collect_bot_order_ids,
     generate_client_order_id,
+    is_bot_order_id,
     safe_float,
     safe_int,
     sanitize_basement_pocket_dict,
@@ -120,6 +122,8 @@ EXTENDED_SELL_RESTRICTION_COOLDOWN_SEC: float = 60.0
 
 # [Case 82 : 윗꼬리($104.00) 슈팅 100% 즉시 체결을 위한 4대 핀포인트 상수 및 인메모리 상태]:
 EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC: float = 5.0
+# [4bot v2.5.2 · 원작 1478200] 데이/애프터마켓에서 prices 가 비었을 때 인정하는 last live price 신선도(초)
+LIVE_PRICE_FRESH_SEC: float = 10.0
 SELLABLE_QTY_POLL_WAIT_SEC: float = 2.0
 SELLABLE_QTY_POLL_INTERVAL_SEC: float = 0.25
 
@@ -179,20 +183,45 @@ def is_within_extended_sell_restriction_cooldown(
 
 def _get_live_soxl_price(
     context: Any,
-    prices: Dict[str, float],
-    holdings: Dict[str, Dict[str, Any]],
-    now_est: datetime,
+    prices: Optional[Dict[str, float]],
+    holdings: Optional[Dict[str, Dict[str, Any]]],
+    now_est: Optional[datetime] = None,
     allow_stale_fallback: bool = True,
 ) -> float:
     """
-    # [Case 79]:
-    - 프리장/정규장(allow_stale_fallback=True)에서는 prices -> 캔들 캐시 -> 보유 잔고 last_price 순으로 폴백한다.
-    - 데이마켓/애프터마켓(allow_stale_fallback=False)에서는 오직 실시간 시세 API(prices)에서 조회된 가격만 인정한다.
+    # MODIFIED [Case 79 & 4bot v2.5.2 · 원작 1478200 인자 누락 자동 폴백]:
+    - prices / holdings 가 None·빈 값이면 context.latest_prices / context.latest_holdings 로 자동 복원한다.
+    - 프리장/정규장(allow_stale_fallback=True): prices -> context.latest_prices -> 캔들 캐시 -> 보유 잔고 last_price (기존 순서 유지).
+    - 데이마켓/애프터마켓(allow_stale_fallback=False): prices 의 실시간 값 또는 최근 10초 내 갱신된
+      context.last_soxl_live_price 만 인정한다. (4bot: 묵은 context.latest_prices 는 이 구간에서 쓰지 않음 — Case 79 보호)
     """
-    lp = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    if isinstance(prices, dict) and prices:
+        eff_prices = prices
+    elif allow_stale_fallback and context is not None and isinstance(
+        getattr(context, "latest_prices", None), dict
+    ):
+        eff_prices = getattr(context, "latest_prices")
+    else:
+        eff_prices = {}
+    lp = safe_float((eff_prices or {}).get(TARGET_SYMBOL), 0.0)
     if lp > 0.0:
         return lp
+
     if not allow_stale_fallback:
+        if context is not None:
+            last_lp = safe_float(
+                getattr(context, "last_soxl_live_price", 0.0), 0.0
+            )
+            last_m = safe_float(
+                getattr(context, "last_soxl_live_price_mono", 0.0), 0.0
+            )
+            if (
+                last_lp > 0.0
+                and last_m > 0.0
+                and (time.monotonic() - last_m) <= LIVE_PRICE_FRESH_SEC
+            ):
+                return last_lp
         return 0.0
 
     raw_cache = getattr(context, "candle_metrics_cache", {})
@@ -200,12 +229,48 @@ def _get_live_soxl_price(
         raw_cache.get(TARGET_SYMBOL) if isinstance(raw_cache, dict) else None
     )
     if isinstance(base_met, dict):
-        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=now_est)
+        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=dt)
         lp = safe_float(met.get("live_price"), 0.0)
         if lp > 0.0:
             return lp
-    h_info = (holdings or {}).get(TARGET_SYMBOL, {})
+    eff_holdings = (
+        holdings
+        if isinstance(holdings, dict) and holdings
+        else (
+            getattr(context, "latest_holdings", {})
+            if context is not None
+            else {}
+        )
+    )
+    h_info = (eff_holdings or {}).get(TARGET_SYMBOL, {})
+    if not isinstance(h_info, dict):
+        return 0.0
     return safe_float(h_info.get("last_price"), 0.0)
+
+
+def _resolve_holdings_prices(
+    context: Any,
+    holdings: Optional[Dict[str, Dict[str, Any]]],
+    prices: Optional[Dict[str, float]],
+    live_price: Any = 0.0,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, float]]:
+    """
+    # NEW [4bot v2.5.2 · 원작 1478200]: holdings·prices 가 None/빈 값이면 context.latest_* 로 복원 (TypeError 방지).
+    """
+    if isinstance(holdings, dict) and holdings:
+        eff_h = holdings
+    else:
+        ctx_h = getattr(context, "latest_holdings", None) if context is not None else None
+        eff_h = ctx_h if isinstance(ctx_h, dict) else {}
+    if isinstance(prices, dict) and prices:
+        eff_p = dict(prices)
+    else:
+        ctx_p = getattr(context, "latest_prices", None) if context is not None else None
+        eff_p = dict(ctx_p) if isinstance(ctx_p, dict) else {}
+    kw_lp = safe_float(live_price, 0.0)
+    if kw_lp > 0.0 and safe_float(eff_p.get(TARGET_SYMBOL), 0.0) <= 0.0:
+        eff_p[TARGET_SYMBOL] = kw_lp
+    return eff_h, eff_p
 
 
 async def _fetch_fresh_current_soxl_price(
@@ -223,6 +288,8 @@ async def _fetch_fresh_current_soxl_price(
         if fresh_p > 0.0:
             if isinstance(getattr(context, "latest_prices", None), dict):
                 context.latest_prices[TARGET_SYMBOL] = fresh_p
+            setattr(context, "last_soxl_live_price", fresh_p)
+            setattr(context, "last_soxl_live_price_mono", time.monotonic())
             if isinstance(getattr(context, "candle_metrics_cache", None), dict):
                 base_met = context.candle_metrics_cache.get(TARGET_SYMBOL)
                 if isinstance(base_met, dict):
@@ -780,11 +847,37 @@ async def execute_bulletproof_sell_sweep(
                 "reason": reason_tag,
             }
 
-        # [4bot v2.3.1 R2] 미체결 SELL 정리는 봇 주문만. 사용자(토스 앱) SELL 이 있으면 취소하지 않고 기다린다
-        #   (지하층 경로와 같은 원칙 · 5초 뒤 다시 확인 · 봇 주문만 있을 때는 예전처럼 최신 1건 취소)
-        bot_sell_ids, user_sell_ids = await split_open_orders_by_owner(
-            context.api, sym, side="SELL", ledger_bot_ids=collect_bot_order_ids(st)
-        )
+        # [4bot v2.3.1 R2 + v2.5.2 원작 1478200 다건 정리] 미체결 SELL 정리는 봇 주문만.
+        #   - 봇 SELL(장부 orderId·봇 등록부)이 여러 건이면 전부 취소 (매도가능수량 잠김 방지 · 원작 1478200)
+        #   - 사용자(토스 앱) SELL 은 절대 취소하지 않고 남긴 뒤 기다린다 (지하층 BASEMENT_WAIT_OPEN_SELL 과 같은 원칙 · 5초 뒤 재확인)
+        #   - 미체결 목록 조회가 실패하면 최신 1건만 확인하고, 그것이 봇 주문일 때만 취소 (사용자 주문이면 대기)
+        ledger_bot_ids = collect_bot_order_ids(st)
+        user_sell_ids: List[str] = []
+        try:
+            bot_sell_ids, user_sell_ids = await split_open_orders_by_owner(
+                context.api, sym, side="SELL", ledger_bot_ids=ledger_bot_ids
+            )
+        except Exception as split_exc:
+            logger.debug("미체결 SELL 목록 조회 폴백(최신 1건 확인): %s", split_exc)
+            bot_sell_ids = []
+            latest_open = ""
+            try:
+                latest_open = str(
+                    await context.api.find_latest_open_order_id(sym, side="SELL")
+                    or ""
+                ).strip()
+            except Exception:
+                latest_open = ""
+            if latest_open:
+                if is_bot_order_id(latest_open, ledger_bot_ids):
+                    bot_sell_ids = [latest_open]
+                else:
+                    user_sell_ids = [latest_open]
+        for bot_oid in bot_sell_ids:
+            try:
+                await context.api.cancel_order(bot_oid)
+            except Exception:
+                pass
         if user_sell_ids:
             mark_extended_sell_restriction_cooldown(
                 context,
@@ -793,23 +886,19 @@ async def execute_bulletproof_sell_sweep(
                 reason="WAIT_USER_OPEN_SELL",
             )
             logger.info(
-                "🛡️ [%s 수동 매도 보호] 사용자 미체결 매도 %d건 → 봇 익절 발주 보류·취소 안 함 (%.1f초 후 재확인)",
+                "🛡️ [%s 수동 매도 보호] 사용자 미체결 매도 %d건 → 취소 안 함·봇 익절 발주 보류 (봇 SELL %d건 정리 · %.1f초 후 재확인)",
                 sym,
                 len(user_sell_ids),
+                len(bot_sell_ids),
                 EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
             )
             return {
                 "status": "WAIT_USER_OPEN_SELL",
                 "symbol": sym,
                 "user_open_sell_count": len(user_sell_ids),
+                "bot_sell_canceled_count": len(bot_sell_ids),
                 "retry_after_sec": EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
             }
-        latest_open = bot_sell_ids[0] if bot_sell_ids else ""
-        if latest_open:
-            try:
-                await context.api.cancel_order(latest_open)
-            except Exception:
-                pass
 
         # [Case 82 & Case 88 : 목표 매도 수량(target_sell_qty) 전량 반영까지 최대 2.0초 정량 폴링 대기]
         sellable_q = 0
@@ -1911,10 +2000,11 @@ def _extract_actual_sell_fee_from_exec(
 
 async def sync_pending_sell_order_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
     force_settle: bool = False,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     # [🚨 Case 19, Case 24, Case 65, Case 66, Case 70, Case 71, Case 72, Case 78, Case 79, Case 82, Case 86 & Case 88 실측 수수료 및 서브 그리드 연동]:
@@ -2098,9 +2188,10 @@ async def sync_pending_sell_order_plugin(
 # ---------------------------------------------------------------------------
 async def execute_1m_sniper_sell_and_reanchor_plugin(
     context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
+    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
+    prices: Optional[Dict[str, float]] = None,
     now_est: Optional[datetime] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 91 (방안 C 오버나이트 통합이평 사수 하이브리드 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 & 본+서브 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가)]:
@@ -2109,6 +2200,18 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
 
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
+
+    # [4bot v2.5.2 · 원작 1478200] holdings·prices 가 None/빈 값이어도 context.latest_* 로 복원 (TypeError·미매도 방지)
+    #   단, 데이/애프터마켓(매도 전용 확장 세션)에서는 묵은 context.latest_prices 로 채우지 않는다 (Case 79 · 10초 신선도 규칙은 _get_live_soxl_price)
+    _prices_given = isinstance(prices, dict) and bool(prices)
+    holdings, _resolved_prices = _resolve_holdings_prices(
+        context, holdings, prices, kwargs.get("live_price")
+    )
+    if _prices_given or not is_extended_sell_only_window(hm, now_est=dt_now):
+        prices = _resolved_prices
+    else:
+        _kw_lp = safe_float(kwargs.get("live_price"), 0.0)
+        prices = {TARGET_SYMBOL: _kw_lp} if _kw_lp > 0.0 else {}
 
     st = context.ledger.get_state(TARGET_SYMBOL)
 
