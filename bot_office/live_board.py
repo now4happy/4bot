@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/live_board.py   (사무실 vNEXT)
+# FILE: /opt/bot-office/live_board.py   (사무실 v1.5.4)
 # 신규: 시세 직접받기 — 토스 API(SOXL·TQQQ 현재가 + 환율)로 1분마다 자산 평가액을 계산해서
 #       보드용 live_board.json 을 전용 브랜치 live-board 에 올린다 (main·staging 에는 절대 안 올림).
 #  - 시트(26년 계획 · 입력정리)는 읽기만 한다 (spreadsheets.readonly · asset_board.py 의 서명·토큰 부품 재사용).
