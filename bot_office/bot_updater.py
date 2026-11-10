@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-10): 2번 스나이퍼 버전은 코드 머리말 버전으로 기록 (태그 카운터 v1.2.3 대신 v2.5.2식) — 머리말 없으면 기존 next_tag 유지
 # 사무실 v1.5.0 (2026-11-09): need.json 상태 업로드 경로 추가
 # BOT_UPDATER_V2 — GitHub에 올라온 수정(main 이외의 브랜치)을 감지 → 텔레그램 [✅ 업데이트] 버튼 → 안전 확인 후 적용
 #  · Gemini/Jules/딥시크 등 누가 올려도 main 이 아닌 브랜치면 감지 (main 은 서버가 적용한 결과만 올라가는 곳)
@@ -738,6 +739,22 @@ def office_restore(saved):
             os.remove(dst)
  
  
+def header_version(files):
+    """올린 파일 머리말의 코드 자체 버전 (# 4bot N번 vX.Y.Z, 숫자만 · vNEXT 제외).
+    main.py 머리말을 우선, 없으면 바뀐 파일 중 처음 찾은 것. 없으면 None (기존 방식 유지)."""
+    ordered = sorted(files, key=lambda f: (os.path.basename(f) != "main.py", f))
+    for f in ordered:
+        try:
+            with open(os.path.join(REPO, f), encoding="utf-8") as fh:
+                head = "".join(fh.readline() for _ in range(40))
+        except OSError:
+            continue
+        m = re.search(r"#\s*4bot\s+\d+번\s+v(\d+)\.(\d+)\.(\d+)", head)
+        if m:
+            return f"v{m.group(1)}.{m.group(2)}.{m.group(3)}"
+    return None
+
+
 def bump_versions(units, old_head):
     """3·4번처럼 BOT_VERSION 이 있는 봇은 이번 수정에서 안 올렸으면 자동으로 한 칸 (v4.3 → v4.3.1)"""
     out = {}
@@ -903,7 +920,9 @@ def apply(st, key):
     _, msgs = git("log", "--format=%s", f"{old_head}..{sha}", "-n", "8")
     tags, roots, now = [], targets(), datetime.now(KST).strftime("%Y-%m-%d %H:%M")
     for u in units:
-        prefix = u.replace(".service", ""); ver = vers.get(u) or next_tag(prefix)
+        prefix = u.replace(".service", "")
+        # 2번 스나이퍼: BOT_VERSION이 없어 태그 카운터(v1.2.3식)가 붙던 것을 코드 머리말 버전(v2.5.2식)으로 기록. 머리말 없으면 기존 방식 유지.
+        ver = vers.get(u) or (header_version(units[u]) if prefix == "toss_sniper" else None) or next_tag(prefix)
         if not ver.count(".") == 2:
             ver = next_tag(prefix)
         if git("rev-parse", "-q", "--verify", f"refs/tags/{prefix}-{ver}")[0] == 0:
