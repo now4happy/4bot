@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.8 · 2026-11-10 11:05 (KST)
+- 파일: live_board.py
+- 내용: 시세 직접받기 한국(KRX) 확장 live_board vNEXT (토스 한국 시세 → krx 섹션 + E41 실시간 합계)
+- 브랜치: staging
+
 ## v1.5.7 · 2026-11-10 10:46 (KST)
 - 파일: meritz_client.py
 - 내용: 메리츠 원화 조회 deposit 교체 meritz_client vNEXT (사무실 vNEXT)
