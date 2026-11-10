@@ -3,7 +3,7 @@
 # FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_vNEXT)
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
-#  vNEXT (2026-11-10) 체결된 매수 줄을 뺀 남은 필요 달러(remaining_need_usd) 추가 — 예약 조회 누적체결수량(acml_cntg_qty) 기준.
+#  v1.6.0 (2026-11-10) 체결된 매수 줄을 뺀 남은 필요 달러(remaining_need_usd) 추가 — 예약 조회 누적체결수량(acml_cntg_qty) 기준.
 #    need_usd()는 그대로(사이클 총액). 남은 필요는 브리핑(need.json)에서만 씀. 조회 실패·행 없음이면 전액으로 폴백.
 #  2.6.1 (2026-11-06, 사무실 v1.3.5) 날짜 기준 수정: 표 맨 위 날짜(start_md)를 표 기간 시작일로 삼는다.
 #    진행일(next_due)과 정확히 같아야 하던 점검 → '표 시작일이 진행일 기준 14일(interval_days) 안' + '직전 회차 표 시작일과 비교
