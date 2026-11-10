@@ -30,6 +30,7 @@
   ② 시멘트추가(예비시드) 무제한: 참고 1줄(현재 회분·금액·총 횟수)만 — 필요 달러 계산에는 넣지 않음 · 표시 문구 '수혈'→'시멘트추가'
   ③ 지하층 참고 줄·보유 차감 1회·실패 조회 제외 목록 그대로
 - 사무실 v1.5.2 (2026-11-09): 토스 준비금 스나이퍼만 계산 — 3번 적립 합산 제외
+- 사무실 vNEXT (2026-11-10): VR6 need를 체결 제외 남은 필요로 계산 (예약 조회 acml_cntg_qty, 실패 시 전액 폴백)
 - 사무실 v1.5.0 (2026-11-09): need.json 발행·정기 텔레그램 중단 (A안)
 - 사무실 v1.4.9 (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
@@ -373,6 +374,23 @@ def meritz_fetch():
                 reason = f"조회 오류 ({type(e).__name__})"
             result.append((label, None, reason))
     return result
+
+
+def _vr6_reserved_rows(plan):
+    """VR6 예약 전체 조회 (읽기 전용, 브리핑 전용 토큰 캐시).
+    meritz_fetch()와 같은 VR6 키·토큰 패턴. 실패하면 예외를 올려
+    호출자가 전액(need_usd)으로 폴백하게 한다."""
+    start = str(plan.get("order_start") or plan.get("start") or "").replace("-", "")
+    end = str(plan.get("end") or "").replace("-", "")
+    if len(start) != 8 or len(end) != 8:
+        raise ValueError("VR6 계획 기간 없음")
+    keys_path = R / "etc/bot-office/meritz_vr6.json"
+    shared_token = R / "var/lib/bot-office/fanding/meritz_vr6_token.json"
+    if not keys_path.is_file():
+        raise FileNotFoundError("VR6 계좌 키 없음")
+    import meritz_client
+    private_token = _meritz_brief_token_cache("VR6", shared_token, keys_path)
+    return meritz_client.Meritz(keys_path, token_cache=private_token).reserved_rows(start, end)
 
 
 def _meritz_amount(by_currency, cur, field):
@@ -1381,7 +1399,13 @@ def _fanding_need(kind, now=None):
             return 0.0 if sheet is None else (float(v) if (v := ft.fx_need(sheet)) is not None else None)
         import fanding_vr6 as fv
         plan = fv._fx_plan(st, now=now)
-        return 0.0 if plan is None else float(fv.need_usd(plan))
+        if plan is None:
+            return 0.0
+        try:
+            rows = _vr6_reserved_rows(plan)
+        except Exception:
+            rows = None
+        return float(fv.remaining_need_usd(plan, rows))
     except Exception:
         pass
     try:

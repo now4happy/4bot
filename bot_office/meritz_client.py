@@ -8,6 +8,7 @@
 # V1.5: 계좌별 키·토큰 파일 선택 (VR6 계좌 = /etc/bot-office/meritz_vr6.json) · 예약주문에 예약방식·종료일 옵션
 #       (기간잔량 "2" 등). 인자를 안 주면 기존(P)과 똑같이 일반예약 "1"·시작=종료일
 # v1.5.7: KRW 예수금 조회 경로 교체 — 해외 외화잔고(/accounts/v1/me/overseas/currencies, KRW 행 없음) → 국내 예수금 상세(/accounts/v1/me/deposit, data.tfam) (2026-11-10)
+# vNEXT: VR6 남은 필요 계산용 예약 전체 조회(reserved_rows) 추가 — 체결수량(acml_cntg_qty)·취소분 포함 (2026-11-10)
 # 메리츠증권 Open API 최소 연결 (해외주식: 현재가·잔고·예약주문)
 #  - 키는 /etc/bot-office/meritz.json 에만 둡니다 (GitHub 에 절대 올리지 않음)
 #    {"app_key": "...", "app_secret": "..."}
@@ -228,6 +229,21 @@ class Meritz:
         for _ in range(10):
             d = self._call("GET", "/trading/v1/overseas/reserved-orders", q)
             rows += [r for r in (d.get("data") or []) if str(r.get("rsev_cncl_yn", "N")).upper() != "Y"]
+            if d.get("tr_cont") != "1" or not d.get("tr_cont_key"):
+                break
+            q = dict(q, tr_cont="1", tr_cont_key=d["tr_cont_key"])
+        return rows
+
+    def reserved_rows(self, date_from, date_to):
+        """해외 예약주문 목록 원본 행 (체결·취소분 포함).
+        reserved_active()와 같은 조회이나 iqry_idnt_clcd "0"(전체)으로
+        체결된 행까지 돌려준다. 각 행의 누적체결수량(acml_cntg_qty)으로
+        남은 필요를 계산하는 용도 (VR6 브리핑). 취소 여부는 rsev_cncl_yn 으로 본다."""
+        rows, q = [], {"iqry_sta_date": date_from, "iqry_fin_date": date_to, "seln_byov_clcd": "0",
+                       "iqry_cls_code": "2", "iqry_idnt_clcd": "0"}
+        for _ in range(10):
+            d = self._call("GET", "/trading/v1/overseas/reserved-orders", q)
+            rows += d.get("data") or []
             if d.get("tr_cont") != "1" or not d.get("tr_cont_key"):
                 break
             q = dict(q, tr_cont="1", tr_cont_key=d["tr_cont_key"])

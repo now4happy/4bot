@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_V2.6.1)
+# FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_vNEXT)
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
+#  vNEXT (2026-11-10) 체결된 매수 줄을 뺀 남은 필요 달러(remaining_need_usd) 추가 — 예약 조회 누적체결수량(acml_cntg_qty) 기준.
+#    need_usd()는 그대로(사이클 총액). 남은 필요는 브리핑(need.json)에서만 씀. 조회 실패·행 없음이면 전액으로 폴백.
 #  2.6.1 (2026-11-06, 사무실 v1.3.5) 날짜 기준 수정: 표 맨 위 날짜(start_md)를 표 기간 시작일로 삼는다.
 #    진행일(next_due)과 정확히 같아야 하던 점검 → '표 시작일이 진행일 기준 14일(interval_days) 안' + '직전 회차 표 시작일과 비교
 #    (같으면 중복 표 실패, 14일의 배수만큼 뒤면 다음 회차 정상, 그 밖은 다른 회차 의심 실패)'. 길이(10~12일)·첫 발주일은
@@ -610,6 +612,54 @@ def seen_exch(symbol):
 
 def need_usd(plan):
     return round(sum(pr * q for s, pr, q in order_lines(plan) if s == "buy"), 2)
+
+
+def remaining_need_usd(plan, rows=None):
+    """체결된 매수 줄을 뺀 남은 필요 달러 (브리핑 need.json용).
+    rows: meritz_client.reserved_rows() 원본 행 목록. None이면 체결 정보를 몰라 전액(need_usd)을 돌려준다.
+    주문표의 매수 줄마다 접수된 예약(rsev_acpt_srno == 주문 no)을 찾아 누적체결수량(acml_cntg_qty)을 빼고,
+    취소된 행(rsev_cncl_yn "Y")은 남은 수량 0, 행이 없으면 전액으로 계산한다 (조회 실패를 체결로 보지 않음).
+    need_usd()는 바꾸지 않는다 (사이클 총액, 텔레그램·밤 체크·자동환전은 그대로)."""
+    if not plan:
+        return None
+    if rows is None:
+        return need_usd(plan)
+    by_no = {}
+    for r in rows or []:
+        try:
+            by_no[int(r.get("rsev_acpt_srno"))] = r
+        except (TypeError, ValueError):
+            continue
+    orders = {}
+    for o in (plan.get("orders") or []):
+        try:
+            orders[int(o.get("i"))] = o
+        except (TypeError, ValueError):
+            continue
+    total = 0.0
+    for i, (side, price, qty) in enumerate(order_lines(plan, keep_zero=True)):
+        if side != "buy" or qty <= 0:
+            continue
+        remain = qty
+        o = orders.get(i)
+        no = None
+        if o is not None:
+            try:
+                no = int(o.get("no")) if o.get("no") is not None else None
+            except (TypeError, ValueError):
+                no = None
+        if no is not None and no in by_no:
+            row = by_no[no]
+            if str(row.get("rsev_cncl_yn", "N")).upper() == "Y":
+                remain = 0
+            else:
+                try:
+                    filled = float(row.get("acml_cntg_qty") or 0)
+                except (TypeError, ValueError):
+                    filled = 0
+                remain = max(0, qty - filled)
+        total += price * remain
+    return round(total, 2)
 
 
 def run_checks(plan, st, now):
