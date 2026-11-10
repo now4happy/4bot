@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.9 · 2026-11-10 11:12 (KST)
+- 파일: live_board.py
+- 내용: 시세 직접받기 한국(KRX) 확장 live_board vNEXT (종목명 정정: TIGER 미국S&P500, probe 32/32)
+- 브랜치: staging
+
 ## v1.5.8 · 2026-11-10 11:05 (KST)
 - 파일: live_board.py
 - 내용: 시세 직접받기 한국(KRX) 확장 live_board vNEXT (토스 한국 시세 → krx 섹션 + E41 실시간 합계)
