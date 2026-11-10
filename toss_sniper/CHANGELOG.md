@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.2.3 · 2026-11-10 10:22 (KST)
+- 파일: assassin_plugin.py, main.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py
+- 내용: 2번 스나이퍼 v2.5.2 원작 1478200 실전 매도 수정 + 암살자 UG 진화형 이식
+- 브랜치: staging
+
 ## v1.2.2 · 2026-11-09 09:57 (KST)
 - 파일: assassin_plugin.py
 - 내용: 2번 스나이퍼 v2.5.1 암살자 c9c5f84 후속 다듬기 이식 (안전망 SN4/SN3 결합·복기 일지 50건·워밍업, 하드락 True 모의 전용)
