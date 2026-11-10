@@ -1,8 +1,8 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-11 05:40:18",
+  "as_of_kst": "2026-11-11 06:13:50",
   "symbol": "SOXL",
-  "live_price": 55.15,
+  "live_price": 56.42,
   "price_note": "",
   "tiers": [
     {
@@ -80,9 +80,9 @@
       "tiers": [
         1
       ],
-      "locked": false,
+      "locked": true,
       "reached": false,
-      "unlock_hm": ""
+      "unlock_hm": "04:07"
     },
     {
       "kind": "indiv",
@@ -91,9 +91,9 @@
       "tiers": [
         2
       ],
-      "locked": false,
+      "locked": true,
       "reached": false,
-      "unlock_hm": ""
+      "unlock_hm": "04:07"
     },
     {
       "kind": "indiv",
@@ -102,9 +102,9 @@
       "tiers": [
         3
       ],
-      "locked": false,
+      "locked": true,
       "reached": false,
-      "unlock_hm": ""
+      "unlock_hm": "04:07"
     },
     {
       "kind": "indiv",
@@ -113,9 +113,9 @@
       "tiers": [
         4
       ],
-      "locked": false,
+      "locked": true,
       "reached": false,
-      "unlock_hm": ""
+      "unlock_hm": "04:07"
     },
     {
       "kind": "indiv",
@@ -124,9 +124,9 @@
       "tiers": [
         5
       ],
-      "locked": false,
+      "locked": true,
       "reached": false,
-      "unlock_hm": ""
+      "unlock_hm": "04:07"
     },
     {
       "kind": "indiv",
@@ -135,9 +135,9 @@
       "tiers": [
         6
       ],
-      "locked": false,
+      "locked": true,
       "reached": false,
-      "unlock_hm": ""
+      "unlock_hm": "04:07"
     },
     {
       "kind": "wma",
