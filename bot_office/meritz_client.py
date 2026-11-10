@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_V1.5)
+# FILE: /opt/bot-office/meritz_client.py   (MERITZ_CLIENT_vNEXT)
 # V1.1: 예약주문 발주 시간 선택 (장개시 0 / 장마감 10분 전 1 / 장마감 30분 전 2 / 장개시 30분 후 3)
 # V1.2: 살아 있는 예약주문 목록 조회 (앱에서 직접 취소한 건 구분)
 # V1.3: USD 추정 예수금 조회(estm_frcr_amt) + 환전 적용환율/환전신청 초안 (버튼·명령에 연결하지 않음)
 # V1.4: KRW 예수금 조회 + 환전 버튼 연결 (실행은 2차 확인 버튼에서만)
 # V1.5: 계좌별 키·토큰 파일 선택 (VR6 계좌 = /etc/bot-office/meritz_vr6.json) · 예약주문에 예약방식·종료일 옵션
 #       (기간잔량 "2" 등). 인자를 안 주면 기존(P)과 똑같이 일반예약 "1"·시작=종료일
+# vNEXT: KRW 예수금 조회 경로 교체 — 해외 외화잔고(/accounts/v1/me/overseas/currencies, KRW 행 없음) → 국내 예수금 상세(/accounts/v1/me/deposit, data.tfam) (2026-11-10)
 # 메리츠증권 Open API 최소 연결 (해외주식: 현재가·잔고·예약주문)
 #  - 키는 /etc/bot-office/meritz.json 에만 둡니다 (GitHub 에 절대 올리지 않음)
 #    {"app_key": "...", "app_secret": "..."}
@@ -176,18 +177,17 @@ class Meritz:
         return d.get("data") or {}
 
     def krw_cash(self):
-        """KRW cash deposit (frcr_amt) — used only to check whether KRW covers an FX buy."""
-        d = self._call("GET", "/accounts/v1/me/overseas/currencies")
-        if d.get("tr_cont") == "1":
-            raise MeritzError("외화잔고 응답이 완전하지 않음")
-        rows = d.get("data")
-        if not isinstance(rows, list):
-            raise MeritzError("외화잔고 형식 확인 필요")
-        found = [row for row in rows if isinstance(row, dict) and str(row.get("crcd", "")).strip().upper() == "KRW"]
-        if len(found) != 1 or found[0].get("frcr_amt") in (None, ""):
-            raise MeritzError("KRW 예수금 행 없음")
+        """KRW cash deposit (data.tfam) — used only to check whether KRW covers an FX buy.
+        출처: 메리츠 Open API openapi.json v2026-10-22 (= v2026-10-28 동일 정의),
+        GET /accounts/v1/me/deposit, 성공 rsp_cd '5766'.
+        구 경로 GET /accounts/v1/me/overseas/currencies 는 외화 행만 주고 KRW 행을 아예 안 줌
+        (명세 설명문: '이 API 의 응답에는 wncr_ 로 시작하는 항목이 없습니다')."""
+        d = self._call("GET", "/accounts/v1/me/deposit")
+        data = d.get("data")
+        if not isinstance(data, dict) or data.get("tfam") in (None, ""):
+            raise MeritzError("KRW 예수금 확인 필요")
         try:
-            value = float(str(found[0]["frcr_amt"]).replace(",", ""))
+            value = float(str(data["tfam"]).replace(",", ""))
         except (ValueError, TypeError):
             raise MeritzError("KRW 예수금 숫자 확인 필요") from None
         if not math.isfinite(value):
