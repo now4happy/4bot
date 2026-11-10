@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.5 · 2026-11-10 10:19 (KST)
+- 파일: fanding_trade.py
+- 내용: 팬딩 자동환전 원화 조회 중단 수정 fanding_trade vNEXT (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.5.4 · 2026-11-10 10:12 (KST)
 - 파일: live_board.py
 - 내용: 시세 직접받기 서버 부분 (토스 시세 → live_board.json → live-board 고아 브랜치 1분 발행, 신규 vNEXT)

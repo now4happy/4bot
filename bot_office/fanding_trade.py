@@ -84,7 +84,7 @@
 #        · 하루치 수량은 그날 시트에 한 번만 계산해 저장(검산·접수·재시도·재예약이 같은 값 재사용 → 중복주문 방지)
 #        · 남은 수량은 매일 부족분으로 다시 계산(미체결은 다음 날로 이월, 종료일만 밀림) · 부족분 0이면 계획 종료 알림 · 메뉴에서 중단 가능
 #        · 검산 매수 총액에 따라잡기 포함(max_buy_usd 그대로) · 현금 부족 시 그날 수량 줄임·건너뜀 · 표 주문 계산(raw_lines)은 그대로
-# vNEXT (사무실 vNEXT): 자동환전 원화 조회 중단 수정 (지시 2026-11-10, P 회차 $370 중단 사례) — P·VR6 공용 auto_fx_execute
+# v1.5.5 (사무실 v1.5.5): 자동환전 원화 조회 중단 수정 (지시 2026-11-10, P 회차 $370 중단 사례) — P·VR6 공용 auto_fx_execute
 #        ① 원화 예수금 조회 불가(KRW 행 없음·예외)를 '중단'으로 보지 않고 환전 실행에 맡김 (환전은 원자적 1회 POST →
 #          원화가 모자라면 증권사가 거절, 돈 안 움직임). 원화를 읽었고 모자라면 예전처럼 중단
 #        ② 환전 실행 MeritzError: 원화 부족 계열 거절(정방향) → stop "원화 부족 (증권사 응답: rsp_cd rsp_msg)" ·
@@ -155,7 +155,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "vNEXT"
+VERSION = "v1.5.5"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1773,7 +1773,7 @@ def auto_fx_execute(m, amount, direction="1", before_exchange=None):
         except Exception:
             krw = None
         krw_need = amount * rate1
-        # vNEXT: 외화잔고 API 는 KRW 행을 주지 않음 → 조회 불가는 '부족'이 아님. 환전 POST 에 맡김 (부족하면 증권사가 거절)
+        # v1.5.5: 외화잔고 API 는 KRW 행을 주지 않음 → 조회 불가는 '부족'이 아님. 환전 POST 에 맡김 (부족하면 증권사가 거절)
         if krw is not None and krw < krw_need:
             short = (krw_need - krw).quantize(Decimal(1), rounding=ROUND_UP)
             return "stop", {"why": f"원화가 {short:,.0f}원 모자라요 (필요 원화 약 {krw_need:,.0f}원 · 원화 예수금 {krw:,.0f}원)"}
@@ -1804,7 +1804,7 @@ def auto_fx_execute(m, amount, direction="1", before_exchange=None):
     return "ok", {"res": res or {}, "rate": rate2}
 
 
-# vNEXT: 정방향 환전 거절 중 '원화가 모자람' 계열로 보는 증권사 응답 글자 (rsp_msg 기준)
+# v1.5.5: 정방향 환전 거절 중 '원화가 모자람' 계열로 보는 증권사 응답 글자 (rsp_msg 기준)
 FX_KRW_SHORT_WORDS = ("부족", "가능금액", "가능 금액", "예수금", "잔고", "잔액")
 
 
