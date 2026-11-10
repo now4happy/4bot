@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/live_board.py   (사무실 v1.6.1)
+# 사무실 vNEXT
+# vNEXT: 스나이퍼 원장 투영(sniper_tiers.json)을 live-board 작업트리에 함께 발행 — 최대 5분에 1번, 내용이 바뀐 때만.
+#  - bot_updater.write_sniper_tiers() 와 같은 원천(sniper_picture.py 의 _find_ledger·_snapshot_price·build)·같은 스키마.
+#    bot_updater 는 import 하지 않는다 (sniper_picture.py 만 importlib 으로 직접 읽음).
+#  - 쓰는 곳은 작업트리(<WORKTREE>/sniper_tiers.json)뿐. 저장소 루트의 sniper_tiers.json 은 건드리지 않는다.
+#  - 5분 경과는 작업트리 파일의 mtime 으로 판단 (다시 만들었는데 내용이 같으면 mtime 만 갱신 · 쓰기·커밋 없음).
+#  - 바뀌면 live_board.json 과 같은 커밋·같은 푸시. 장이 둘 다 닫힌 시간 · --check · --dry-run · --probe-krx 에서는 건너뜀.
+#  - 원장 단계의 어떤 실패도 로그만 남긴다 (live_board.json 발행·종료 코드 그대로).
 # v1.6.1: 한국(KRX) 확장 — 키움 보유 32종목(KRX 상장·원화)의 현재가를 토스 /api/v1/prices 로 받아
 #        krx 섹션 + E41(국내 주식) 실시간 합계를 만든다. 미국 장 로직·합계 정의·git/푸시 로직은 v1 그대로.
 #  - 한국 장(KST 09:00–15:35, KR_CLOSED 제외 · KR_SPECIAL_HOURS 는 그날 시간)에는 KRX 시세만 받고 시트는 안 읽는다
@@ -41,6 +49,9 @@ SHEET_RANGE = "'입력정리'!A14:F55"
 FIRST_ROW = 14
 COLS = "ABCDEF"
 TIME_KEYS = ("as_of_kst", "as_of_et")             # 내용 비교 때 빼는 칸 (시각만 바뀐 것은 '안 바뀜')
+TIERS_NAME = "sniper_tiers.json"                  # vNEXT: 스나이퍼 원장 투영 (작업트리에만 씀)
+OFFICE_DIR = os.environ.get("LB_OFFICE_DIR", "/opt/bot-office")   # sniper_picture.py 가 있는 곳 (bot_updater 의 OFFICE_DIR 과 같은 기본값)
+TIERS_INTERVAL = 300                              # 초 — 원장 투영은 최대 5분에 1번만 다시 만든다
 
 
 # ---------------- 미국 휴장일 — fanding_trade.py 246·258행 발췌 그대로 (원본 sha256 8d8c3b3f0b50)
@@ -483,13 +494,17 @@ def out_path():
     return os.path.join(WORKTREE, OUT_NAME)
 
 
-def load_current():
+def _load_json(path):
     try:
-        with open(out_path(), encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             d = json.load(f)
         return d if isinstance(d, dict) else None
     except (OSError, ValueError):
         return None
+
+
+def load_current():
+    return _load_json(out_path())
 
 
 def same_content(a, b):
@@ -503,12 +518,12 @@ def same_content(a, b):
     return strip(a) == strip(b)
 
 
-def write_atomic(data):
+def write_atomic(data, name=OUT_NAME):
     """임시 파일 + os.replace · 0644 · 저장소 주인 소유 (bot_updater.write_sniper_tiers 와 같은 방식)"""
-    path, tmp = out_path(), None
+    path, tmp = os.path.join(WORKTREE, name), None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=WORKTREE,
-                                         prefix=".live_board_", suffix=".tmp", delete=False) as out:
+                                         prefix=f".{name.rsplit('.', 1)[0]}_", suffix=".tmp", delete=False) as out:
             tmp = out.name
             json.dump(data, out, ensure_ascii=False, allow_nan=False, indent=2)
             out.write("\n")
@@ -522,7 +537,7 @@ def write_atomic(data):
         tmp = None
         return True
     except Exception as exc:
-        print("live_board.json 기록 실패:", type(exc).__name__, str(exc)[:120], flush=True)
+        print(f"{name} 기록 실패:", type(exc).__name__, str(exc)[:120], flush=True)
         return False
     finally:
         if tmp and os.path.exists(tmp):
@@ -533,14 +548,16 @@ def write_atomic(data):
 
 
 def commit(msg):
-    rc, out = git("add", "--", OUT_NAME)
+    # vNEXT: 원장 파일이 작업트리에 있으면 같은 커밋에 넣는다 (안 바뀐 파일은 add 해도 커밋에 안 잡힘)
+    names = [OUT_NAME] + ([TIERS_NAME] if os.path.isfile(tiers_path()) else [])
+    rc, out = git("add", "--", *names)
     if rc:
         print("git add 실패:", out[-200:], flush=True)
         return False
-    if git("diff", "--cached", "--quiet", "--", OUT_NAME)[0] == 0:
+    if git("diff", "--cached", "--quiet", "--", *names)[0] == 0:
         return True   # 바뀐 것 없음
     rc, out = git("-c", "user.name=bot-office live-board", "-c", "user.email=live-board@localhost",
-                  "commit", "-q", "-m", msg, "--", OUT_NAME)
+                  "commit", "-q", "-m", msg, "--", *names)
     if rc:
         print("git commit 실패:", out[-200:], flush=True)
     return rc == 0
@@ -579,6 +596,79 @@ def publish(data, msg):
         return False
     commit(msg)
     return True
+
+
+# ---------------- 스나이퍼 원장 투영 (vNEXT · sniper_tiers.json · 작업트리에만 씀)
+def tiers_path():
+    return os.path.join(WORKTREE, TIERS_NAME)
+
+
+def tiers_due(now_ts):
+    """작업트리 파일 mtime 기준 5분 지났는가 (매 실행이 새 프로세스라 파일 시각으로 판단) · 파일 없으면 True"""
+    try:
+        age = now_ts - os.stat(tiers_path()).st_mtime
+    except OSError:
+        return True
+    return age >= TIERS_INTERVAL or age < 0   # 미래 시각(시계 되돌림)이면 다시 만든다
+
+
+def _tiers_touch():
+    """다시 만들었지만 쓰지 않은 때: mtime 만 갱신해 다음 5분까지 쉬게 한다 (내용 그대로 → git 변경 없음)"""
+    try:
+        os.utime(tiers_path(), None)
+    except OSError:
+        pass
+
+
+def build_tiers(now_utc):
+    """bot_updater.write_sniper_tiers() 와 같은 원천·같은 스키마 (bot_updater import 없음) → dict · 실패는 예외"""
+    import importlib.util
+    source = os.path.join(OFFICE_DIR, "sniper_picture.py")
+    spec = importlib.util.spec_from_file_location("office_sniper_picture_export", source)
+    if not spec or not spec.loader:
+        raise RuntimeError("sniper_picture_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    found, err = module._find_ledger()
+    if not found:
+        raise RuntimeError(str(err or "ledger_unavailable"))
+    _, state = found
+    live, note = module._snapshot_price(time.time())
+    data = module.build(state, live_price=live, price_note=note)
+    if not data.get("ok"):
+        raise RuntimeError(str(data.get("error") or "build_failed"))
+    holding = data.get("holding") or {}
+    return {
+        "ok": True, "as_of_kst": stamps(now_utc)[0], "symbol": "SOXL",
+        "live_price": (data.get("price") or {}).get("live"),
+        "price_note": (data.get("price") or {}).get("note", ""),
+        "tiers": data.get("tiers") or [], "targets": data.get("targets") or [],
+        "sub_tiers": data.get("sub_tiers") or [], "sub_targets": data.get("sub_targets") or [],
+        "holding": {k: holding.get(k, 0) for k in ("shares", "sub_shares", "basement_shares", "total_shares")},
+        "basement": data.get("basement"),
+    }
+
+
+def tiers_step(now_utc, now_ts=None):
+    """5분 지났고 내용이 바뀌었으면 작업트리에 쓴다 → True = 새로 씀 (커밋 대상).
+    어떤 실패도 로그만 남기고 False (live_board.json 발행·종료 코드에 영향 없음 · 마지막 정상 파일 유지)."""
+    try:
+        if not tiers_due(time.time() if now_ts is None else now_ts):
+            return False
+        try:
+            new = build_tiers(now_utc)
+        except Exception as exc:   # 원장 없음·build 실패 등 — 코드만 남김 (RuntimeError 는 짧은 오류 코드)
+            print("sniper_tiers 건너뜀:", type(exc).__name__,
+                  (str(exc)[:80] if type(exc) is RuntimeError else ""), flush=True)
+            _tiers_touch()
+            return False
+        if same_content(_load_json(tiers_path()), new):
+            _tiers_touch()
+            return False
+        return write_atomic(new, TIERS_NAME)
+    except Exception as exc:
+        print("sniper_tiers 단계 실패:", type(exc).__name__, flush=True)
+        return False
 
 
 # ---------------- 실행
@@ -693,8 +783,14 @@ def run(argv=None, now=None, sheet_reader=None, quote_fetcher=None, out=print, k
         out(("ok" if data["ok"] else "실패 " + data["error"]) + " · 쓰지 않음")
         return code
 
+    tiers_new = tiers_step(now_utc)   # vNEXT: 실패해도 False 만 (아래 발행·종료 코드 그대로)
     if not same_content(load_current(), data):
-        publish(data, f"live_board {data['as_of_kst']} KST" + ("" if data["ok"] else " (실패)"))
+        publish(data, f"live_board {data['as_of_kst']} KST" + ("" if data["ok"] else " (실패)"))   # 원장 파일도 같은 커밋
+    elif tiers_new:                   # live_board 는 그대로인데 원장만 바뀐 드문 경우
+        try:
+            commit(f"sniper_tiers {data['as_of_kst']} KST")
+        except Exception as exc:
+            print("sniper_tiers 커밋 실패:", type(exc).__name__, flush=True)
     print(("ok" if data["ok"] else "실패 " + data["error"]), flush=True)
     rc = push_if_needed()
     return code or rc
