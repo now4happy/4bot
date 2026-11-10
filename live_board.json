@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-10 15:20:01",
-  "as_of_et": "2026-11-10 01:20:01",
+  "as_of_kst": "2026-11-10 15:30:01",
+  "as_of_et": "2026-11-10 01:30:01",
   "market_open": true,
   "source": "toss",
   "prices": {
@@ -21,12 +21,12 @@
     "35": 189.07,
     "37": 28,
     "38": 29,
-    "41": 15006.44
+    "41": 15012.18
   },
   "totals": {
-    "api_sum": 50570.75,
+    "api_sum": 50576.49,
     "cash": 27579.24,
-    "total_assets": 69733.75
+    "total_assets": 69739.49
   },
   "market_open_us": false,
   "market_open_kr": true,
@@ -36,10 +36,10 @@
     "api_ex41": 35564.302861,
     "cash": 27579.23685,
     "manual": 19163.0,
-    "krx_total": 15006.445
+    "krx_total": 15012.185
   },
   "krx": {
-    "as_of_kst": "2026-11-10 15:20:01",
+    "as_of_kst": "2026-11-10 15:30:01",
     "stocks": [
       {
         "code": "411060",
@@ -230,8 +230,8 @@
         "name": "이수페타시스",
         "qty": 82,
         "avg_price": 84916,
-        "price": 68000,
-        "value_manw": 557.6
+        "price": 68700,
+        "value_manw": 563.34
       },
       {
         "code": "022100",
@@ -298,7 +298,7 @@
         "value_manw": 377.91
       }
     ],
-    "total_manw": 15006.44,
+    "total_manw": 15012.18,
     "unavailable": []
   }
 }
