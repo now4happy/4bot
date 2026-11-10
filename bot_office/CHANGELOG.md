@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.3 · 2026-11-10 09:58 (KST)
+- 파일: sniper_upstream.py
+- 내용: 업데이트 비서 원작 자동 알림 끄기 (매일 09:02 자동 확인 기본 OFF, 수동 원작 확인 유지)
+- 브랜치: staging
+
 ## v1.5.2 · 2026-11-09 16:02 (KST)
 - 파일: office_briefing.py
 - 내용: 사무실 vNEXT: 토스 준비금 스나이퍼만 계산 — 3번 적립 합산 제외 (office_briefing vNEXT)
