@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/live_board.py   (사무실 v1.5.8)
-# v1.5.8: 한국(KRX) 확장 — 키움 보유 32종목(KRX 상장·원화)의 현재가를 토스 /api/v1/prices 로 받아
+# FILE: /opt/bot-office/live_board.py   (사무실 vNEXT)
+# vNEXT: 한국(KRX) 확장 — 키움 보유 32종목(KRX 상장·원화)의 현재가를 토스 /api/v1/prices 로 받아
 #        krx 섹션 + E41(국내 주식) 실시간 합계를 만든다. 미국 장 로직·합계 정의·git/푸시 로직은 v1 그대로.
 #  - 한국 장(KST 09:00–15:35, KR_CLOSED 제외 · KR_SPECIAL_HOURS 는 그날 시간)에는 KRX 시세만 받고 시트는 안 읽는다
 #    (예외: 기존 JSON 에 base 가 없을 때 한 번만 — 첫 발행 · v1 JSON 에서 넘어올 때 · 실패 JSON 뒤).
@@ -112,7 +112,7 @@ KRX_QTY = (
     ("000660", "SK하이닉스", 4, 1393354),
     ("0080Y0", "SOL 조선TOP3플러스레버리지", 1370, 8089),
     ("462010", "TIGER 2차전지소재Fn", 1372, 5023),
-    ("360750", "TIGER 미국SP500", 251, 24271),
+    ("360750", "TIGER 미국S&P500", 251, 24271),
     ("371460", "TIGER 차이나전기차SOLACTIVE", 679, 10554),
     ("371160", "TIGER 차이나항셍테크", 1691, 6998),
     ("0148J0", "TIGER 코리아휴머노이드로봇산업", 237, 8561),
@@ -209,7 +209,7 @@ def num0(values, ref):
 # ---------------- 계산 (API 와 분리 · 시트 수식과 같은 식)
 # 행 → (수량 칸, 시세 키) · 시세 키 None = 달러 그대로(환율만)
 QTY_ROWS = {27: "tqqq", 28: "soxl", 29: "soxl", 30: "tqqq", 33: None, 34: "soxl", 35: None}
-STATIC_C = (26, 31, 32, 36, 39, 40, 46, 47, 48, 49, 50, 54)       # 정적 값 (C열) · v1.5.8: 41 뺌 (E41 = KRX 합계)
+STATIC_C = (26, 31, 32, 36, 39, 40, 46, 47, 48, 49, 50, 54)       # 정적 값 (C열) · vNEXT: 41 뺌 (E41 = KRX 합계)
 STATIC_E = (37, 38)                                                 # v1: 시트 E값 그대로 (BTC·ETH)
 OUT_ROWS = (27, 28, 29, 30, 33, 34, 35, 37, 38)
 KRX_ROW = 41                                                        # E41 국내 주식 = krx 32종목 합계
@@ -496,7 +496,7 @@ def same_content(a, b):
         return False
     def strip(d):
         o = {k: v for k, v in d.items() if k not in TIME_KEYS}
-        if isinstance(o.get("krx"), dict):   # v1.5.8: krx 섹션 시각도 같은 취급
+        if isinstance(o.get("krx"), dict):   # vNEXT: krx 섹션 시각도 같은 취급
             o["krx"] = {k: v for k, v in o["krx"].items() if k != "as_of_kst"}
         return o
     return strip(a) == strip(b)
