@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.2 · 2026-11-11 05:40 (KST)
+- 파일: live_board.py
+- 내용: live_board 원장 파일(sniper_tiers.json) 5분마다 live-board 브랜치에 발행
+- 브랜치: staging
+
 ## v1.6.1 · 2026-11-10 13:22 (KST)
 - 파일: live_board.py
 - 내용: 키움 수량 변경 live_board vNEXT (NAVER 21→14, TIGER 코리아휴머노이드 237→398, 에코프로비엠 49→67, 이수페타시스 60→82; 11-10 12:15 잔고 캡처 + 자동매매내역 2일치 기준)

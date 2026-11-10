@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/live_board.py   (사무실 v1.6.1)
-# 사무실 vNEXT
-# vNEXT: 스나이퍼 원장 투영(sniper_tiers.json)을 live-board 작업트리에 함께 발행 — 최대 5분에 1번, 내용이 바뀐 때만.
+# 사무실 v1.6.2
+# v1.6.2: 스나이퍼 원장 투영(sniper_tiers.json)을 live-board 작업트리에 함께 발행 — 최대 5분에 1번, 내용이 바뀐 때만.
 #  - bot_updater.write_sniper_tiers() 와 같은 원천(sniper_picture.py 의 _find_ledger·_snapshot_price·build)·같은 스키마.
 #    bot_updater 는 import 하지 않는다 (sniper_picture.py 만 importlib 으로 직접 읽음).
 #  - 쓰는 곳은 작업트리(<WORKTREE>/sniper_tiers.json)뿐. 저장소 루트의 sniper_tiers.json 은 건드리지 않는다.
@@ -49,7 +49,7 @@ SHEET_RANGE = "'입력정리'!A14:F55"
 FIRST_ROW = 14
 COLS = "ABCDEF"
 TIME_KEYS = ("as_of_kst", "as_of_et")             # 내용 비교 때 빼는 칸 (시각만 바뀐 것은 '안 바뀜')
-TIERS_NAME = "sniper_tiers.json"                  # vNEXT: 스나이퍼 원장 투영 (작업트리에만 씀)
+TIERS_NAME = "sniper_tiers.json"                  # v1.6.2: 스나이퍼 원장 투영 (작업트리에만 씀)
 OFFICE_DIR = os.environ.get("LB_OFFICE_DIR", "/opt/bot-office")   # sniper_picture.py 가 있는 곳 (bot_updater 의 OFFICE_DIR 과 같은 기본값)
 TIERS_INTERVAL = 300                              # 초 — 원장 투영은 최대 5분에 1번만 다시 만든다
 
@@ -548,7 +548,7 @@ def write_atomic(data, name=OUT_NAME):
 
 
 def commit(msg):
-    # vNEXT: 원장 파일이 작업트리에 있으면 같은 커밋에 넣는다 (안 바뀐 파일은 add 해도 커밋에 안 잡힘)
+    # v1.6.2: 원장 파일이 작업트리에 있으면 같은 커밋에 넣는다 (안 바뀐 파일은 add 해도 커밋에 안 잡힘)
     names = [OUT_NAME] + ([TIERS_NAME] if os.path.isfile(tiers_path()) else [])
     rc, out = git("add", "--", *names)
     if rc:
@@ -598,7 +598,7 @@ def publish(data, msg):
     return True
 
 
-# ---------------- 스나이퍼 원장 투영 (vNEXT · sniper_tiers.json · 작업트리에만 씀)
+# ---------------- 스나이퍼 원장 투영 (v1.6.2 · sniper_tiers.json · 작업트리에만 씀)
 def tiers_path():
     return os.path.join(WORKTREE, TIERS_NAME)
 
@@ -783,7 +783,7 @@ def run(argv=None, now=None, sheet_reader=None, quote_fetcher=None, out=print, k
         out(("ok" if data["ok"] else "실패 " + data["error"]) + " · 쓰지 않음")
         return code
 
-    tiers_new = tiers_step(now_utc)   # vNEXT: 실패해도 False 만 (아래 발행·종료 코드 그대로)
+    tiers_new = tiers_step(now_utc)   # v1.6.2: 실패해도 False 만 (아래 발행·종료 코드 그대로)
     if not same_content(load_current(), data):
         publish(data, f"live_board {data['as_of_kst']} KST" + ("" if data["ok"] else " (실패)"))   # 원장 파일도 같은 커밋
     elif tiers_new:                   # live_board 는 그대로인데 원장만 바뀐 드문 경우

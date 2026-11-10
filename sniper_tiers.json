@@ -1,10 +1,21 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-10 13:22:04",
+  "as_of_kst": "2026-11-11 05:40:18",
   "symbol": "SOXL",
-  "live_price": 54.28,
+  "live_price": 55.15,
   "price_note": "",
   "tiers": [
+    {
+      "tier": 1,
+      "kind": "l1",
+      "qty": 14,
+      "price": 57.58,
+      "lot_count": 1,
+      "lot_type": "REENTRY_1FL",
+      "target": 58.45,
+      "target_pct": 1.5,
+      "reached": false
+    },
     {
       "tier": 2,
       "kind": "upper",
@@ -63,15 +74,26 @@
   ],
   "targets": [
     {
+      "kind": "l1",
+      "price": 58.45,
+      "pct": 1.5,
+      "tiers": [
+        1
+      ],
+      "locked": false,
+      "reached": false,
+      "unlock_hm": ""
+    },
+    {
       "kind": "indiv",
       "price": 63.1,
       "pct": 1.0,
       "tiers": [
         2
       ],
-      "locked": true,
+      "locked": false,
       "reached": false,
-      "unlock_hm": "04:07"
+      "unlock_hm": ""
     },
     {
       "kind": "indiv",
@@ -80,9 +102,9 @@
       "tiers": [
         3
       ],
-      "locked": true,
+      "locked": false,
       "reached": false,
-      "unlock_hm": "04:07"
+      "unlock_hm": ""
     },
     {
       "kind": "indiv",
@@ -91,9 +113,9 @@
       "tiers": [
         4
       ],
-      "locked": true,
+      "locked": false,
       "reached": false,
-      "unlock_hm": "04:07"
+      "unlock_hm": ""
     },
     {
       "kind": "indiv",
@@ -102,9 +124,9 @@
       "tiers": [
         5
       ],
-      "locked": true,
+      "locked": false,
       "reached": false,
-      "unlock_hm": "04:07"
+      "unlock_hm": ""
     },
     {
       "kind": "indiv",
@@ -113,9 +135,9 @@
       "tiers": [
         6
       ],
-      "locked": true,
+      "locked": false,
       "reached": false,
-      "unlock_hm": "04:07"
+      "unlock_hm": ""
     },
     {
       "kind": "wma",
@@ -137,10 +159,10 @@
   "sub_tiers": [],
   "sub_targets": [],
   "holding": {
-    "shares": 121,
+    "shares": 135,
     "sub_shares": 0,
     "basement_shares": 0,
-    "total_shares": 121
+    "total_shares": 135
   },
   "basement": null
 }
