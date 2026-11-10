@@ -84,6 +84,12 @@
 #        · 하루치 수량은 그날 시트에 한 번만 계산해 저장(검산·접수·재시도·재예약이 같은 값 재사용 → 중복주문 방지)
 #        · 남은 수량은 매일 부족분으로 다시 계산(미체결은 다음 날로 이월, 종료일만 밀림) · 부족분 0이면 계획 종료 알림 · 메뉴에서 중단 가능
 #        · 검산 매수 총액에 따라잡기 포함(max_buy_usd 그대로) · 현금 부족 시 그날 수량 줄임·건너뜀 · 표 주문 계산(raw_lines)은 그대로
+# vNEXT (사무실 vNEXT): 자동환전 원화 조회 중단 수정 (지시 2026-11-10, P 회차 $370 중단 사례) — P·VR6 공용 auto_fx_execute
+#        ① 원화 예수금 조회 불가(KRW 행 없음·예외)를 '중단'으로 보지 않고 환전 실행에 맡김 (환전은 원자적 1회 POST →
+#          원화가 모자라면 증권사가 거절, 돈 안 움직임). 원화를 읽었고 모자라면 예전처럼 중단
+#        ② 환전 실행 MeritzError: 원화 부족 계열 거절(정방향) → stop "원화 부족 (증권사 응답: rsp_cd rsp_msg)" ·
+#          그 외 MeritzError → uncertain 에 str(e) 그대로 · 네트워크/타임아웃 등 그 외 예외 → uncertain (예외 이름)
+#        · 환율 1% 변동·중복 금지·우대 시간·fx_auto_amount·토글·주문표·추정 예수금 검사, 수동 💱 화면, 역방향 원화 검사(없음) 불변
 # 1.14.3 (사무실 v1.3.1): 과거자료 다운을 버튼으로 (사용자 지시 2026-11-05) — 매매·주문·판독·알림 로직 불변
 #        ① loop() 의 past_sheet_telegram.tick() 호출 삭제 → 매일 자동 전송 없음
 #        ② 🛠 도구에 [📥 과거자료 다운] (/과거자료다운): 누르면 숫자 파일을 바로 갱신(history 가 바뀐 경우만) → 5칸 검사 →
@@ -149,7 +155,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.5.1"
+VERSION = "vNEXT"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1767,9 +1773,8 @@ def auto_fx_execute(m, amount, direction="1", before_exchange=None):
         except Exception:
             krw = None
         krw_need = amount * rate1
-        if krw is None:
-            return "stop", {"why": "원화 예수금을 못 읽어 원화가 충분한지 확인하지 못했어요"}
-        if krw < krw_need:
+        # vNEXT: 외화잔고 API 는 KRW 행을 주지 않음 → 조회 불가는 '부족'이 아님. 환전 POST 에 맡김 (부족하면 증권사가 거절)
+        if krw is not None and krw < krw_need:
             short = (krw_need - krw).quantize(Decimal(1), rounding=ROUND_UP)
             return "stop", {"why": f"원화가 {short:,.0f}원 모자라요 (필요 원화 약 {krw_need:,.0f}원 · 원화 예수금 {krw:,.0f}원)"}
     try:
@@ -1790,8 +1795,34 @@ def auto_fx_execute(m, amount, direction="1", before_exchange=None):
         else:   # 메리츠 스펙: mnec_clcd "2" = 외화 매도(외화→원화), frcr_amt = 환전할 외화 금액, iqry_exrt = tltr_aply_slrt
             res = m.fx_exchange(f"{amount:.2f}", str(rate2), time2, crcd="USD", mnec_clcd="2")
     except Exception as e:
-        return "uncertain", {"why": type(e).__name__}
+        if _is_meritz_error(e):                      # 증권사가 응답한 거절 (str(e) = "rsp_cd rsp_msg")
+            broker = str(e).strip() or type(e).__name__
+            if direction == "1" and _fx_krw_short_reject(broker):
+                return "stop", {"why": f"원화 부족 (증권사 응답: {broker})", "broker": broker}
+            return "uncertain", {"why": broker, "broker": broker}
+        return "uncertain", {"why": type(e).__name__}   # 네트워크·타임아웃 등: 실행 결과 모름
     return "ok", {"res": res or {}, "rate": rate2}
+
+
+# vNEXT: 정방향 환전 거절 중 '원화가 모자람' 계열로 보는 증권사 응답 글자 (rsp_msg 기준)
+FX_KRW_SHORT_WORDS = ("부족", "가능금액", "가능 금액", "예수금", "잔고", "잔액")
+
+
+def _is_meritz_error(e):
+    """meritz_client.MeritzError (증권사 rsp_cd + rsp_msg) 인지. HTTP 본문이 JSON 이 아니면 'HTTP 500 경로' 형태라 부족으로 안 봄"""
+    try:
+        from meritz_client import MeritzError
+        return isinstance(e, MeritzError)
+    except Exception:
+        return any(c.__name__ == "MeritzError" for c in type(e).__mro__)
+
+
+def _fx_krw_short_reject(msg):
+    """증권사 응답 글자가 원화 부족 계열 거절인지 (HTTP 오류 형태·토큰 발급 실패는 제외 → uncertain)"""
+    s = str(msg or "")
+    if s.startswith("HTTP ") or "토큰" in s:
+        return False
+    return any(w in s for w in FX_KRW_SHORT_WORDS)
 
 
 def _after_on(at_text, on_at):
