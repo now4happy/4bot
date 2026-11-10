@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.1 · 2026-11-10 13:22 (KST)
+- 파일: live_board.py
+- 내용: 키움 수량 변경 live_board vNEXT (NAVER 21→14, TIGER 코리아휴머노이드 237→398, 에코프로비엠 49→67, 이수페타시스 60→82; 11-10 12:15 잔고 캡처 + 자동매매내역 2일치 기준)
+- 브랜치: staging
+
 ## v1.6.0 · 2026-11-10 11:16 (KST)
 - 파일: fanding_vr6.py, meritz_client.py, office_briefing.py
 - 내용: VR6 need: 체결된 매수 줄 제외 — reserved_rows + remaining_need_usd (브리핑 남은 필요)

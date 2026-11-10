@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/live_board.py   (사무실 vNEXT)
-# vNEXT: 한국(KRX) 확장 — 키움 보유 32종목(KRX 상장·원화)의 현재가를 토스 /api/v1/prices 로 받아
+# FILE: /opt/bot-office/live_board.py   (사무실 v1.6.1)
+# v1.6.1: 한국(KRX) 확장 — 키움 보유 32종목(KRX 상장·원화)의 현재가를 토스 /api/v1/prices 로 받아
 #        krx 섹션 + E41(국내 주식) 실시간 합계를 만든다. 미국 장 로직·합계 정의·git/푸시 로직은 v1 그대로.
 #  - 한국 장(KST 09:00–15:35, KR_CLOSED 제외 · KR_SPECIAL_HOURS 는 그날 시간)에는 KRX 시세만 받고 시트는 안 읽는다
 #    (예외: 기존 JSON 에 base 가 없을 때 한 번만 — 첫 발행 · v1 JSON 에서 넘어올 때 · 실패 JSON 뒤).
