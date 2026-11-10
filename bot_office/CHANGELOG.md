@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.5.7 · 2026-11-10 10:46 (KST)
+- 파일: meritz_client.py
+- 내용: 메리츠 원화 조회 deposit 교체 meritz_client vNEXT (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.5.6 · 2026-11-10 10:29 (KST)
 - 파일: bot_updater.py
 - 내용: 업데이트 비서 2번 스나이퍼 버전은 코드 머리말 버전으로 기록 (태그 카운터 대신)

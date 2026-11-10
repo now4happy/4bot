@@ -7,7 +7,7 @@
 # V1.4: KRW 예수금 조회 + 환전 버튼 연결 (실행은 2차 확인 버튼에서만)
 # V1.5: 계좌별 키·토큰 파일 선택 (VR6 계좌 = /etc/bot-office/meritz_vr6.json) · 예약주문에 예약방식·종료일 옵션
 #       (기간잔량 "2" 등). 인자를 안 주면 기존(P)과 똑같이 일반예약 "1"·시작=종료일
-# vNEXT: KRW 예수금 조회 경로 교체 — 해외 외화잔고(/accounts/v1/me/overseas/currencies, KRW 행 없음) → 국내 예수금 상세(/accounts/v1/me/deposit, data.tfam) (2026-11-10)
+# v1.5.7: KRW 예수금 조회 경로 교체 — 해외 외화잔고(/accounts/v1/me/overseas/currencies, KRW 행 없음) → 국내 예수금 상세(/accounts/v1/me/deposit, data.tfam) (2026-11-10)
 # 메리츠증권 Open API 최소 연결 (해외주식: 현재가·잔고·예약주문)
 #  - 키는 /etc/bot-office/meritz.json 에만 둡니다 (GitHub 에 절대 올리지 않음)
 #    {"app_key": "...", "app_secret": "..."}
