@@ -2,6 +2,7 @@
 # =====================================================================
 # FILE: bot_office/sniper_upstream.py   (업데이트 비서 부품 · 2번 스나이퍼 원작자 새 버전 '알림 전용')
 #
+#  사무실 vNEXT (2026-11-10): 매일 09:02 자동 확인 기본 꺼짐 (U_SNIPER_AUTO=1일 때만) — 원작 체크는 Muse 일일 체크로 이관 · 수동 '원작 확인'(force=True)은 그대로
 #  사무실 v1.0.49 (2026-10-28): 알림 전용으로 다시 켬 — 자동 합치기·자동 업로드 없음
 #   · 하루 1번(아침 브리핑 직후 09:02 KST) 원작 저장소(pipios4006-boop/pipiosToss_bot) 확인 · 6. Update 에 '원작 확인'이면 즉시
 #   · 내 2번 봇이 바탕으로 삼은 원작 커밋(기준) 이후 새 커밋이 있으면 🔴 [중요] 알림 (바뀐 파일·쌓인 수정 수·원작 매뉴얼 제목)
@@ -20,6 +21,7 @@ from zoneinfo import ZoneInfo
 UPSTREAM_URL = os.environ.get("U_SNIPER_UPSTREAM", "https://github.com/pipios4006-boop/pipiosToss_bot.git")
 UPSTREAM_NAME = "pipiosToss_bot"
 CHECK_AT = os.environ.get("U_SNIPER_AT", "09:02")   # 하루 1번 확인 시각 (KST) — 아침 브리핑(09:00) 바로 뒤
+AUTO_CHECK = os.environ.get("U_SNIPER_AUTO", "0") == "1"  # 자동 확인 기본 꺼짐 (2026-11-10: 원작 체크는 Muse 일일 체크로 이관, 수동 확인은 유지)
 WORK = os.environ.get("U_SNIPER_WORK", "/var/lib/bot-updater/sniper_upstream")
 # 2026-10-28 비교 결과: 2번 봇(v1.0.7 이후)은 원작 2e23df2 (10-24 11:54 KST) 와 가장 같음 → 처음 기준
 BASE_DEFAULT = "2e23df2ede063e4db6d14e57b3cd833938c15395"
@@ -106,6 +108,8 @@ def _summary(base, head):
 def check(u, st, force=False):
     sl = _slot(st)
     if not force:
+        if not AUTO_CHECK:
+            return
         now = datetime.now(KST)
         today = now.strftime("%Y-%m-%d")
         if sl["last_day"] == today or now.strftime("%H:%M") < CHECK_AT:
