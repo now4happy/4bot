@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-11): dirty 검사에서 생성 상태 파일(need.json·sniper_tiers.json) 제외 — 브리핑이 매번 다시 써서 업데이트가 멈추던 것 수정
 # 사무실 v1.5.6 (2026-11-10): 2번 스나이퍼 버전은 코드 머리말 버전으로 기록 (태그 카운터 v1.2.3 대신 v2.5.2식) — 머리말 없으면 기존 next_tag 유지
 # 사무실 v1.5.0 (2026-11-09): need.json 상태 업로드 경로 추가
 # BOT_UPDATER_V2 — GitHub에 올라온 수정(main 이외의 브랜치)을 감지 → 텔레그램 [✅ 업데이트] 버튼 → 안전 확인 후 적용
@@ -140,6 +141,26 @@ def git_raw(*a):
     return r.returncode, r.stdout
  
  
+def _dirty_code_files(include_staged=False):
+    """저장 안 된 변경 중 실제 코드 변경만 반환한다.
+    브리핑이 매번 다시 쓰는 생성 상태 파일(need.json·sniper_tiers.json)은 제외한다.
+    include_staged=True면 스테이징된 변경도 포함한다."""
+    state = {NEED_FILE, SNIPER_TIERS_FILE}
+    files = []
+    out = git("status", "--porcelain", "--untracked-files=no")[1]
+    for line in out.splitlines():
+        parts = line.split()
+        if parts and parts[-1] not in state:
+            files.append(parts[-1])
+    if include_staged:
+        staged = git("diff", "--cached", "--name-only")[1]
+        for line in staged.splitlines():
+            name = line.strip()
+            if name and name not in state:
+                files.append(name)
+    return files
+
+
 def load(p, d):
     try:
         return json.load(open(p, encoding="utf-8"))
@@ -635,7 +656,7 @@ def status_daily(st, force=False):
     if not force and (now.hour * 100 + now.minute < 610 or st.get("status_day") == today):
         return None
     st["status_day"] = today
-    if git("status", "--porcelain", "--untracked-files=no")[1].strip():
+    if _dirty_code_files():
         return "서버에 저장 안 된 변경이 있어 건너뜀"
     _, head = git("rev-parse", "HEAD")
     rc_m, main = git("rev-parse", "origin/main")
@@ -875,7 +896,7 @@ def apply(st, key):
         return say("⏸ <b>지금은 적용하지 않았습니다</b>\n▫️ " + "\n▫️ ".join(esc(b) for b in busy) + "\n▫️ 나중에 같은 알림의 ✅를 다시 눌러 주세요.",
                    [[{"text": "✅ 다시 시도", "callback_data": f"up:{key}"}]] +
                    [[{"text": "⏸ " + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
-    if git("status", "--porcelain", "--untracked-files=no")[1].strip() or git("diff", "--cached", "--name-only")[1].strip():
+    if _dirty_code_files(include_staged=True):
         return say("⛔ 서버에 저장 안 된 변경이 있어 멈췄습니다. Claude나 Gemini에게 확인을 요청해 주세요.")
     rc_m, main_sha = git("rev-parse", "origin/main")
     if rc_m == 0 and git("merge-base", "--is-ancestor", main_sha, "HEAD")[0] and git("merge-base", "--is-ancestor", main_sha, sha)[0]:
