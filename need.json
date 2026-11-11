@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-11 11:50:01",
+  "as_of_kst": "2026-11-11 09:00:02",
   "accounts": [
     {
       "name": "토스",
@@ -27,9 +27,9 @@
         {
           "label": "P",
           "currency": "USD",
-          "holding": 2927.34,
+          "holding": 1985.18,
           "need": 2927.34,
-          "sufficient": true,
+          "sufficient": false,
           "auto_fx": "on"
         },
         {
@@ -47,14 +47,14 @@
       "lines": [
         {
           "currency": "USD",
-          "holding": 1063.26,
+          "holding": 1639.57,
           "need": 1506.875,
-          "sufficient": false,
+          "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
           "currency": "KRW",
-          "holding": 9584077.0,
+          "holding": null,
           "need": null,
           "sufficient": null,
           "auto_fx": "unavailable"
