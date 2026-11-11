@@ -72,6 +72,7 @@
 #        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
 # 1.14.0 (사무실 v1.2.4): 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
 # 1.14.5: 자동환전 $10 단위를 반올림(half-up) → 올림(ceiling)으로 — 반올림이 내림이 되면 부족이 남아 매수 자금이 모자람 (2026-11-11, 부족 $942.16 → $940 환전돼 매수 $2 부족 사례)
+# 1.14.6: 배수 맞추기 주단위 + 나머지 하루 더 (사용자 지시 2026-11-11) — 일수 선택지 6/12/24일 → 5/10/20일(주 단위), 나머지는 마지막 예정일에 몰아넣지 않고 예정일이 끝난 다음 날에 한 번에 삼 (예: 20주·6일이면 3주씩 6일 + 마지막 날 2주, 총 7일)
 # 1.14.4 (사무실 v1.3.4): 검산 오탐 + 주문 버튼 사라짐 수정 (사용자 지시 2026-11-06, P 표 33차 종가 40.87 사례)
 #        ① 매도가 상한을 종가 2배만으로 보지 않음 → 직전 가격표 최고 매도가 +10% (없으면 보유 평단 2배) 와 비교.
 #          기준이 없으면 '이상한 매도가' 대신 '기준 없음, 확인 필요' (통과 아님 = 자동주문 판정은 예전과 같음)
@@ -80,8 +81,8 @@
 #          (마감 전까지 ✅/❌ 로 직접 결정) · /가격표 다시 보내기도 버튼 붙음 · 버튼 붙은 메시지를 모두 기억해 마감·자동승인 때 함께 정리
 #        · 매수 범위·개수·매수 총액·매도 합계 검사, 자동주문 가능 판정, 버튼 문구·callback_data·주문 접수 흐름 불변
 # v1.5.1: 배수 맞추기 (따라잡기 매수) — 배수를 올렸을 때 부족한 보유를 메뉴에서 정한 일수 동안 매일 예약매수에 조금씩 추가
-#        · P 메뉴 [📈 배수 맞추기] (/맞추기): 부족분(표 보유×배수−실제 보유)을 보여주고 일수(6/12/24일 + 직접 입력)를 고르면 확인 후 시작
-#        · 하루치 수량 = 부족분÷일수(내림), 나머지는 마지막 날에 몰아넣음 · 가장 낮은 매수가 줄에 더함 · 30분 VWAP 그대로
+#        · P 메뉴 [📈 배수 맞추기] (/맞추기): 부족분(표 보유×배수−실제 보유)을 보여주고 일수(5/10/20일 + 직접 입력)를 고르면 확인 후 시작
+#        · 하루치 수량 = 부족분÷일수(내림), 나머지는 예정일이 끝난 다음 날에 한 번에 삼 · 가장 낮은 매수가 줄에 더함 · 30분 VWAP 그대로
 #        · 하루치 수량은 그날 시트에 한 번만 계산해 저장(검산·접수·재시도·재예약이 같은 값 재사용 → 중복주문 방지)
 #        · 남은 수량은 매일 부족분으로 다시 계산(미체결은 다음 날로 이월, 종료일만 밀림) · 부족분 0이면 계획 종료 알림 · 메뉴에서 중단 가능
 #        · 검산 매수 총액에 따라잡기 포함(max_buy_usd 그대로) · 현금 부족 시 그날 수량 줄임·건너뜀 · 표 주문 계산(raw_lines)은 그대로
@@ -156,7 +157,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.5.6"
+VERSION = "v1.5.7"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1149,7 +1150,7 @@ def cap_sells(lines, sellable):
 
 
 # ---------------------------------------------------------- 배수 맞추기 (따라잡기 매수, v1.5.1)
-CATCHUP_DAY_PRESETS = (6, 12, 24)
+CATCHUP_DAY_PRESETS = (5, 10, 20)
 
 
 def _catchup_int(value):
@@ -1190,14 +1191,17 @@ def catchup_lowest_buy_price(sheet):
 
 
 def catchup_daily_qty(plan, gap):
-    """그날 따라잡기 수량. gap: 오늘 부족분. 마지막 예정일이면 나머지를 더한다."""
+    """그날 따라잡기 수량. gap: 오늘 부족분. 마지막 예정일에도 하루치만 사고,
+    남은 나머지는 예정일이 끝난 다음 날에 한 번에 산다 (하루 더)."""
     if gap is None or gap <= 0:
         return 0
     daily = int(plan.get("daily") or 0)
     if daily <= 0:
         return 0
-    if int(plan.get("applied", 0)) + 1 == int(plan.get("days", 1)):
-        return min(daily + int(plan.get("remainder", 0)), gap)
+    if int(plan.get("applied", 0)) >= int(plan.get("days", 1)):
+        # 예정일 이후: 남은 나머지를 한 번에 산다 (미체결 등으로 더 남았으면 나머지씩 나눠서)
+        rem = int(plan.get("remainder") or 0)
+        return min(rem if rem > 0 else daily, gap)
     return min(daily, gap)
 
 
@@ -3097,9 +3101,10 @@ def catchup_setup(tg_s, st):
     plan = catchup_plan(st)
     if plan:
         gap, sheet, mult, table, actual = _catchup_current_gap(st)
+        eff_days = int(plan.get('days', 1)) + (1 if plan.get('remainder') else 0)
         L = ["📈 <b>배수 맞추기 진행 중</b>",
-             f"▫️ 목표 배수 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · {plan.get('days')}일 중 {int(plan.get('applied', 0)) + 1}일째",
-             f"▫️ 하루 {plan.get('daily')}주씩" + (f" · 마지막 날 {int(plan.get('daily', 0)) + int(plan.get('remainder', 0))}주" if plan.get('remainder') else ""),
+             f"▫️ 목표 배수 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · {eff_days}일 중 {int(plan.get('applied', 0)) + 1}일째",
+             f"▫️ 하루 {plan.get('daily')}주씩" + (f" · 나머지 {int(plan.get('remainder', 0))}주는 마지막에 하루 더" if plan.get('remainder') else ""),
              f"▫️ 시작 {plan.get('started')}"]
         if gap is not None:
             L.append(f"▫️ 지금 부족분 {gap}주" + ("" if gap > 0 else " (다 채워졌어요)"))
@@ -3140,7 +3145,7 @@ def catchup_confirm(tg_s, st, days):
     price = catchup_lowest_buy_price(sheet)
     L = ["📈 <b>배수 맞추기 확인</b>",
          f"▫️ 목표 배수 ×{mult} · 부족분 <b>{gap}주</b> (표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주)",
-         f"▫️ 기간 {eff}일 · 매일 {daily}주씩" + (f" · 마지막 날 {daily + rem}주" if rem else ""),
+         f"▫️ 기간 {eff}일 · 매일 {daily}주씩" + (f" · 나머지 {rem}주는 마지막에 하루 더" if rem else ""),
          f"▫️ 매수 가격: 가장 낮은 표 매수가 {price:g}" if price is not None else "▫️ 매수 가격: 표 매수가",
          "▫️ 발주: 장마감 30분 전 (30분 VWAP) 그대로",
          "▫️ 미체결이면 다음 날로 넘어가고, 부족분이 0이 되면 자동으로 끝나요"]
@@ -3179,7 +3184,7 @@ def catchup_start(tg_s, st, days):
         send_sheet_alert(TG(), sh, "📋 <b>배수 맞추기 적용된 가격표</b>", st)
         note = "\n오늘 가격표에도 바로 적용했어요. 새 알림의 버튼으로 결정해 주세요."
     tg_s.send(f"📈 <b>배수 맞추기 시작</b>\n▫️ 목표 배수 ×{mult} · 부족분 {gap}주\n"
-              f"▫️ {eff}일 · 매일 {daily}주씩" + (f" · 마지막 날 {daily + rem}주" if rem else "") + note)
+              f"▫️ {eff}일 · 매일 {daily}주씩" + (f" · 나머지 {rem}주는 마지막에 하루 더" if rem else "") + note)
     return True
 
 
