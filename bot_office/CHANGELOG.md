@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.4 · 2026-11-11 10:42 (KST)
+- 파일: fanding_trade.py
+- 내용: 배수 맞추기 주단위 5일 + 나머지 하루 더 (fanding_trade v1.5.7)
+- 브랜치: staging
+
 ## v1.6.3 · 2026-11-11 10:15 (KST)
 - 파일: fanding_trade.py
 - 내용: 자동환전 $10 단위 올림(ceiling) — 부족 남지 않게 (fanding_trade v1.5.6)
