@@ -71,6 +71,7 @@
 # 1.11.2 (사무실 v1.2.0): 가격표·주문 완료 메시지 간결화 — 💵 달러(숫자 앞·정수 반올림, 조회 불가 시 예전 순서)·📦 보유 수량 비교만
 #        · 참고 줄(예수금·부족·여유·긴 설명·계좌 조회 시각)과 매수·매도 줄의 (표 숫자) 제거 · 표시만, 계산·주문 그대로
 # 1.14.0 (사무실 v1.2.4): 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
+# 1.14.5: 자동환전 $10 단위를 반올림(half-up) → 올림(ceiling)으로 — 반올림이 내림이 되면 부족이 남아 매수 자금이 모자람 (2026-11-11, 부족 $942.16 → $940 환전돼 매수 $2 부족 사례)
 # 1.14.4 (사무실 v1.3.4): 검산 오탐 + 주문 버튼 사라짐 수정 (사용자 지시 2026-11-06, P 표 33차 종가 40.87 사례)
 #        ① 매도가 상한을 종가 2배만으로 보지 않음 → 직전 가격표 최고 매도가 +10% (없으면 보유 평단 2배) 와 비교.
 #          기준이 없으면 '이상한 매도가' 대신 '기준 없음, 확인 필요' (통과 아님 = 자동주문 판정은 예전과 같음)
@@ -101,7 +102,7 @@
 #        history.jsonl 이 바뀌었을 때만 export_past_sheet.auto_export() 를 이 서비스 계정으로 실행 (10분에 한 번 확인)
 #        · 원본 읽기만 · 알림·주문·state.json 안 건드림 · 실패해도 매매 루프 계속 (서비스 로그 한 줄만) · 매매 로직 불변
 # 1.13.0: 자동환전을 가격표 알림 '전'에 실행(알림은 환전 후 달러+환전 줄, 중단·시간 밖이면 바로 알림+수동 버튼) · 정/역방향 우대 시간 평일 09:00~15:30 만 · P 원화 역자동환전(💱 역자동환전 토글, 기본 꺼짐, 메리츠 mnec_clcd 2)
-# 1.12.0: 환전 직관화(💱 환전 → 금액 고르기 버튼 → 확인 → [✅ $XXX 환전 실행]) + P 부족금 자동환전(💱 자동환전 토글, 기본 꺼짐, 추정 기준·$10 반올림·회차당 1번, P 키만)
+# 1.12.0: 환전 직관화(💱 환전 → 금액 고르기 버튼 → 확인 → [✅ $XXX 환전 실행]) + P 부족금 자동환전(💱 자동환전 토글, 기본 꺼짐, 추정 기준·$10 올림·회차당 1번, P 키만)
 # 팬딩 가격표 → 숫자 확인 → 메리츠 Limit VWAP 예약주문 (SOXL)
 #
 #  흐름
@@ -155,7 +156,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.5.5"
+VERSION = "v1.5.6"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1371,14 +1372,14 @@ def fx_cb_amount(d):
 
 
 def fx_auto_amount(gap):
-    """자동환전 금액 (Decimal) 또는 None. $10 이상 → $10 단위 반올림(5 이상 올림, half-up), $0 초과 $10 미만 → $100"""
-    from decimal import Decimal, ROUND_HALF_UP
+    """자동환전 금액 (Decimal) 또는 None. $10 이상 → $10 단위 올림(ceiling, 부족이 남지 않게), $0 초과 $10 미만 → $100"""
+    from decimal import Decimal, ROUND_CEILING
     g = _dec(gap)
     if g is None or g <= 0:
         return None
     if g < 10:
         return Decimal(100)
-    return (g / 10).quantize(Decimal(1), rounding=ROUND_HALF_UP) * 10
+    return (g / 10).quantize(Decimal(1), rounding=ROUND_CEILING) * 10
 
 
 def fx_current_sheet(st=None, now=None):
