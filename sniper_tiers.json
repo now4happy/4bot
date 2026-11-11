@@ -1,61 +1,39 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-12 00:46:01",
+  "as_of_kst": "2026-11-12 00:52:01",
   "symbol": "SOXL",
-  "live_price": 65.46,
+  "live_price": 66.77,
   "price_note": "",
   "tiers": [
     {
-      "tier": 1,
-      "kind": "l1",
-      "qty": 13,
-      "price": 64.68,
-      "lot_count": 1,
-      "lot_type": "REENTRY_1FL",
-      "target": 65.66,
-      "target_pct": 1.5,
-      "reached": false
-    },
-    {
       "tier": 2,
       "kind": "upper",
-      "qty": 23,
-      "price": 66.1187,
+      "qty": 21,
+      "price": 68.9633,
       "lot_count": 2,
       "lot_type": "GRID_L2",
-      "target": 66.78,
+      "target": 69.66,
       "target_pct": 1.0,
       "reached": false
     },
     {
       "tier": 3,
       "kind": "upper",
-      "qty": 21,
-      "price": 68.9633,
-      "lot_count": 2,
+      "qty": 41,
+      "price": 75.5961,
+      "lot_count": 4,
       "lot_type": "GRID_L3",
-      "target": 69.66,
+      "target": 76.36,
       "target_pct": 1.0,
       "reached": false
     },
     {
       "tier": 4,
       "kind": "upper",
-      "qty": 41,
-      "price": 75.5961,
-      "lot_count": 4,
-      "lot_type": "GRID_L4",
-      "target": 76.36,
-      "target_pct": 1.0,
-      "reached": false
-    },
-    {
-      "tier": 5,
-      "kind": "upper",
       "qty": 10,
       "price": 78.03,
       "lot_count": 1,
-      "lot_type": "GRID_L5",
+      "lot_type": "GRID_L4",
       "target": 78.82,
       "target_pct": 1.0,
       "reached": false
@@ -63,19 +41,8 @@
   ],
   "targets": [
     {
-      "kind": "l1",
-      "price": 65.66,
-      "pct": 1.5,
-      "tiers": [
-        1
-      ],
-      "locked": false,
-      "reached": false,
-      "unlock_hm": ""
-    },
-    {
       "kind": "indiv",
-      "price": 66.78,
+      "price": 69.66,
       "pct": 1.0,
       "tiers": [
         2
@@ -86,7 +53,7 @@
     },
     {
       "kind": "indiv",
-      "price": 69.66,
+      "price": 76.36,
       "pct": 1.0,
       "tiers": [
         3
@@ -97,7 +64,7 @@
     },
     {
       "kind": "indiv",
-      "price": 76.36,
+      "price": 78.82,
       "pct": 1.0,
       "tiers": [
         4
@@ -107,28 +74,16 @@
       "unlock_hm": ""
     },
     {
-      "kind": "indiv",
-      "price": 78.82,
-      "pct": 1.0,
-      "tiers": [
-        5
-      ],
-      "locked": false,
-      "reached": false,
-      "unlock_hm": ""
-    },
-    {
       "kind": "wma",
-      "price": 72.82,
+      "price": 74.74,
       "pct": 1.0,
       "tiers": [
         2,
         3,
-        4,
-        5
+        4
       ],
       "locked": false,
-      "avg_price": 72.0916,
+      "avg_price": 73.9996,
       "reached": false,
       "unlock_hm": ""
     }
@@ -136,10 +91,10 @@
   "sub_tiers": [],
   "sub_targets": [],
   "holding": {
-    "shares": 108,
+    "shares": 72,
     "sub_shares": 0,
     "basement_shares": 0,
-    "total_shares": 108
+    "total_shares": 72
   },
   "basement": null
 }
