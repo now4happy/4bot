@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.3 · 2026-11-11 10:15 (KST)
+- 파일: fanding_trade.py
+- 내용: 자동환전 $10 단위 올림(ceiling) — 부족 남지 않게 (fanding_trade v1.5.6)
+- 브랜치: staging
+
 ## v1.6.2 · 2026-11-11 05:40 (KST)
 - 파일: live_board.py
 - 내용: live_board 원장 파일(sniper_tiers.json) 5분마다 live-board 브랜치에 발행

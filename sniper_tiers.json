@@ -1,8 +1,8 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-11 06:13:50",
+  "as_of_kst": "2026-11-11 10:15:23",
   "symbol": "SOXL",
-  "live_price": 56.42,
+  "live_price": 58.82,
   "price_note": "",
   "tiers": [
     {
@@ -14,7 +14,7 @@
       "lot_type": "REENTRY_1FL",
       "target": 58.45,
       "target_pct": 1.5,
-      "reached": false
+      "reached": true
     },
     {
       "tier": 2,
@@ -81,7 +81,7 @@
         1
       ],
       "locked": true,
-      "reached": false,
+      "reached": true,
       "unlock_hm": "04:07"
     },
     {
