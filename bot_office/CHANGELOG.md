@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.5 · 2026-11-11 13:21 (KST)
+- 파일: bot_updater.py, office_briefing.py
+- 내용: Revert "상태 기록: need.json"
+- 브랜치: staging
+
 ## v1.6.4 · 2026-11-11 10:42 (KST)
 - 파일: fanding_trade.py
 - 내용: 배수 맞추기 주단위 5일 + 나머지 하루 더 (fanding_trade v1.5.7)

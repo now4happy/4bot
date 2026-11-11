@@ -34,7 +34,7 @@
 - 사무실 v1.5.0 (2026-11-09): need.json 발행·정기 텔레그램 중단 (A안)
 - 사무실 v1.4.9 (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
-- 사무실 vNEXT (2026-11-11): 한투 need를 당일 매수 체결액 제외 남은 필요로 계산 (frcr_buy_amt_smtl 조회, 실패 시 전액 폴백)
+- 사무실 v1.6.5 (2026-11-11): 한투 need를 당일 매수 체결액 제외 남은 필요로 계산 (frcr_buy_amt_smtl 조회, 실패 시 전액 폴백)
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
