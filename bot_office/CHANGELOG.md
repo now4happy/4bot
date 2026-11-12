@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.0 · 2026-11-12 21:10 (KST)
+- 파일: fanding_fetch_server.py, test_fanding_fetch_server.py
+- 내용: 팬딩 서버 수집기: SERVER_SETUP.md 고침 — 유닛 파일(.service/.timer) 내용을 heredoc으로 넣어 서버에서 직접 만들게 (업데이터 허용 목록 밖이라 저장소에 두지 않음)
+- 브랜치: fanding-server-collect
+
 ## v1.6.9 · 2026-11-12 20:41 (KST)
 - 파일: bot_updater.py
 - 내용: 업데이터 enable 고침: 재시작 때 실행 중이면 enable도 같이 (사무실 vNEXT)

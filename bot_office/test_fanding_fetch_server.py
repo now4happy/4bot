@@ -284,7 +284,7 @@ forbidden = ["vision(", "process_inbox(", "handle_image(", "handle_history_image
              "ft.STATE", "ft.LOCKF", "ft.IMAGES", "ft.GEMINI_CFG", "scan_gate\"] =", "fanding_vr6", "X-Fanding-Kind", "X-Fanding-Mode\": \"history"]
 hits = [f for f in forbidden if f in src]
 check("판독·판정·주문·state.json·게이트 쓰기·VR6·history 를 건드리지 않음", not hits, str(hits))
-check("버전 vNEXT", 'VERSION = "vNEXT"' in src)
+check("버전 v1.7.0", 'VERSION = "v1.7.0"' in src)
 
 # ── 8. 실제 브라우저 (가짜 팬딩 페이지) ──
 if WANT_BROWSER:
