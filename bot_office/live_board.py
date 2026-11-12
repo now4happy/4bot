@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/live_board.py   (사무실 v1.6.1)
-# 사무실 v1.6.2
+# FILE: /opt/bot-office/live_board.py   (사무실 vNEXT)
+# 사무실 vNEXT
+# vNEXT: 한국만 열림 분기에도 시트 읽어 현금 갱신 (새로고침 시 현금 반영) + 한투 달러화 43행 포함
+#  - 한국 장 열림·미국 장 닫힘 분기(elif _has_base)에서 시트를 다시 읽고 compute_sheet_only로 현금만 갱신.
+#    미국 행은 마지막 값 그대로 동결. 시트 현금(B83)과 live_board 현금(totals.cash)이 낮에도 일치.
+#  - 한투 달러화(43행, E43 = D43×환율)를 STATIC_E·합계(cash·api_ex41)에 포함.
 # v1.6.2: 스나이퍼 원장 투영(sniper_tiers.json)을 live-board 작업트리에 함께 발행 — 최대 5분에 1번, 내용이 바뀐 때만.
 #  - bot_updater.write_sniper_tiers() 와 같은 원천(sniper_picture.py 의 _find_ledger·_snapshot_price·build)·같은 스키마.
 #    bot_updater 는 import 하지 않는다 (sniper_picture.py 만 importlib 으로 직접 읽음).
@@ -222,15 +226,15 @@ def num0(values, ref):
 # 행 → (수량 칸, 시세 키) · 시세 키 None = 달러 그대로(환율만)
 QTY_ROWS = {27: "tqqq", 28: "soxl", 29: "soxl", 30: "tqqq", 33: None, 34: "soxl", 35: None}
 STATIC_C = (26, 31, 32, 36, 39, 40, 46, 47, 48, 49, 50, 54)       # 정적 값 (C열) · v1.5.9: 41 뺌 (E41 = KRX 합계)
-STATIC_E = (37, 38)                                                 # v1: 시트 E값 그대로 (BTC·ETH)
+STATIC_E = (37, 38, 43)                                                 # v1: 시트 E값 그대로 (BTC·ETH) · 43: 한투 달러화 (E43 = D43×환율)
 OUT_ROWS = (27, 28, 29, 30, 33, 34, 35, 37, 38)
 KRX_ROW = 41                                                        # E41 국내 주식 = krx 32종목 합계
 
 
 def sums(E):
     """반올림 전 부분합 (E41 빼고) → JSON base 칸 · 한국만 열린 분에 시트 없이 합계를 다시 내는 데 씀"""
-    return {"api_ex41": sum(E[r] for r in range(26, 41)),                     # E42 - E41 = SUM(E26:E40)
-            "cash": sum(E[r] for r in (26, 39, 31, 32, 33, 36, 46, 40, 54)),  # B83 (41행 없음)
+    return {"api_ex41": sum(E[r] for r in range(26, 41)) + E[43],                 # E42 - E41 = SUM(E26:E40,E43)
+            "cash": sum(E[r] for r in (26, 39, 31, 32, 33, 36, 46, 40, 54, 43)),  # B83 (41행 없음)
             "manual": sum(E[r] for r in (46, 47, 48, 49, 50, 54))}           # E51 = SUM(E46:E50,E54)
 
 
@@ -707,13 +711,12 @@ def build_v2(now_utc, cur, us_open, kr_open, sheet_reader, quote_fetcher, krx_fe
         soxl, tqqq, fx = quote_fetcher()
         E, rows, totals = compute(values, soxl, tqqq, fx, e41=krx_total)
         base = pack_base(E, krx_total)
-    elif _has_base(prev):                            # 한국만 열림 · 시트 안 읽음 · 미국 행은 마지막 값
+    elif _has_base(prev):                            # 한국만 열림 · 시트 읽어 현금만 갱신 · 미국 행은 마지막 값
+        values = sheet_reader()
         p = prev["prices"]
         soxl, tqqq, fx = p.get("soxl"), p.get("tqqq"), p.get("usdkrw")
-        base = dict(prev["base"], krx_total=round(krx_total, 6))
-        rows = dict(prev["rows"])
-        rows[str(KRX_ROW)] = r2(krx_total)
-        totals = totals_from(base, krx_total)
+        E, rows, totals = compute_sheet_only(values, krx_total, prev.get("rows"))
+        base = pack_base(E, krx_total)
     else:                                            # 한국만 열림 · 첫 발행 예외 (이때만 시트 읽음)
         values = sheet_reader()
         p = (prev or {}).get("prices") or {}
