@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.8 · 2026-11-12 15:00 (KST)
+- 파일: live_board.py
+- 내용: office: live_board writes sniper_snapshot (vNEXT)
+- 브랜치: staging
+
 ## v1.6.7 · 2026-11-12 13:53 (KST)
 - 파일: live_board.py
 - 내용: live_board: 한국만 열림에도 시트 현금 갱신 + 한투 달러화 43행 포함 (사무실 vNEXT)

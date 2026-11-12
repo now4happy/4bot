@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/live_board.py   (사무실 vNEXT)
-# 사무실 vNEXT
-# vNEXT: 스나이퍼 현재가 스냅샷(sniper_snapshot.json)을 live_board 발행이 대신 써준다.
+# FILE: /opt/bot-office/live_board.py   (사무실 v1.6.8)
+# 사무실 v1.6.8
+# v1.6.8: 스나이퍼 현재가 스냅샷(sniper_snapshot.json)을 live_board 발행이 대신 써준다.
 #  - 원작 스나이퍼 main.py에는 _write_picture_snapshot이 없어서, 원작 그대로 마이그레이션 뒤에는
 #    사무실 그림(sniper_picture.py)이 읽는 현재가 스냅샷이 멈춘다. live_board가 매 실행마다
 #    data["prices"]["soxl"]로 스냅샷을 써서 그림·원장 투영의 현재가를 유지한다.
@@ -611,7 +611,7 @@ def publish(data, msg):
     return True
 
 
-# ---------------- 스나이퍼 현재가 스냅샷 (vNEXT · 원작 스나이퍼에는 없는 기능)
+# ---------------- 스나이퍼 현재가 스냅샷 (v1.6.8 · 원작 스나이퍼에는 없는 기능)
 def _write_sniper_snapshot(data):
     """사무실 그림(sniper_picture.py)이 읽는 sniper_snapshot.json을 쓴다.
     원작 스나이퍼 main.py에는 _write_picture_snapshot이 없어서, 원작 그대로
@@ -820,7 +820,7 @@ def run(argv=None, now=None, sheet_reader=None, quote_fetcher=None, out=print, k
         return code
 
     if data.get("ok"):
-        _write_sniper_snapshot(data)   # vNEXT: 스냅샷 — live_board 발행 여부와 무관하게 매 실행마다
+        _write_sniper_snapshot(data)   # v1.6.8: 스냅샷 — live_board 발행 여부와 무관하게 매 실행마다
     tiers_new = tiers_step(now_utc)   # v1.6.2: 실패해도 False 만 (아래 발행·종료 코드 그대로)
     if not same_content(load_current(), data):
         publish(data, f"live_board {data['as_of_kst']} KST" + ("" if data["ok"] else " (실패)"))   # 원장 파일도 같은 커밋
