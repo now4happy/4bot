@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""팬딩 서버 직접 수집기 — fanding_fetch_server.py  (VERSION v1.7.0)
+"""팬딩 서버 직접 수집기 — fanding_fetch_server.py  (VERSION vNEXT)
 
 하는 일 (이것만 한다)
   서버(GCP)가 fanding.kr 작성자 페이지에서 최신 가격표 글을 찾아,
@@ -27,7 +27,7 @@
 비밀 규칙: 토큰·비밀번호를 코드·로그·상태 파일에 적지 않는다. 토큰은 fanding.json 에서 읽기만 한다.
 """
 
-VERSION = "v1.7.0"
+VERSION = "vNEXT"
 
 import argparse
 import contextlib
@@ -328,11 +328,25 @@ def largest_image(ctx, sc, post):
         _settle(page)
         if _looks_login(page.url):
             return None, "login"
+        # lazy-load 이미지가 다 뜨도록 천천히 끝까지 스크롤한다.
+        # (900px씩 250ms 간격은 느린 서버에서 이미지가 로딩을 시작하기 전에 지나쳐
+        #  naturalWidth가 0으로 측정돼 표 이미지를 못 찾는 경우가 있다.)
         page.evaluate("""async () => {
-            for (let i = 0; i < 30 && window.scrollY + innerHeight < document.body.scrollHeight; i++) {
-                window.scrollBy(0, 900); await new Promise(r => setTimeout(r, 250)); }
+            const H = document.body.scrollHeight;
+            for (let y = 0; y < H; y += 500) {
+                window.scrollTo(0, y);
+                await new Promise(r => setTimeout(r, 400));
+            }
             window.scrollTo(0, 0); }""")
-        page.wait_for_timeout(1500)
+        # 표 크기 이미지가 뜰 때까지 최대 20초 대기 (없으면 그대로 진행해 아래에서 오류 반환)
+        for _ in range(40):
+            has = page.evaluate(
+                f"() => Array.from(document.images).some(i => i.complete && "
+                f"i.naturalWidth * i.naturalHeight >= {sc['min_image_pixels']})")
+            if has:
+                break
+            page.wait_for_timeout(500)
+        page.wait_for_timeout(1000)
         imgs = page.evaluate("""() => Array.from(document.images).map(i => (
             {src: i.currentSrc || i.src, w: i.naturalWidth, h: i.naturalHeight}))""")
         cands = [i for i in imgs if str(i.get("src", "")).startswith("http")
