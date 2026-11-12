@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.9 · 2026-11-12 20:41 (KST)
+- 파일: bot_updater.py
+- 내용: 업데이터 enable 고침: 재시작 때 실행 중이면 enable도 같이 (사무실 vNEXT)
+- 브랜치: updater-enable-fix
+
 ## v1.6.8 · 2026-11-12 15:00 (KST)
 - 파일: live_board.py
 - 내용: office: live_board writes sniper_snapshot (vNEXT)

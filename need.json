@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-12 11:50:01",
+  "as_of_kst": "2026-11-12 16:30:00",
   "accounts": [
     {
       "name": "토스",
@@ -39,6 +39,14 @@
           "need": 0.0,
           "sufficient": true,
           "auto_fx": "on"
+        },
+        {
+          "label": "4번",
+          "currency": "USD",
+          "holding": 70.0,
+          "need": 0.0,
+          "sufficient": true,
+          "auto_fx": "off"
         }
       ]
     },
