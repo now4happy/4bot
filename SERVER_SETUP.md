@@ -39,17 +39,49 @@ free -m
 
 서비스 파일에 `MemoryMax=480M`이 들어 있다. 브라우저가 너무 커지면 수집기 서비스만 정리되고, 봇 본체(`bot-office-fanding.service`)는 영향을 받지 않는다.
 
-## 3단계. 파일 배치 + 실행 사용자 맞추기
+## 3단계. 유닛 파일 만들기 + 실행 사용자 맞추기
 
-GitHub staging → main 반영 뒤, 평소 배포 방식으로 아래 파일을 서버에 둔다.
+수집기 본체(`fanding_fetch_server.py`)는 업데이터가 main 반영 뒤 `/opt/bot-office`로 넣어 준다. 유닛 파일(.service·.timer)은 저장소에 두지 않는다 — 업데이터가 사무실 대상으로 받는 파일이 .py·.html·.css·.js·.md 뿐이라, 유닛 파일을 브랜치에 넣으면 업데이트 전체가 거부된다. 그래서 아래 내용을 서버에 직접 만든다.
 
-| 저장소 파일 | 서버 위치 |
-|---|---|
-| `bot_office/fanding_fetch_server.py` | `/opt/bot-office/fanding_fetch_server.py` |
-| `systemd/bot-office-fanding-fetch.service` | `/etc/systemd/system/bot-office-fanding-fetch.service` |
-| `systemd/bot-office-fanding-fetch.timer` | `/etc/systemd/system/bot-office-fanding-fetch.timer` |
+```bash
+sudo tee /etc/systemd/system/bot-office-fanding-fetch.service > /dev/null <<'EOF'
+# 팬딩 서버 직접 수집기 (fanding_fetch_server.py) — vNEXT
+# 매일 아침 타이머가 한 번 실행한다. 새 표를 보내거나 11:00 이 되면 스스로 끝난다 (상주하지 않음).
+# User= 는 설치 명령이 bot-office-fanding.service 와 같은 사용자로 drop-in 을 만들어 맞춘다.
+[Unit]
+Description=Fanding server collector (daily price table -> /api/fanding/upload)
+After=network-online.target bot-office-fanding.service
+Wants=network-online.target
 
-systemd 파일의 저장소 경로는 기존 서비스 파일을 두는 위치에 맞춰 Muse가 정한다.
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/bot-office
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/bot-office/fanding_fetch_server.py run
+# 07:50~11:00 사이에 끝나야 함 (여유 포함 3시간 30분)
+TimeoutStartSec=3h30min
+# 1GB 서버 보호: 브라우저가 커지면 이 서비스만 정리된다 (봇 본체는 영향 없음)
+MemoryHigh=380M
+MemoryMax=480M
+Nice=5
+EOF
+sudo tee /etc/systemd/system/bot-office-fanding-fetch.timer > /dev/null <<'EOF'
+# 팬딩 서버 직접 수집기 타이머 — vNEXT
+# 매일 07:50 KST. 주말·휴장일·이미 보낸 날은 프로그램이 사이트에 접속하지 않고 바로 끝난다.
+[Unit]
+Description=Fanding server collector daily 07:50 KST
+
+[Timer]
+OnCalendar=*-*-* 07:50:00 Asia/Seoul
+Persistent=false
+AccuracySec=30s
+Unit=bot-office-fanding-fetch.service
+
+[Install]
+WantedBy=timers.target
+EOF
+```
 
 수집기는 **봇 본체와 같은 사용자**로 돌아야 한다. 그래야 inbox에 남긴 파일을 봇이 지울 수 있다. 아래 명령이 그 사용자를 자동으로 맞춘다.
 
