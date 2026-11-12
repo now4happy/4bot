@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.6 · 2026-11-12 13:20 (KST)
+- 파일: office_briefing.py
+- 내용: 메리츠 4번 need 브리핑 + 자동환전 (office_briefing vNEXT, meritz_dca v1.0.1)
+- 브랜치: staging
+
 ## v1.6.5 · 2026-11-11 13:21 (KST)
 - 파일: bot_updater.py, office_briefing.py
 - 내용: Revert "상태 기록: need.json"
