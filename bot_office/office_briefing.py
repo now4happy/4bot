@@ -34,7 +34,7 @@
 - 사무실 v1.5.0 (2026-11-09): need.json 발행·정기 텔레그램 중단 (A안)
 - 사무실 v1.4.9 (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
-- 사무실 v1.6.5 (2026-11-11): 한투 need를 당일 매수 체결액 제외 남은 필요로 계산 (frcr_buy_amt_smtl 조회, 실패 시 전액 폴백)
+- 사무실 vNEXT (4번 메리츠 need 추가) / v1.6.5 (2026-11-11): 한투 need를 당일 매수 체결액 제외 남은 필요로 계산 (frcr_buy_amt_smtl 조회, 실패 시 전액 폴백)
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
@@ -347,6 +347,8 @@ def meritz_fetch():
          R / "var/lib/bot-office/fanding/meritz_token.json"),
         ("VR6", R / "etc/bot-office/meritz_vr6.json",
          R / "var/lib/bot-office/fanding/meritz_vr6_token.json"),
+        ("4번", R / "etc/meritz-accum/meritz_keys.json",
+         R / "var/lib/meritz-dca/meritz_token.json"),
     )
     for label, keys_path, shared_token in accounts:
         try:
@@ -1515,6 +1517,58 @@ def _need_line(currency, holding, need, auto_fx, label=None):
     return line
 
 
+
+# NYSE trading dates (2026–2028), copied from fanding_trade.py.
+US_CLOSED = {
+    2026: "01-01 01-19 02-16 04-03 05-25 06-19 07-03 09-07 11-26 12-25",
+    2027: "01-01 01-18 02-15 03-26 05-31 06-18 07-05 09-06 11-25 12-24",
+    2028: "01-17 02-21 04-14 05-29 06-19 07-04 09-04 11-23 12-25",
+}
+
+def is_trading_day(d):
+    if d.weekday() >= 5: return False
+    return d.strftime("%m-%d") not in US_CLOSED.get(d.year, "").split()
+
+
+def _meritz_dca_need(now=None):
+    """Read-only 4번 need; None when price/state unavailable, never invent prices."""
+    now = (now or datetime.now(KST)).astimezone(KST)
+    if not is_trading_day(now.date()): return 0.0
+    s = load(R / "etc/meritz-accum/settings.json", {})
+    if not s.get("enabled",False): return 0.0
+    state_dir = R / str(s.get("state_dir", "/var/lib/meritz-dca")).lstrip("/")
+    state = load(state_dir / ("dca_config.dry.json" if s.get("dry_run",True) else "dca_config.json"), None)
+    if not isinstance(state,dict):
+        state = {"is_master_active":(s.get("start") or {}).get("master_active",False),"stocks":(s.get("start") or {}).get("stocks",{})}
+    if not state.get("is_master_active",False): return 0.0
+    from math import floor
+    try:
+        import meritz_client
+        key = R / "etc/meritz-accum/meritz_keys.json"
+        token = _meritz_brief_token_cache("4번", R / "var/lib/meritz-dca/meritz_token.json", key)
+        m = meritz_client.Meritz(key,token_cache=token)
+        total = 0.0
+        for sym,stock in (state.get("stocks") or {}).items():
+            if not stock.get("enabled",True) or stock.get("s_mode","buy_1") not in ("buy_1","buy_2"): continue
+            if stock.get("last_exec_date") == now.strftime("%Y-%m-%d"): continue
+            # Use the broker price and ledger cost basis, not the fanding sheet.
+            rows = m._call("GET","/market/v1/overseas/prices",{"mrkt_div_code":"OV","mrkt_cls_code":"NY" if sym=="NKE" else "OQ","iscd":sym,"dely_rltm_cls_code":"0"})
+            price = balance_value((rows.get("data") or {}).get("prpr"))
+            if price <= 0: return None
+            lg = stock.get("ledger") or {}
+            qty = float(lg.get("qty",stock.get("qty",0)) or 0)
+            principal = float(lg.get("principal",stock.get("principal_usd",0)) or 0)
+            avg = principal/qty if qty>0 else 0
+            half = avg>0 and qty>0 and (price-avg)/avg >= 0.01
+            mult = float(((state.get("n7_state") or {}).get(stock.get("index_ref","SP500")) or {}).get("mult",1)) if state.get("n7_enabled",False) else 1.0
+            budget = float(stock.get("base_amount",40))*mult*(0.5 if half else 1.0)
+            pool = budget+max(0,float(stock.get("buy_carry",0) or 0))
+            q = max(1,int(pool//price)) if s.get("us_int_buy_mode","carry")=="min1" else int(pool//price)
+            total += round(q*price*(1+float(s.get("buy_cash_buffer_pct",1))/100),2)
+        return round(total,2)
+    except Exception:
+        return None
+
 def need_data(now=None):
     """오늘 매수 예정 합계·보유 현금·자동환전 상태 (읽기 전용)."""
     now = (now or datetime.now(KST)).astimezone(KST)
@@ -1533,7 +1587,8 @@ def need_data(now=None):
     meritz = []
     for label, by_currency, reason in meritz_fetch():
         est = _meritz_amount(by_currency, "USD", "estm_frcr_amt") if by_currency is not None else None
-        meritz.append(_need_line("USD", est, _fanding_need(label, now), _auto_fx(label), label=label))
+        meritz.append(_need_line("USD", est, _meritz_dca_need(now) if label == "4번" else _fanding_need(label, now),
+                                 ("on" if load(R / "etc/meritz-accum/settings.json", {}).get("auto_fx",{}).get("on",False) else "off") if label == "4번" else _auto_fx(label), label=label))
     accounts.append({"name": "메리츠", "lines": meritz})
 
     try:

@@ -1,5 +1,5 @@
 # ==========================================================
-# FILE: meritz_dca_bot/meritz_api.py   (MERITZ_DCA v1.0.0)
+# FILE: meritz_dca_bot/meritz_api.py   (MERITZ_DCA v1.0.1)
 # 메리츠증권 Open API — 메리츠 적립 봇(meritz_dca)용. 3번 toss_api.py 자리를 대신함 (미국주식만)
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 토큰·호출(_call)은 meritz_laoer/meritz_api.py(v1.0.0) 방식 그대로. 파일은 공유하지 않음(이 폴더 전용 복사)
@@ -195,6 +195,66 @@ class MeritzApi:
         if isinstance(data, list):
             data = next((x for x in data if isinstance(x, dict) and str(x.get("ovrs_stck_mrkt_tr_cls_code")) == "01"), {})
         return str((data or {}).get("ovrs_mkop_cls_code", ""))
+
+    def usd_estimated(self):
+        """Estimated USD deposit (estm_frcr_amt, unsettled included); app '외화 추정 예수금' basis. Never use alone as spendable cash."""
+        d = self._call("GET", "/accounts/v1/me/overseas/currencies")
+        if d.get("tr_cont") == "1":
+            raise MeritzError("외화잔고 응답이 완전하지 않음")
+        rows = d.get("data")
+        if not isinstance(rows, list):
+            raise MeritzError("외화잔고 형식 확인 필요")
+        usd = [row for row in rows if isinstance(row, dict) and str(row.get("crcd", "")).strip().upper() == "USD"]
+        if len(usd) != 1 or usd[0].get("estm_frcr_amt") in (None, ""):
+            raise MeritzError("USD 추정 예수금 행 없음")
+        try:
+            value = float(str(usd[0]["estm_frcr_amt"]).replace(",", ""))
+        except (ValueError, TypeError):
+            raise MeritzError("USD 추정 예수금 숫자 확인 필요") from None
+        if not math.isfinite(value):
+            raise MeritzError("USD 추정 예수금 숫자 확인 필요")
+        return value
+
+    def fx_applied_rate(self, crcd="USD", mnec_clcd="1"):
+        """환전 적용환율 조회 (읽기 전용). 외화 매수(원화->외화)는 mnec_clcd='1', tltr_aply_byrt 사용.
+        출처: 메리츠 Open API openapi.json v2026-10-22, GET /forex/v1/rates/applied"""
+        d = self._call("GET", "/forex/v1/rates/applied", {"crcd": crcd, "mnec_clcd": mnec_clcd})
+        data = d.get("data") or {}
+        rate_key = "tltr_aply_byrt" if mnec_clcd == "1" else "tltr_aply_slrt"
+        return {"rate": data.get(rate_key), "exrt_stnd_time": data.get("exrt_stnd_time"),
+                "spead": data.get("spead"), "prft_aply_clcd": data.get("prft_aply_clcd"),
+                "prft_aply_cls_val": data.get("prft_aply_cls_val"), "raw": data}
+
+    def fx_exchange(self, frcr_amt, iqry_exrt, exrt_stnd_time, crcd="USD", mnec_clcd="1"):
+        """실시간 환전신청 (실제 돈 이동 — 텔레그램 2차 확인 버튼에서만 호출할 것).
+        스펙: POST /forex/v1/exchanges, 필수 mnec_clcd, wncr_amt, frcr_amt, exrt_stnd_time, iqry_exrt, crcd.
+        스펙 예시는 wncr_amt=0, frcr_amt=외화금액으로, 원화는 적용환율로 계산된다.
+        스펙상 frcr_amt 타입은 string이지만 예시는 숫자이다 — 서버 수용 여부는 실환전 전에 확인이 필요하고,
+        실환전 테스트로 확인하지 않는다. 성공 rsp_cd는 '0000'이며, 기존 _call OK_CODES에 포함된다."""
+        body = {"mnec_clcd": str(mnec_clcd), "crcd": crcd, "frcr_amt": str(frcr_amt),
+                "wncr_amt": 0, "exrt_stnd_time": exrt_stnd_time, "iqry_exrt": str(iqry_exrt)}
+        d = self._call("POST", "/forex/v1/exchanges", body=body)
+        if str(d.get("rsp_cd")) != "0000":
+            raise MeritzError("환전 성공 코드 불일치")
+        return d.get("data") or {}
+
+    def krw_cash(self):
+        """KRW cash deposit (data.tfam) — used only to check whether KRW covers an FX buy.
+        출처: 메리츠 Open API openapi.json v2026-10-22 (= v2026-10-28 동일 정의),
+        GET /accounts/v1/me/deposit, 성공 rsp_cd '5766'.
+        구 경로 GET /accounts/v1/me/overseas/currencies 는 외화 행만 주고 KRW 행을 아예 안 줌
+        (명세 설명문: '이 API 의 응답에는 wncr_ 로 시작하는 항목이 없습니다')."""
+        d = self._call("GET", "/accounts/v1/me/deposit")
+        data = d.get("data")
+        if not isinstance(data, dict) or data.get("tfam") in (None, ""):
+            raise MeritzError("KRW 예수금 확인 필요")
+        try:
+            value = float(str(data["tfam"]).replace(",", ""))
+        except (ValueError, TypeError):
+            raise MeritzError("KRW 예수금 숫자 확인 필요") from None
+        if not math.isfinite(value):
+            raise MeritzError("KRW 예수금 숫자 확인 필요")
+        return value
 
     def exchanges(self):
         """{시세 거래소 구분(AX 등): 주문 벤더번호(0066 등)} — 온라인 주문 가능한 미국 거래소만"""

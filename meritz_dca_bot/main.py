@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =====================================================================
-# FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.0.0)
+# FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.0.1)
 # 메리츠 적립 봇 (서비스 meritz_dca) — 3번 toss_dca_bot/main.py(v4.3.8) 엔진을 옮기고 토스 API 만 메리츠로 바꿈
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로: 100일 사이클(buy_1/pause/buy_2/sell/decision) · +1%↑ ½ 매수 · 익절 10%/20% 구간 20% 매도(단계는 위로만)
@@ -18,6 +18,9 @@
 #   python3 main.py                   상시 실행 (서비스용)
 # =====================================================================
 import argparse, copy, os, re, signal, subprocess, sys
+from decimal import Decimal, ROUND_CEILING
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -779,6 +782,104 @@ async def polling_loop(client):
             if not getattr(pe, "_rl_logged", False): RL.err("tg_poll", pe)
             await asyncio.sleep(3)
 
+
+# FX: only the daytime scheduler calls this; no new timer or US market-status gate.
+FX_KRW_SHORT_WORDS = ("부족", "가능금액", "가능 금액", "예수금", "잔고", "잔액")
+FX_KST = ZoneInfo("Asia/Seoul")
+
+def fx_auto_amount(gap):
+    g = Decimal(str(gap))
+    if not g.is_finite() or g <= 0: return None
+    if g < 10: return Decimal(100)
+    return (g / 10).quantize(Decimal(1), rounding=ROUND_CEILING) * 10
+
+async def dca_fx_plan(client, cfg):
+    """Same buy-quantity and 1% cash buffer as execute_us_step; no orders."""
+    stocks = cfg.get("stocks") or {}
+    pending = {p.get("sym") for p in (cfg.get("pending_orders") or [])}
+    n7 = await n7_market_multipliers(client, cfg, False)
+    total = 0.0
+    for sym, s in stocks.items():
+        if not s.get("enabled", True) or sym in pending or s.get("currency") == "KRW": continue
+        if s.get("s_mode", "buy_1") not in ("buy_1", "buy_2"): continue
+        if s.get("last_exec_date") == datetime.now(EST_TZ).strftime("%Y-%m-%d"): continue
+        p = float(await client.get_current_price(sym) or 0)
+        if p <= 0: raise ValueError("시세 없음: " + sym)
+        qty, _ = ledger_of(s)
+        avg = ledger_avg(s)
+        half = avg > 0 and qty > 0 and (p - avg) / avg * 100 >= 1.0
+        mult = float(n7.get(n7_index_of(s), 1.0))
+        budget = calc_buy_amount(float(s.get("base_amount", 40)), mult, half)
+        q, _ = int_buy_qty(budget, float(s.get("buy_carry") or 0), p, SETTINGS.get("us_int_buy_mode", "carry"))
+        total += round(q * p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 1.0))/100), 2)
+    return round(total, 2)
+
+def _fx_record_path(day):
+    return Path(SETTINGS["state_dir"]) / ("auto_fx_" + day + ".json")
+
+def _fx_mark(day, result, detail=""):
+    p = _fx_record_path(day)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("x", encoding="utf-8") as f:
+        json.dump({"date_kst":day,"result":result,"detail":detail},f,ensure_ascii=False)
+
+async def maybe_auto_fx(client, now=None):
+    """Daytime-only FX decision. Dry-run NEVER calls fx_exchange."""
+    now = (now or datetime.now(FX_KST)).astimezone(FX_KST)
+    day = now.strftime("%Y-%m-%d")
+    hm = now.strftime("%H:%M")
+    if now.weekday() >= 5 or not ("09:00" <= hm <= "15:30"): return "outside_hours"
+    if not is_trading_day(now.date()):
+        RL.ev("decision", "auto_fx", "skipped", "us_holiday", actor="scheduler")
+        return "us_holiday"
+    if not SETTINGS.get("enabled") or not SETTINGS.get("auto_fx",{}).get("on",False): return "disabled"
+    if not RUN.get("key_ok"): return "key_bad"
+    if not RUN.get("dry") and live_gate(): return "gate_blocked"
+    if _fx_record_path(day).exists(): return "already_done"
+    cfg = await DcaConfigManager.load()
+    if not cfg.get("is_master_active",False): return "master_off"
+    try:
+        need = await dca_fx_plan(client,cfg)
+        usd = Decimal(str(await asyncio.to_thread(client.api.usd_estimated)))
+        amount = fx_auto_amount(Decimal(str(need))-usd)
+        if amount is None:
+            RL.ev("decision","auto_fx","skipped","no_gap",actor="scheduler",need_usd=need)
+            return "no_gap"
+        r1 = await asyncio.to_thread(client.api.fx_applied_rate)
+        rate1 = Decimal(str(r1["rate"]))
+        if not rate1.is_finite() or rate1 <= 0: return "rate_error"
+        try: krw = Decimal(str(await asyncio.to_thread(client.api.krw_cash)))
+        except Exception: krw = None
+        krw_need = amount * rate1
+        if krw is not None and krw < krw_need:
+            _fx_mark(day,"stop","krw_short")
+            return "krw_short"
+        r2 = await asyncio.to_thread(client.api.fx_applied_rate)
+        rate2 = Decimal(str(r2["rate"]))
+        if not rate2.is_finite() or rate2 <= 0 or abs(rate2-rate1)/rate1 >= Decimal("0.01"):
+            _fx_mark(day,"stop","rate_changed")
+            return "rate_changed"
+        RL.ev("decision","auto_fx","ok","dry_run" if RUN.get("dry") else "live",actor="scheduler",need_usd=need,amount_usd=float(amount),rate=float(rate2),krw_required=float(amount*rate2))
+        if RUN.get("dry"):
+            _fx_mark(day,"dry_run",str(amount))
+            return "dry_run"
+        # Persist before POST. Uncertain network results MUST NOT be retried.
+        _fx_mark(day,"uncertain","before_exchange")
+        try:
+            await asyncio.to_thread(client.api.fx_exchange, f"{amount:.2f}", str(rate2), str(r2.get("exrt_stnd_time") or ""))
+        except MeritzError as e:
+            msg = str(e)
+            if not msg.startswith("HTTP ") and "토큰" not in msg and any(w in msg for w in FX_KRW_SHORT_WORDS):
+                return "stop"
+            return "uncertain"
+        except Exception:
+            return "uncertain"
+        _fx_record_path(day).write_text(json.dumps({"date_kst":day,"result":"ok"}),encoding="utf-8")
+        return "ok"
+    except Exception as e:
+        RL.err("auto_fx",e,event_type="decision")
+        return "error"
+
 async def scheduler_loop(client):
     n_pass = 0
     while True:
@@ -786,6 +887,7 @@ async def scheduler_loop(client):
         _hub_beat(HUB_NAME)
         try:
             refresh_settings()
+            await maybe_auto_fx(client)
             now_est = datetime.now(EST_TZ)
             if runtime_info.get("date") != now_est.strftime("%Y-%m-%d"):
                 runtime_info["date"] = now_est.strftime("%Y-%m-%d"); runtime_info["count"] = 0

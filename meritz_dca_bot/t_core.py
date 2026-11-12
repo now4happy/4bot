@@ -14,7 +14,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.0.0"
+BOT_VERSION = "v1.0.1"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -403,3 +403,16 @@ def n7_status_lines(cfg: dict) -> list:
         cand = f", 후보 {st.get('cand'):.1f}배 {st.get('cand_days')}/{N7_CONFIRM_DAYS}일" if st.get("cand") else ""
         lines.append(f"   - {name}({etf}): {float(st.get('mult', 1.0)):.1f}배 (200일선 {float(st.get('d', 0))*100:+.1f}%, {st.get('last_candle')}{cand})")
     return lines
+
+
+# NYSE calendar, copied from fanding_trade.py (2026–2028).
+US_CLOSED = {
+    2026: "01-01 01-19 02-16 04-03 05-25 06-19 07-03 09-07 11-26 12-25",
+    2027: "01-01 01-18 02-15 03-26 05-31 06-18 07-05 09-06 11-25 12-24",
+    2028: "01-17 02-21 04-14 05-29 06-19 07-04 09-04 11-23 12-25",
+}
+
+def is_trading_day(d):
+    if d.weekday() >= 5: return False
+    return d.strftime("%m-%d") not in US_CLOSED.get(d.year, "").split()
+
