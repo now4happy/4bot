@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/live_board.py   (사무실 v1.6.7)
+# FILE: /opt/bot-office/live_board.py   (사무실 vNEXT)
+# 사무실 vNEXT
+# vNEXT: 스나이퍼 현재가 스냅샷(sniper_snapshot.json)을 live_board 발행이 대신 써준다.
+#  - 원작 스나이퍼 main.py에는 _write_picture_snapshot이 없어서, 원작 그대로 마이그레이션 뒤에는
+#    사무실 그림(sniper_picture.py)이 읽는 현재가 스냅샷이 멈춘다. live_board가 매 실행마다
+#    data["prices"]["soxl"]로 스냅샷을 써서 그림·원장 투영의 현재가를 유지한다.
+#  - live_board 발행 여부와 무관하게 매 실행마다 쓴다 (SNAPSHOT_MAX_AGE 180초 — 가격이 안 바뀌어도
+#    'at' 시각을 갱신해야 함). 장 닫힘·--check·--dry-run·--probe-krx에서는 쓰지 않는다.
+#  - 쓰기 실패는 로그 없이 넘긴다 (live_board 발행·종료 코드에 영향 없음). 스나이퍼 폴더 파일과
+#    같은 스키마 {"live_price", "at", "symbol": "SOXL"} · 원자적 쓰기 · 644.
 # 사무실 v1.6.7
 # v1.6.7: 한국만 열림 분기에도 시트 읽어 현금 갱신 (새로고침 시 현금 반영) + 한투 달러화 43행 포함
 #  - 한국 장 열림·미국 장 닫힘 분기(elif _has_base)에서 시트를 다시 읽고 compute_sheet_only로 현금만 갱신.
@@ -602,6 +611,30 @@ def publish(data, msg):
     return True
 
 
+# ---------------- 스나이퍼 현재가 스냅샷 (vNEXT · 원작 스나이퍼에는 없는 기능)
+def _write_sniper_snapshot(data):
+    """사무실 그림(sniper_picture.py)이 읽는 sniper_snapshot.json을 쓴다.
+    원작 스나이퍼 main.py에는 _write_picture_snapshot이 없어서, 원작 그대로
+    마이그레이션 뒤에는 이 live_board 발행이 스냅샷을 대신 써준다.
+    실패해도 예외를 삼켜 live_board 발행·종료 코드에 영향을 주지 않는다."""
+    try:
+        prices = data.get("prices") if isinstance(data, dict) else None
+        p = float(prices.get("soxl")) if isinstance(prices, dict) else 0.0
+        if not (p > 0.0):
+            return
+        path = os.path.join(TOSS_DIR, "sniper_snapshot.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"live_price": round(p, 4), "at": time.time(), "symbol": "SOXL"}, f, ensure_ascii=False)
+        os.replace(tmp, path)
+        try:
+            os.chmod(path, 0o644)
+        except OSError:
+            pass
+    except Exception:
+        pass
+
+
 # ---------------- 스나이퍼 원장 투영 (v1.6.2 · sniper_tiers.json · 작업트리에만 씀)
 def tiers_path():
     return os.path.join(WORKTREE, TIERS_NAME)
@@ -786,6 +819,8 @@ def run(argv=None, now=None, sheet_reader=None, quote_fetcher=None, out=print, k
         out(("ok" if data["ok"] else "실패 " + data["error"]) + " · 쓰지 않음")
         return code
 
+    if data.get("ok"):
+        _write_sniper_snapshot(data)   # vNEXT: 스냅샷 — live_board 발행 여부와 무관하게 매 실행마다
     tiers_new = tiers_step(now_utc)   # v1.6.2: 실패해도 False 만 (아래 발행·종료 코드 그대로)
     if not same_content(load_current(), data):
         publish(data, f"live_board {data['as_of_kst']} KST" + ("" if data["ok"] else " (실패)"))   # 원장 파일도 같은 커밋
