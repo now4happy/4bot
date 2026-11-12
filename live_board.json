@@ -2,7 +2,7 @@
   "ok": true,
   "as_of_kst": "2026-11-12 15:33:00",
   "as_of_et": "2026-11-12 01:33:00",
-  "market_open": true,
+  "market_open": false,
   "source": "toss",
   "prices": {
     "soxl": 66.09,
@@ -29,7 +29,7 @@
     "total_assets": 70875.74
   },
   "market_open_us": false,
-  "market_open_kr": true,
+  "market_open_kr": false,
   "krx_count": 32,
   "e41_source": "krx",
   "base": {
