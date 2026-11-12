@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/live_board.py   (사무실 vNEXT)
-# 사무실 vNEXT
-# vNEXT: 한국만 열림 분기에도 시트 읽어 현금 갱신 (새로고침 시 현금 반영) + 한투 달러화 43행 포함
+# FILE: /opt/bot-office/live_board.py   (사무실 v1.6.7)
+# 사무실 v1.6.7
+# v1.6.7: 한국만 열림 분기에도 시트 읽어 현금 갱신 (새로고침 시 현금 반영) + 한투 달러화 43행 포함
 #  - 한국 장 열림·미국 장 닫힘 분기(elif _has_base)에서 시트를 다시 읽고 compute_sheet_only로 현금만 갱신.
 #    미국 행은 마지막 값 그대로 동결. 시트 현금(B83)과 live_board 현금(totals.cash)이 낮에도 일치.
 #  - 한투 달러화(43행, E43 = D43×환율)를 STATIC_E·합계(cash·api_ex41)에 포함.

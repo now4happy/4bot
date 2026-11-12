@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.6.7 · 2026-11-12 13:53 (KST)
+- 파일: live_board.py
+- 내용: live_board: 한국만 열림에도 시트 현금 갱신 + 한투 달러화 43행 포함 (사무실 vNEXT)
+- 브랜치: staging
+
 ## v1.6.6 · 2026-11-12 13:20 (KST)
 - 파일: office_briefing.py
 - 내용: 메리츠 4번 need 브리핑 + 자동환전 (office_briefing vNEXT, meritz_dca v1.0.1)
