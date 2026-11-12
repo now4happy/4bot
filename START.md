@@ -32,7 +32,7 @@
 | 공통 규칙·업로드·문서관리 | docs/handoff/00_rules.md |
 | 1 한투 라오어 | docs/handoff/01_hantu.md |
 | 2 토스 스나이퍼 | docs/handoff/02_sniper.md |
-| 3 토스 스마트적립 | docs/handoff/03_toss_dca.md |
+| 3 메리츠 적립 | meritz_dca_bot/README.md |
 | 4 빗썸 스마트적립 | docs/handoff/04_bithumb.md |
 | 사무실·잔액·브리핑·PC 감시 | docs/handoff/05_office.md |
 | 업데이트·일시중지·STATUS | docs/handoff/06_updater.md |

@@ -1,9 +1,10 @@
+# 사무실 vNEXT (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """Read-only bot metadata collector. Never imports bot code or reads env files."""
 import hashlib,json,os,re,subprocess
 from pathlib import Path
 from datetime import datetime,timezone
 OUT=Path('/var/lib/bot-office/inventory.json')
-UNITS=('han4384tubot.service','bithumb_bot.service','toss_sniper.service','toss_dca.service')
+UNITS=('han4384tubot.service','bithumb_bot.service','toss_sniper.service','meritz_dca.service')
 def collect(unit,previous,clock):
  fields={};notes=[]
  try:

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 # 사무실 v1.7.5 (2026-11-13): 배포에서 빠진 파일은 막지 않고 넘김 — classify()가 (units, skipped) 반환, 테스트·점파일 등은 알림에 '⏭️ 배포에서 빠진 파일'로만 표시 (✅·중지 버튼 항상 표시, apply·중지 요청 거부 안 함)
 # 사무실 v1.7.2 (2026-11-13): 서버 미저장 변경 중단 안내에서 'Claude나 Gemini에게 확인을 요청해 주세요.' 문구 제거
 # 사무실 v1.6.9 (2026-11-12): 재시작 때 실행 중인 서비스는 enable도 같이 함 — 재부팅 뒤에도 살아남게 (7번 비서 재발 방지)
@@ -97,7 +98,7 @@ TG_API = os.environ.get("U_TG_API", "https://api.telegram.org")
 CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
-         "toss_dca.service": "3번 토스 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서",
+         "meritz_dca.service": "3번 메리츠 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서",
          "meritz_laoer.service": "메리츠 SOXL 무매", "meritz_dca.service": "메리츠 적립"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
@@ -105,7 +106,7 @@ HUB_DIR = os.path.join(REPO, "alert-hub")
 HUB_VENV = os.path.join(HUB_DIR, ".venv")
 HUB_PY = os.path.join(HUB_VENV, "bin", "python")
 HUB_PIP = os.path.join(HUB_VENV, "bin", "pip")
-HUB_BOT_NAMES = "1번 한투 라오어,2번 토스 스나이퍼,3번 토스 적립,4번 빗썸 적립,8번 사무실 비서,5번 팬딩 가격표,6번 업데이트 비서:1500,7번 비서"
+HUB_BOT_NAMES = "1번 한투 라오어,2번 토스 스나이퍼,3번 메리츠 적립,4번 빗썸 적립,8번 사무실 비서,5번 팬딩 가격표,6번 업데이트 비서:1500,7번 비서"
 OWNER = pwd.getpwuid(os.stat(REPO).st_uid)
 try:   # 2번 스나이퍼 원작자 새 버전 알림 부품 (알림 전용 · 없어도 비서는 정상 작동)
     import sniper_upstream as SU
@@ -258,23 +259,6 @@ def busy_reason(unit, pause_verified=False):
             L = d.get("SOXL", d) if isinstance(d, dict) else {}
             if isinstance(L, dict) and (str(L.get("buy_order_id") or "").strip() or str(L.get("sell_order_id") or "").strip()):
                 return "스나이퍼(SOXL) 주문이 걸려 있음 (체결·취소 뒤 다시 눌러 주세요)"
-    if unit == "toss_dca.service":
-        # 각 시장의 현지 요일을 사용: 한국 토요일 새벽의 미국 금요일 장은 보호.
-        kr_busy = now_k.weekday() < 5 and 1050 <= k <= 1510
-        us_busy = now_e.weekday() < 5 and 1120 <= e <= 1600
-        # 3번 설정에 켜진 한국/미국 종목이 없으면 그 시장 보호 시간은 건너뜀 (설정을 못 읽으면 예전처럼 보호)
-        cfg = load(os.path.join(targets().get(unit, ""), "dca_config.json"), None)
-        if isinstance(cfg, dict) and isinstance(cfg.get("stocks"), dict):
-            on = [v for v in cfg["stocks"].values() if isinstance(v, dict) and v.get("enabled", True)] if cfg.get("is_master_active", True) else []
-            kr_busy = kr_busy and any(v.get("currency") == "KRW" for v in on)
-            us_busy = us_busy and any(v.get("currency") != "KRW" for v in on)
-        if kr_busy or us_busy:
-            markets = []
-            if kr_busy:
-                markets.append("한국장 평일 10:50~15:10 KST")
-            if us_busy:
-                markets.append("미국장 평일 11:20~16:00 뉴욕시간")
-            return "3번 봇 매매 보호 시간 (" + " · ".join(markets) + ")"
     if unit == "bithumb_bot.service" and 1850 <= k <= 1925:
         return "4번 봇 19:00 정기 매수 시간"
     if unit == "han4384tubot.service" and 925 <= e <= 1605 and now_e.weekday() < 5:

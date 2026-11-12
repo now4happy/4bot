@@ -53,7 +53,7 @@
 ## 실행 확인에 필요한 경로만
 
 - Google Cloud VM 1대, systemd. 과거 스냅샷은 실시간 건강 상태가 아니다.
-- 1 han4384tubot.service, 2 toss_sniper.service, 3 toss_dca.service, 4 bithumb_bot.service. 실행 본문은 각각 01~04 문서에 있다.
+- 1 han4384tubot.service, 2 toss_sniper.service, 3 meritz_dca.service, 4 bithumb_bot.service. 실행 본문은 각각 01~04 문서에 있다.
 - 사무실 /opt/bot-office; bot-office.service, bot-office-secretary.service, bot-office-briefing.service/.timer. 업데이트 bot-updater.service.
 - /etc/bot-office/telegram.json은 token/chat_id를 읽는 위치이며 비밀 원문을 출력하지 않는다.
 - updater 기본 U_REPO=/home/gieokkim, U_TARGETS=/var/lib/bot-office-deploy/targets.json, U_STATE=/var/lib/bot-updater/state.json, U_OFFICE=/opt/bot-office, U_EVERY=300, guard U_GRACE=120초.

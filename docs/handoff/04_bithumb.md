@@ -18,7 +18,7 @@
 
 ## 재생 로그 (v4.0.4, 2026-10-28 · start.md 규칙)
 
-- 부품 `replay_log.py`(3번과 같은 파일). 봇 폴더 `logs/events-날짜.jsonl`(일반, 14일) + `logs/audit-날짜.jsonl`(감사, 권한 600). 규칙·재생 명령은 03_toss_dca.md '재생 로그'와 같다.
+- 부품 `replay_log.py`(3번과 같은 파일). 봇 폴더 `logs/events-날짜.jsonl`(일반, 14일) + `logs/audit-날짜.jsonl`(감사, 권한 600). 규칙·재생 명령은 bithumb_laoeo_bot/replay_log.py의 재생 로그와 같다.
 - correlation_id: 텔레그램 `tg-<update_id>`, 60초 감시 회차 `sch-<KST 날짜>-<회차>`, 주문 `ord-<참조>`(빗썸 응답 uuid 는 감사 로그에만).
 - 주문 기록은 `b_core.place_order` 안에서 남긴다. 미배포 deployment_gate 가 나중에 이 함수를 감쌀 때도 (성공여부, 결과) 반환 형식은 그대로다.
 - 건너뜀 이유(하루 1번): done_today, before_buy_hour, krw_insufficient, below_min_order, ticker_unavailable, master_off. 잔고 조회 실패는 accounts_unavailable.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """사무실 비서 필요 금액 JSON 발행 (평일 09:00 · 16:30 KST, systemd timer)
 - 읽기 전용: 주문·설정 변경 없음. 잔고 조회만 합니다.
 - 오늘 필요한 달러·원화와 보유 현금은 need.json에 기록합니다 (텔레그램 정기 전송 없음).
@@ -9,12 +10,12 @@
   ① 2번 스나이퍼 다음 1회 = 주수 × 매수가 (1회분 예산 그대로가 아님). toss_sniper 코드와 같은 식:
      1회분 예산·Case 67 이중 캡핑(compute_golden8_quota_qty), 장부 가용현금·왕복 수수료(resolve_affordable_buy_qty),
      0주 첫 진입 / 1층 공석 재장전 / 신저가 추매 갈래(sniper_plugin), 매수가능금액 0.2% 안전버퍼
-  ② 3번 적립은 실제 주문하는 main.py 규칙(+1%↑ ½, 오늘 완료·익절일 매수 없음)  ③ 조회 실패·가동 OFF는 0으로 두지 않고 '합산 제외' 표시
-  ④ 부족하면 내역(2번·3번 분리·보유 달러·부족액)과 함께 🚨 표시, 스나이퍼 당일 추가 매수 상한은 따로 (부족 판정 제외)
+  ② (과거) 당시 적립 계산 규칙  ③ 조회 실패·가동 OFF 항목은 합산 제외 표시
+  ④ 부족하면 내역(2번·보유 달러·부족액)과 함께 🚨 표시, 스나이퍼 당일 추가 매수 상한은 따로 (부족 판정 제외)
 - 사무실 v1.1.5 (2026-11-03): '토스 달러 확인'을 2번 v2.0.0(원작 d7b3a66) 매매법으로 다시 계산 (읽기 전용 · 주문·환전 없음)
   ① 본 그리드 1회분 = 순수 코어 자산(가용현금+본·서브·골든포켓 원가−예비수혈금, 기준시드 하한) × 8%, 수수료는 원장 계좌 수수료
   ② 서브 그리드 1회분(4%, 본 0.5회분 보호예수 뒤 유휴현금, 최대 4회분) — 대상이 아니면 '대상 아님'으로 따로 표시
-  ③ 예비수혈은 필요액에 더하지 않고 경고로만 (2·3번 같은 계좌) · 골든포켓은 모드가 켜졌을 때만 조건부 표시
+  ③ 예비수혈은 필요액에 더하지 않고 경고로만 (당시 2·3번 같은 계좌) · 골든포켓은 모드가 켜졌을 때만 조건부 표시
 - 사무실 v1.1.8 (2026-11-04): 브리핑 간결화 — 형식만 변경 (계산·주문·조회 로직 그대로)
   ① 통합 잔액 블록 대신 '필요 금액' 표 1개 (고정폭 <pre>, 머리말 계좌·보유·필요 1번, 숫자+아이콘, 범례 1번)
   ② 토스(달러·원화)·메리츠(P·VR6)는 이름 1번에 두 줄로 묶음 · 메리츠 보유는 추정 달러만, 필요는 '–'
@@ -47,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-try:  # [🔗토스 토큰 공유 HOOK] 2·3번 봇과 같은 토큰 사용 (새로 발급해 봇 토큰을 끊지 않음)
+try:  # [🔗토스 토큰 공유 HOOK] 2번 봇과 같은 토큰 사용 (새로 발급해 봇 토큰을 끊지 않음)
     import toss_token_share as _TTS
 except Exception:
     _TTS = None
@@ -55,7 +56,7 @@ except Exception:
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "home/gieokkim"
 REPO = Path(os.environ.get("U_REPO", "/home/gieokkim"))
-TOSS_DIR, SNIPER_DIR, BITHUMB_DIR = HOME / "toss_dca_bot", HOME / "toss_sniper", HOME / "bithumb_laoeo_bot"
+TOSS_DIR, SNIPER_DIR, BITHUMB_DIR = HOME / "toss_sniper", HOME / "toss_sniper", HOME / "bithumb_laoeo_bot"
 TELEGRAM_CFG = R / "etc/bot-office/telegram.json"
 OFFICE_URL = R / "etc/bot-office/office_url"
 MARKET = R / "var/lib/bot-office/market-manual/score.json"
@@ -66,7 +67,7 @@ BITHUMB_API = os.environ.get("BRIEF_BITHUMB_API", "https://api.bithumb.com")
 TELEGRAM_API = os.environ.get("BRIEF_TELEGRAM_API", "https://api.telegram.org")
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 UNITS = [("1번 한투 라오어", "han4384tubot.service"), ("2번 토스 스나이퍼", "toss_sniper.service"),
-         ("3번 토스 적립", "toss_dca.service"), ("4번 빗썸 적립", "bithumb_bot.service"),
+         ("3번 메리츠 적립", "meritz_dca.service"), ("4번 빗썸 적립", "bithumb_bot.service"),
          ("5번 팬딩", "bot-office-fanding.service")]
 
 
@@ -188,7 +189,7 @@ class Toss:
         return float(it.get("quantity") or 0), float(it.get("averagePurchasePrice") or 0), float(it.get("lastPrice") or 0)
 
     def price(self, sym):
-        """현재가 — 3번 적립 toss_api.get_current_price 와 같은 /api/v1/prices. 값이 없으면 오류 (0으로 바꾸지 않음)"""
+        """현재가 — /api/v1/prices. 값이 없으면 오류 (0으로 바꾸지 않음)"""
         rows = self._get(f"/api/v1/prices?symbols={urllib.parse.quote(sym)}", account=False) or []
         p = num(rows[0].get("lastPrice")) if isinstance(rows, list) and rows and isinstance(rows[0], dict) else 0.0
         if p <= 0:
@@ -360,7 +361,7 @@ def meritz_fetch():
          R / "var/lib/bot-office/fanding/meritz_token.json"),
         ("VR6", R / "etc/bot-office/meritz_vr6.json",
          R / "var/lib/bot-office/fanding/meritz_vr6_token.json"),
-        ("4번", R / "etc/meritz-accum/meritz_keys.json",
+        ("3번", R / "etc/meritz-accum/meritz_keys.json",
          R / "var/lib/meritz-dca/meritz_token.json"),
     )
     for label, keys_path, shared_token in accounts:
@@ -931,35 +932,9 @@ def section_money(now):
     now_kst, now_est = now.astimezone(KST), now.astimezone(EST)
     lines, tips = [], []
     toss, toss_err = Toss(), ""
-    us_day, kr_day = us_session(now_est), kr_session(now_kst)
 
     sn_min, sn_max, sn_lines = sniper_plan()
     pre_day = next_weekday(now_est.date() if now_est.strftime("%H:%M") <= "09:29" else now_est.date() + timedelta(days=1))
-
-    # 3번 적립: 다음 세션 매수 예정
-    cfg = load(TOSS_DIR / "dca_config.json", {})
-    us_need, kr_need, us_det, kr_det = 0.0, 0.0, [], []
-    if cfg.get("is_master_active", True):
-        for sym, s in (cfg.get("stocks") or {}).items():
-            if not isinstance(s, dict) or not s.get("enabled", True) or s.get("s_mode", "buy_1") not in ("buy_1", "buy_2"):
-                continue
-            is_kr = s.get("currency") == "KRW"
-            day = (kr_day if is_kr else us_day).isoformat()
-            if s.get("last_exec_date") == day:
-                continue
-            base = float(s.get("base_amount") or (100000.0 if is_kr else 40.0))
-            half, price = False, 0.0
-            try:
-                q, avg, price = toss.holding(sym)
-                half = q > 0 and avg > 0 and price > 0 and (price / avg - 1) * 100 >= 1.0
-            except Exception as e:
-                toss_err = toss_err or str(e)[:80]
-            amt = base / 2 if half else base
-            if is_kr:
-                cost = max(1, int(amt // price)) * price if price > 0 else amt
-                kr_need += cost; kr_det.append(f"{sym} {cost:,.0f}원{'(½)' if half else ''}")
-            else:
-                us_need += amt; us_det.append(f"{sym} ${amt:,.0f}{'(½)' if half else ''}")
 
     try:
         usd = toss.buying_power("USD")
@@ -970,11 +945,10 @@ def section_money(now):
     except Exception as e:
         krw_toss, toss_err = None, toss_err or str(e)[:80]
 
-    need_min, need_max = sn_min + us_need, sn_max + us_need
+    need_min, need_max = sn_min, sn_max
     lines.append("💵 <b>토스 달러 (미국장)</b>")
     lines.append(f"🎯 2번 스나이퍼 {pre_day.strftime('%m/%d')} 프리장 (SOXL)")
     lines += sn_lines
-    lines.append(f"🔁 3번 적립 {us_day.strftime('%m/%d')} 미국장: ${us_need:,.2f}" + (f" [{', '.join(us_det)}]" if us_det else " (예정 없음)"))
     lines.append(f"🧾 필요 합계: 1회분만 <b>${need_min:,.2f}</b> · 장부 전액까지 <b>${need_max:,.2f}</b>")
     if usd is None:
         lines.append("💵 보유 달러: 조회 실패")
@@ -991,14 +965,6 @@ def section_money(now):
 
     lines.append("")
     lines.append("🇰🇷 <b>원화</b>")
-    if kr_need > 0:
-        bal = f" / 토스 원화 {krw_toss:,.0f}원" if krw_toss is not None else ""
-        lines.append(f"🔁 3번 적립 {kr_day.strftime('%m/%d')} 11:00 국내장: {kr_need:,.0f}원 [{', '.join(kr_det)}]{bal}")
-        if krw_toss is not None and krw_toss < kr_need:
-            tips.append(f"토스 원화 {kr_need - krw_toss:,.0f}원 부족 (국내 적립)")
-    else:
-        lines.append("🔁 3번 적립 국내장: 예정 없음")
-
     # 4번 빗썸: 오늘(또는 내일) 19:00 정기매수
     bcfg = load(BITHUMB_DIR / "bot_config.json", {})
     bst = load(BITHUMB_DIR / "bot_state.json", {})
@@ -1049,81 +1015,21 @@ def section_money(now):
     return summary + [""] + lines, tips
 
 
-def dca_plan(toss, cfg, us_day, kr_day):
-    """3번 적립 다음 세션 매수 예정 — 실제 주문하는 toss_dca_bot/main.py execute_100day_step 과 같은 규칙.
-    (dca_engine.evaluate_dca_decision·profit_lock 경로는 tg_controller.py 전용이고 main.py 는 부르지 않음)
-    · 전체 전원 OFF / 종목 OFF / 오늘 완료(last_exec_date) / pause·sell·decision → 매수 없음
-    · 익절 구간(tp1 이상 1차 · tp1×2 이상 2차, 아직 안 했으면)이면 그날은 익절 매도만 하고 매수 없음
-    · 수익률 +1.0% 이상(평단·보유 있음) → 기준금액 ½, 그 외 1배. 국내는 max(1, 금액÷현재가)주 × 현재가
-    · 잔고·가격 조회 실패 종목은 0으로 두지 않고 fail 로 빼서 표시
-    → {"master": bool, "USD": {...}, "KRW": {...}} — 통화마다 need(합계) · buy · skip · fail · note"""
-    out = {c: {"need": 0.0, "buy": [], "skip": [], "fail": [], "note": []} for c in ("USD", "KRW")}
-    out["master"] = bool(cfg.get("is_master_active", True))
-    if not out["master"]:
-        return out
-    tp1, sr = num(cfg.get("tp1_pct", 10.0), 10.0), num(cfg.get("sr_pct", 20.0), 20.0)
-    for sym, s in (cfg.get("stocks") or {}).items():
-        if not isinstance(s, dict) or not s.get("enabled", True):
-            continue
-        is_kr = s.get("currency") == "KRW"
-        cur_code = "KRW" if is_kr else "USD"
-        o, day = out[cur_code], (kr_day if is_kr else us_day).isoformat()
-        sym_t = html.escape(str(sym))
-        if s.get("last_exec_date") == day:
-            o["skip"].append(f"{sym_t} 완료")
-            continue
-        mode = s.get("s_mode", "buy_1")
-        if mode == "decision" and _int(s.get("s_day", 0)) < _int(s.get("s_target_days", 100)):
-            mode = "buy_1"   # main.py ensure_stock_cycle 과 같음
-        if mode not in ("buy_1", "buy_2"):
-            continue
-        base = num(s.get("base_amount", 100000.0 if is_kr else 40.0))
-        try:
-            qty, avg, cur = toss.holding(sym)
-            if is_kr and cur <= 0:
-                cur = toss.price(sym)
-        except Exception:
-            o["fail"].append(f"{sym_t} 잔고 조회 불가(1배면 {money(base, cur_code)})")
-            continue
-        if qty <= 0 and s.get("has_held"):
-            o["skip"].append(f"{sym_t} 잔고 0주(목록 제외 예정)")
-            continue
-        prof = (cur - avg) / avg * 100 if avg > 0 and cur > 0 else 0.0
-        sold = _int(s.get("sold_stage", 0)) if prof >= tp1 else 0
-        stage = 1 if (tp1 <= prof < tp1 * 2 and sold < 1) else (2 if (tp1 * 2 <= prof < tp1 * 3 and sold < 2) else 0)
-        sell_q = (min(int(qty), max(1, int(round(qty * sr / 100.0)))) if is_kr else round(qty * sr / 100.0, 4)) if stage else 0
-        if qty > 0 and avg > 0 and stage and sell_q > 0:
-            o["skip"].append(f"{sym_t} 익절 {stage}차 예정({prof:+.1f}%)")
-            continue
-        half = avg > 0 and qty > 0 and prof >= 1.0
-        amt = base / 2.0 if half else base
-        cost = max(1, int(amt // cur)) * cur if is_kr else amt
-        o["need"] += cost
-        o["buy"].append(f"{sym_t} {money(cost, cur_code)}({'½' if half else '1배'})")
-        if s.get("profit_lock"):
-            o["note"].append(sym_t)
-    return out
-
-
 def section_dollar_check(now=None, info=None):
-    """토스 달러 확인 — 2번 스나이퍼 다음 1회 + 3번 미국 적립 예정 vs 토스 USD 매수가능금액 (읽기 전용, 주문·환전 없음)
-    · 부족 = (2번 다음 1회[수수료·0.2% 안전버퍼 포함] + 3번 미국 적립) − 토스 USD 매수가능금액. 2·3번이 같은 계좌면 보유 달러는 1번만 뺀다.
+    """토스 달러 확인 — 2번 스나이퍼 다음 1회 vs 토스 USD 매수가능금액 (읽기 전용, 주문·환전 없음)
+    · 부족 = 2번 다음 1회[수수료·0.2% 안전버퍼 포함] − 토스 USD 매수가능금액.
     · 조회 불가·가동 OFF 항목은 0으로 두지 않고 합산에서 빼며 그 사실을 표시한다.
     · 2번 당일 추가 매수(재장전·추매는 조건 충족 때만)는 상한만 따로 보여 주고 부족 판정에 넣지 않는다.
     · 예상 매도 대금은 넣지 않는다 (체결돼 원장·잔고에 반영된 현금만)."""
     now = now or datetime.now(timezone.utc)
-    toss, other, excluded = Toss(), Toss(SNIPER_DIR), []
-    us_day, kr_day = us_session(now.astimezone(EST)), kr_session(now.astimezone(KST))
+    toss, excluded = Toss(), []
+    us_day = us_session(now.astimezone(EST))
     try:
         usd = toss.buying_power("USD")
     except Exception as e:
         usd = None
         excluded.append(f"토스 보유 달러({html.escape(type(e).__name__)})")
-    # 2·3번은 같은 토스 키·같은 BROKERAGE 계좌를 쓰는 구조(toss_token_share.py). 다르면 경고만 하고 같은 계좌로 합산
-    acct = ("" if other.cid and other.cid == toss.cid and other.sec == toss.sec else
-            " · ⚠️ 2번 토스 인증 확인 불가 — 같은 계좌로 보고 합산" if not other.cid else
-            " · ⚠️ 2번·3번 토스 인증이 달라 같은 계좌 합산이 맞는지 확인 필요")
-    lines = [f"💵 <b>토스 달러 확인</b> · 미국장 {us_day.strftime('%m/%d')}" + acct]
+    lines = [f"💵 <b>토스 달러 확인</b> · 미국장 {us_day.strftime('%m/%d')}"]
     warn, state, note = [], [], []   # v1.1.8: 간결 표 아래에 쓸 줄 (문구·계산은 그대로, 위치만 분류)
 
     def _keep(bucket, text):
@@ -1190,7 +1096,7 @@ def section_dollar_check(now=None, info=None):
         used = max(0, int(num(led.get("used_reserve_portions_cnt"))))
         tot_cnt = max(used, int(num(led.get("total_reserve_injected_cnt"))))
         _keep(warn, f"⚠️ 2번 시멘트추가: 현재 {used}회분 ${num(led.get('injected_reserve_usd')):,.2f} (총 {tot_cnt}회 · 0주 졸업 때 상환)"
-                     " · 시드 고갈 때 토스 계좌 여유 달러를 횟수 제한 없이 씀 — 2·3번 같은 계좌라 3번 적립용 달러까지 쓸 수 있음 (필요 달러 계산 제외)")
+                     " · 시드 고갈 때 토스 계좌 여유 달러를 횟수 제한 없이 씀 (필요 달러 계산 제외)")
     # 사무실 v1.2.7: 지하층(옛 골든포켓 보관분) 참고 1줄 — 원장에 있을 때만. 필요 달러·코어 자산·보유 차감에 넣지 않음.
     bp = led.get("basement_pocket") if isinstance(led, dict) and isinstance(led.get("basement_pocket"), dict) else {}
     if _int(bp.get("qty")) > 0 and num(bp.get("actual_cost_usd")) > 0:
@@ -1200,32 +1106,11 @@ def section_dollar_check(now=None, info=None):
         if n:
             _keep(note, "   ↳ " + html.escape(n))
 
-    # 3번 적립
-    cfg = load(TOSS_DIR / "dca_config.json", None)
-    if isinstance(cfg, dict):
-        dca = dca_plan(toss, cfg, us_day, kr_day)
-    else:
-        dca = {"master": True, **{c: {"need": 0.0, "buy": [], "skip": [], "fail": [], "note": []} for c in ("USD", "KRW")}}
-        excluded.append("3번 적립 설정 파일 읽기 실패")
-    U, K = dca["USD"], dca["KRW"]
-    if not dca["master"]:
-        _keep(state, "🔁 3번 적립: 전체 전원 OFF → 매수 없음 (합산 제외)")
-    else:
-        lines.append(f"🔁 3번 적립 미국 {len(U['buy'])}종목: ${U['need']:,.2f}"
-                     + (f" [{', '.join(U['buy'])}]" if U["buy"] else " (예정 없음)")
-                     + " · 합산 제외(토스 준비금은 스나이퍼만)")
-        if U["skip"]:
-            _keep(note, "   ↳ 매수 없음: " + ", ".join(U["skip"]))
-        if U["note"]:
-            _keep(note, "   ↳ profit_lock 표시(" + ", ".join(U["note"]) + ")는 실제 주문 코드가 읽지 않아 매수로 셈")
-        excluded += [f"3번 {f}" for f in U["fail"]]
-
     total = round(sn_need + sb_need, 2)
     sn_part = (f"2번 ${sn_need:,.2f}" if sn["state"] == "ok" else
                {"off": "2번 OFF", "no_cash": "2번 매수 불가", "deposit_wait": "2번 입금 대기"}.get(sn["state"], "2번 합산 제외"))
     sn_part += (f" + 2번 서브 ${sb_need:,.2f}" if sb_need > 0 else "")
-    dca_part = "3번 합산 제외"
-    lines.append(f"🧾 당일 예정 합계 ${total:,.2f} ({sn_part} · {dca_part}) · 보유 "
+    lines.append(f"🧾 당일 예정 합계 ${total:,.2f} ({sn_part}) · 보유 "
                  + (f"${usd:,.2f}" if usd is not None else "조회 불가"))
     if usd is None:
         lines.append("❔ 보유 달러를 몰라 부족 여부 판정 보류")
@@ -1238,22 +1123,11 @@ def section_dollar_check(now=None, info=None):
         lines.append(f"➕ 2번 당일 추가 매수(조건 충족 때만 · 부족 판정 제외): 본 1회당 최대 ${sn['budget']:,.2f}"
                      f" · 장부 가용현금 ${sn['free']:,.2f}까지" + (f" → 다 쓰려면 약 ${extra:,.2f} 더" if extra > 0.005 else ""))
 
-    # 국내 적립 (원화 — 달러 합산에 넣지 않음)
-    if dca["master"] and (K["buy"] or K["fail"]):
-        line = f"🇰🇷 3번 국내 적립 {kr_day.strftime('%m/%d')}: {K['need']:,.0f}원" + (f" [{', '.join(K['buy'])}]" if K["buy"] else "")
-        if K["need"] > 0:
-            try:
-                krw = toss.buying_power("KRW")
-                line += f" · 토스 원화 {K['need'] - krw:,.0f}원 부족" if krw < K["need"] else " · 원화 충분"
-            except Exception:
-                line += " · 원화 잔액 조회 불가"
-        lines.append(line + " · 합산 제외(토스 준비금은 스나이퍼만)")
-        excluded += [f"3번 {f}" for f in K["fail"]]
     if excluded:
         lines.append("⚠️ 합산 제외(조회 불가 등): " + "; ".join(excluded) + " → 실제 필요액은 더 클 수 있음")
     if info is not None:   # v1.1.8 표시용 — 위에서 계산한 값을 그대로 넘김 (새 계산 없음)
-        info.update(usd=usd, total=total, sn_part=sn_part, dca_part=dca_part, master=dca["master"],
-                    krw_need=None, acct=acct.strip(" ·"), warn=warn, state=state, note=note,
+        info.update(usd=usd, total=total, sn_part=sn_part, dca_part="", master=False,
+                    krw_need=None, acct="", warn=warn, state=state, note=note,
                     excluded=list(excluded), toss=toss)
     return lines
 
@@ -1544,7 +1418,7 @@ def is_trading_day(d):
 
 
 def _meritz_dca_need(now=None):
-    """Read-only 4번 need; None when price/state unavailable, never invent prices."""
+    """Read-only 3번 need; None when price/state unavailable, never invent prices."""
     now = (now or datetime.now(KST)).astimezone(KST)
     if not is_trading_day(now.date()): return 0.0
     s = load(R / "etc/meritz-accum/settings.json", {})
@@ -1558,7 +1432,7 @@ def _meritz_dca_need(now=None):
     try:
         import meritz_client
         key = R / "etc/meritz-accum/meritz_keys.json"
-        token = _meritz_brief_token_cache("4번", R / "var/lib/meritz-dca/meritz_token.json", key)
+        token = _meritz_brief_token_cache("3번", R / "var/lib/meritz-dca/meritz_token.json", key)
         m = meritz_client.Meritz(key,token_cache=token)
         total = 0.0
         for sym,stock in (state.get("stocks") or {}).items():
@@ -1681,11 +1555,11 @@ def need_data(now=None):
     auto_fx_4 = "off"
     for label, by_currency, reason in meritz_fetch():
         est = _meritz_amount(by_currency, "USD", "estm_frcr_amt") if by_currency is not None else None
-        auto_fx = ("on" if load(R / "etc/meritz-accum/settings.json", {}).get("auto_fx",{}).get("on",False) else "off") if label == "4번" else _auto_fx(label)
-        if label == "4번":
+        auto_fx = ("on" if load(R / "etc/meritz-accum/settings.json", {}).get("auto_fx",{}).get("on",False) else "off") if label == "3번" else _auto_fx(label)
+        if label == "3번":
             est_4 = est
             auto_fx_4 = auto_fx
-        meritz.append(_need_line("USD", est, _meritz_dca_need(now) if label == "4번" else _fanding_need(label, now),
+        meritz.append(_need_line("USD", est, _meritz_dca_need(now) if label == "3번" else _fanding_need(label, now),
                                  auto_fx, label=label))
     sgov_line = _sgov_need_line(now, est_4, auto_fx_4)
     if sgov_line is not None:

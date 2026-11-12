@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """Loopback-only, authenticated, read-only systemd dashboard. No trading API access."""
 # 사무실 (초안 · 버전은 Muse 가 부여): 스나이퍼 매매 그림 추가 — GET /sniper-picture (페이지) · GET /api/sniper-picture (데이터), 둘 다 로그인 필요·보기 전용
 # 사무실 스나이퍼룸 iframe 허용: /sniper-picture 만 같은 주소(SAMEORIGIN) 프레임 허용, 그 외 페이지는 DENY 유지 (외부 사이트 클릭재킹 차단 유지)
 # 사무실 (초안 · 버전은 Muse 가 부여): 생각의 연결 마인드맵 탭 추가 — GET /thought-mindmap (페이지), 로그인 필요·보기 전용
 #   · 로그인 안 된 /sniper-picture 는 /login 으로, /api/sniper-picture 는 401. /api/board 와 첫 화면 규칙은 그대로
-# 사무실 v1.0.55 (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
+# 사무실 vNEXT (2026-10-28): 첫 화면(/)을 상황판(board.html · /api/board, 보기 전용)으로 바꿈
 #   · 픽셀 사무실은 /pixel-office, 예전 운영 화면은 /operations 로 그대로 남김 (기존 기능·주소 변경 없음)
 # 사무실 v1.0.57 (2026-10-28): 미팅룸(/room) 연결·옛 결재(/api/deployments)·수정 요청(/api/dev-requests)·업무 흐름(/api/pipeline) 주소 삭제
 # 사무실 v1.0.58 (2026-10-28): 픽셀 사무실(/pixel-office)·운영 화면(/operations)·시장점수·결재기록·업무 주소 삭제
@@ -48,7 +49,7 @@ def _hub_alert(bot, level, text):
 
 ROOT = Path(__file__).resolve().parent
 AUTH_PATH = Path(os.environ.get('BOT_OFFICE_AUTH', '/etc/bot-office/auth.json'))
-UNITS = ('han4384tubot.service', 'bithumb_bot.service', 'toss_sniper.service', 'toss_dca.service')
+UNITS = ('han4384tubot.service', 'bithumb_bot.service', 'toss_sniper.service', 'meritz_dca.service')
 SESSIONS = {}
 ATTEMPTS = deque()
 LOCK = threading.Lock()

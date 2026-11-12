@@ -36,7 +36,7 @@
 |---|---|
 | 1 | hantu_laoer/deployment_gate.py, kis_api_client.py, plugin_updater.py |
 | 2 | toss_sniper/deployment_gate.py, toss_api.py |
-| 3 | toss_dca_bot/deployment_gate.py, toss_api.py, main.py, dca_engine.py |
+| 3 | meritz_dca_bot/ (기존 적립봇 파일 목록은 폐기; 메리츠 배포 훅은 별도 검증 필요) |
 | 4 | bithumb_laoeo_bot/deployment_gate.py, b_core.py |
 
 3. **첫 거래봇 부품 설치/재시작은 기존 업데이트 보호 조건이 허용되는 때에만** 진행한다. 아직 실행되지 않은 차단 장치로 장중 재시작을 안전하다고 확인할 수 없으므로 최초 한 번은 제한을 우회하지 않는다. 거래봇 부품을 아직 안 올린 단계에서 중지 버튼을 누르면 ‘차단 부품 먼저 설치’로 거절하는 것이 정상이다.
@@ -51,7 +51,7 @@
 
 ### 7.5 업데이트 비서 주말 차단 수정 — 실제 적용 확인
 
-- 원래 `busy_reason('toss_dca.service')`는 한국 10:50~15:10 또는 뉴욕 11:20~16:00이면 요일 없이 차단.
+- 기존 `busy_reason('toss_dca.service')` 보호 분기는 삭제됨. `meritz_dca.service`에 같은 보호 분기를 추가하지 않음.
 - 수정: 한국 조건은 한국 현지 weekday<5, 미국 조건은 뉴욕 현지 weekday<5를 각각 추가. 보호 시간 범위는 유지.
 - 한국 토요일 새벽이 뉴욕 금요일이면 미국 보호 조건을 유지함.
 - updater의 ET는 `ZoneInfo('America/New_York')`, KST는 `ZoneInfo('Asia/Seoul')`로 확인. DST 자동 반영.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 # ==========================================================
-# FILE: /opt/bot-office/office_board.py   (사무실 v1.3.7 · 2026-11-06)
+# FILE: /opt/bot-office/office_board.py   (사무실 vNEXT · 2026-11-06)
 #  · 사무실 v1.4.4: mix '현금' → '전환 대기 현금' (포트폴리오 자산 구성 6개 항목 · amt 도 그 항목에만)
 #  · 사무실 v1.4.3: assets 예외 2가지 전달 — (1) mix '현금' 항목의 amt(만원 ÷ 10 정수, 현금만) (2) stock 항목의 segments
 #    [{"broker": 키움·한투·메리츠·토스·빗썸, "val": 만원}] (증권사 이름·val 만 · 색은 board.html 이 정함 · 이상한 구간은 뺌)
@@ -36,7 +37,7 @@ KST = timezone(timedelta(hours=9))
 SERVICES = [
     ("trade", "1번 한투 라오어", "han4384tubot.service"),
     ("trade", "2번 토스 스나이퍼", "toss_sniper.service"),
-    ("trade", "3번 토스 적립", "toss_dca.service"),
+    ("trade", "3번 메리츠 적립", "meritz_dca.service"),
     ("trade", "4번 빗썸 적립", "bithumb_bot.service"),
     ("office", "5번 팬딩 가격표", "bot-office-fanding.service"),
     ("office", "6번 업데이트 비서", "bot-updater.service"),

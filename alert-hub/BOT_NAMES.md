@@ -7,7 +7,7 @@
 |---|---|---|
 | 1번 한투 라오어 | han4384tubot.service | hantu_laoer/ |
 | 2번 토스 스나이퍼 | toss_sniper.service | toss_sniper/ |
-| 3번 토스 적립 | toss_dca.service | toss_dca_bot/ |
+| 3번 메리츠 적립 | meritz_dca.service | meritz_dca_bot/ |
 | 4번 빗썸 적립 | bithumb_bot.service | bithumb_laoeo_bot/ |
 | 8번 사무실 비서 | bot-office.service | bot_office/server.py (웹 상황판) |
 | 5번 팬딩 가격표 | bot-office-fanding.service | bot_office/fanding_trade.py, fanding_vr6.py |

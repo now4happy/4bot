@@ -1,3 +1,4 @@
+# 사무실 vNEXT (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """Target-scoped deployment pause controller; only GET account/order reads."""
 import contextlib
 import fcntl
@@ -19,7 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 UNITS = {'1': 'han4384tubot.service', '2': 'toss_sniper.service',
-         '3': 'toss_dca.service', '4': 'bithumb_bot.service'}
+         '3': 'meritz_dca.service', '4': 'bithumb_bot.service'}
 NAMES = {v: k + '번 봇' for k, v in UNITS.items()}
 _TOKENS = {}
 
