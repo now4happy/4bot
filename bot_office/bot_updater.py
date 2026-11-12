@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-12): 재시작 때 실행 중인 서비스는 enable도 같이 함 — 재부팅 뒤에도 살아남게 (7번 비서 재발 방지)
 # 사무실 v1.6.5 (2026-11-11): dirty 검사에서 생성 상태 파일(need.json·sniper_tiers.json) 제외 — 브리핑이 매번 다시 써서 업데이트가 멈추던 것 수정
 # 사무실 v1.5.6 (2026-11-10): 2번 스나이퍼 버전은 코드 머리말 버전으로 기록 (태그 카운터 v1.2.3 대신 v2.5.2식) — 머리말 없으면 기존 next_tag 유지
 # 사무실 v1.5.0 (2026-11-09): need.json 상태 업로드 경로 추가
@@ -849,6 +850,19 @@ def healthy(unit):
     return sh(SYSTEMCTL, "show", unit, "-p", "NRestarts", "--value")[1] == n0
  
  
+def restart_service(unit, active=None):
+    """재시작. active(업데이트 전 is-active 스냅샷)가 참일 때만 enable 먼저 — 재부팅 뒤에도 살아남게.
+    active 를 안 넘기면 지금 한 번 판정. 정지돼 있던 서비스는 enable 안 함. enable 실패는 로그만 남기고 재시작은 계속."""
+    if active is None:
+        active = sh(SYSTEMCTL, "is-active", unit)[1].strip() == "active"
+    if active:
+        rc, out = sh(SYSTEMCTL, "enable", unit)
+        if rc:
+            print("enable 실패(재시작은 계속):", unit, SECRET_RE.sub("***", out)[-200:], flush=True)
+    sh(SYSTEMCTL, "restart", unit)
+    return active
+
+
 def apply(st, key):
     o = st.get("offers", {}).get(key)
     if not o:
@@ -926,16 +940,18 @@ def apply(st, key):
     for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
         if names_changed & set(xfiles) and sh(SYSTEMCTL, "is-active", xu)[1].strip() == "active":   # 지금 실행 중인 것만 (비서는 disabled 지만 실행 중)
             restart.append(xu)
+    # 업데이트 전 실행 상태 스냅샷 — 첫 재시작 직전에 한 번만 판정, 되돌림 때도 이 값을 다시 씀 (정지돼 있던 서비스는 끝까지 enable 안 함)
+    was_active = {u: sh(SYSTEMCTL, "is-active", u)[1].strip() == "active" for u in restart}
     failed = []
     for u in restart:
-        sh(SYSTEMCTL, "restart", u)
+        restart_service(u, was_active[u])
         if not healthy(u):
             failed.append(u)
     if failed:
         git("reset", "-q", "--hard", old_head)
         office_restore(saved)
         for u in restart:
-            sh(SYSTEMCTL, "restart", u)
+            restart_service(u, was_active[u])
         return say("🚨 <b>업데이트 후 봇이 정상 실행되지 않아 원래 코드로 되돌렸습니다</b>\n▫️ " + esc(", ".join(NAMES.get(u, u) for u in failed)) + "\n▫️ 봇은 이전 버전으로 다시 켜졌습니다.")
     # 버전 기록 (봇 폴더 CHANGELOG.md) → 커밋 → 태그 → main 업로드
     _, msgs = git("log", "--format=%s", f"{old_head}..{sha}", "-n", "8")
@@ -989,7 +1005,7 @@ def apply(st, key):
     if self_update:
         st["self_pending"] = {"since": time.time()}
         save(STATE, st)
-        sh(SYSTEMCTL, "restart", SELF_UNIT)
+        restart_service(SELF_UNIT)
  
  
 def show_diff(st, key):
