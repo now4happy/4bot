@@ -1,46 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-# MODIFIED: sniper_exit_plugin.py
-# 4bot 2번 v2.5.2 (2026-11-10): 원작 1478200 실전 수정 이식 — holdings·prices 선택 인자(None/빈 값 → context.latest_* 자동 복원)로 목표가 초과 시 미매도 TypeError 제거 · 데이/애프터마켓 10초 내 last live price 인정 · 익절 스윕 미체결 SELL 다건 정리(봇 주문만 · 사용자 SELL은 취소 안 하고 대기 · R2 유지)
-# 4bot 2번 v2.3.1 (2026-11-06): R1·R2 수동 주문 보호 — 04:00·16:00 일괄 취소와 익절 스윕의 미체결 매도 취소를 봇 주문(장부 orderId·봇 등록부)만 대상으로 제한, 사용자 토스 앱 주문은 취소하지 않고 남김/기다림
-# 4bot 2번 v2.3.0 (2026-11-06): 원작 a4b4790 Case 91 이식 — 자산증식형(복리·기본)⇄인출형(단리) 모드 전환 + 무제한 시멘트추가(예비시드 · 횟수만 카운트 · GUARD30 유지) · 표시 문구 '수혈'→'시멘트추가' · 지하층 보존
-# 4bot 2번 v2.2.0 (2026-11-05): 원작 254eef5(c1b9b27) 골든포켓 폐기 이식 + 기존 골든포켓 → 지하층(basement_pocket) 보관·목표가 매도 전용 (신규 매수 없음)
-# 4bot 2번 v2.1.0 (2026-11-04): 원작 e5ae290 Case 89(사이클 수익·배분 게이지·졸업예정자산) 이식 · 이전 v2.0.0 = 원작 d7b3a66 이식 + 사용자 수정 재적용 (단일파일 구조 유지)
+# MODIFIED: sniper_exit_plugin.py (Part 1/2 — 황금시간 07:00~07:50 RSI<=19 올인 전면 영구 소각 &
+# 바벨 모드[BARBELL_60_30_10] 매도 시 세후 실현수익 별도 금고 즉시 영구 격리 및 0주 졸업 시 60/30/10 자동 리밸런싱 결속 &
+# SOXL 0주 달성 순간 [실전] 암살자 전환 예약[ARMED_LIVE_ON_ZERO] 자동 승격 인계 훅 탑재)
 순수 롱(SOXL) 전용 '매수 체결 후 최초 60초 강제 타임쉴드(POST_BUY_TO_SELL_SHIELD_SEC = 60.0) &
 매수 후 60초 경과 시점부터 프리마켓·정규장·애프터마켓(16:00 ~ 19:59 EST)·데이마켓(20:00 ~ 03:59 EST) 24시간 전 세션에서
-보유 중 60초 블라인드 대기 락 없이 매 1.5초 실시간 다중 익절(7층 본 그리드 + Default-ON 3층 서브 그리드) 타점 스나이퍼 매도 모니터(Case 70, Case 71, Case 72, Case 79, Case 82, Case 83, Case 84, Case 87, Case 88) ·
-🚨 [Case 83 방안 C 오버나이트 통합이평 사수 하이브리드 & Case 88 & 상단 순수 통합이평 +1.00% 도달 시 1층 무조건 동일 가격 포함 전량 매도 사이클 종료]
-애프터마켓·데이마켓(is_ext_sell_only == True) 구간에서 상단 지층(본 2 ~ 7층 / 서브 2 ~ 3층) 보유 시
-하단 개별 층(1층 및 상단 개별/합병층) 쪼개 팔기를 잠가 저가 물량 이탈로 인한 통합 이동평균(wma_2_to_7 / sub_wma_2_to_3) 도망을 100% 원천 봉쇄하고,
-2층 ~ 7층(서브 2층 ~ 3층) 순수 이동평균(1층 매수 가격 100% 배제) 대비 +1.00% 목표가 도달 시에는
-1층 매수 가격과 무관하게 1층 물량까지 동일한 가격에 조건 없이 전량 포함 매도(SELL_ALL_GRAD / SELL_SUB_ALL_GRAD)하여 즉시 0주 사이클을 종료시키며,
-04:07:00 EST 프리장 개장(is_ext_sell_only == False) 즉시 프리장 시초가로 본·서브 다중 익절을 전면 개방하여 시초가 갭상승 수익 극대화! ·
-🔄 [현재 사이클 단위 실현수익(cycle_realized_net_usd) 자동 추적 및 0주 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 리셋]
-부분 익절 시에는 현재 진행 사이클의 실현순익(cycle_realized_net_usd)과 익절 횟수(cycle_sell_events)를 누적하고,
-전 지층 0주 졸업(is_graduated_zero == True) 순간 이번 사이클 총 확정수익을 졸업 알림에 브리핑한 뒤 last_cycle_realized_net_usd 에 박제하고
-새 사이클을 위해 cycle_realized_net_usd = 0.0 으로 자동 리셋! ·
-🛡️ [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 0주 새 사이클 첫 1층 진입 및 1층 공석 +1.0% 돌파 추격 동시 차단 알림 연동]
-15:29:01 ~ 16:00:00 EST 구간에 0주 전량 졸업 달성 시 60초 타임쉴드 직후 15:30 EST 이상이 되어 새 사이클 1층 진입이 자동 차단되므로
-익일 04:07 EST 프리장 진입 대기 안내를 표출하고, 1층 익절 후 상단층 잔존(1층 공석) 시에는 +1.0% 돌파 차단 및 2층 상한 이하 -1.0% 눌림목 재장전 감시 안내를 표출! ·
-👑 [Case 87 : 06_L2L7_RATCHET_8PCT] & 🛡️ [Case 88 : 13_SUB_L1L3_RESV05_CAP4L] 본 그리드 중간 합병층 또는 서브 그리드 양끝 합병층 익절 체결 시
-잔여 지층이 존재하는 동안에는 사이클 최고 도달 회차(cycle_ratchet_max_lots / sub_ratchet_max_lots) 잠금을 그대로 유지하고 해당 그리드 0주 졸업 시에만 0으로 리셋! ·
-1.5초 실시간 감시 중 익절 조건 도래 및 최근접 유효 목표가 -2.50% 이내 근접 시 GET /api/v1/trades 최근 5.0초 체결틱 최고가(wick_high_p) 병행 감지로
-1분봉 윗꼬리(Upper-Wick) 슈팅을 100% 포착하되, 2차 재조회 시 max(live_p, fresh_live_p) 고점 박제를 배제하고 순수 fresh_live_p 기준으로 즉시 체결 가능한 하위 지층을 분리 보호하며
-윗꼬리 타임스탬프(_LAST_CONSUMED_WICK_TRADE_TS)는 실주문 발주 성공 시에만 각인하고
-목표 익절 하한가(min_floor_p, +0.50% 초과 대폭 갭상승 시 fresh_live_p * 0.997 마켓터블 지정가)로 직결 지정가(LIMIT) 매도 발주(Case 82) ·
-연타 익절 시 장외 sellableQuantity 정산 시차 대비 폴링 대기 2.0초 정량 확인(sellable_q >= target_sell_qty) 및 일시 0주 반환 시 쿨다운 5.0초 단축(진성 422 거래제한 시 60초 묵음 쿨다운 유지 · Case 79, Case 82) ·
-매수 1호가(Bid 1) 하향 추격 정정 100% 영구 소각 및 미체결 단조시계(last_modify_mono) 역전 자가 치유 · 세션 경계 force_settle 강제 정산(Case 65, Case 66) ·
-리앵커링 원가 차감 영구 폐기 및 순수 실물 원가(book_price == actual_avg_price) 100% 보존(Case 69, Case 71, Case 72, Case 88) ·
-💰 [Case 86] 매도 FILLED 정산 시 토스 execution.commission / tax 실측 수수료 및 계좌별 고유 왕복 수수료율(0.14% / 0.20%) 자동 반영 ·
-3층 서브 그리드(sub_buckets) 단독/동시 익절 시 기존 본 그리드(buckets)의 단가·기억저가·최고회차·목표정량 100% 비오염 보존 및 원리금 복리 환원(Case 87, Case 88) ·
-1층 익절 후 상단층 잔존 시 1층 공석 보존 · 상단 익절 후 1층 단독 잔류 시 알림 정밀 표출 ·
-l1_target_quota_qty / sub_l1_target_quota_qty = 0 자동 클리어 및 1층 부분 익절 시 잔여 수량 동기화(허위 TOPUP_1FL 재매수 차단 · Case 78) ·
-익절 매도로 가용현금 회복 시 시드고갈 입금 대기 및 단 1회 알림 래치(waiting_reserve_deposit_alert_sent) 자동 해제 &
-본·서브 모두 0주 전량 졸업 시 무제한 온디맨드 예비시드 원금 자동 상환 및 잔여 수혈 횟수 정산(compute_reserve_repayment_on_zero · Case 77, Case 88, Case 91) ·
-매도 체결 즉시 기정산 주문 ID(last_settled_order_ids) 등록 및
-60초 매도타임쉴드(last_sell_fill_ts / last_cycle_end_ts) & 1층 공석 재장전 타임쉴드 클리어(last_reentry_eval_ts / last_sub_reentry_eval_ts = 0.0) &
-15초 잔고 인덱싱 그레이스 쉴드(last_auto_fill_ts) 동시 각인' 코어 플러그인 (Step 08 / 13)
-- 제1헌법 ~ 제6헌법 및 Case 01 ~ 91 완벽 준수
+매 1.5초 실시간 다중 익절(7층 본 그리드 + Default-ON 3층 서브 그리드) + 최근 5.0초 윗꼬리 체결틱 포착 + 방안 C 오버나이트 통합이평 사수 스나이퍼 매도 모니터' 코어 플러그인
 """
 
 from __future__ import annotations
@@ -52,11 +17,18 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+import assassin_plugin
+from barbell_plugin import (
+    ensure_barbell_ledger,
+    is_barbell_mode,
+    record_barbell_realized_profit,
+)
 from quant_engine import (
     DEFAULT_GRID_MERGE_MODE,
     MAX_GRID_TIERS_7,
     MAX_GRID_TIERS_12,
     MAX_RESERVE_PORTIONS,
+    PORTION_MODE_BARBELL,
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
     REANCHOR_NET_BUFFER_MULT,
@@ -90,25 +62,18 @@ from quant_indicators_plugin import (
     refresh_metrics_with_live_tick,
 )
 from toss_api import (
-    BASEMENT_POCKET_KEY,
-    BASEMENT_REALIZED_KEY,
     DEFAULT_INITIAL_SEED_USD,
     EST_TZ,
     TARGET_SYMBOL,
     _NonRetryableApiError,
-    collect_bot_order_ids,
     generate_client_order_id,
-    is_bot_order_id,
     safe_float,
     safe_int,
-    sanitize_basement_pocket_dict,
-    split_open_orders_by_owner,
 )
 
 logger = logging.getLogger("toss_sniper.sniper_exit_plugin")
 
 # Case 65 & Case 70: 매수 직후 최초 60.0초 타임쉴드 · 매도(및 0주 종료) 후 60.0초 타임쉴드 상수
-# (SELL_MONITOR_TIME_SHIELD_SEC 는 AST 하위호환을 위해 유지하되 보유 중 블라인드 락은 0.0초로 해제)
 POST_BUY_TO_SELL_SHIELD_SEC: float = 60.0
 SELL_MONITOR_TIME_SHIELD_SEC: float = 0.0
 POST_SELL_TO_BUY_SHIELD_SEC: float = 60.0
@@ -116,14 +81,11 @@ POST_SELL_TO_BUY_SHIELD_SEC: float = 60.0
 # 지정가 매도 주문 발주 후 미체결 최대 대기 시간(초) — 하향 추격 정정 없이 60초 미체결 시 안전 취소
 SELL_ORDER_MAX_WAIT_SEC: float = 60.0
 
-# [Case 79]: 데이마켓/애프터마켓 종목 집중 거래 제한 또는 세션 공백(422 order-hours-closed / stock-restricted 등) 시
-# 알림 메시지 폭탄 없이 조용히 대기하는 인메모리 묵음 쿨다운 시간(초)
+# [Case 79]: 데이마켓/애프터마켓 거래 제한 시 묵음 쿨다운 시간(초)
 EXTENDED_SELL_RESTRICTION_COOLDOWN_SEC: float = 60.0
 
-# [Case 82 : 윗꼬리($104.00) 슈팅 100% 즉시 체결을 위한 4대 핀포인트 상수 및 인메모리 상태]:
+# [Case 82 : 윗꼬리 슈팅 100% 즉시 체결을 위한 4대 핀포인트 상수 및 인메모리 상태]
 EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC: float = 5.0
-# [4bot v2.5.2 · 원작 1478200] 데이/애프터마켓에서 prices 가 비었을 때 인정하는 last live price 신선도(초)
-LIVE_PRICE_FRESH_SEC: float = 10.0
 SELLABLE_QTY_POLL_WAIT_SEC: float = 2.0
 SELLABLE_QTY_POLL_INTERVAL_SEC: float = 0.25
 
@@ -148,17 +110,18 @@ def mark_extended_sell_restriction_cooldown(
     cooldown_sec: float = EXTENDED_SELL_RESTRICTION_COOLDOWN_SEC,
     reason: str = "EXTENDED_RESTRICTED",
 ) -> None:
-    """
-    # [Case 79 & Case 82 : 데이마켓·애프터마켓 거래 제한/정산 시차 시 100% 묵음(Silent) 인메모리 쿨다운 각인]:
-    """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     c_sec = max(0.0, safe_float(cooldown_sec, 60.0))
     until_mono = (time.monotonic() + c_sec) if c_sec > 0.0 else 0.0
     snap_map = getattr(context, "exit_snapshot_cache", None)
     if isinstance(snap_map, dict):
-        entry = snap_map.get(sym) if isinstance(snap_map.get(sym), dict) else {}
+        entry = (
+            snap_map.get(sym) if isinstance(snap_map.get(sym), dict) else {}
+        )
         entry["ext_sell_restrict_until_mono"] = until_mono
-        entry["ext_sell_restrict_reason"] = str(reason or "EXTENDED_RESTRICTED")
+        entry["ext_sell_restrict_reason"] = str(
+            reason or "EXTENDED_RESTRICTED"
+        )
         snap_map[sym] = entry
 
 
@@ -166,9 +129,6 @@ def is_within_extended_sell_restriction_cooldown(
     context: Any,
     symbol: str = TARGET_SYMBOL,
 ) -> Tuple[bool, float]:
-    """
-    # [Case 79 : 데이마켓·애프터마켓 거래 제한 묵음 쿨다운 작동 여부 판별]:
-    """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     snap_map = getattr(context, "exit_snapshot_cache", None)
     if isinstance(snap_map, dict):
@@ -183,45 +143,15 @@ def is_within_extended_sell_restriction_cooldown(
 
 def _get_live_soxl_price(
     context: Any,
-    prices: Optional[Dict[str, float]],
-    holdings: Optional[Dict[str, Dict[str, Any]]],
-    now_est: Optional[datetime] = None,
+    prices: Dict[str, float],
+    holdings: Dict[str, Dict[str, Any]],
+    now_est: datetime,
     allow_stale_fallback: bool = True,
 ) -> float:
-    """
-    # MODIFIED [Case 79 & 4bot v2.5.2 · 원작 1478200 인자 누락 자동 폴백]:
-    - prices / holdings 가 None·빈 값이면 context.latest_prices / context.latest_holdings 로 자동 복원한다.
-    - 프리장/정규장(allow_stale_fallback=True): prices -> context.latest_prices -> 캔들 캐시 -> 보유 잔고 last_price (기존 순서 유지).
-    - 데이마켓/애프터마켓(allow_stale_fallback=False): prices 의 실시간 값 또는 최근 10초 내 갱신된
-      context.last_soxl_live_price 만 인정한다. (4bot: 묵은 context.latest_prices 는 이 구간에서 쓰지 않음 — Case 79 보호)
-    """
-    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    if isinstance(prices, dict) and prices:
-        eff_prices = prices
-    elif allow_stale_fallback and context is not None and isinstance(
-        getattr(context, "latest_prices", None), dict
-    ):
-        eff_prices = getattr(context, "latest_prices")
-    else:
-        eff_prices = {}
-    lp = safe_float((eff_prices or {}).get(TARGET_SYMBOL), 0.0)
+    lp = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
     if lp > 0.0:
         return lp
-
     if not allow_stale_fallback:
-        if context is not None:
-            last_lp = safe_float(
-                getattr(context, "last_soxl_live_price", 0.0), 0.0
-            )
-            last_m = safe_float(
-                getattr(context, "last_soxl_live_price_mono", 0.0), 0.0
-            )
-            if (
-                last_lp > 0.0
-                and last_m > 0.0
-                and (time.monotonic() - last_m) <= LIVE_PRICE_FRESH_SEC
-            ):
-                return last_lp
         return 0.0
 
     raw_cache = getattr(context, "candle_metrics_cache", {})
@@ -229,67 +159,24 @@ def _get_live_soxl_price(
         raw_cache.get(TARGET_SYMBOL) if isinstance(raw_cache, dict) else None
     )
     if isinstance(base_met, dict):
-        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=dt)
+        met = refresh_metrics_with_live_tick(base_met, 0.0, now_est=now_est)
         lp = safe_float(met.get("live_price"), 0.0)
         if lp > 0.0:
             return lp
-    eff_holdings = (
-        holdings
-        if isinstance(holdings, dict) and holdings
-        else (
-            getattr(context, "latest_holdings", {})
-            if context is not None
-            else {}
-        )
-    )
-    h_info = (eff_holdings or {}).get(TARGET_SYMBOL, {})
-    if not isinstance(h_info, dict):
-        return 0.0
+    h_info = (holdings or {}).get(TARGET_SYMBOL, {})
     return safe_float(h_info.get("last_price"), 0.0)
-
-
-def _resolve_holdings_prices(
-    context: Any,
-    holdings: Optional[Dict[str, Dict[str, Any]]],
-    prices: Optional[Dict[str, float]],
-    live_price: Any = 0.0,
-) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, float]]:
-    """
-    # NEW [4bot v2.5.2 · 원작 1478200]: holdings·prices 가 None/빈 값이면 context.latest_* 로 복원 (TypeError 방지).
-    """
-    if isinstance(holdings, dict) and holdings:
-        eff_h = holdings
-    else:
-        ctx_h = getattr(context, "latest_holdings", None) if context is not None else None
-        eff_h = ctx_h if isinstance(ctx_h, dict) else {}
-    if isinstance(prices, dict) and prices:
-        eff_p = dict(prices)
-    else:
-        ctx_p = getattr(context, "latest_prices", None) if context is not None else None
-        eff_p = dict(ctx_p) if isinstance(ctx_p, dict) else {}
-    kw_lp = safe_float(live_price, 0.0)
-    if kw_lp > 0.0 and safe_float(eff_p.get(TARGET_SYMBOL), 0.0) <= 0.0:
-        eff_p[TARGET_SYMBOL] = kw_lp
-    return eff_h, eff_p
 
 
 async def _fetch_fresh_current_soxl_price(
     context: Any,
     fallback_price: float = 0.0,
 ) -> float:
-    """
-    🚨 Case 65, Case 70, Case 79 & Case 82:
-    1.5초 실시간 매도 모니터에서 익절 타점 도달이 감지된 직후(또는 가격 폴백 필요 시)
-    토스 Open API(/api/v1/prices)를 직접 호출하여 가장 최신의 실시간 현재가를 확인한다.
-    """
     try:
         fresh_map = await context.api.get_current_prices_batch((TARGET_SYMBOL,))
         fresh_p = safe_float((fresh_map or {}).get(TARGET_SYMBOL), 0.0)
         if fresh_p > 0.0:
             if isinstance(getattr(context, "latest_prices", None), dict):
                 context.latest_prices[TARGET_SYMBOL] = fresh_p
-            setattr(context, "last_soxl_live_price", fresh_p)
-            setattr(context, "last_soxl_live_price_mono", time.monotonic())
             if isinstance(getattr(context, "candle_metrics_cache", None), dict):
                 base_met = context.candle_metrics_cache.get(TARGET_SYMBOL)
                 if isinstance(base_met, dict):
@@ -309,9 +196,6 @@ def _compute_nearest_sell_target_price(
     is_overnight_session: bool = False,
     sub_buckets: Optional[Sequence[StratumBucket]] = None,
 ) -> float:
-    """
-    # MODIFIED [Case 82, Case 83 (방안 C) & Case 88 : 본 그리드 + 3층 서브 그리드의 유효 최단 거리 익절 목표가(nearest_target_p) 산출기]:
-    """
     candidates: List[float] = []
     l1_mult = 1.0 + max(0.1, safe_float(rise_l1_pct, 1.50)) / 100.0
     up_mult = 1.0 + max(0.1, safe_float(rise_upper_pct, 1.00)) / 100.0
@@ -323,7 +207,6 @@ def _compute_nearest_sell_target_price(
         )
         upper_cnt = safe_int(wma_info.get("upper_tier_count"), 0)
 
-        # Case 83 방안 C: 프리/정규장이거나 상단 지층 없이 1층 단독 보유 시에만 개별 층 목표가를 후보에 추가
         if not (is_overnight_session and upper_cnt > 0):
             for idx, b in enumerate(buckets):
                 if b.qty <= 0:
@@ -346,7 +229,6 @@ def _compute_nearest_sell_target_price(
             if wma_t > 0.0:
                 candidates.append(wma_t)
 
-    # [Case 88 : 3층 서브 그리드 유효 익절 목표가 스캔]
     valid_sub = [
         sb
         for sb in (sub_buckets or [])
@@ -415,9 +297,6 @@ async def _probe_recent_trade_wick_high_soxl(
     lookback_sec: float = WICK_TRADE_LOOKBACK_SEC,
     count: int = WICK_TRADE_FETCH_COUNT,
 ) -> Tuple[float, float]:
-    """
-    # [Case 82 핵심 수술 3 : GET /api/v1/trades 최근 체결 내역 기반 1분봉 윗꼬리(Upper-Wick) 포착기]:
-    """
     global _LAST_WICK_PROBE_MONO
 
     now_mono = time.monotonic()
@@ -489,9 +368,6 @@ def _resolve_safe_l2_book_price(
     bucket: StratumBucket,
     st: Optional[Dict[str, Any]] = None,
 ) -> float:
-    """
-    🚨 [Case 69, Case 71, Case 72 & Case 88 진성 손익분기점(순수 매수 원가) 하한선 가드]:
-    """
     if bucket.qty <= 0:
         return max(0.01, bucket.book_price)
     return round(max(0.01, bucket.actual_avg_price, bucket.book_price), 4)
@@ -502,9 +378,6 @@ def is_within_post_buy_time_shield(
     st: Optional[Dict[str, Any]] = None,
     symbol: str = TARGET_SYMBOL,
 ) -> Tuple[bool, float]:
-    """
-    🚨 Case 65 [매수 체결 직후 최초 60.0초 강제 타임쉴드]:
-    """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     now_mono = time.monotonic()
 
@@ -556,14 +429,13 @@ def mark_sell_monitor_60s_cycle_shield(
     eval_price: float = 0.0,
     clear_shield: bool = False,
 ) -> float:
-    """
-    # [Case 70 & Case 75 : 보유 중 60초 블라인드 매도 대기 락 영구 해제 및 AST 심볼 호환 유지]:
-    """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
 
     snap_map = getattr(context, "exit_snapshot_cache", None)
     if isinstance(snap_map, dict):
-        entry = snap_map.get(sym) if isinstance(snap_map.get(sym), dict) else {}
+        entry = (
+            snap_map.get(sym) if isinstance(snap_map.get(sym), dict) else {}
+        )
         entry["last_sell_gate_eval_mono"] = 0.0
         entry["last_sell_gate_eval_ts"] = 0.0
         if eval_price > 0.0:
@@ -589,9 +461,6 @@ def is_within_sell_monitor_time_shield(
     st: Optional[Dict[str, Any]] = None,
     symbol: str = TARGET_SYMBOL,
 ) -> Tuple[bool, float]:
-    """
-    # [Case 70 : 매수 직후 최초 60.0초 타임쉴드만 검문 & 이후 보유 중 1.5초 상시 실시간 감시 허용]:
-    """
     return is_within_post_buy_time_shield(context, st, symbol)
 
 
@@ -602,10 +471,6 @@ def mark_post_sell_time_shield(
     sold_qty: int = 0,
     is_cycle_end: bool = False,
 ) -> None:
-    """
-    🚨 Case 61, Case 65, Case 69, Case 70, Case 73, Case 77, Case 82 & Case 88:
-    매도 체결 및 0주 싸이클 종료 후 60.0초 매수 타임쉴드 & 본/서브 1층 공석/입금대기 타임쉴드 클리어 & 15.0초 잔고 인덱싱 그레이스 쉴드 동시 각인.
-    """
     global _LAST_CONSUMED_WICK_TRADE_TS
 
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
@@ -615,7 +480,9 @@ def mark_post_sell_time_shield(
 
     snap_map = getattr(context, "exit_snapshot_cache", None)
     if isinstance(snap_map, dict):
-        entry = snap_map.get(sym) if isinstance(snap_map.get(sym), dict) else {}
+        entry = (
+            snap_map.get(sym) if isinstance(snap_map.get(sym), dict) else {}
+        )
         entry["last_sell_fill_mono"] = now_mono
         entry["last_sell_fill_ts"] = now_epoch
         entry["last_reentry_eval_mono"] = 0.0
@@ -672,9 +539,6 @@ def is_within_post_sell_time_shield(
     st: Optional[Dict[str, Any]] = None,
     symbol: str = TARGET_SYMBOL,
 ) -> Tuple[bool, float]:
-    """
-    🚨 Case 65 & Case 88 [매도 체결 및 0주 싸이클 종료 후 60.0초 강제 타임쉴드 판별]:
-    """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     now_mono = time.monotonic()
 
@@ -738,10 +602,6 @@ def update_exit_snapshot_on_hold(
     avg_price: float = 0.0,
     live_price: float = 0.0,
 ) -> Dict[str, Any]:
-    """
-    Case 19 & Case 70: 보유 중 exit_snapshot_cache["SOXL"] 에 실보유 수량과 평단가,
-    현재가를 백업하되 기존의 타임쉴드 시각을 안전하게 보존한다.
-    """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     snap_map: Dict[str, Dict[str, Any]] = getattr(
         context, "exit_snapshot_cache", {}
@@ -774,7 +634,7 @@ def update_exit_snapshot_on_hold(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 1] Case 24, Case 65, Case 70, Case 71, Case 72, Case 79, Case 82, Case 83 & Case 88 : 목표 하한가 직결 지정가(LIMIT) 다중 그리드(본+서브) 스나이퍼 매도 발주
+# [핵심 1] 목표 하한가 직결 지정가(LIMIT) 다중 그리드(본+서브) 스나이퍼 매도 발주
 # ---------------------------------------------------------------------------
 async def execute_bulletproof_sell_sweep(
     context: Any,
@@ -786,11 +646,6 @@ async def execute_bulletproof_sell_sweep(
     pending_sell_indices: Optional[Sequence[int]] = None,
     pending_sub_sell_indices: Optional[Sequence[int]] = None,
 ) -> Dict[str, Any]:
-    """
-    🚨 Case 24, Case 65, Case 70, Case 71, Case 72, Case 79, Case 82, Case 83 & Case 88:
-    1.5초 실시간 다중 익절(본 그리드 + 서브 그리드) 스나이퍼 매도 발사 시 목표 익절 하한가(min_floor_price) 또는
-    대폭 갭상승 시 마켓터블 지정가(sweep_price)로 LIMIT 매도 주문을 즉시 발주한다.
-    """
     sym = str(symbol or TARGET_SYMBOL).upper().strip()
     target_sell_qty = max(1, safe_int(holdings_qty, 1))
     floor_p = max(
@@ -847,60 +702,15 @@ async def execute_bulletproof_sell_sweep(
                 "reason": reason_tag,
             }
 
-        # [4bot v2.3.1 R2 + v2.5.2 원작 1478200 다건 정리] 미체결 SELL 정리는 봇 주문만.
-        #   - 봇 SELL(장부 orderId·봇 등록부)이 여러 건이면 전부 취소 (매도가능수량 잠김 방지 · 원작 1478200)
-        #   - 사용자(토스 앱) SELL 은 절대 취소하지 않고 남긴 뒤 기다린다 (지하층 BASEMENT_WAIT_OPEN_SELL 과 같은 원칙 · 5초 뒤 재확인)
-        #   - 미체결 목록 조회가 실패하면 최신 1건만 확인하고, 그것이 봇 주문일 때만 취소 (사용자 주문이면 대기)
-        ledger_bot_ids = collect_bot_order_ids(st)
-        user_sell_ids: List[str] = []
-        try:
-            bot_sell_ids, user_sell_ids = await split_open_orders_by_owner(
-                context.api, sym, side="SELL", ledger_bot_ids=ledger_bot_ids
-            )
-        except Exception as split_exc:
-            logger.debug("미체결 SELL 목록 조회 폴백(최신 1건 확인): %s", split_exc)
-            bot_sell_ids = []
-            latest_open = ""
+        latest_open = await context.api.find_latest_open_order_id(
+            sym, side="SELL"
+        )
+        if latest_open:
             try:
-                latest_open = str(
-                    await context.api.find_latest_open_order_id(sym, side="SELL")
-                    or ""
-                ).strip()
-            except Exception:
-                latest_open = ""
-            if latest_open:
-                if is_bot_order_id(latest_open, ledger_bot_ids):
-                    bot_sell_ids = [latest_open]
-                else:
-                    user_sell_ids = [latest_open]
-        for bot_oid in bot_sell_ids:
-            try:
-                await context.api.cancel_order(bot_oid)
+                await context.api.cancel_order(latest_open)
             except Exception:
                 pass
-        if user_sell_ids:
-            mark_extended_sell_restriction_cooldown(
-                context,
-                symbol=sym,
-                cooldown_sec=EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
-                reason="WAIT_USER_OPEN_SELL",
-            )
-            logger.info(
-                "🛡️ [%s 수동 매도 보호] 사용자 미체결 매도 %d건 → 취소 안 함·봇 익절 발주 보류 (봇 SELL %d건 정리 · %.1f초 후 재확인)",
-                sym,
-                len(user_sell_ids),
-                len(bot_sell_ids),
-                EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
-            )
-            return {
-                "status": "WAIT_USER_OPEN_SELL",
-                "symbol": sym,
-                "user_open_sell_count": len(user_sell_ids),
-                "bot_sell_canceled_count": len(bot_sell_ids),
-                "retry_after_sec": EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
-            }
 
-        # [Case 82 & Case 88 : 목표 매도 수량(target_sell_qty) 전량 반영까지 최대 2.0초 정량 폴링 대기]
         sellable_q = 0
         deadline = time.monotonic() + SELLABLE_QTY_POLL_WAIT_SEC
         while time.monotonic() < deadline:
@@ -1049,7 +859,7 @@ async def execute_bulletproof_sell_sweep(
             )
             return {"status": "SWEEP_FAILED", "symbol": sym, "error": str(exc)}
 # ---------------------------------------------------------------------------
-# [핵심 2] 실물 매도 FILLED 정산 · 서브그리드/본그리드 분리 정산(Case 88) · 최고도달회차 잠금 유지(Case 87, 88) · 현재 사이클 단위 실현수익 누적 및 0주 졸업 시 자동 리셋(📌 ③) · 실측/동적 수수료 차감 세후 순익 산입 · 0주 졸업 시 무제한 예비시드 원금 자동 상환 및 인출형(단리) 당일 수익 안내 (Case 91)
+# [핵심 2] 실물 매도 FILLED 정산 · 서브/본그리드 분리 정산(Case 88) · 최고도달회차 잠금 유지(Case 87) · 사이클 수익 추적 및 0주 리셋 · 바벨 모드 별도 수익금고 격리 & 60/30/10 리밸런싱 · 0주 달성 시 실전 암살자 자동 승격 인계
 # ---------------------------------------------------------------------------
 async def _commit_filled_sell_and_reanchor_ledger(
     context: Any,
@@ -1060,18 +870,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     actual_sell_fee_usd: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 91 & 본/서브 최고 도달 회차 잠금 유지 · Default-ON 3층 서브 그리드 분리 정산 · 현재 사이클 단위 실현수익(cycle_realized_net_usd) 누적 및 0주 전량 졸업 시 직전 사이클 수익(last_cycle_realized_net_usd) 박제 후 $0.00 자동 리셋(📌 ③) · 상단 순수 통합이평 +1.00% 도달 시 1층 포함 전량 매도 사이클 종료 · 무제한 예비시드 상환 카운트 · 인출형(단리) 당일 수익 인출 안내 연동]:
-    7층 골디락스 본 그리드 및 Default-ON 3층 서브 그리드 스나이퍼 매도 주문이 체결(FILLED 또는 부분 체결 후 취소 종료)되었을 때:
-    1) pending_sub_sell_indices, pending_sell_indices 에 해당하는 순수 매수 원금과 실제 매도 체결가(avg_fill_price)에 대해,
-       토스 execution.commission + tax 실측값(actual_sell_fee_usd) 및 계좌별 왕복 수수료율(eff_rt_pct : 0.14% 또는 0.20%)을 적용하여
-       세후 실현 순수익금(net_pnl_usd)을 정밀 산출한다.
-    2) 🚨 [Case 88 : 서브 그리드 단독/동시 익절 시 7층 본 그리드 100% 비오염 보존]
-    3) 👑 [Case 87 & Case 88 : 부분 익절 시 잔여 지층이 존재하는 동안에는 cycle_ratchet_max_lots / sub_ratchet_max_lots 잠금을 그대로 유지하고,
-       해당 그리드가 0주 졸업했을 때만 0으로 리셋!]
-    4) 🚨 [Case 78 : 본·서브 1층 부분 익절 시 l1_target_quota_qty / sub_l1_target_quota_qty 잔여 수량 동기화로 허위 TOPUP_1FL 재매수 원천 차단]
-    5) 🚨 [Case 77, Case 88 & Case 91 : 본·서브 모두 0주 전량 졸업 시 무제한 예비시드 원금 자동 상환 및 잔여 수혈 횟수 카운트 정산]
-    6) 🔄 [📌 ③ 현재 사이클 단위 수익 추적 및 0주 졸업 시 자동 리셋 : 부분 익절 시에는 cycle_realized_net_usd 에 누적하고,
-       is_graduated_zero == True 순간 이번 사이클 최종 확정수익을 last_cycle_realized_net_usd 에 박제한 뒤 cycle_realized_net_usd = 0.0 으로 자동 리셋!]
+    # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 91 + 바벨 모드(실현수익 별도 금고 영구 격리 및 0주 졸업 60/30/10 리밸런싱) + 실전 암살자 0주 인계]:
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
     buckets = buckets_from_dicts(st.get("buckets", []))
@@ -1092,7 +891,8 @@ async def _commit_filled_sell_and_reanchor_ledger(
     portion_mode = (
         str(st.get("portion_mode") or PORTION_MODE_COMPOUND).upper().strip()
     )
-    is_simple_mode = is_simple_income_mode(portion_mode)
+    is_barbell = is_barbell_mode(portion_mode)
+    is_simple_mode = (not is_barbell) and is_simple_income_mode(portion_mode)
 
     settled_oids: List[str] = list(st.get("last_settled_order_ids") or [])
     if eff_oid and eff_oid not in settled_oids:
@@ -1160,7 +960,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
             }
         )
 
-    # 서브 그리드 상단 통합이평 졸업 시 서브 1층(index 0)도 무조건 포함하여 전량 졸업
     if not sub_target_indices and rem_fill_to_alloc > 0 and sub_buckets:
         if mode in (
             "SELL_SUB_ALL_GRAD",
@@ -1237,7 +1036,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
             }
         )
 
-    # 본 그리드 2~7층 통합이평 졸업 시 1층(index 0)도 무조건 포함하여 전량 졸업(사이클 완전 종료)
     if (
         not target_indices
         and not sub_target_indices
@@ -1305,7 +1103,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
             if idx == 0 and was_active_l1:
                 sold_l1_flag = False
 
-    # 잔여 미배분 체결 수량이 남아 있을 경우 서브 -> 본 그리드 순 폴백 배분
     if rem_fill_to_alloc > 0 and rem_sub_buckets:
         fb_rem_sub: List[StratumBucket] = []
         for idx_sf, sbf in enumerate(rem_sub_buckets):
@@ -1508,7 +1305,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
         sold_sub_q > 0 and sold_grid_q == 0
     )
 
-    # [Case 87 & Case 88 : 부분 익절 시 본/서브 최고 도달 회차 잠금 유지 및 해당 그리드 0주 졸업 시 리셋]
     prev_ratchet_lots = max(0, safe_int(st.get("cycle_ratchet_max_lots"), 0))
     rem_held_lots = sum(max(1, b.lot_count) for b in rem_buckets)
     next_ratchet_max_lots = (
@@ -1560,7 +1356,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
         else max(0, safe_int(st.get("main_consec_frozen_days"), 0))
     )
 
-    # 서브 그리드 통계 및 동결일 갱신 (Case 88)
     sub_sell_inc = 1 if sold_sub_q > 0 else 0
     sub_sell_ev = safe_int(st.get("sub_sell_events"), 0) + sub_sell_inc
     sub_sold_sh = safe_int(st.get("sub_sold_shares"), 0) + sold_sub_q
@@ -1598,7 +1393,6 @@ async def _commit_filled_sell_and_reanchor_ledger(
         else max(0, safe_int(st.get("sub_consec_frozen_days"), 0))
     )
 
-    # [Case 87 & Case 88 : 본 그리드와 서브 그리드 동시 매도(SELL_MAIN_AND_SUB 등) 시에도 본 그리드 상단 실제 소진 여부로 wma_inc / indiv_inc 정밀 집계]
     rem_upper_cnt = (
         max(0, len(rem_buckets) - (1 if rem_has_active_l1 else 0))
         if rem_buckets
@@ -1635,7 +1429,16 @@ async def _commit_filled_sell_and_reanchor_ledger(
         safe_float(st.get("daily_realized_net_usd"), 0.0) + net_pnl, 4
     )
 
-    # [📌 ③ 현재 사이클 단위 실현수익 누적 및 0주 졸업(is_graduated_zero) 시 직전 사이클 박제 후 $0.00 자동 리셋]
+    # 바벨 모드 가동 중 발생한 세후 수익금은 별도 수익금고로 격리 오프셋 동기화
+    prev_vault_locked = max(
+        0.0, safe_float(st.get("vaulted_profit_locked_usd"), 0.0)
+    )
+    next_vault_locked = (
+        round(prev_vault_locked + max(0.0, net_pnl), 4)
+        if is_barbell
+        else prev_vault_locked
+    )
+
     cur_cyc_gross = round(
         safe_float(st.get("cycle_realized_gross_usd"), 0.0) + gross_pnl, 4
     )
@@ -1697,7 +1500,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
     next_inj_res_usd = cur_inj_res_usd
     next_used_res_cnt = cur_used_res_cnt
 
-    if is_graduated_zero and cur_inj_res_usd > 0.0:
+    if (not is_barbell) and is_graduated_zero and cur_inj_res_usd > 0.0:
         repay_info = compute_reserve_repayment_on_zero(
             initial_seed_usd=init_seed,
             cumulative_realized_net_usd=cum_net,
@@ -1705,6 +1508,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             used_reserve_portions_cnt=cur_used_res_cnt,
             max_reserve_portions=MAX_RESERVE_PORTIONS,
             portion_mode=portion_mode,
+            vaulted_profit_locked_usd=next_vault_locked,
         )
         if bool(repay_info.get("did_repay")):
             repaid_this_time = round(
@@ -1721,11 +1525,10 @@ async def _commit_filled_sell_and_reanchor_ledger(
             )
             cum_repaid_usd = round(cum_repaid_usd + repaid_this_time, 4)
             logger.info(
-                "🎓 [Case 77/91 0주 졸업 온디맨드 예비시드 자동 상환 완료] 상환액=$%.2f · 잔여수혈잔액=$%.2f · 잔여수혈=%d회분(누적총 %d회)",
+                "🎓 [0주 졸업 예비시드 자동 상환 완료] 상환액=$%.2f · 잔여수혈잔액=$%.2f · 잔여수혈=%d회분",
                 repaid_this_time,
                 next_inj_res_usd,
                 next_used_res_cnt,
-                safe_int(st.get("total_reserve_injected_cnt"), 0),
             )
 
     now_sell_epoch = time.time()
@@ -1766,6 +1569,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "used_reserve_portions_cnt": next_used_res_cnt,
         "injected_reserve_usd": next_inj_res_usd,
         "cumulative_reserve_repaid_usd": cum_repaid_usd,
+        "vaulted_profit_locked_usd": next_vault_locked,
         "waiting_reserve_deposit": False,
         "waiting_reserve_deposit_alert_sent": False,
         "required_reserve_deposit_usd": 0.0,
@@ -1814,6 +1618,61 @@ async def _commit_filled_sell_and_reanchor_ledger(
         TARGET_SYMBOL, **update_kwargs
     )
 
+    # [바벨 모드 전용 훅] 별도 수익금고 영구 격리 및 전 구간(부분 익절 · 0주 졸업) 실시간 60/30/10 리밸런싱 실행
+    barbell_vault_total = next_vault_locked
+    repaid_to_vault_usd = 0.0
+    pending_sgov_reb_usd = 0.0
+    added_sgov_reb_usd = 0.0
+    barbell_cash_b_usd = 0.0
+    if is_barbell:
+        barbell_rec = await record_barbell_realized_profit(
+            context=context,
+            net_pnl_usd=net_pnl,
+            is_graduated_zero=is_graduated_zero,
+            prev_soxl_injected_usd=cur_inj_res_usd,
+            prev_soxl_used_portions_cnt=cur_used_res_cnt,
+            cycle_realized_net_override=cur_cyc_net,
+        )
+        barbell_vault_total = safe_float(
+            barbell_rec.get("vault_realized_profit_usd"), next_vault_locked
+        )
+        repaid_this_time = safe_float(
+            barbell_rec.get("repaid_from_soxl_usd"), 0.0
+        )
+        next_inj_res_usd = safe_float(
+            barbell_rec.get("rem_soxl_injected_usd"), 0.0
+        )
+        next_used_res_cnt = safe_int(
+            barbell_rec.get("rem_soxl_used_portions_cnt"), 0
+        )
+        repaid_to_vault_usd = safe_float(
+            barbell_rec.get("repaid_to_vault_usd"), 0.0
+        )
+        pending_sgov_reb_usd = safe_float(
+            barbell_rec.get("pending_sgov_buy_budget_usd"), 0.0
+        )
+        added_sgov_reb_usd = safe_float(
+            barbell_rec.get("added_sgov_buy_budget_usd"), 0.0
+        )
+        barbell_cash_b_usd = safe_float(
+            barbell_rec.get("cash_bucket_usd"), 0.0
+        )
+        updated_st = context.ledger.get_state(TARGET_SYMBOL)
+
+    # [실전 암살자 분리 전환 훅] SOXL == 0주 졸업 달성 시 예약된 [실전] 암살자 모드로 즉시 자동 인계!
+    switched_to_live_assassin = False
+    if is_graduated_zero:
+        activate_fn = getattr(
+            assassin_plugin, "activate_live_assassin_on_zero_soxl_if_armed", None
+        )
+        if callable(activate_fn):
+            try:
+                switched_to_live_assassin = bool(await activate_fn(context))
+            except Exception as exc:
+                logger.warning(
+                    "0주 졸업 후 실전 암살자 자동 인계 훅 예외: %s", exc
+                )
+
     context.wakeup_event.set()
     free_cash_now = safe_float(updated_st.get("free_cash_usd"), 0.0)
 
@@ -1843,14 +1702,38 @@ async def _commit_filled_sell_and_reanchor_ledger(
         cyc_sign = "+" if cur_cyc_net >= 0.0 else "-"
         cum_sign = "+" if cum_net >= 0.0 else "-"
         sess_tag = " · 🌃장외익절" if is_ext_sell else ""
-        credit_mode_desc = (
-            "현금금고 적립(💵인출형 · 당일실현 +${:,.2f} 인출가능!)".format(
-                max(0.0, day_net)
+
+        if is_barbell:
+            rt_reb_note = ""
+            if not is_graduated_zero and repaid_this_time > 0.0:
+                sgov_add_note = (
+                    f"➔SGOV예약 +${added_sgov_reb_usd:,.0f}(총 ${pending_sgov_reb_usd:,.0f})"
+                    if added_sgov_reb_usd > 0.0
+                    else ""
+                )
+                vault_rep_note = (
+                    f"·금고원복 ${repaid_to_vault_usd:,.0f}"
+                    if repaid_to_vault_usd > 0.0
+                    else ""
+                )
+                rt_reb_note = (
+                    f" · ⚡실시간환수 ${repaid_this_time:,.0f}"
+                    f"(현금버킷 ${barbell_cash_b_usd:,.0f}{sgov_add_note}{vault_rep_note})"
+                )
+            credit_mode_desc = (
+                f"별도 수익금고 영구격리!(⚖️바벨 · 누적금고 +${barbell_vault_total:,.2f}){rt_reb_note}"
             )
-            if is_simple_mode
-            else "시드 복리산입!"
-        )
-        if is_sub_without_main_sell:
+            cash_lbl = "바벨SOXL현금"
+        elif is_simple_mode:
+            credit_mode_desc = (
+                f"현금금고 적립(💵인출형 · 당일실현 +${max(0.0, day_net):,.2f} 인출가능!)"
+            )
+            cash_lbl = "가용현금"
+        else:
+            credit_mode_desc = "시드 복리산입!"
+            cash_lbl = "가용현금"
+
+        if is_sub_without_main_sell and not is_graduated_zero:
             grid_sh = sum(b.qty for b in rem_buckets)
             sub_sh = sum(sb.qty for sb in rem_sub_buckets)
             if is_sub_empty:
@@ -1869,7 +1752,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
                 f"세후순익 {sign}${abs(net_pnl):,.2f} {credit_mode_desc} · "
                 f"🔄이번사이클 누적: {cyc_sign}${abs(cur_cyc_net):,.2f}({cur_cyc_ev}회) · "
                 f"{sub_state_note} · 본그리드({len(rem_buckets)}개층·{grid_sh}주) 무결성 유지 · "
-                f"가용현금 ${free_cash_now:,.2f}"
+                f"{cash_lbl} ${free_cash_now:,.2f}"
             )
         else:
             co_sold_note = (
@@ -1880,12 +1763,28 @@ async def _commit_filled_sell_and_reanchor_ledger(
 
             if is_graduated_zero:
                 repay_note = ""
-                if repaid_this_time > 0.0:
+                if is_barbell:
+                    if repaid_to_vault_usd > 0.0:
+                        repay_note = (
+                            f" · 🏦수익금고 대여금 ${repaid_to_vault_usd:,.2f} 1순위 원복 & "
+                            f"⚖️60/30/10 리밸런싱 완료(SGOV 매수예약 ${pending_sgov_reb_usd:,.0f})"
+                        )
+                    else:
+                        repay_note = (
+                            f" · ⚖️시드 60/30/10 리밸런싱 완료"
+                            f"(SGOV 매수예약 ${pending_sgov_reb_usd:,.0f} · 별도금고 +${barbell_vault_total:,.2f} 보존)"
+                        )
+                elif repaid_this_time > 0.0:
                     repay_note = (
                         f" · 💉예비시드 원금 ${repaid_this_time:,.2f} 자동상환 완료"
-                        f"(잔여 시멘트추가 {next_used_res_cnt}회분 · ${next_inj_res_usd:,.2f}!)"
+                        f"(잔여수혈 {next_used_res_cnt}회분 · ${next_inj_res_usd:,.2f}!)"
                     )
-                if is_ext_sell:
+
+                if switched_to_live_assassin:
+                    next_entry_guide = (
+                        "🗡️[실전 암살자 모드 자동 전환 완료! 스나이퍼/바벨 신규매수 잠금 · 보유 SGOV는 수동매도 위임]"
+                    )
+                elif is_ext_sell:
                     next_entry_guide = "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 첫 1층 진입 대기!"
                 elif will_hit_late_cutoff_after_shield:
                     next_entry_guide = (
@@ -1962,7 +1861,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
             )
             body_msg = (
                 f"세후순익 {sign}${abs(net_pnl):,.2f} {credit_mode_desc} · "
-                f"{note_str} · 가용현금 ${free_cash_now:,.2f}"
+                f"{note_str} · {cash_lbl} ${free_cash_now:,.2f}"
             )
         await context.send_slim_alert(title=title_msg, body=body_msg)
 
@@ -1978,6 +1877,7 @@ async def _commit_filled_sell_and_reanchor_ledger(
         "last_cycle_realized_net_usd": next_last_cyc_net,
         "completed_main_cycles": next_comp_main_cycles,
         "repaid_reserve_usd": repaid_this_time,
+        "switched_to_live_assassin": switched_to_live_assassin,
         "reanchor_drop_usd": 0.0,
         "remaining_tiers": len(rem_buckets),
         "remaining_sub_tiers": len(rem_sub_buckets),
@@ -2000,20 +1900,11 @@ def _extract_actual_sell_fee_from_exec(
 
 async def sync_pending_sell_order_plugin(
     context: Any,
-    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
-    prices: Optional[Dict[str, float]] = None,
+    holdings: Dict[str, Dict[str, Any]],
+    prices: Dict[str, float],
     now_est: Optional[datetime] = None,
     force_settle: bool = False,
-    **kwargs: Any,
 ) -> Dict[str, Any]:
-    """
-    # [🚨 Case 19, Case 24, Case 65, Case 66, Case 70, Case 71, Case 72, Case 78, Case 79, Case 82, Case 86 & Case 88 실측 수수료 및 서브 그리드 연동]:
-    장부에 대기 중인 미체결 매도 주문(sell_order_id)이 존재할 때:
-    1) GET /api/v1/orders/{orderId} 로 FILLED 여부를 조회하여 체결 완료 시
-       execution.commission + tax 실측값과 함께 _commit_filled_sell_and_reanchor_ledger() 로 복리 정산을 수행한다.
-    2) 🚨 [Case 66 & Case 78 세션 경계 force_settle=True 강제 정산]
-    3) 발주 후 60.0초 미체결 시 하향 추격 정정 없이 안전 취소 후 1.5초 실시간 타점 감시로 복귀한다.
-    """
     st = context.ledger.get_state(TARGET_SYMBOL)
     sell_oid = str(st.get("sell_order_id") or "").strip()
     if not sell_oid:
@@ -2072,23 +1963,49 @@ async def sync_pending_sell_order_plugin(
                 except Exception:
                     pass
                 final_det = await context.api.get_order_detail(sell_oid)
-                if isinstance(final_det, dict):
-                    f_ex = (
-                        final_det.get("execution")
-                        if isinstance(final_det.get("execution"), dict)
-                        else {}
+                f_st2 = (
+                    str(final_det.get("status") or "").upper().strip()
+                    if isinstance(final_det, dict)
+                    else ""
+                )
+                if not isinstance(final_det, dict) or f_st2 in (
+                    "PENDING",
+                    "PARTIAL_FILLED",
+                    "PENDING_CANCEL",
+                    "PENDING_REPLACE",
+                ):
+                    await asyncio.sleep(0.35)
+                    final_det = await context.api.get_order_detail(sell_oid)
+                    f_st2 = (
+                        str(final_det.get("status") or "").upper().strip()
+                        if isinstance(final_det, dict)
+                        else ""
                     )
-                    f_q2 = safe_int(f_ex.get("filledQuantity"), filled_q)
-                    f_p2 = safe_float(
-                        f_ex.get("averageFilledPrice"), avg_fill_p
-                    )
-                    f_fee2 = _extract_actual_sell_fee_from_exec(f_ex)
-                    if f_q2 > 0:
-                        filled_q = f_q2
-                    if f_p2 > 0.0:
-                        avg_fill_p = f_p2
-                    if f_fee2 is not None:
-                        actual_fee_val = f_fee2
+                if not isinstance(final_det, dict) or f_st2 in (
+                    "PENDING",
+                    "PARTIAL_FILLED",
+                    "PENDING_CANCEL",
+                    "PENDING_REPLACE",
+                ):
+                    return {
+                        "status": "SELL_PARTIAL_CANCEL_CONFIRMING",
+                        "did_sell_or_ratchet": True,
+                        "orderId": sell_oid,
+                    }
+                f_ex = (
+                    final_det.get("execution")
+                    if isinstance(final_det.get("execution"), dict)
+                    else {}
+                )
+                f_q2 = safe_int(f_ex.get("filledQuantity"), filled_q)
+                f_p2 = safe_float(f_ex.get("averageFilledPrice"), avg_fill_p)
+                f_fee2 = _extract_actual_sell_fee_from_exec(f_ex)
+                if f_q2 > 0:
+                    filled_q = f_q2
+                if f_p2 > 0.0:
+                    avg_fill_p = f_p2
+                if f_fee2 is not None:
+                    actual_fee_val = f_fee2
                 if filled_q > 0:
                     eff_p = avg_fill_p if avg_fill_p > 0.0 else target_p
                     return await _commit_filled_sell_and_reanchor_ledger(
@@ -2107,7 +2024,10 @@ async def sync_pending_sell_order_plugin(
                     "ordered_qty": ordered_qty,
                 }
 
-        if ord_status in ("CANCELED", "REJECTED") and filled_q == 0:
+        if (
+            ord_status in ("CANCELED", "REJECTED", "REPLACED")
+            and filled_q == 0
+        ):
             if ord_status == "REJECTED":
                 mark_extended_sell_restriction_cooldown(
                     context,
@@ -2137,8 +2057,51 @@ async def sync_pending_sell_order_plugin(
             pass
 
         final_detail = await context.api.get_order_detail(sell_oid)
+        f_status = (
+            str(final_detail.get("status") or "").upper().strip()
+            if isinstance(final_detail, dict)
+            else ""
+        )
+        if not isinstance(final_detail, dict) or f_status in (
+            "PENDING",
+            "PARTIAL_FILLED",
+            "PENDING_CANCEL",
+            "PENDING_REPLACE",
+        ):
+            await asyncio.sleep(0.35)
+            final_detail = await context.api.get_order_detail(sell_oid)
+            f_status = (
+                str(final_detail.get("status") or "").upper().strip()
+                if isinstance(final_detail, dict)
+                else ""
+            )
+
+        if not isinstance(final_detail, dict) and elapsed_mod >= (
+            SELL_ORDER_MAX_WAIT_SEC + 15.0
+        ):
+            closed_cands = await context.api.get_closed_orders(
+                symbol=TARGET_SYMBOL, limit=25
+            )
+            for c_item in closed_cands:
+                if str(c_item.get("orderId") or "").strip() == sell_oid:
+                    final_detail = c_item
+                    f_status = (
+                        str(c_item.get("status") or "").upper().strip()
+                    )
+                    break
+
         if isinstance(final_detail, dict):
-            f_status = str(final_detail.get("status") or "").upper().strip()
+            if f_status in (
+                "PENDING",
+                "PARTIAL_FILLED",
+                "PENDING_CANCEL",
+                "PENDING_REPLACE",
+            ):
+                return {
+                    "status": "SELL_CANCEL_IN_FLIGHT",
+                    "did_sell_or_ratchet": True,
+                    "orderId": sell_oid,
+                }
             f_exec = (
                 final_detail.get("execution")
                 if isinstance(final_detail.get("execution"), dict)
@@ -2156,6 +2119,12 @@ async def sync_pending_sell_order_plugin(
                     settled_order_id=sell_oid,
                     actual_sell_fee_usd=f_fee,
                 )
+        elif elapsed_mod < (SELL_ORDER_MAX_WAIT_SEC + 30.0):
+            return {
+                "status": "SELL_CANCEL_VERIFY_RETRY",
+                "did_sell_or_ratchet": True,
+                "orderId": sell_oid,
+            }
 
         await context.ledger.update_state(
             TARGET_SYMBOL,
@@ -2184,38 +2153,21 @@ async def sync_pending_sell_order_plugin(
 
 
 # ---------------------------------------------------------------------------
-# [핵심 3] 24시간 전 세션(프리·정규·애프터·데이마켓) 매수 후 최초 60초 타임쉴드 & 이후 보유 중 매 1.5초 실시간 다중 익절(본+서브) + 방안 C 오버나이트 통합이평 사수 + 윗꼬리 즉시 체결 모니터 (Case 69 ~ 91)
+# [핵심 3] 24시간 전 세션 매수 후 최초 60초 타임쉴드 & 이후 보유 중 매 1.5초 실시간 다중 익절(본+서브) + 방안 C 오버나이트 통합이평 사수 + 윗꼬리 즉시 체결 모니터
 # ---------------------------------------------------------------------------
 async def execute_1m_sniper_sell_and_reanchor_plugin(
     context: Any,
-    holdings: Optional[Dict[str, Dict[str, Any]]] = None,
-    prices: Optional[Dict[str, float]] = None,
+    holdings: Dict[str, Dict[str, Any]],
+    prices: Dict[str, float],
     now_est: Optional[datetime] = None,
-    **kwargs: Any,
 ) -> Dict[str, Any]:
-    """
-    # MODIFIED [🎯 2 Step 2 & Case 24, 44, 46 ~ 91 (방안 C 오버나이트 통합이평 사수 하이브리드 & 2~7층 순수 통합이평 +1.00% 도달 시 1층 물량 무조건 동일 가격 포함 전량 매도 & 본+서브 다중 익절 & 2차 재조회 시 순수 fresh_live_p 우선 평가)]:
-    """
     global _LAST_CONSUMED_WICK_TRADE_TS
 
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
     hm = dt_now.hour * 100 + dt_now.minute
 
-    # [4bot v2.5.2 · 원작 1478200] holdings·prices 가 None/빈 값이어도 context.latest_* 로 복원 (TypeError·미매도 방지)
-    #   단, 데이/애프터마켓(매도 전용 확장 세션)에서는 묵은 context.latest_prices 로 채우지 않는다 (Case 79 · 10초 신선도 규칙은 _get_live_soxl_price)
-    _prices_given = isinstance(prices, dict) and bool(prices)
-    holdings, _resolved_prices = _resolve_holdings_prices(
-        context, holdings, prices, kwargs.get("live_price")
-    )
-    if _prices_given or not is_extended_sell_only_window(hm, now_est=dt_now):
-        prices = _resolved_prices
-    else:
-        _kw_lp = safe_float(kwargs.get("live_price"), 0.0)
-        prices = {TARGET_SYMBOL: _kw_lp} if _kw_lp > 0.0 else {}
-
     st = context.ledger.get_state(TARGET_SYMBOL)
 
-    # 1) 미체결 매도 주문이 있으면 먼저 체결 확인 수행
     if str(st.get("sell_order_id") or "").strip():
         return await sync_pending_sell_order_plugin(
             context=context,
@@ -2389,7 +2341,6 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
         if fresh_live_p <= 0.0:
             fresh_live_p = live_p
 
-        # [Case 82 핵심 : max(live_p, fresh_live_p) 고점 박제 영구 배제 & 순수 fresh_live_p 기준 우선 재평가로 하위 지층 즉시 체결 보장]
         fresh_only_eval = evaluate_multi_grid_sell_targets(
             buckets=buckets,
             live_price=fresh_live_p,
@@ -2499,296 +2450,3 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
 execute_sniper_exit_plugin = execute_1m_sniper_sell_and_reanchor_plugin
 manage_mechanical_profit_trap_plugin = execute_1m_sniper_sell_and_reanchor_plugin
 reconcile_zero_holdings_exit_plugin = sync_pending_sell_order_plugin
-
-
-
-# ---------------------------------------------------------------------------
-# [4bot 지하층 v2.2.0 · 원작에 없는 사용자 커스텀] 지하층(basement_pocket) 목표가 매도 전용 플러그인
-#  · 신규 매수 없음. 현재가 ≥ 지하층 목표가(매수가×1.015 센트 올림)일 때 지하층 수량 전량을 기존 매도 경로
-#    (context.api.create_order LIMIT · DAY · enforce_daymarket_block=False — 본/서브 스윕과 같은 호출)로 판다.
-#  · 본/서브 주문(buy_order_id·sell_order_id)이 있으면 기다린다. 다른 매도 미체결이 있어도 건드리지 않고 기다린다.
-#  · 정산은 지하층만: basement_realized_net_usd · basement_sell_events · basement_sold_shares.
-#    본·서브 버킷 / 사이클 / 래칫 / 사이클 실현 / 누적 실현 / 가용현금(free_cash_usd) 은 건드리지 않는다.
-#  · 수량 0 이 되면 basement_pocket 필드 삭제 → 그 뒤로는 순수 원작 동작 (이 함수는 바로 NO_BASEMENT 반환).
-#  · 체결 직후 15초는 defense_plugin 잔고 대조가 잔고 API 시차를 수동매매로 오판하지 않게 별도 표식만 남긴다
-#    (본/서브의 매도 후 60초 매수 쉴드 표식은 쓰지 않음 → 본·서브 비오염).
-# ---------------------------------------------------------------------------
-BASEMENT_SELL_ORDER_MAX_WAIT_SEC: float = SELL_ORDER_MAX_WAIT_SEC
-BASEMENT_FILL_GRACE_SEC: float = 15.0
-
-
-def mark_basement_fill_grace(context: Any, symbol: str = TARGET_SYMBOL) -> None:
-    guard_map = getattr(context, "indexing_grace_cache", None)
-    if isinstance(guard_map, dict):
-        sym = str(symbol or TARGET_SYMBOL).upper().strip()
-        entry = dict(guard_map.get(sym) or {}) if isinstance(guard_map.get(sym), dict) else {}
-        entry["last_basement_fill_mono"] = time.monotonic()
-        guard_map[sym] = entry
-
-
-def is_within_basement_fill_grace(context: Any, symbol: str = TARGET_SYMBOL) -> bool:
-    guard_map = getattr(context, "indexing_grace_cache", None)
-    if not isinstance(guard_map, dict):
-        return False
-    entry = guard_map.get(str(symbol or TARGET_SYMBOL).upper().strip())
-    if not isinstance(entry, dict):
-        return False
-    last_m = safe_float(entry.get("last_basement_fill_mono"), 0.0)
-    return bool(last_m > 0.0 and 0.0 <= (time.monotonic() - last_m) <= BASEMENT_FILL_GRACE_SEC)
-
-
-def _basement_without_order(bp: Dict[str, Any]) -> Dict[str, Any]:
-    out = dict(bp)
-    out.update(
-        sell_order_id="",
-        sell_client_order_id="",
-        sell_ordered_qty=0,
-        sell_price=0.0,
-        sell_order_ts=0.0,
-    )
-    return out
-
-
-async def _settle_basement_sell_fill(
-    context: Any,
-    st: Dict[str, Any],
-    bp: Dict[str, Any],
-    filled_qty: int,
-    avg_fill_price: float,
-    actual_sell_fee_usd: Optional[float],
-    order_id: str,
-) -> Dict[str, Any]:
-    """지하층 매도 체결 정산 — 지하층 필드만 바꾼다."""
-    bq = max(0, safe_int(bp.get("qty"), 0))
-    sold_q = max(0, min(bq, safe_int(filled_qty, 0)))
-    cost = safe_float(bp.get("actual_cost_usd"), 0.0)
-    if sold_q <= 0 or bq <= 0:
-        await context.ledger.update_state(
-            TARGET_SYMBOL, **{BASEMENT_POCKET_KEY: _basement_without_order(bp)}
-        )
-        return {"status": "BASEMENT_SELL_NOTHING_FILLED", "basement_order_pending": False}
-    fill_p = safe_float(avg_fill_price, 0.0) or safe_float(bp.get("sell_price"), 0.0)
-    if sold_q >= bq:
-        sold_cost = round(cost, 4)
-    else:
-        sold_cost = round(cost * float(sold_q) / float(bq), 4)
-    rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st)
-    pnl = calc_sell_realized_pnl(
-        sold_qty=sold_q,
-        sell_exec_price=fill_p,
-        sold_actual_cost_usd=sold_cost,
-        round_trip_fee_rate_pct=rt_pct,
-        actual_sell_fee_usd=actual_sell_fee_usd,
-    )
-    net = safe_float(pnl.get("net_pnl_usd"), 0.0)
-    rem_q = bq - sold_q
-    if rem_q <= 0:
-        new_bp: Dict[str, Any] = {}
-    else:
-        keep_cost = round(max(0.01 * float(rem_q), cost - sold_cost), 4)
-        new_bp = _basement_without_order(bp)
-        new_bp.update(
-            qty=rem_q,
-            book_price=round(keep_cost / float(rem_q), 4),
-            book_invested_usd=keep_cost,
-            actual_cost_usd=keep_cost,
-        )
-    realized = round(safe_float(st.get(BASEMENT_REALIZED_KEY), 0.0) + net, 4)
-    await context.ledger.update_state(
-        TARGET_SYMBOL,
-        **{
-            BASEMENT_POCKET_KEY: new_bp,
-            BASEMENT_REALIZED_KEY: realized,
-            "basement_sell_events": safe_int(st.get("basement_sell_events"), 0) + 1,
-            "basement_sold_shares": safe_int(st.get("basement_sold_shares"), 0) + sold_q,
-        },
-    )
-    mark_basement_fill_grace(context)
-    logger.info(
-        "🏚️ [지하층 목표가 매도 체결] %d주 @ $%.2f (orderId=%s) · 세후 %+.2f · 지하층 누적 %+.2f · 남은 지하층 %d주",
-        sold_q, fill_p, order_id, net, realized, rem_q,
-    )
-    if hasattr(context, "send_slim_alert"):
-        try:
-            await context.send_slim_alert(
-                title=f"🏚️ [SOXL 지하층 매도 체결] {sold_q}주 @ ${fill_p:.2f}",
-                body=(
-                    f"세후 {'+' if net >= 0 else '-'}${abs(net):,.2f} · 지하층 누적 ${realized:,.2f} · "
-                    + (f"남은 지하층 {rem_q}주" if rem_q > 0 else "지하층 정리 완료 (이후 원작 그대로)")
-                    + " · 본·서브 장부와 따로 정산"
-                ),
-            )
-        except Exception as exc:
-            logger.debug("지하층 체결 알림 실패(무시): %s", exc)
-    return {
-        "status": "BASEMENT_SELL_FILLED",
-        "basement_order_pending": False,
-        "sold_qty": sold_q,
-        "net_pnl_usd": net,
-        "remaining_qty": rem_q,
-    }
-
-
-async def _sync_basement_sell_order(
-    context: Any, st: Dict[str, Any], bp: Dict[str, Any], force_settle: bool = False
-) -> Dict[str, Any]:
-    oid = str(bp.get("sell_order_id") or "").strip()
-    ordered_q = max(1, safe_int(bp.get("sell_ordered_qty"), 1))
-    limit_p = safe_float(bp.get("sell_price"), 0.0)
-    placed_ts = safe_float(bp.get("sell_order_ts"), 0.0)
-    elapsed = max(0.0, time.time() - placed_ts) if placed_ts > 0 else BASEMENT_SELL_ORDER_MAX_WAIT_SEC
-
-    def _parse(det: Any) -> Tuple[str, int, float, Optional[float]]:
-        if not isinstance(det, dict):
-            return "", 0, 0.0, None
-        ex = det.get("execution") if isinstance(det.get("execution"), dict) else {}
-        return (
-            str(det.get("status") or "").upper().strip(),
-            safe_int(ex.get("filledQuantity"), 0),
-            safe_float(ex.get("averageFilledPrice"), 0.0),
-            _extract_actual_sell_fee_from_exec(ex),
-        )
-
-    status, f_q, f_p, f_fee = _parse(await context.api.get_order_detail(oid))
-    if status == "FILLED" or (f_q > 0 and status in ("CANCELED", "REPLACED", "REJECTED")):
-        return await _settle_basement_sell_fill(
-            context, st, bp, f_q if f_q > 0 else ordered_q, f_p or limit_p, f_fee, oid
-        )
-    if status in ("CANCELED", "REJECTED") and f_q == 0:
-        if status == "REJECTED":
-            mark_extended_sell_restriction_cooldown(
-                context, symbol=TARGET_SYMBOL,
-                cooldown_sec=EXTENDED_SELL_RESTRICTION_COOLDOWN_SEC,
-                reason="BASEMENT_SELL_REJECTED",
-            )
-        await context.ledger.update_state(
-            TARGET_SYMBOL, **{BASEMENT_POCKET_KEY: _basement_without_order(bp)}
-        )
-        return {"status": f"BASEMENT_SELL_{status}_CLEARED", "basement_order_pending": False}
-    if elapsed >= BASEMENT_SELL_ORDER_MAX_WAIT_SEC or force_settle or status == "PENDING_CANCEL":
-        try:
-            await context.api.cancel_order(oid)
-        except Exception:
-            pass
-        status2, f_q2, f_p2, f_fee2 = _parse(await context.api.get_order_detail(oid))
-        f_q = max(f_q, f_q2)
-        if f_q > 0:
-            return await _settle_basement_sell_fill(
-                context, st, bp, f_q, f_p2 or f_p or limit_p,
-                f_fee2 if f_fee2 is not None else f_fee, oid,
-            )
-        if status2 in ("", "PENDING", "OPEN", "ACCEPTED", "NEW", "PARTIAL_FILLED", "PENDING_CANCEL"):
-            # 취소 확인 전 — 다음 바퀴에 다시 확인 (주문을 잊지 않는다)
-            return {"status": "BASEMENT_SELL_CANCEL_WAIT", "basement_order_pending": True, "orderId": oid}
-        await context.ledger.update_state(
-            TARGET_SYMBOL, **{BASEMENT_POCKET_KEY: _basement_without_order(bp)}
-        )
-        logger.info("⏳ [지하층 매도 60초 미체결 안전 취소] 지정가 $%.2f · 목표가 감시 복귀", limit_p)
-        return {"status": "BASEMENT_SELL_UNFILLED_CANCELED", "basement_order_pending": False}
-    return {"status": "BASEMENT_SELL_PENDING", "basement_order_pending": True, "orderId": oid}
-
-
-async def execute_basement_pocket_exit_plugin(
-    context: Any,
-    holdings: Dict[str, Dict[str, Any]],
-    prices: Dict[str, float],
-    now_est: Optional[datetime] = None,
-    force_settle: bool = False,
-    allow_new_order: bool = True,
-) -> Dict[str, Any]:
-    """지하층 목표가 매도 (발주 + 미체결 확인). 반환 basement_order_pending=True 이면 이번 바퀴 본/서브 매매를 쉰다
-    (본/서브 스윕이 미체결 매도를 취소하는 원작 동작과 겹치지 않게 · 최대 60초)."""
-    st = context.ledger.get_state(TARGET_SYMBOL)
-    bp = sanitize_basement_pocket_dict(st.get(BASEMENT_POCKET_KEY))
-    if not bp:
-        return {"status": "NO_BASEMENT", "basement_order_pending": False}
-    if bp.get("sell_order_id"):
-        return await _sync_basement_sell_order(context, st, bp, force_settle=force_settle)
-    if not allow_new_order:
-        return {"status": "BASEMENT_HOLD", "basement_order_pending": False}
-    if str(st.get("buy_order_id") or "").strip() or str(st.get("sell_order_id") or "").strip():
-        return {"status": "BASEMENT_WAIT_BOT_ORDER", "basement_order_pending": False}
-    restricted, _ = is_within_extended_sell_restriction_cooldown(context, TARGET_SYMBOL)
-    if restricted:
-        return {"status": "BASEMENT_WAIT_RESTRICTION_COOLDOWN", "basement_order_pending": False}
-    live_p = safe_float((prices or {}).get(TARGET_SYMBOL), 0.0)
-    tgt = safe_float(bp.get("target_price"), 0.0)
-    if live_p <= 0.0 or tgt <= 0.0:
-        return {"status": "BASEMENT_NO_PRICE", "basement_order_pending": False}
-    if live_p < tgt:
-        return {"status": "BASEMENT_BELOW_TARGET", "basement_order_pending": False,
-                "live": live_p, "target": tgt}
-
-    async with context.in_memory_ordering_lock:
-        st = context.ledger.get_state(TARGET_SYMBOL)
-        bp = sanitize_basement_pocket_dict(st.get(BASEMENT_POCKET_KEY))
-        if not bp or bp.get("sell_order_id"):
-            return {"status": "BASEMENT_STATE_CHANGED", "basement_order_pending": bool(bp and bp.get("sell_order_id"))}
-        if str(st.get("buy_order_id") or "").strip() or str(st.get("sell_order_id") or "").strip():
-            return {"status": "BASEMENT_WAIT_BOT_ORDER", "basement_order_pending": False}
-        # 다른 매도 미체결(사용자 주문 포함)은 취소하지 않고 기다린다
-        if await context.api.find_latest_open_order_id(TARGET_SYMBOL, side="SELL"):
-            return {"status": "BASEMENT_WAIT_OPEN_SELL", "basement_order_pending": False}
-        bq = safe_int(bp.get("qty"), 0)
-        # 본·서브 주식을 지하층으로 팔지 않도록: 토스 실보유 − 본 − 서브 만큼만
-        grid_q = sum(safe_int(b.get("qty"), 0) for b in (st.get("buckets") or []) if isinstance(b, dict))
-        sub_q = sum(safe_int(b.get("qty"), 0) for b in (st.get("sub_buckets") or []) if isinstance(b, dict))
-        h_info = (holdings or {}).get(TARGET_SYMBOL, {}) if isinstance(holdings, dict) else {}
-        h_qty = safe_int(h_info.get("qty"), -1) if isinstance(h_info, dict) else -1
-        avail_basement = bq if h_qty < 0 else max(0, h_qty - grid_q - sub_q)
-        sellable = safe_int(await context.api.get_sellable_quantity(TARGET_SYMBOL), 0)
-        sell_q = min(bq, avail_basement, sellable)
-        if sell_q <= 0:
-            return {"status": "BASEMENT_NO_SELLABLE", "basement_order_pending": False,
-                    "sellable": sellable, "avail_basement": avail_basement}
-        if live_p > tgt * MARKETABLE_GAP_UP_THRESHOLD_MULT:
-            limit_p = max(tgt, math.floor((live_p * MARKETABLE_GAP_UP_SLIPPAGE_MULT + 1e-9) * 100.0) / 100.0)
-        else:
-            limit_p = tgt
-        limit_p = round(max(0.01, limit_p), 2)
-        cid = generate_client_order_id(prefix="SBM")
-        try:
-            ord_res = await context.api.create_order(
-                symbol=TARGET_SYMBOL,
-                side="SELL",
-                quantity=sell_q,
-                price=limit_p,
-                order_type="LIMIT",
-                time_in_force="DAY",
-                client_order_id=cid,
-                enforce_daymarket_block=False,
-            )
-        except _NonRetryableApiError as api_err:
-            mark_extended_sell_restriction_cooldown(
-                context, symbol=TARGET_SYMBOL,
-                cooldown_sec=EXTENDED_SELL_RESTRICTION_COOLDOWN_SEC,
-                reason="BASEMENT_" + (str(getattr(api_err, "error_code", "") or "API_ERROR").lower()),
-            )
-            logger.info("🏚️ 지하층 매도 보류(60초 쿨다운): %s", api_err)
-            return {"status": "BASEMENT_SELL_RESTRICTED", "basement_order_pending": False}
-        except Exception as exc:
-            mark_extended_sell_restriction_cooldown(
-                context, symbol=TARGET_SYMBOL,
-                cooldown_sec=EXTENDED_NO_SELLABLE_RETRY_COOLDOWN_SEC,
-                reason="BASEMENT_TRANSIENT_EXCEPTION",
-            )
-            logger.warning("🏚️ 지하층 매도 발주 실패(재시도 예정): %s", exc)
-            return {"status": "BASEMENT_SELL_FAILED", "basement_order_pending": False}
-        new_oid = str((ord_res or {}).get("orderId") or "").strip()
-        if not new_oid:
-            return {"status": "BASEMENT_SELL_NO_ORDER_ID", "basement_order_pending": False}
-        nb = dict(bp)
-        nb.update(
-            sell_order_id=new_oid,
-            sell_client_order_id=cid,
-            sell_ordered_qty=sell_q,
-            sell_price=limit_p,
-            sell_order_ts=round(time.time(), 4),
-        )
-        await context.ledger.update_state(TARGET_SYMBOL, **{BASEMENT_POCKET_KEY: nb})
-        logger.info(
-            "🏚️ [지하층 목표가 매도 발주] %d주 @ 지정가 $%.2f (목표 $%.2f · 현재가 $%.2f · orderId=%s)",
-            sell_q, limit_p, tgt, live_p, new_oid,
-        )
-        return {"status": "BASEMENT_SELL_ORDERED", "basement_order_pending": True,
-                "orderId": new_oid, "qty": sell_q, "price": limit_p}
