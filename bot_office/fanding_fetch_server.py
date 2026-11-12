@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""팬딩 서버 직접 수집기 — fanding_fetch_server.py  (VERSION vNEXT)
+"""팬딩 서버 직접 수집기 — fanding_fetch_server.py  (VERSION v1.7.1)
 
 하는 일 (이것만 한다)
   서버(GCP)가 fanding.kr 작성자 페이지에서 최신 가격표 글을 찾아,
@@ -27,7 +27,7 @@
 비밀 규칙: 토큰·비밀번호를 코드·로그·상태 파일에 적지 않는다. 토큰은 fanding.json 에서 읽기만 한다.
 """
 
-VERSION = "vNEXT"
+VERSION = "v1.7.1"
 
 import argparse
 import contextlib

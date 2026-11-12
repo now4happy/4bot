@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.1 · 2026-11-12 21:42 (KST)
+- 파일: fanding_fetch_server.py
+- 내용: 팬딩 서버 수집기: lazy-load 이미지 대기 고침
+- 브랜치: fanding-lazyload-fix
+
 ## v1.7.0 · 2026-11-12 21:10 (KST)
 - 파일: fanding_fetch_server.py, test_fanding_fetch_server.py
 - 내용: 팬딩 서버 수집기: SERVER_SETUP.md 고침 — 유닛 파일(.service/.timer) 내용을 heredoc으로 넣어 서버에서 직접 만들게 (업데이터 허용 목록 밖이라 저장소에 두지 않음)
