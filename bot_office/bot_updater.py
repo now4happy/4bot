@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT (2026-11-13): 옛(리베이스 전) 브랜치 되풀이 알림·충돌 방지 — ① 알림에 '서버보다 N개 뒤처짐'·'지금 적용하면 충돌할 파일'(git merge-tree, 미리 보기만) 표시
+# 사무실 v1.8.1 (2026-11-13): 옛(리베이스 전) 브랜치 되풀이 알림·충돌 방지 — ① 알림에 '서버보다 N개 뒤처짐'·'지금 적용하면 충돌할 파일'(git merge-tree, 미리 보기만) 표시
 #                       ② 같은 수정(제목+작성 시각 같음)이 이미 서버 HEAD나 다른 대기 브랜치에 있으면 '♻️ 옛 브랜치' 안내 + [🗑 옛 브랜치 지우기] 버튼
 #                          (누를 때 다시 확인 · 백업 태그 updater-backup/superseded-… 와 삭제를 한 번에 · 자동 삭제 없음 · main·staging 은 못 지움)
 #                       ③ '업데이트 확인'에서 알림을 다시 보냈는데도 '새로 올라온 수정이 없습니다'가 같이 뜨던 것 고침
@@ -282,7 +282,7 @@ def gate_installed(unit):
 # ---------------------------------------------------------------- 새 업데이트 찾기
 def scan(st, force=False):
     """새 업데이트 찾기 → 이번에 보낸 알림 개수 (GitHub 확인 실패면 None).
-    vNEXT: 대기 브랜치 목록을 먼저 다 모은 뒤 알림 — 옛 브랜치 안내(superseded)가 다른 대기 브랜치도 볼 수 있게. 감지 조건은 그대로."""
+    v1.8.1: 대기 브랜치 목록을 먼저 다 모은 뒤 알림 — 옛 브랜치 안내(superseded)가 다른 대기 브랜치도 볼 수 있게. 감지 조건은 그대로."""
     rc, out = git("fetch", "-q", "--prune", "origin")
     if rc:
         if st.get("fetch_err") != out[:80]:
@@ -425,7 +425,7 @@ def revert_check(sha, files):
     return out
 
 
-# ---------------------------------------------------------------- 옛(리베이스 전) 브랜치 감지 (vNEXT)
+# ---------------------------------------------------------------- 옛(리베이스 전) 브랜치 감지 (v1.8.1)
 # 왜: scan 은 'main 이 아니고 서버 HEAD 의 조상이 아닌' 브랜치를 모두 새 수정으로 본다. 리베이스는 새 커밋을 만들 뿐
 #     옛 커밋을 HEAD 의 조상으로 만들지 않으므로, 옛 커밋을 가리키는 브랜치가 GitHub 에 남으면 영원히 '미반영'으로 보이고
 #     낡은 기준에서 같은 파일을 고친 것이라 병합 때마다 충돌한다. apply 의 자동 삭제는 적용한 브랜치 하나만 지운다.
@@ -548,7 +548,7 @@ def offer(st, br, sha, live=None):
                  + ("\n…외 " + str(len(reverts) - 6) + "건" if len(reverts) > 6 else "")
                  + "\n→ 최신 main 파일을 받아 다시 고쳐 올리는 걸 추천해요. 알고 올린 거면 그대로 승인해도 돼요.")
         st["offers"][key]["reverts"] = len(reverts)
-    # vNEXT: 낡은 정도 · 미리 본 충돌 · 옛 브랜치 안내 (모두 알림 정보만 — 적용 단계의 검사는 그대로)
+    # v1.8.1: 낡은 정도 · 미리 본 충돌 · 옛 브랜치 안내 (모두 알림 정보만 — 적용 단계의 검사는 그대로)
     try:
         behind = behind_count(sha)
         conflicts = predict_conflicts(sha)
@@ -1044,7 +1044,7 @@ def apply(st, key):
     rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
     if rc:
         git("merge", "--abort")
-        try:   # vNEXT: 옛(리베이스 전) 브랜치면 충돌 정리가 아니라 지우기를 안내 (안내만 · 병합 중단은 위와 같음)
+        try:   # v1.8.1: 옛(리베이스 전) 브랜치면 충돌 정리가 아니라 지우기를 안내 (안내만 · 병합 중단은 위와 같음)
             sup = superseded(sha, live_branches())
         except Exception:
             sup = None
@@ -1184,10 +1184,10 @@ def handle(st, upd):
         act, _, key = (cb.get("data") or "").partition(":")
         if act == "cp" and UC:
             o = st.get("offers", {}).get(key)
-            if o and o.get("superseded"):   # vNEXT: 옛 브랜치면 정리보다 지우기가 맞다고 먼저 안내 (정리 화면도 그대로 열림)
+            if o and o.get("superseded"):   # v1.8.1: 옛 브랜치면 정리보다 지우기가 맞다고 먼저 안내 (정리 화면도 그대로 열림)
                 say("ℹ️ 이 브랜치는 이미 반영된 옛 브랜치로 보여요. 충돌 정리보다 지우기가 맞습니다.", [_drop_row(key)])
             return UC.preview(sys.modules[__name__], st, key)
-        elif act == "rm":   # vNEXT: 🗑 옛 브랜치 지우기
+        elif act == "rm":   # v1.8.1: 🗑 옛 브랜치 지우기
             return drop_superseded(st, key)
         elif act in ("ct", "cc", "cr", "cx") and UC:
             return UC.handle(sys.modules[__name__], st, act, key)
@@ -1285,7 +1285,7 @@ def handle(st, upd):
                 say("✅ 업데이트용 일시중지/대기 중인 봇이 없습니다.")
         elif txt in ("업데이트", "업데이트 확인", "/update"):
             say("🔄 GitHub를 확인합니다…")
-            sent = scan(st, force=True)   # vNEXT: 보낸 알림 수로 판단 (예전엔 같은 알림을 다시 보내고도 '없습니다'가 같이 떴음)
+            sent = scan(st, force=True)   # v1.8.1: 보낸 알림 수로 판단 (예전엔 같은 알림을 다시 보내고도 '없습니다'가 같이 떴음)
             if sent == 0:
                 say("✅ 새로 올라온 수정이 없습니다.")
             elif sent is None:
