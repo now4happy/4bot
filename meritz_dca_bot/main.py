@@ -26,6 +26,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)   # 실행 위치와 상관없이 이 폴더의 부품을 씀 (meritz_laoer 와 같음)
 from t_core import *
+import t_core  # TG_TOKEN live global (from-import copy goes stale)
 from t_ui import *
 import dca_engine
 from dca_engine import load_settings, config_path
@@ -760,10 +761,10 @@ async def polling_loop(client):
     offset, hooked = None, False
     while True:
         try:
-            if not TG_TOKEN or poll_blocked():
+            if not t_core.TG_TOKEN or poll_blocked():
                 await asyncio.sleep(30); continue
             if not hooked: tg_api("deleteWebhook", {"drop_pending_updates": False}); hooked = True
-            res = await asyncio.to_thread(requests.get, f"https://api.telegram.org/bot{TG_TOKEN}/getUpdates", params={"timeout": 20, "offset": offset} if offset else {"timeout": 20}, timeout=25)
+            res = await asyncio.to_thread(requests.get, f"https://api.telegram.org/bot{t_core.TG_TOKEN}/getUpdates", params={"timeout": 20, "offset": offset} if offset else {"timeout": 20}, timeout=25)
             if res.status_code == 200:
                 RL.count("tg_poll_ok")
                 for upd in res.json().get("result", []):
@@ -948,7 +949,7 @@ async def run_service():
     load_telegram(s.get("telegram_env_file", ""))
     client, bad = make_client(s)
     RL.ev("state_change", "service_start", "ok", None, us_window=f"{s.get('order_time_et')}-{s.get('order_deadline_et')} America/New_York",
-          poll_sec=50, enabled=bool(s.get("enabled")), dry_run=bool(s.get("dry_run", True)), key_ok=not bad, tg_ok=bool(TG_TOKEN))
+          poll_sec=50, enabled=bool(s.get("enabled")), dry_run=bool(s.get("dry_run", True)), key_ok=not bad, tg_ok=bool(t_core.TG_TOKEN))
     signal.signal(signal.SIGTERM, _on_stop)
     if bad:
         txt = "⛔ [메리츠 적립 키 확인 실패 — 메리츠 호출·주문 안 함]\n" + "\n".join("• " + b for b in bad)
