@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: meritz_dca_bot/meritz_api.py   (MERITZ_DCA v1.0.1)
 # 메리츠증권 Open API — 메리츠 적립 봇(meritz_dca)용. 3번 toss_api.py 자리를 대신함 (미국주식만)
+# v1.2.5 (2026-11-14): 시세 0 이하를 거부해 다음 거래소 조회 허용.
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 토큰·호출(_call)은 meritz_laoer/meritz_api.py(v1.0.0) 방식 그대로. 파일은 공유하지 않음(이 폴더 전용 복사)
 #   - 키 파일 경로 기본값 없음(설정 key_file 필수). 토큰 캐시도 이 봇 전용(state_dir/meritz_token.json)
@@ -125,9 +126,11 @@ class MeritzApi:
         d = self._call("GET", "/market/v1/overseas/prices",
                        {"mrkt_div_code": "OV", "mrkt_cls_code": mrkt_cls_code, "iscd": symbol, "dely_rltm_cls_code": "0"})
         data = d.get("data") or {}
-        if not data.get("prpr"):
+        # v1.2.5: 비상장 거래소의 문자열 "0.00"은 참이므로 숫자로 검사한다.
+        px = _num(data.get("prpr"))
+        if px <= 0:
             raise MeritzError(f"{symbol} 시세 없음 (거래소 {mrkt_cls_code})")
-        return {"price": _num(data["prpr"]), "prev_close": _num(data.get("prdy_clpr")),
+        return {"price": px, "prev_close": _num(data.get("prdy_clpr")),
                 "name": str(data.get("kor_isnm") or data.get("eng_isnm") or symbol).strip(),
                 "currency": str(data.get("crnc_code") or "USD").upper(),
                 "status": str(data.get("issu_stat_cls_code") or ""), "sell_only": str(data.get("sell_only") or "")}
