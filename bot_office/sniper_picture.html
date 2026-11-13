@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체 · 사무실 v1.2.8: 층 영역 지하층 줄(황금 칸)·상단 지하 주수 · 사무실 v1.3.3: Case 91 시멘트추가 횟수·운용 모드 줄 · 사무실 vNEXT: 바벨·암살자 모드 그래프 카드) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체 · 사무실 v1.2.8: 층 영역 지하층 줄(황금 칸)·상단 지하 주수 · 사무실 v1.3.3: Case 91 시멘트추가 횟수·운용 모드 줄 · 사무실 v1.7.3: 바벨·암살자 모드 그래프 카드) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
 <!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
@@ -199,7 +199,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     });
   }
 
-  // 사무실 vNEXT: 바벨 그래프 — 60/30/10 바 너비는 비중(60%·30%·10%), 라벨은 실제 금액. 바벨 OFF면 목표만 참고로 보여 준다.
+  // 사무실 v1.7.3: 바벨 그래프 — 60/30/10 바 너비는 비중(60%·30%·10%), 라벨은 실제 금액. 바벨 OFF면 목표만 참고로 보여 준다.
   function drawBarbell(d){
     var box=$('barbell');box.textContent='';
     var b=d.barbell;if(!b){box.appendChild(el('div','note','바벨 원장 없음'));return}
@@ -225,7 +225,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     box.appendChild(el('div','note','🏦 수익금고: 사용 가능 '+usd(b.vault_available_usd)+' · 누적 실현 '+usd(b.vault_realized_profit_usd)+' · 완료 사이클 '+b.completed_barbell_cycles+'회 · SGOV 추가 매수 예산 '+usd(b.pending_sgov_buy_budget_usd)));
   }
 
-  // 사무실 vNEXT: 암살자 그래프 — 오늘 게이트 라운드를 진입→청산 한 줄씩. 초록=익절, 빨강=손절/중단.
+  // 사무실 v1.7.3: 암살자 그래프 — 오늘 게이트 라운드를 진입→청산 한 줄씩. 초록=익절, 빨강=손절/중단.
   function drawAssassin(d){
     var box=$('assassin');box.textContent='';
     var a=d.assassin;if(!a){box.appendChild(el('div','note','암살자 원장 없음'));return}

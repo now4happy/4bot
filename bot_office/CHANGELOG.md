@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.3 · 2026-11-13 10:47 (KST)
+- 파일: sniper_picture.html, sniper_picture.py
+- 내용: remove .upstream_head from staging (updater allowlist rejects dotfile; updater creates marker itself on first sync)
+- 브랜치: staging
+
 ## v1.7.2 · 2026-11-13 09:51 (KST)
 - 파일: bot_updater.py, live_board.py
 - 내용: live_board: 키움 수량 변경 v1.6.8 기준으로 재적용 (일본종합상사 416→362, 오픈엣지 917→674, 하이브 26→18; 스냅샷 코드 유지); bot_updater: 서버 미저장 변경 중단 안내에서 Claude/Gemini 확인 문구 제거

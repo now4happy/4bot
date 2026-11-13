@@ -14,7 +14,7 @@
 #   holding.total_shares = 본 + 서브 + 지하층 (주수 합계만). 투자금·평단·미실현은 본·서브만 그대로 (지하층 금액 미포함).
 # 사무실 v1.3.3 (2026-11-06): 스나이퍼 v2.3.0(원작 a4b4790 Case 91) 대응 — reserve 에 total_injected_cnt·daily_injected_cnt 추가
 #   (무제한 시멘트추가 · 회분 상한 표시 없앰), mode 객체 추가(원장 portion_mode · 없으면 복리). 지하층·본·서브·사이클·캐시 그대로.
-# 사무실 vNEXT: 바벨·암살자 모드 그래프 — barbell_ledger.json(바벨 60/30/10·SGOV 방패·수익금고)와
+# 사무실 v1.7.3: 바벨·암살자 모드 그래프 — barbell_ledger.json(바벨 60/30/10·SGOV 방패·수익금고)와
 #   assassin_sim_ledger.json(모의/실전·오늘 게이트 라운드)을 읽어 barbell·assassin 객체로 내보냄 (읽기만 · 계산 없음).
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
