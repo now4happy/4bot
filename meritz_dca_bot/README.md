@@ -1,4 +1,4 @@
-# 메리츠 적립 봇 (meritz_dca_bot · 서비스 meritz_dca) — v1.0.0
+# 메리츠 적립 봇 (meritz_dca_bot · 서비스 meritz_dca) — v1.1.0
 
 3번 토스 적립(toss_dca_bot v4.3.8)의 적립 엔진을 그대로 옮기고, 토스 API 부분만 메리츠 4번 계좌 API로 바꾼 **새 봇**이다. toss_dca_bot 은 수정하지 않는다.
 
@@ -43,3 +43,21 @@ enabled=true · dry_run=false · transfer_confirmed=true · 키 지문 = expecte
 3. 입고 확인 → `transfer_confirmed=true` → `python3 main.py --inject-start` (메리츠 잔고 = start.qty 일 때만).
 4. toss_dca 완전 정지 → meritz_dca 시작 (절체). `enabled=true`(dry_run=true)로 며칠 모의 → 승인 뒤 `dry_run=false`.
 5. 관제탑에서 🟢 전체 전원 켜기 (주입 때 master_active=false 면 OFF 로 시작).
+
+## SGOV 회차 적립 (v1.1.0)
+같은 봇·같은 4번 계좌에서 SGOV 를 회차로 모은다. NKE/QLD 적립 판단과는 공식이 따로다 (`sgov.py`).
+- 계획 기준(비율만): 달러·단기 몫 = 전체 자산의 35%, 그 안에서 SGOV : TIGER = 65 : 35. SGOV 총액 = 그 65%, 회차 금액 = 총액 ÷ 회차 수, 첫 회차는 더 작게.
+- 금액은 코드에 없다. 설치 때 `settings.json` 의 `"sgov"` 에 넣으면 상태 파일에 처음 1번 복사된다 (켜기는 텔레그램 🪙 SGOV 메뉴에서):
+```
+"sgov": {"target_usd_total": <총액>, "tranche_usd": <회차 금액>, "first_tranche_usd": <첫 회차(더 작게)>,
+         "tranches_total": <회차 수>, "interval_days": <간격 일수>, "next_due_date": "<YYYY-MM-DD 미국 동부>",
+         "skip_jump_pct": 1.5, "skip_cap_mode": "review", "fx_avg_months": 36}
+```
+- 회차 날(미국 거래일, 예정일 도달) 순서: 관문 (a)(b) → 통과하면 SGOV 몫 먼저 예약 → 정수 주 시장가 매수(적립과 같은 1% 여유) → SGOV 장부만 갱신.
+  - (a) 메리츠 적용환율 < 최근 36개월 USD/KRW 일별 종가 평균 (기본 자료: FRED DEXKOUS 공개 CSV, `sgov_fx_history_url` 로 바꿀 수 있음). 받기 실패·기간 부족 → 건너뜀.
+  - (b) 7일 전보다 X% 이상 오름 → 건너뜀. 7일 전 값은 봇이 매일 남긴 메리츠 적용환율 기록, 없으면 공개 종가끼리 비교.
+  - 건너뛴 회차는 맨 뒤로 붙는다 (회차 수 +1, 다음 예정일은 원래 간격). 다음 회차에 몰아 사지 않는다.
+  - 연속 건너뜀: `review`(기본) = 3회 연속 건너뛰면 재점검 (강제 매수 없음, 메뉴 '재점검 완료' 전까지 멈춤) / `proceed3` = (b) 2회 연속 뒤 3회째는 (a)만 통과하면 진행.
+- 달러 부족이면 SGOV 는 미룸(건너뜀 아님), 적립 매수는 SGOV 몫을 뺀 남은 달러로만 검사 (부족하면 그날 쉼).
+- 분배금은 메뉴 💵 분배금 기록 으로 넣는다 → SGOV 장부·대기 달러에만 더해져 다음 회차에 재투자.
+- 모의(dry_run)에서는 주문·환전 API 를 부르지 않는다. 기본 `enabled=false`.

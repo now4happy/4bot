@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =====================================================================
-# FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.0.1)
+# FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.1.0)
 # 메리츠 적립 봇 (서비스 meritz_dca) — 3번 toss_dca_bot/main.py(v4.3.8) 엔진을 옮기고 토스 API 만 메리츠로 바꿈
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로: 100일 사이클(buy_1/pause/buy_2/sell/decision) · +1%↑ ½ 매수 · 익절 10%/20% 구간 20% 매도(단계는 위로만)
@@ -10,6 +10,10 @@
 #   - 안전장치: 기본 enabled=false·dry_run=true · 입고 확인(transfer_confirmed) · 키 지문 일치 + P/VR6/3번 키면 정지
 #     · 시작 상태 주입(--inject-start) 전 실주문 없음 · 장부≠잔고면 그 종목 주문 안 함 · 체결 대기 중 재주문 안 함
 #     · toss_dca 서비스가 살아 있으면 텔레그램 폴링 안 함 (같은 토큰) · USD 행 없는 빈 계좌 = $0 (멈추지 않음)
+# v1.0.2 (2026-11-13): 낮 자동환전 참고가 fallback — 장 닫힌 낮에 시세 0이면 전일 종가로 환전 규모 계산, 없으면 no_price로 그날 종료 (토큰 핫픽스: t_core.TG_TOKEN 참조)
+# v1.1.0 (2026-11-13): SGOV 회차 적립 (판단은 sgov.py, 같은 4번 계좌·같은 봇). NKE/QLD 동작은 그대로.
+#   - 미국 단계: SGOV 회차를 먼저 판단·예약 → 적립 매수는 (USD 예수금 − SGOV 몫)으로만 달러 검사
+#   - 체결 반영: kind=sgov 주문은 SGOV 장부에만 · 아침 환전 금액에 SGOV 회차 몫 더함 · 관제탑 🪙 SGOV 메뉴 · --check 미리보기
 # 사용:
 #   python3 main.py --fingerprint     키 지문만 출력 (expected_key_fp 에 넣을 값)
 #   python3 main.py --check           주문 없이 점검 + 종목별 오늘 판단 미리보기
@@ -29,6 +33,7 @@ from t_core import *
 import t_core  # TG_TOKEN live global (from-import copy goes stale)
 from t_ui import *
 import dca_engine
+import sgov as SG
 from dca_engine import load_settings, config_path
 from meritz_api import MeritzApi, MeritzDcaClient, MeritzError, WarnNeeded, key_fingerprint
 
@@ -64,7 +69,7 @@ def _hub_alert(bot, level, text):
             _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
     except Exception:
         pass
-CB_PREFIX = ("trade_on_", "trade_off_", "detail_", "setday_", "setamt_", "next_pause_", "next_sell_", "next_buy2_", "slist_")
+CB_PREFIX = ("trade_on_", "trade_off_", "detail_", "setday_", "setamt_", "next_pause_", "next_sell_", "next_buy2_", "slist_", "sgovx_", "sgovmode_")
 
 
 class GateBlocked(Exception):
@@ -311,10 +316,10 @@ async def sync_fills(client):
         else:
             side, fq, famt = fills.get(str(p.get("no")), (p["side"], 0.0, 0.0))
         dq, damt = round(float(fq) - float(p.get("applied_q", 0)), 6), float(famt) - float(p.get("applied_amt", 0))
-        s = cfg.get("stocks", {}).get(p["sym"])
+        s = cfg.get("sgov") if p.get("kind") == "sgov" else cfg.get("stocks", {}).get(p["sym"])   # SGOV 체결은 SGOV 장부에만
         if dq > 1e-9 and s is not None:
             ledger_apply_fill(s, p["side"], dq, damt)
-            if p["side"] == "BUY" and ledger_of(s)[0] > 0: s["has_held"] = True
+            if p["side"] == "BUY" and ledger_of(s)[0] > 0 and p.get("kind") != "sgov": s["has_held"] = True
             p["applied_q"], p["applied_amt"] = round(float(fq), 6), round(float(famt), 4); changed = True
             px = damt / dq if dq else 0.0
             lines.append(f"• {p['sym']} {'매수' if p['side'] == 'BUY' else '매도'} {dq:g}주 @ ${px:.2f} → 장부 {ledger_of(s)[0]:g}주 · 평단 ${ledger_avg(s):.4f}")
@@ -334,6 +339,8 @@ async def sync_fills(client):
             if sym in fresh.get("stocks", {}):
                 for k in ("ledger", "has_held"):
                     if k in s: fresh["stocks"][sym][k] = s[k]
+        if isinstance(cfg.get("sgov"), dict) and isinstance(fresh.get("sgov"), dict):
+            fresh["sgov"]["ledger"] = cfg["sgov"].get("ledger", fresh["sgov"].get("ledger"))
         done_oids = {p["oid"] for p in pend} - {p["oid"] for p in keep}
         fresh["pending_orders"] = [p for p in (fresh.get("pending_orders") or []) if p["oid"] not in done_oids]
         for p in fresh["pending_orders"]:
@@ -384,6 +391,10 @@ async def execute_us_step(client):
     tp1, sr = float(cfg.get("tp1_pct", 10.0)), float(cfg.get("sr_pct", 20.0))
     pending_syms = {p.get("sym") for p in (cfg.get("pending_orders") or [])}
     n7_mults = await n7_market_multipliers(client, cfg, False)   # N7: 꺼짐이면 {} → 모든 배수 1.0
+    # v1.1.0 SGOV: 회차를 먼저 판단·예약 (sgov_step 은 예외를 밖으로 내지 않음 → 적립 매수를 막지 않음)
+    sg_res = await SG.sgov_step(client, _order, today_str, live)
+    sgov_reserve = round(float(sg_res.get("reserve") or 0.0), 2)
+    logs += sg_res.get("logs") or []
 
     for sym, s in list(stocks.items()):
         if s.get("currency") == "KRW": continue                       # 한국주식은 이 봇 대상 아님
@@ -475,11 +486,12 @@ async def execute_us_step(client):
                 if buy_q > 0:
                     # 달러 부족 검사는 익절 판단 뒤에 함 (달러가 없어도 익절 매도는 진행되도록)
                     usd_bal = float(await client.get_buying_power("USD") or 0.0)
+                    if sgov_reserve > 0: usd_bal = usd_bal - sgov_reserve        # (ii) SGOV 몫을 먼저 떼고 남은 달러만
                     need_amt = round(buy_q * cur_p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 1.0)) / 100.0), 2)
                     if usd_bal < need_amt:
-                        fail_reasons[sym] = f"달러 부족 (필요 ${need_amt:.2f} / 보유 ${usd_bal:.2f})"
+                        fail_reasons[sym] = f"달러 부족 (필요 ${need_amt:.2f} / 보유 ${usd_bal:.2f}" + (f" · SGOV 몫 ${sgov_reserve:.2f} 제외" if sgov_reserve > 0 else "") + ")"
                         if RL.once(f"{sym}|buy|usd_insufficient"):
-                            _decide(sym, "buy", "skipped", "usd_insufficient", s, _snap(sym, s, usd_need=need_amt, usd_balance=usd_bal, profit_pct=prof_pct))
+                            _decide(sym, "buy", "skipped", "usd_insufficient", s, _snap(sym, s, usd_need=need_amt, usd_balance=usd_bal, profit_pct=prof_pct, sgov_reserve=sgov_reserve))
                         else: RL.count("skip:usd_insufficient")
                         continue
                 ord_id = f"b_{today_str}_{sym}"
@@ -558,6 +570,8 @@ async def add_symbol_from_text(client, text):
     if not is_us_symbol(sym):
         return None, "❌ 미국 티커(영문)만 넣어 주세요. 예: NKE, QLD (한국주식은 이 봇에서 안 함)"
     cfg = await DcaConfigManager.load()
+    if sym == SG.sgov_symbol(cfg):
+        return None, f"ℹ️ {sym} 는 일반 종목이 아니라 🪙 SGOV 회차 적립 메뉴에서 관리합니다."
     if sym in cfg.get("stocks", {}):
         return sym, f"ℹ️ {sym} 는 이미 목록에 있습니다."
     try:
@@ -623,6 +637,8 @@ async def handle_callback(cb: dict, client):
         send_panel("➕ [새 종목 추가 — 미국주식만]\n• 모아갈 미국 티커(영문)를 입력해 주세요. 예: NKE, QLD, SPY\n• 추가하면 ⏸ 중지 상태로 등록됩니다 (기준금액 $40).",
                    [[{"text": "🔙 취소", "callback_data": "panel"}]], msg_id)
         return
+    if data == "sgov" or data.startswith(("sgovx_", "sgovmode_", "sgov_")):
+        await handle_sgov_callback(data, msg_id); return
     if data == "panel": send_panel(*(await build_panel_view(client)), msg_id)
     elif data == "stock_list": send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])), msg_id)
     elif data.startswith("slist_"): send_panel(*(await build_stock_list_view(client, int(data.split("_")[1]))), msg_id)
@@ -661,6 +677,35 @@ async def handle_callback(cb: dict, client):
         send_panel(*(await build_stock_detail_view(client, sym)), msg_id)
     elif data == "ask_tp": wait_state["mode"] = "tp"; send_panel("🎯 [1차익절% 매도비율%] 입력 (예: 10 20)", [[{"text": "🔙 취소", "callback_data": "panel"}]], msg_id)
 
+async def handle_sgov_callback(data, msg_id):
+    """SGOV 메뉴 버튼. 설정만 바꾸고 화면을 다시 보여 줌 — 어떤 버튼도 주문·환전을 하지 않음 (다음 회차 판단부터 적용)"""
+    notice = ""
+    if data.startswith("sgovx_"):
+        try: v = float(data.split("_", 1)[1])
+        except ValueError: v = None
+        if v in SG.SKIP_X_CHOICES:
+            await SG.sgov_menu_set("skip_jump_pct", v)
+            notice = f"✅ 7일 상승 건너뜀 기준을 {v:g}% 로 바꿨습니다. 다음 회차 판단부터 적용 (지금 매수 없음)."
+    elif data.startswith("sgovmode_"):
+        m = data.split("_", 1)[1]
+        if m in SG.CAP_MODES:
+            await SG.sgov_menu_set("skip_cap_mode", m)
+            notice = f"✅ 연속 건너뜀 규칙: {SG.CAP_MODES[m]} — 다음 회차 판단부터 적용 (지금 매수 없음)."
+    elif data == "sgov_review_ok":
+        await SG.sgov_menu_set("review_hold", False)
+        notice = "✅ 재점검 완료 — 다음 예정일에 다시 판단합니다 (지금 매수 없음)."
+    elif data == "sgov_toggle":
+        latest = await DcaConfigManager.load(); on = not bool(SG.sgov_block(latest).get("enabled"))
+        await SG.sgov_menu_set("enabled", on)
+        notice = "▶️ SGOV 회차 적립을 켰습니다. 예정일이 되면 판단합니다 (지금 매수 없음)." if on else "⏸ SGOV 회차 적립을 껐습니다."
+    elif data == "sgov_dist":
+        wait_state["mode"] = "sgov_dist"
+        send_panel("💵 [SGOV 분배금 기록]\n• 들어온 분배금(달러)을 숫자로 입력해 주세요. 예: 12.34\n• SGOV 장부·대기 달러에만 더하고 다음 회차에 재투자합니다 (NKE/QLD 와 따로).",
+                   [[{"text": "🔙 취소", "callback_data": "sgov"}]], msg_id)
+        return
+    send_panel(*SG.build_sgov_view(await DcaConfigManager.load(), notice), msg_id)
+
+
 async def handle_message(msg: dict, client):
     if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
     text = msg.get("text", "").strip()
@@ -675,6 +720,17 @@ async def handle_message(msg: dict, client):
         else: send_panel(*(await build_panel_view(client)))
         return
     stocks = cfg.get("stocks", {}); m, sym = wait_state.get("mode"), wait_state.get("sym")
+    if m == "sgov_dist":
+        wait_state["mode"] = None
+        try:
+            val = round(float("".join(ch for ch in text if ch.isdigit() or ch == ".")), 4)
+            if val <= 0: raise ValueError
+        except Exception:
+            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="sgov_dist")
+            send_panel("❌ 숫자(달러)를 입력해 주세요. 예: 12.34", [[{"text": "💵 다시 입력", "callback_data": "sgov_dist"}, {"text": "🪙 SGOV", "callback_data": "sgov"}]])
+            return
+        send_panel(*SG.build_sgov_view(await SG.sgov_add_distribution(val), f"✅ 분배금 ${val:.2f} 기록 — SGOV 대기 달러로 다음 회차에 재투자합니다."))
+        return
     if m == "stock_search":
         wait_state["mode"] = None
         send_panel(*(await build_stock_list_view(client, 0, "all", "all", text)))
@@ -818,6 +874,8 @@ async def dca_fx_plan(client, cfg):
         budget = calc_buy_amount(float(s.get("base_amount", 40)), mult, half)
         q, _ = int_buy_qty(budget, float(s.get("buy_carry") or 0), p, SETTINGS.get("us_int_buy_mode", "carry"))
         total += round(q * p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 1.0))/100), 2)
+    # v1.1.0: 오늘 밤 SGOV 회차(관문 통과 시) 몫도 아침 환전에 포함 (실패하면 0 → 적립 몫 환전은 그대로)
+    total += await SG.sgov_fx_need(client, cfg, datetime.now(FX_KST).strftime("%Y-%m-%d"))
     return round(total, 2)
 
 def _fx_record_path(day):
@@ -899,6 +957,8 @@ async def scheduler_loop(client):
         try:
             refresh_settings()
             await maybe_auto_fx(client)
+            if SETTINGS.get("enabled", False) and RUN.get("key_ok"):
+                await SG.sgov_daily_refresh(client)            # 조회만: 공개 환율 자료 + 메리츠 적용환율 기록 (하루 1번)
             now_est = datetime.now(EST_TZ)
             if runtime_info.get("date") != now_est.strftime("%Y-%m-%d"):
                 runtime_info["date"] = now_est.strftime("%Y-%m-%d"); runtime_info["count"] = 0
@@ -1011,6 +1071,9 @@ async def cmd_check():
         plan = f"{stg}차 익절 {int_sell_qty(q, sr)}주 매도" if (q > 0 and stg) else (f"매수 {bq}주 (이월 ${_c:.2f})" if st.get("s_mode") in ("buy_1", "buy_2") else st.get("s_mode"))
         print(f"  {sym}: 거래소 {m}/{ex} · 현재가 ${cur:.2f} · 장부 {q:g}주 평단 ${avg:.4f} ({pp:+.2f}%) · 메리츠 {float(h.get('qty') or 0):g}주"
               f" · {st.get('s_mode')} {st.get('s_day')}/{st.get('s_target_days')} · 익절단계 {st.get('sold_stage')} → 오늘 계획: {plan} (N7 배수 미반영)")
+    try:
+        for line in await SG.sgov_preview_lines(client, cfg, datetime.now(EST_TZ).strftime("%Y-%m-%d")): print(line)
+    except Exception as e: print(f"  ✗ SGOV 미리보기 실패: {e}")
     return 0
 
 

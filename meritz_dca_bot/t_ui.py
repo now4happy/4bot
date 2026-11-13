@@ -1,13 +1,15 @@
 # =====================================================================
-# FILE: meritz_dca_bot/t_ui.py   (MERITZ_DCA v1.0.0)
+# FILE: meritz_dca_bot/t_ui.py   (MERITZ_DCA v1.1.0)
 # 텔레그램 조작판 화면. 3번 toss_dca_bot/t_ui.py(v4.3.8)에서 옮김.
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로: 관제탑·종목 목록(시장/상태 필터·검색·5개씩 페이지)·종목 상세·버튼 이름과 callback_data
 #   - 바꿈: 미국주식만 · 매매 시각 미국 동부 10:05~15:40 · 수량은 봇 장부(입고 평단 안 씀) + 증권사 잔고 함께 표시
 #   - 더함: ➕ 종목 추가 버튼(add_symbol) · 주문 모드 표시(꺼짐/모의/실주문 + 막힌 이유) · 이월 금액 표시
 #   - 뺌: 환전 필요액 화면(build_fx_view, 3번에서도 버튼 없음) · 한국주식 표시
+# v1.1.0 (2026-11-13): 관제탑에 SGOV 회차 적립 요약 1줄 + 🪙 SGOV 적립 버튼 (화면은 sgov.build_sgov_view)
 # =====================================================================
 from t_core import *
+from sgov import sgov_panel_line
 
 
 def ensure_stock_cycle(s: dict, is_kr: bool = False):
@@ -79,6 +81,7 @@ async def build_panel_view(client):
         " • 매수 배율: 수익률 +1.0%↑ 시 1/2배 (그 외 1배)",
         " • 정수 주문: " + ("남은 금액은 다음 날로 이월 (평균 = 기준금액)" if SETTINGS.get("us_int_buy_mode", "carry") != "min1" else "금액이 1주보다 작아도 최소 1주"),
         *n7_status_lines(cfg),
+        sgov_panel_line(cfg),
         " • 100일 종료 시: [N일 정지 / N일 분할매도 / N일 2차매수] 선택", "─────────────────",
         "📊 [수익률 구간별 매도 계획]",
         f" • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도",
@@ -93,7 +96,7 @@ async def build_panel_view(client):
     if decision_syms: lines.append(f"\n🚨 [기간 완료 종목: {', '.join(decision_syms)}] 아래 보유종목 리스트에서 다음 단계를 선택하세요!")
     kb = [
         [{"text": "📋 보유종목 리스트 & 개별 금액/상태 설정", "callback_data": "stock_list"}],
-        [{"text": "➕ 종목 추가", "callback_data": "add_symbol"}],
+        [{"text": "➕ 종목 추가", "callback_data": "add_symbol"}, {"text": "🪙 SGOV 적립", "callback_data": "sgov"}],
         [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}, {"text": "🎯 익절/매도비율 변경", "callback_data": "ask_tp"}],
         [{"text": "📐 지수 연동 배수 끄기" if cfg.get("n7_enabled", False) else "📐 지수 연동 배수 켜기", "callback_data": "toggle_n7"}],
         [{"text": "🔄 새로고침", "callback_data": "panel"}]
