@@ -1,4 +1,4 @@
-# 사무실 vNEXT (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
+# 사무실 v1.8.0 (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """Target-scoped deployment pause controller; only GET account/order reads."""
 import contextlib
 import fcntl

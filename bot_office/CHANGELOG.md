@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.8.0 · 2026-11-13 17:16 (KST)
+- 파일: bot_updater.py, collect_inventory.py, deployment_control.py, office_board.py, office_briefing.py, server.py, toss_token_share.py
+- 내용: 메리츠 적립봇을 3번으로 (toss_dca 삭제, 표시·서비스·브리핑 정리)
+- 브랜치: meritz3-renumber
+
 ## v1.7.9 · 2026-11-13 16:58 (KST)
 - 파일: asset_board.py, board.html, office_board.py, test_asset_board.py
 - 내용: 사무실 자산 구성: 포트폴리오 버킷 6개 (asset_board v1.4.4)
