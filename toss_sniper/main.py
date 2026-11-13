@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 import signal
 import sys
 import time
@@ -73,6 +74,7 @@ from quant_indicators_plugin import (
 )
 from sniper_exit_plugin import (
     execute_1m_sniper_sell_and_reanchor_plugin,
+    is_sniper_l1_trail_active,
     is_within_post_buy_time_shield,
     is_within_post_sell_time_shield,
     sync_pending_sell_order_plugin,
@@ -113,6 +115,13 @@ logger = logging.getLogger("toss_sniper.main")
 NORMAL_LOOP_INTERVAL_SEC: float = 1.50
 FAST_SHIELD_LOOP_INTERVAL_SEC: float = 0.40
 EXTENDED_ZERO_HOLD_INTERVAL_SEC: float = 5.00
+
+
+# NEW: 다중 프로세스 동시 기상을 위한 Wall-Clock 정각 격자 슬립
+def _wall_wait(iv: float, off: float = 0.0) -> float:
+    w = time.time()
+    nxt = math.ceil(((w - off) + 0.04) / iv) * iv + off
+    return max(0.05, min(iv + 0.25, nxt - w))
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +333,7 @@ async def candle_radar_loop(context: SniperAppContext) -> None:
 
         try:
             await asyncio.wait_for(
-                context.shutdown_event.wait(), timeout=sleep_sec
+                context.shutdown_event.wait(), timeout=(_wall_wait(5.0, 0.15) if in_market else sleep_sec)
             )
         except asyncio.TimeoutError:
             pass
@@ -338,6 +347,8 @@ def _evaluate_fast_shield_mode(
     🗡️ 암살자 +1.00% 트레일링 점화(assassin_high_freq_active) 시 루프를 0.40초로 가속한다.
     """
     if bool(getattr(context, "assassin_high_freq_active", False)):
+        return True
+    if is_sniper_l1_trail_active(context, TARGET_SYMBOL):
         return True
     if str(st.get("buy_order_id") or "").strip() or str(
         st.get("sell_order_id") or ""
@@ -523,7 +534,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 )
                 try:
                     await asyncio.wait_for(
-                        context.wakeup_event.wait(), timeout=loop_sleep_live
+                        context.wakeup_event.wait(), timeout=_wall_wait(loop_sleep_live)
                     )
                     context.wakeup_event.clear()
                 except asyncio.TimeoutError:
@@ -650,7 +661,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
                 )
                 try:
                     await asyncio.wait_for(
-                        context.wakeup_event.wait(), timeout=wait_off
+                        context.wakeup_event.wait(), timeout=_wall_wait(wait_off)
                     )
                     context.wakeup_event.clear()
                 except asyncio.TimeoutError:
@@ -752,7 +763,7 @@ async def main_sniper_loop(context: SniperAppContext) -> None:
 
         try:
             await asyncio.wait_for(
-                context.wakeup_event.wait(), timeout=loop_sleep
+                context.wakeup_event.wait(), timeout=_wall_wait(loop_sleep)
             )
             context.wakeup_event.clear()
         except asyncio.TimeoutError:

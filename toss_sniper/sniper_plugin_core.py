@@ -61,6 +61,7 @@ from quant_indicators_plugin import (
 from sniper_exit_plugin import (
     is_within_post_buy_time_shield,
     is_within_post_sell_time_shield,
+    reset_sniper_l1_trail_slots,
 )
 import toss_api
 from toss_api import (
@@ -139,6 +140,11 @@ def mark_auto_fill_grace_shield(
         guard_map[sym] = updated
 
     if tag != "SELL_FILL":
+        reset_sniper_l1_trail_slots(
+            context,
+            grid_kind=("SUB" if is_sub_tag else "MAIN"),
+            symbol=sym,
+        )
         snap_map = getattr(context, "exit_snapshot_cache", None)
         if isinstance(snap_map, dict):
             s_entry = (
@@ -567,8 +573,22 @@ async def _fetch_fresh_current_soxl_price(
     fallback_price: float = 0.0,
 ) -> float:
     try:
-        fresh_map = await context.api.get_current_prices_batch((TARGET_SYMBOL,))
-        fresh_p = safe_float((fresh_map or {}).get(TARGET_SYMBOL), 0.0)
+        try:
+            fresh_map = (
+                await context.api.get_current_prices_batch(
+                    (TARGET_SYMBOL,),
+                    bypass_shm_cache=True,
+                )
+            )
+        except TypeError:
+            fresh_map = (
+                await context.api.get_current_prices_batch(
+                    (TARGET_SYMBOL,)
+                )
+            )
+        fresh_p = safe_float(
+            (fresh_map or {}).get(TARGET_SYMBOL), 0.0
+        )
         if fresh_p > 0.0:
             if isinstance(getattr(context, "latest_prices", None), dict):
                 context.latest_prices[TARGET_SYMBOL] = fresh_p
