@@ -1,6 +1,7 @@
 # =====================================================================
 # FILE: meritz_dca_bot/sgov.py   (MERITZ_DCA v1.1.0)
 # SGOV(미국 초단기 국채 ETF) 회차 적립 — NKE/QLD 적립과 같은 봇·같은 4번 계좌, 판단 공식은 완전히 따로.
+# v1.2.5 (2026-11-14): 환율 자료 조회 실패 시 저장된 캐시 폴백.
 # v1.1.0 (2026-11-13): 첫 버전.
 # v1.1.2 (2026-11-13): HIST_FETCH urllib -> requests (서버에서 urllib FRED 타임아웃, requests·curl은 0.2초 정상)
 #   - 설정: 상태 파일의 최상위 "sgov" 블록 (stocks 옆). stocks["SGOV"] 로 넣지 않음
@@ -158,7 +159,7 @@ def _write_json(p, data):
 
 
 async def get_history(today_kst: str):
-    """(종가 목록 또는 None, 이유). 하루 1번만 받음. 오늘 받기 실패면 None (옛 자료로 판단하지 않음 — 안전 쪽)"""
+    """(종가 목록 또는 None, 이유). 하루 1번만 받음. 조회 실패 시 최근 캐시로 판단하며 캐시가 없으면 None."""
     p = _state("fx_usdkrw_history.json")
     c = _read_json(p, {})
     if c.get("fetched_kst") == today_kst and c.get("closes"):
@@ -172,6 +173,9 @@ async def get_history(today_kst: str):
     except Exception as e:
         _HIST.update(fail_ts=time.time(), fail_day=today_kst)
         RL.err("sgov_fx_history", e, event_type="external_call")
+        # v1.2.5: 최신 일별 종가가 전날 캐시에 남아 있을 수 있으므로 조회 실패 시 사용.
+        if c.get("closes"):
+            return [tuple(x) for x in c["closes"]], "cache_stale"
         return None, "fetch_failed"
     _write_json(p, {"fetched_kst": today_kst, "source": url.split("?")[0], "closes": closes})
     RL.ev("external_call", "sgov_fx_history", "ok", None, actor="scheduler", rows=len(closes), last=closes[-1][0])
