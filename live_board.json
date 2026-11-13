@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-13 15:26:08",
-  "as_of_et": "2026-11-13 01:26:08",
+  "as_of_kst": "2026-11-13 15:28:04",
+  "as_of_et": "2026-11-13 01:28:04",
   "market_open": true,
   "source": "toss",
   "prices": {
@@ -24,22 +24,22 @@
     "41": 15048.45
   },
   "totals": {
-    "api_sum": 52830.61,
-    "cash": 27546.55,
-    "total_assets": 70811.61
+    "api_sum": 52830.71,
+    "cash": 27546.65,
+    "total_assets": 70811.71
   },
   "market_open_us": false,
   "market_open_kr": true,
   "krx_count": 32,
   "e41_source": "krx",
   "base": {
-    "api_ex41": 37782.155614,
-    "cash": 27546.545614,
+    "api_ex41": 37782.260345,
+    "cash": 27546.650345,
     "manual": 17981.0,
     "krx_total": 15048.4535
   },
   "krx": {
-    "as_of_kst": "2026-11-13 15:26:08",
+    "as_of_kst": "2026-11-13 15:28:04",
     "stocks": [
       {
         "code": "411060",
