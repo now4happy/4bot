@@ -18,6 +18,7 @@
 #   t_core.CHAT_ID(실제 읽은 값)로 바꿈 (TG_TOKEN 핫픽스와 같은 종류). 다른 채팅방/메시지 없는 콜백은 받은 채팅방 ID·data 를
 #   감사 로그에만 남김 (진단). 폴링·매매·SGOV 판단 로직은 그대로.
 # v1.2.0 (2026-11-13): 하단 메뉴·자금/시드/진행률 화면 및 수동 환전 확인
+# v1.2.2 (2026-11-13): 시드 설정을 2개 메뉴로 나눔 (적립 / SGOV). 저장 뒤에는 같은 그룹 메뉴로 돌아감.
 # 사용:
 #   python3 main.py --fingerprint     키 지문만 출력 (expected_key_fp 에 넣을 값)
 #   python3 main.py --check           주문 없이 점검 + 종목별 오늘 판단 미리보기
@@ -644,17 +645,42 @@ FX_RESULT_KO = {
     "error": "환전 오류가 발생했습니다",
 }
 
+def seed_group(key):
+    # 시드 항목이 어느 그룹인지: 적립(NKE/QLD) / SGOV(나머지)
+    return "stock" if SEED_FIELDS[key][1] == "stock" else "sgov"
+
+
 def build_seed_menu(cfg):
+    # v1.2.2: 시드 설정을 2개 메뉴로 나눔 (적립 / SGOV). 한 번에 7개가 보여서 섞이지 않게.
     sg = SG.sgov_block(cfg)
     stocks = cfg.get("stocks", {})
-    lines = ["⚙️ [시드 설정 — 입력만으로 주문·환전 없음]"]
+    lines = ["⚙️ [시드 설정 — 입력만으로 주문·환전 없음]",
+             "• 적립: " + " · ".join(f"{sym} ${float(stocks[sym].get('base_amount') or 0):,.2f}/회" for sym in ("NKE", "QLD") if sym in stocks),
+             f"• SGOV: 총 ${float(sg.get('target_usd_total') or 0):,.2f} · {int(sg.get('tranches_total') or 0)}회 · 회차 ${float(sg.get('tranche_usd') or 0):,.2f}"]
+    kb = [[{"text": "📈 적립 시드", "callback_data": "funds_seed_stock"}],
+          [{"text": "🪙 SGOV 시드", "callback_data": "funds_seed_sgov"}],
+          [{"text": "🔙 자금", "callback_data": "funds"}]]
+    return "\n".join(lines), kb
+
+
+def build_seed_group_menu(cfg, group):
+    sg = SG.sgov_block(cfg)
+    stocks = cfg.get("stocks", {})
+    if group == "stock":
+        title = "📈 [적립 시드 — 입력만으로 주문·환전 없음]"
+        keys = ["NKE", "QLD"]
+    else:
+        title = "🪙 [SGOV 시드 — 입력만으로 주문·환전 없음]"
+        keys = ["target_usd_total", "tranche_usd", "first_tranche_usd", "tranches_total", "interval_days"]
+    lines = [title]
     kb = []
-    for key, (label, kind) in SEED_FIELDS.items():
+    for key in keys:
+        label, kind = SEED_FIELDS[key]
         if kind == "stock" and key not in stocks: continue
         val = stocks[key].get("base_amount") if kind == "stock" else sg.get(key)
         lines.append(f"• {label}: {val}")
-        kb.append([{"text":label, "callback_data":f"funds_seed_{key}"}])
-    kb.append([{"text":"🔙 자금", "callback_data":"funds"}])
+        kb.append([{"text": label, "callback_data": f"funds_seed_{key}"}])
+    kb.append([{"text": "🔙 시드 설정", "callback_data": "funds_seed"}])
     return "\n".join(lines), kb
 
 def parse_seed_value(key, raw):
@@ -774,12 +800,14 @@ async def handle_callback(cb: dict, client):
         send_panel(*(await build_panel_view(client)), msg_id); send_bottom_menu()
     elif data == "funds": send_panel(*(await build_funds_view(client)), msg_id)
     elif data == "funds_seed": send_panel(*build_seed_menu(await DcaConfigManager.load()), msg_id)
+    elif data == "funds_seed_stock": send_panel(*build_seed_group_menu(await DcaConfigManager.load(), "stock"), msg_id)
+    elif data == "funds_seed_sgov": send_panel(*build_seed_group_menu(await DcaConfigManager.load(), "sgov"), msg_id)
     elif data.startswith("funds_seed_"):
         key = data[len("funds_seed_"):]
         if key in SEED_FIELDS:
             wait_state.update(mode="funds_seed", sym=key)
             send_panel(f"💰 {SEED_FIELDS[key][0]} 새 값을 숫자로 입력하세요. (주문·환전 없음)",
-                       [[{"text":"취소", "callback_data":"funds_seed"}]], msg_id)
+                       [[{"text": "취소", "callback_data": f"funds_seed_{seed_group(key)}"}]], msg_id)
     elif data == "funds_fx":
         await show_fx_confirmation(client, msg_id)
     elif data == "funds_fx_confirm":
@@ -885,10 +913,12 @@ async def handle_message(msg: dict, client):
             value = parse_seed_value(key, text)
             await save_seed_value(cfg, key, value)
         except (ValueError, TypeError) as e:
-            send_panel(f"❌ 저장 거부: {e}", [[{"text":"시드 설정", "callback_data":"funds_seed"}]])
+            send_panel(f"❌ 저장 거부: {e}", [[{"text": "시드 설정", "callback_data": f"funds_seed_{seed_group(key)}"}]])
             return
         wait_state.update(mode=None, sym=None)
-        send_panel(*(await build_funds_view(client, "✅ 시드 변경 저장 (주문·환전 없음)")))
+        cfg2 = await DcaConfigManager.load()
+        menu_text, kb = build_seed_group_menu(cfg2, seed_group(key))
+        send_panel("✅ 시드 변경 저장 (주문·환전 없음)\n\n" + menu_text, kb)
         return
     if m == "sgov_dist":
         wait_state["mode"] = None
