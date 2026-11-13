@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.2.5 · 2026-11-13 10:33 (KST)
+- 파일: assassin_plugin.py, defense_plugin.py, main.py, quant_engine.py, quant_engine_core.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin_core.py, tg_ui_plugin.py, toss_api.py
+- 내용: sniper: upstream cd9e87b as-is migration (15 files, Case 99 + shm price bus)
+- 브랜치: staging
+
 ## v1.2.4 · 2026-11-12 15:20 (KST)
 - 파일: assassin_plugin.py, barbell_plugin.py, defense_plugin.py, main.py, main_runtime.py, plugin_updater.py, quant_engine.py, quant_engine_core.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_plugin.py, sniper_plugin_core.py, tg_ui_plugin.py, toss_api.py, toss_api_core.py
 - 내용: sniper: upstream c8c07d0 as-is migration (15 files)
