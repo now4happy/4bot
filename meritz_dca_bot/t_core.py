@@ -12,6 +12,9 @@
 # v1.1.1 (2026-11-13): BOT_VERSION만 (버튼 무응답 수정은 main.py — 다른 모듈은 CHAT_ID 를 t_core.CHAT_ID 로 볼 것)
 # v1.1.2 (2026-11-13): BOT_VERSION만 (SGOV FRED 자료 받기 urllib → requests, sgov.py HIST_FETCH)
 # v1.2.0 (2026-11-13): 하단 고정 메뉴 추가
+# v1.2.1 (2026-11-13): 하단 키보드는 3개(주식·SGOV·자금)만. 나머지 4개(보유종목·종목 추가·관제탑·설정)는
+#   각 메뉴 안의 인라인 버튼으로 이동 (보유종목·종목 추가는 주식 패널, 설정은 자금 패널의 시드 설정,
+#   관제탑은 모든 패널의 인라인 버튼). 입력 단어(보유종목·종목 추가·관제탑·설정)는 그대로 동작.
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -19,7 +22,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.0"
+BOT_VERSION = "v1.2.1"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -78,11 +81,10 @@ def send_panel(text, inline_kb, msg_id=None):
 
 
 # 하단 키보드는 인라인 키보드와 별도 메시지로 전송한다.
+# v1.2.1: 하단에는 3개 메뉴(주식·SGOV·자금)만. 나머지 4개는 각 메뉴 안의 인라인 버튼으로.
 def send_bottom_menu():
     return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": "📌 메뉴", "reply_markup": {
-        "keyboard": [[{"text": "주식"}, {"text": "SGOV"}, {"text": "자금"}],
-                     [{"text": "보유종목"}, {"text": "종목 추가"}],
-                     [{"text": "관제탑"}, {"text": "설정"}]],
+        "keyboard": [[{"text": "주식"}, {"text": "SGOV"}, {"text": "자금"}]],
         "resize_keyboard": True, "is_persistent": True}})
 
 def check_holiday():
