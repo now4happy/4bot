@@ -1,5 +1,10 @@
 # 메리츠 적립 변경 기록
 
+## v1.1.0 · 2026-11-13 12:38 (KST)
+- 파일: main.py, sgov.py, t_core.py, t_ui.py
+- 내용: SGOV 테스트 파일 staging에서 제외 (업데이터 허용 파일 아님)
+- 브랜치: staging
+
 ## v1.1.0 · 2026-11-13 (KST)
 - 파일: main.py, t_core.py, t_ui.py, sgov.py(새 파일), README.md
 - 내용: SGOV(미국 초단기 국채 ETF) 회차 적립 — 같은 봇·같은 4번 계좌, NKE/QLD 동작은 그대로
