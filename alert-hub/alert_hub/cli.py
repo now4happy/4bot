@@ -5,7 +5,6 @@
   notify 봇 등급 메시지  쉘 스크립트 등에서 알림 남기기
   heartbeat 봇          하트비트 남기기
   briefing             일일 브리핑 전송 (--no-send: 화면에만 출력, --no-ai, --hours N)
-  watchdog             무소식 봇 점검 (cron 10분마다)
 """
 from __future__ import annotations
 
@@ -75,11 +74,6 @@ def cmd_briefing(args) -> int:
     return 0 if ok else 1
 
 
-def cmd_watchdog(args) -> int:
-    from .watchdog import run_watchdog
-    r = run_watchdog()
-    print(f"밀린 알림 재전송 {r['flushed']}건 · 무소식 경고 {r['stale']} · 복구 {r['recovered']} · 정리 {r['purged']}건")
-    return 0
 
 
 def main(argv=None) -> int:
@@ -101,6 +95,5 @@ def main(argv=None) -> int:
     b.add_argument("--no-ai", action="store_true", help="AI 요약 없이 숫자 브리핑만")
     b.add_argument("--hours", type=float, default=None, help="최근 N시간 (지정하면 '마지막 브리핑 시각'은 갱신 안 함)")
     b.set_defaults(fn=cmd_briefing)
-    sub.add_parser("watchdog").set_defaults(fn=cmd_watchdog)
     args = p.parse_args(argv)
     return args.fn(args)
