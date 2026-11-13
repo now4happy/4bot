@@ -35,11 +35,11 @@
 - 사무실 v1.4.9 (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
 - 사무실 v1.6.6 (4번 메리츠 need 추가) / v1.6.5 (2026-11-11): 한투 need를 당일 매수 체결액 제외 남은 필요로 계산 (frcr_buy_amt_smtl 조회, 실패 시 전액 폴백)
-- 사무실 vNEXT (2026-11-13): 바벨 씨드 need를 SOXL 평가액 대신 투입원가(원장 본·서브 층 actual_cost) 기준으로 — 평가손실이 현금 부족처럼 보이던 문제. need = 기준시드 − SOXL 투입원가. 원장 주수 ≠ 토스 주수면 토스 평균단가×주수, 둘 다 안 되면 줄 없음
+- 사무실 v1.7.8 (2026-11-13): 바벨 씨드 need를 SOXL 평가액 대신 투입원가(원장 본·서브 층 actual_cost) 기준으로 — 평가손실이 현금 부족처럼 보이던 문제. need = 기준시드 − SOXL 투입원가. 원장 주수 ≠ 토스 주수면 토스 평균단가×주수, 둘 다 안 되면 줄 없음
 - 사무실 v1.7.7 (2026-11-13): sniper_ledger() 모의(SIM) 원장 제외 — assassin_sim_ledger가 더 새로워 실전 need 0·바벨 줄 누락이 생겼음
 - 사무실 v1.7.6 (2026-11-13): 토스 키 읽기 폴백 — toss_dca_bot 삭제 뒤 스나이퍼 .env에서 읽음
 - 사무실 v1.7.4 (2026-11-13): 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 — 바벨 모드(BARBELL_60_30_10)일 때만 need.json 토스 계좌에 '바벨 씨드' 줄을 넣는다. need = 기준시드 − SOXL평가액(보유 주수 × 현재가), holding = 토스 USD 매수가능금액, 부족액 = max(0, need − holding). 바벨 OFF·씨드 없음·SOXL 조회 실패면 줄 없음 (합산 제외). 일일 매수 필요액 계산은 그대로.
-- 사무실 vNEXT (2026-11-13): 메리츠 4번에 SGOV 다음 회차 줄 추가 — 매수 3거래일(미국장) 전부터 보여준다. need = 다음 회차 금액(1회차면 first_tranche_usd, 이후 tranche_usd), holding = 메리츠 USD 추정잔고, 부족액 = max(0, need − holding). SGOV OFF·회차 없음·예정일 없음·3거래일 밖이면 줄 없음. 4번 적립(NKE/QLD) need는 그대로.
+- 사무실 v1.7.8 (2026-11-13): 메리츠 4번에 SGOV 다음 회차 줄 추가 — 매수 3거래일(미국장) 전부터 보여준다. need = 다음 회차 금액(1회차면 first_tranche_usd, 이후 tranche_usd), holding = 메리츠 USD 추정잔고, 부족액 = max(0, need − holding). SGOV OFF·회차 없음·예정일 없음·3거래일 밖이면 줄 없음. 4번 적립(NKE/QLD) need는 그대로.
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
@@ -1584,7 +1584,7 @@ def _meritz_dca_need(now=None):
 
 def barbell_seed_line(toss, usd_cash):
     """바벨 모드일 때만: 씨드 부족액 줄 (읽기 전용). seed − SOXL 투입원가 = 필요 현금, 보유 = 토스 USD 매수가능금액.
-    vNEXT: 평가액(주수 × 현재가)을 빼면 SOXL 평가손실이 그대로 '현금 부족'으로 보여 환전해도 가격이 내리면 다시 부족해졌다.
+    v1.7.8: 평가액(주수 × 현재가)을 빼면 SOXL 평가손실이 그대로 '현금 부족'으로 보여 환전해도 가격이 내리면 다시 부족해졌다.
     투입원가 = 원장 본·서브 층 actual_cost 합 (sniper_core 의 invested, 지하층 제외) — 원장 층 주수가 토스 보유 주수와 같을 때만.
     다르면 토스 평균단가 × 보유 주수. 둘 다 못 구하면 None.
     바벨 OFF·씨드 없음·SOXL 조회 실패면 None (줄 없음). 부족액 = max(0, need − holding)."""

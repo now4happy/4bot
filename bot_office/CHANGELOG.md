@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.8 · 2026-11-13 16:18 (KST)
+- 파일: office_briefing.py
+- 내용: office_briefing: 메리츠 4번에 SGOV 다음 회차 줄 추가, 매수 3거래일 전부터 표시 (방: 3. 미국주식 적립)
+- 브랜치: staging
+
 ## v1.7.7 · 2026-11-13 15:11 (KST)
 - 파일: office_briefing.py
 - 내용: 사무실: sniper_ledger() 모의(SIM) 원장 제외 (실전 need 0·바벨 줄 누락 고침)
