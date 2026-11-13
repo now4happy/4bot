@@ -794,8 +794,12 @@ def fx_auto_amount(gap):
     if g < 10: return Decimal(100)
     return (g / 10).quantize(Decimal(1), rounding=ROUND_CEILING) * 10
 
+class FxNoPrice(Exception):
+    """낮 환전 계획: 라이브 시세·전일 종가 모두 없음 → 그날 환전 안 함 (no_price 기록). 2026-11-13 추가"""
+
 async def dca_fx_plan(client, cfg):
-    """Same buy-quantity and 1% cash buffer as execute_us_step; no orders."""
+    """Same buy-quantity and 1% cash buffer as execute_us_step; no orders.
+    참고가: 라이브 시세 > 0 이면 그대로, 아니면 전일 종가 (get_reference_price, 낮 환전 규모 계산 전용)."""
     stocks = cfg.get("stocks") or {}
     pending = {p.get("sym") for p in (cfg.get("pending_orders") or [])}
     n7 = await n7_market_multipliers(client, cfg, False)
@@ -804,8 +808,9 @@ async def dca_fx_plan(client, cfg):
         if not s.get("enabled", True) or sym in pending or s.get("currency") == "KRW": continue
         if s.get("s_mode", "buy_1") not in ("buy_1", "buy_2"): continue
         if s.get("last_exec_date") == datetime.now(EST_TZ).strftime("%Y-%m-%d"): continue
-        p = float(await client.get_current_price(sym) or 0)
-        if p <= 0: raise ValueError("시세 없음: " + sym)
+        p, _src = await client.get_reference_price(sym)
+        p = float(p or 0)
+        if p <= 0: raise FxNoPrice(sym)
         qty, _ = ledger_of(s)
         avg = ledger_avg(s)
         half = avg > 0 and qty > 0 and (p - avg) / avg * 100 >= 1.0
@@ -840,7 +845,12 @@ async def maybe_auto_fx(client, now=None):
     cfg = await DcaConfigManager.load()
     if not cfg.get("is_master_active",False): return "master_off"
     try:
-        need = await dca_fx_plan(client,cfg)
+        try:
+            need = await dca_fx_plan(client,cfg)
+        except FxNoPrice as e:
+            _fx_mark(day,"no_price",str(e))
+            RL.ev("decision","auto_fx","skipped","no_price",actor="scheduler",level="WARN",symbol=str(e))
+            return "no_price"
         usd = Decimal(str(await asyncio.to_thread(client.api.usd_estimated)))
         amount = fx_auto_amount(Decimal(str(need))-usd)
         if amount is None:

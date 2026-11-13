@@ -374,6 +374,19 @@ class MeritzDcaClient:
         _, _, p = await self.resolve(sym)
         return float(p["price"])
 
+    async def get_reference_price(self, symbol):
+        """낮 환전 규모 계산(dca_fx_plan) 전용 참고가. (가격, "live"|"prev_close"|None).
+        라이브 시세 > 0 이면 그대로, 0 이하면 같은 시세 응답의 전일 종가(prdy_clpr). 둘 다 없으면 (0.0, None).
+        밤 실주문(execute_us_step)은 이 함수를 쓰지 않고 get_current_price(라이브만)를 쓴다. (2026-11-13 추가)"""
+        sym = str(symbol).strip().upper()
+        live = float(await self.get_current_price(sym) or 0.0)
+        if live > 0:
+            return live, "live"
+        prev = _num((self._last_info.get(sym) or {}).get("prev_close"))
+        if prev > 0:
+            return prev, "prev_close"
+        return 0.0, None
+
     async def get_symbol_holdings(self, symbol):
         """증권사 잔고 (수량·매도가능·거래소번호). 평단은 봇 장부가 기준이라 avg_price 는 일부러 0"""
         sym = str(symbol).strip().upper()
