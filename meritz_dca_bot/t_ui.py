@@ -175,13 +175,12 @@ async def build_panel_view(client):
     except Exception as e:
         lines.append(f"📊 시드 대비 진행률: 조회 실패 ({type(e).__name__})")
     if decision_syms: lines.append(f"\n🚨 [기간 완료 종목: {', '.join(decision_syms)}] 아래 보유종목 리스트에서 다음 단계를 선택하세요!")
+    # v1.2.3: 관제탑 패널은 전체 현황 + 자금 + 전원 + 새로고침만. 주식·SGOV로 옮길 수 있는 버튼은 그쪽 패널로 이동.
+    #   보유종목 리스트·종목 추가는 주식 패널에 이미 있음, SGOV 적립은 하단 SGOV 버튼으로, 익절/매도비율·지수 배수는 주식 패널로.
     kb = [
         [{"text": "지금", "callback_data": "panel_view_now"}, {"text": "완성 시 예상", "callback_data": "panel_view_done"}],
         [{"text": "💰 자금", "callback_data": "funds"}],
-        [{"text": "📋 보유종목 리스트 & 개별 금액/상태 설정", "callback_data": "stock_list"}],
-        [{"text": "➕ 종목 추가", "callback_data": "add_symbol"}, {"text": "🪙 SGOV 적립", "callback_data": "sgov"}],
-        [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}, {"text": "🎯 익절/매도비율 변경", "callback_data": "ask_tp"}],
-        [{"text": "📐 지수 연동 배수 끄기" if cfg.get("n7_enabled", False) else "📐 지수 연동 배수 켜기", "callback_data": "toggle_n7"}],
+        [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}],
         [{"text": "🔄 새로고침", "callback_data": "panel"}]
     ]
     return "\n".join(lines), kb
@@ -268,6 +267,9 @@ async def build_stock_list_view(client, page: int = 0, market=None, status=None,
     if nav:
         kb.append(nav)
     kb.append([{"text": "🔎 종목 검색", "callback_data": "stock_search"}, {"text": "➕ 종목 추가", "callback_data": "add_symbol"}])
+    # v1.2.3: 관제탑에서 옮겨온 주식 적립 설정 (익절/매도비율·지수 연동 배수).
+    kb.append([{"text": "🎯 익절/매도비율 변경", "callback_data": "ask_tp"},
+               {"text": "📐 지수 연동 배수 끄기" if cfg.get("n7_enabled", False) else "📐 지수 연동 배수 켜기", "callback_data": "toggle_n7"}])
     kb.append([btn("🔄 새로고침", pg=page)])
     if query:
         kb.append([btn("검색 해제", keep=False)])

@@ -19,6 +19,7 @@
 #   감사 로그에만 남김 (진단). 폴링·매매·SGOV 판단 로직은 그대로.
 # v1.2.0 (2026-11-13): 하단 메뉴·자금/시드/진행률 화면 및 수동 환전 확인
 # v1.2.2 (2026-11-13): 시드 설정을 2개 메뉴로 나눔 (적립 / SGOV). 저장 뒤에는 같은 그룹 메뉴로 돌아감.
+# v1.2.3 (2026-11-13): 관제탑 버튼 정리 — 익절/매도비율·지수 배수를 주식 패널로 이동 (바꾼 뒤에도 주식 패널로 돌아감).
 # 사용:
 #   python3 main.py --fingerprint     키 지문만 출력 (expected_key_fp 에 넣을 값)
 #   python3 main.py --check           주문 없이 점검 + 종목별 오늘 판단 미리보기
@@ -840,7 +841,8 @@ async def handle_callback(cb: dict, client):
         latest = await DcaConfigManager.load(); before = bool(latest.get("n7_enabled", False))
         latest["n7_enabled"] = not before; await DcaConfigManager.save(latest)
         RL.ev("state_change", "n7_enabled", "ok", None, actor="user", before=before, after=latest["n7_enabled"])
-        send_panel(*(await build_panel_view(client)), msg_id)
+        # v1.2.3: 지수 배수 버튼이 주식 패널로 옮겨서, 바꾼 뒤에도 주식 패널로 돌아간다.
+        send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])), msg_id)
     elif data.startswith("idx_"):
         sym = data.split("_", 1)[1].strip().upper()
         latest = await DcaConfigManager.load(); stocks = latest.get("stocks", {})
@@ -849,7 +851,7 @@ async def handle_callback(cb: dict, client):
             stocks[sym]["index_ref"] = b if cur == a else a; await DcaConfigManager.save(latest)
             RL.ev("state_change", "n7_index_ref", "ok", None, actor="user", sym_ref=RL.ref(sym), before=cur, after=stocks[sym]["index_ref"])
         send_panel(*(await build_stock_detail_view(client, sym)), msg_id)
-    elif data == "ask_tp": wait_state["mode"] = "tp"; send_panel("🎯 [1차익절% 매도비율%] 입력 (예: 10 20)", [[{"text": "🔙 취소", "callback_data": "panel"}]], msg_id)
+    elif data == "ask_tp": wait_state["mode"] = "tp"; send_panel("🎯 [1차익절% 매도비율%] 입력 (예: 10 20)", [[{"text": "🔙 주식 목록", "callback_data": "stock_list"}]], msg_id)
 
 async def handle_sgov_callback(data, msg_id):
     """SGOV 메뉴 버튼. 설정만 바꾸고 화면을 다시 보여 줌 — 어떤 버튼도 주문·환전을 하지 않음 (다음 회차 판단부터 적용)"""
@@ -986,8 +988,9 @@ async def handle_message(msg: dict, client):
             if len(pts) >= 2: cfg["sr_pct"] = float(pts[1])
             for s in stocks.values(): s["target_profit_pct"], s["sell_ratio_pct"] = cfg["tp1_pct"], cfg["sr_pct"]
             RL.ev("state_change", "take_profit_rule", "ok", None, actor="user", before=list(tp_before), after=[cfg["tp1_pct"], cfg["sr_pct"]])
-            await DcaConfigManager.save(cfg); wait_state["mode"] = None; send_panel(*(await build_panel_view(client)))
-        except: RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="tp"); send_panel("❌ 예: 10 20", [[{"text": "🔙 관제탑", "callback_data": "panel"}]])
+            # v1.2.3: 익절/매도비율 버튼이 주식 패널로 옮겨서, 저장 뒤에도 주식 패널로 돌아간다.
+            await DcaConfigManager.save(cfg); wait_state["mode"] = None; send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])))
+        except: RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="tp"); send_panel("❌ 예: 10 20", [[{"text": "🔙 주식 목록", "callback_data": "stock_list"}]])
         return
     # 설정값 입력 처리를 마친 일반 메시지는 보유종목 검색으로 처리.
     matches = select_stock_items(stocks, query=text)

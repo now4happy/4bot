@@ -16,6 +16,9 @@
 #   각 메뉴 안의 인라인 버튼으로 이동 (보유종목·종목 추가는 주식 패널, 설정은 자금 패널의 시드 설정,
 #   관제탑은 모든 패널의 인라인 버튼). 입력 단어(보유종목·종목 추가·관제탑·설정)는 그대로 동작.
 # v1.2.2 (2026-11-13): 시드 설정 2개 메뉴 분리 (적립 / SGOV) — BOT_VERSION만 올리고 내용은 main.py에.
+# v1.2.3 (2026-11-13): 하단 키보드 3번째를 자금 → 관제탑으로. 자금은 관제탑 패널 안의 [💰 자금]으로 들어간다.
+#   관제탑 패널에서 주식·SGOV로 옮길 수 있는 버튼(보유종목 리스트·종목 추가·SGOV 적립·익절/매도비율·지수 배수)은
+#   주식/SGOV 패널로 이동 (내용은 t_ui.py·main.py에).
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -23,7 +26,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.2"
+BOT_VERSION = "v1.2.3"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -85,7 +88,7 @@ def send_panel(text, inline_kb, msg_id=None):
 # v1.2.1: 하단에는 3개 메뉴(주식·SGOV·자금)만. 나머지 4개는 각 메뉴 안의 인라인 버튼으로.
 def send_bottom_menu():
     return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": "📌 메뉴", "reply_markup": {
-        "keyboard": [[{"text": "주식"}, {"text": "SGOV"}, {"text": "자금"}]],
+        "keyboard": [[{"text": "주식"}, {"text": "SGOV"}, {"text": "관제탑"}]],
         "resize_keyboard": True, "is_persistent": True}})
 
 def check_holiday():
