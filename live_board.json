@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-13 12:58:00",
-  "as_of_et": "2026-11-12 22:58:00",
+  "as_of_kst": "2026-11-13 12:59:00",
+  "as_of_et": "2026-11-12 22:59:00",
   "market_open": true,
   "source": "toss",
   "prices": {
@@ -21,49 +21,49 @@
     "35": 188.58,
     "37": 28,
     "38": 29,
-    "41": 15149
+    "41": 15149.1
   },
   "totals": {
-    "api_sum": 52930.87,
-    "cash": 27546.26,
-    "total_assets": 70911.87
+    "api_sum": 52930.9,
+    "cash": 27546.2,
+    "total_assets": 70911.9
   },
   "market_open_us": false,
   "market_open_kr": true,
   "krx_count": 32,
   "e41_source": "krx",
   "base": {
-    "api_ex41": 37781.868002,
-    "cash": 27546.258002,
+    "api_ex41": 37781.808991,
+    "cash": 27546.198991,
     "manual": 17981.0,
-    "krx_total": 15149.0045
+    "krx_total": 15149.096
   },
   "krx": {
-    "as_of_kst": "2026-11-13 12:58:00",
+    "as_of_kst": "2026-11-13 12:59:00",
     "stocks": [
       {
         "code": "411060",
         "name": "ACE KRX금현물",
         "qty": 233,
         "avg_price": 29535,
-        "price": 23475,
-        "value_manw": 546.97
+        "price": 23480,
+        "value_manw": 547.08
       },
       {
         "code": "066570",
         "name": "LG전자",
         "qty": 31,
         "avg_price": 166722,
-        "price": 136700,
-        "value_manw": 423.77
+        "price": 136800,
+        "value_manw": 424.08
       },
       {
         "code": "035420",
         "name": "NAVER",
         "qty": 14,
         "avg_price": 194121,
-        "price": 178500,
-        "value_manw": 249.9
+        "price": 178700,
+        "value_manw": 250.18
       },
       {
         "code": "178920",
@@ -78,8 +78,8 @@
         "name": "PLUS K방산",
         "qty": 136,
         "avg_price": 43823,
-        "price": 32560,
-        "value_manw": 442.82
+        "price": 32580,
+        "value_manw": 443.09
       },
       {
         "code": "005490",
@@ -94,8 +94,8 @@
         "name": "RISE 200",
         "qty": 57,
         "avg_price": 96933,
-        "price": 83800,
-        "value_manw": 477.66
+        "price": 83790,
+        "value_manw": 477.6
       },
       {
         "code": "475350",
@@ -118,8 +118,8 @@
         "name": "SOL 조선TOP3플러스레버리지",
         "qty": 1370,
         "avg_price": 8089,
-        "price": 3660,
-        "value_manw": 501.42
+        "price": 3650,
+        "value_manw": 500.05
       },
       {
         "code": "462010",
@@ -134,8 +134,8 @@
         "name": "TIGER 미국S&P500",
         "qty": 251,
         "avg_price": 24271,
-        "price": 25095,
-        "value_manw": 629.88
+        "price": 25090,
+        "value_manw": 629.76
       },
       {
         "code": "371460",
@@ -150,16 +150,16 @@
         "name": "TIGER 차이나항셍테크",
         "qty": 1691,
         "avg_price": 6998,
-        "price": 5605,
-        "value_manw": 947.81
+        "price": 5615,
+        "value_manw": 949.5
       },
       {
         "code": "0148J0",
         "name": "TIGER 코리아휴머노이드로봇산업",
         "qty": 398,
         "avg_price": 8561,
-        "price": 7590,
-        "value_manw": 302.08
+        "price": 7595,
+        "value_manw": 302.28
       },
       {
         "code": "0015G0",
@@ -174,8 +174,8 @@
         "name": "레이크머티리얼즈",
         "qty": 463,
         "avg_price": 13104,
-        "price": 11185,
-        "value_manw": 517.87
+        "price": 11170,
+        "value_manw": 517.17
       },
       {
         "code": "005930",
@@ -206,8 +206,8 @@
         "name": "에코프로비엠",
         "qty": 67,
         "avg_price": 124968,
-        "price": 91200,
-        "value_manw": 611.04
+        "price": 91000,
+        "value_manw": 609.7
       },
       {
         "code": "394280",
@@ -270,8 +270,8 @@
         "name": "한화시스템",
         "qty": 81,
         "avg_price": 62530,
-        "price": 53800,
-        "value_manw": 435.78
+        "price": 53900,
+        "value_manw": 436.59
       },
       {
         "code": "000720",
@@ -298,7 +298,7 @@
         "value_manw": 371.64
       }
     ],
-    "total_manw": 15149,
+    "total_manw": 15149.1,
     "unavailable": []
   }
 }
