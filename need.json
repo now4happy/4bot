@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-13 15:18:36",
+  "as_of_kst": "2026-11-13 16:30:00",
   "accounts": [
     {
       "name": "토스",
@@ -16,8 +16,8 @@
           "label": "바벨 씨드",
           "currency": "USD",
           "holding": 12006.65,
-          "need": 12671.54,
-          "sufficient": false,
+          "need": 11959.74,
+          "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
@@ -55,6 +55,14 @@
           "need": null,
           "sufficient": null,
           "auto_fx": "on"
+        },
+        {
+          "label": "SGOV 11/13",
+          "currency": "USD",
+          "holding": 4660.0,
+          "need": 4600.0,
+          "sufficient": true,
+          "auto_fx": "on"
         }
       ]
     },
@@ -90,6 +98,6 @@
       ]
     }
   ],
-  "total_need_usd": 21646.535,
+  "total_need_usd": 25534.735,
   "total_need_krw": 60000.0
 }
