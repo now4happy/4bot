@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-13): 서버 미저장 변경 중단 안내에서 'Claude나 Gemini에게 확인을 요청해 주세요.' 문구 제거
 # 사무실 v1.6.9 (2026-11-12): 재시작 때 실행 중인 서비스는 enable도 같이 함 — 재부팅 뒤에도 살아남게 (7번 비서 재발 방지)
 # 사무실 v1.6.5 (2026-11-11): dirty 검사에서 생성 상태 파일(need.json·sniper_tiers.json) 제외 — 브리핑이 매번 다시 써서 업데이트가 멈추던 것 수정
 # 사무실 v1.5.6 (2026-11-10): 2번 스나이퍼 버전은 코드 머리말 버전으로 기록 (태그 카운터 v1.2.3 대신 v2.5.2식) — 머리말 없으면 기존 next_tag 유지
@@ -911,7 +912,7 @@ def apply(st, key):
                    [[{"text": "✅ 다시 시도", "callback_data": f"up:{key}"}]] +
                    [[{"text": "⏸ " + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
     if _dirty_code_files(include_staged=True):
-        return say("⛔ 서버에 저장 안 된 변경이 있어 멈췄습니다. Claude나 Gemini에게 확인을 요청해 주세요.")
+        return say("⛔ 서버에 저장 안 된 변경이 있어 멈췄습니다.")
     rc_m, main_sha = git("rev-parse", "origin/main")
     if rc_m == 0 and git("merge-base", "--is-ancestor", main_sha, "HEAD")[0] and git("merge-base", "--is-ancestor", main_sha, sha)[0]:
         return say("⛔ GitHub main 에 서버를 거치지 않은 수정이 있고, 이 브랜치는 그 수정을 포함하지 않아 적용하지 않았습니다.\n"
