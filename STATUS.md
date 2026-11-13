@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-12 21:42 (KST) · 계기: 업데이트 적용 (fanding-lazyload-fix: 팬딩 서버 수집기: lazy-load 이미지 대기 고침)
+- 갱신: 2026-11-13 09:51 (KST) · 계기: 업데이트 적용 (staging: live_board: 키움 수량 변경 v1.6.8 기준으로 재적용 (일본종합상사 416→362, 오픈엣지 917→674, 하이브 26→18; 스냅샷 코드 유지); bot_updater: 서버 미저장 변경 중단 안내에서 Claude/Gemini 확인 문구 제거)
 
 ## 봇별 현재 상태
 
@@ -11,9 +11,9 @@
 |---|---|---|---|---|---|
 | 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.2.4 | 2026-11-12 15:20 | sniper: upstream c8c07d0 as-is migration (15 files) |
-| 3번 토스 적립 | `toss_dca` | ⚪ 꺼짐 | v4.3.8 | 2026-11-05 09:02 | 3번 토스 적립 v4.3.8: R1 단계 단조화 + 정지·결정 중 알림 + 가격 0 가드 + N7 지수 20 |
+| 3번 토스 적립 | `toss_dca` | ⚪ 꺼짐 | - | - | - |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-12 15:28 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-12 21:42 KST부터) | v1.7.1 | 2026-11-12 21:42 | 팬딩 서버 수집기: lazy-load 이미지 대기 고침 |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-13 09:51 KST부터) | v1.7.2 | 2026-11-13 09:51 | live_board: 키움 수량 변경 v1.6.8 기준으로 재적용 (일본종합상사 416→362, 오픈엣지 9 |
 | 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.2 | 2026-11-08 10:11 | 메리츠 무매 평단 조절 추가 meritz_laoer v1.0.2 |
 | 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.1 | 2026-11-12 13:20 | 메리츠 4번 need 브리핑 + 자동환전 (office_briefing vNEXT, meritz_dca v1 |
 
@@ -24,10 +24,11 @@
 - 사무실 터널 `bot-office-tunnel`: ⚪ 꺼짐
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-12 20:41 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
-- 디스크 사용: 40% (남은 12.3GB)
+- 디스크 사용: 39% (남은 12.5GB)
 
 ## 최근 적용 10건
 
+- 2026-11-13 09:51 · 5번 사무실 비서 v1.7.2 · bot_updater.py, live_board.py · live_board: 키움 수량 변경 v1.6.8 기준으로 재적용 (일본종합상사 416→362, 오픈엣지 9
 - 2026-11-12 21:42 · 5번 사무실 비서 v1.7.1 · fanding_fetch_server.py · 팬딩 서버 수집기: lazy-load 이미지 대기 고침
 - 2026-11-12 21:10 · 5번 사무실 비서 v1.7.0 · fanding_fetch_server.py, test_fanding_fetch_server.py · 팬딩 서버 수집기: SERVER_SETUP.md 고침 — 유닛 파일(.service/.timer) 내용을 h
 - 2026-11-12 20:41 · 5번 사무실 비서 v1.6.9 · bot_updater.py · 업데이터 enable 고침: 재시작 때 실행 중이면 enable도 같이 (사무실 vNEXT)
@@ -37,7 +38,6 @@
 - 2026-11-12 13:20 · 메리츠 적립 v1.0.1 · main.py, meritz_api.py, t_core.py · 메리츠 4번 need 브리핑 + 자동환전 (office_briefing vNEXT, meritz_dca v1
 - 2026-11-12 13:20 · 5번 사무실 비서 v1.6.6 · office_briefing.py · 메리츠 4번 need 브리핑 + 자동환전 (office_briefing vNEXT, meritz_dca v1
 - 2026-11-11 13:21 · 5번 사무실 비서 v1.6.5 · bot_updater.py, office_briefing.py · Revert "상태 기록: need.json"
-- 2026-11-11 10:42 · 5번 사무실 비서 v1.6.4 · fanding_trade.py · 배수 맞추기 주단위 5일 + 나머지 하루 더 (fanding_trade v1.5.7)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
