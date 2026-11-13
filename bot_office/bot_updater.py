@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-13): 배포에서 빠진 파일은 막지 않고 넘김 — classify()가 (units, skipped) 반환, 테스트·점파일 등은 알림에 '⏭️ 배포에서 빠진 파일'로만 표시 (✅·중지 버튼 항상 표시, apply·중지 요청 거부 안 함)
 # 사무실 v1.7.2 (2026-11-13): 서버 미저장 변경 중단 안내에서 'Claude나 Gemini에게 확인을 요청해 주세요.' 문구 제거
 # 사무실 v1.6.9 (2026-11-12): 재시작 때 실행 중인 서비스는 enable도 같이 함 — 재부팅 뒤에도 살아남게 (7번 비서 재발 방지)
 # 사무실 v1.6.5 (2026-11-11): dirty 검사에서 생성 상태 파일(need.json·sniper_tiers.json) 제외 — 브리핑이 매번 다시 써서 업데이트가 멈추던 것 수정
@@ -214,16 +215,18 @@ def targets():
  
  
 def classify(files):
-    """바뀐 파일 → (봇별 파일, 거부 사유)"""
-    roots, units, bad = targets(), {}, []
+    """바뀐 파일 → (봇별 파일, 배포에서 빠진 파일)
+    배포 규칙에 안 맞는 파일(테스트·점파일·폴더 안 파일·저장소 루트 파일·alert-hub·.gitignore·.example.json)은
+    거부하지 않고 skipped 로 넘긴다 — 같이 묶인 다른 봇 업데이트가 막히지 않게."""
+    roots, units, skipped = targets(), {}, []
     for f in files:
         if f == "alert-hub" or f.startswith("alert-hub/"):
             # alert-hub는 업데이터 적용 대상이 아님 (보관만, 서버 직접 설치).
-            # 거부하지 않고 넘겨야, 같이 묶인 다른 봇 업데이트가 막히지 않음.
+            skipped.append(f)
             continue
         if f == ".gitignore" or f.endswith(".example.json"):
             # .gitignore·예시 설정은 저장소 전용 문서라 서버 적용 대상이 아님 (실제 설정은 서버에만 있음).
-            # 거부하지 않고 넘겨야, 같이 묶인 다른 봇 업데이트가 막히지 않음.
+            skipped.append(f)
             continue
         absf = os.path.realpath(os.path.join(REPO, f)); d = os.path.dirname(absf); name = os.path.basename(f)
         unit = next((u for u, r in roots.items() if r == d), None)
@@ -235,8 +238,8 @@ def classify(files):
         elif unit and unit != OFFICE_UNIT and name.endswith(".py") and not name.startswith(("bot_office_", "test_")):
             units.setdefault(unit, []).append(f)
         else:
-            bad.append(f)
-    return units, bad
+            skipped.append(f)
+    return units, skipped
  
  
 # ---------------------------------------------------------------- 매매 중인지 확인
@@ -429,12 +432,13 @@ def revert_check(sha, files):
 def offer(st, br, sha):
     _, files = git("diff", "--name-only", f"HEAD...{sha}")
     files = [f for f in files.splitlines() if f.strip()]
-    units, bad = classify(files)
+    units, skipped = classify(files)
     _, log = git("log", "--format=%an · %s", f"HEAD..{sha}", "-n", "5")
     key = sha[:12]
     st.setdefault("offers", {})[key] = {"branch": br, "sha": sha, "at": time.time()}
     bots = ", ".join(NAMES.get(u, u) for u, fs in units.items() if fs) or "봇 코드 없음(문서만)"
-    warn = ("\n⛔ <b>허용되지 않은 파일</b>: " + esc(", ".join(bad[:5])) + " → 이 업데이트는 적용할 수 없습니다") if bad else ""
+    warn = ("\n⏭️ <b>배포에서 빠진 파일</b>: " + esc(", ".join(skipped[:5])) + (" 외 " + str(len(skipped) - 5) + "개" if len(skipped) > 5 else "")
+            + " (서버에 적용하지 않고 넘김 · 업데이트는 그대로 진행 가능)") if skipped else ""
     try:
         reverts = revert_check(sha, files)
     except Exception as e:
@@ -447,10 +451,9 @@ def offer(st, br, sha):
     rows = [[{"text": "🔍 바뀐 내용 보기", "callback_data": f"df:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]]
     if UC:
         rows.append([{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}])
-    if not bad:
-        rows.insert(0, [{"text": "⚠️ 알고 있음 · 그래도 업데이트" if reverts else "✅ 업데이트", "callback_data": f"up:{key}"}])
+    rows.insert(0, [{"text": "⚠️ 알고 있음 · 그래도 업데이트" if reverts else "✅ 업데이트", "callback_data": f"up:{key}"}])   # 빠진 파일이 있어도 항상 표시
     gated = {u for u in DC.UNITS.values() if units.get(u) and gate_installed(u)}   # 차단 부품이 설치된 봇만 일시중지 버튼
-    if not bad and gated:
+    if gated:
         rows.append([{'text':'⏸ 이번 업데이트 대상 전체 중지 대기','callback_data':'pa:'+key},
                      {'text':'▶️ 이번 대상 거래 재개','callback_data':'ra:'+key}])
     for number, unit in DC.UNITS.items():
@@ -875,9 +878,9 @@ def apply(st, key):
         return say("⚠️ 그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림의 버튼을 눌러 주세요.")
     _, files = git("diff", "--name-only", f"HEAD...{sha}")
     files = [f for f in files.splitlines() if f.strip()]
-    units, bad = classify(files)
-    if bad:
-        return say("⛔ 허용되지 않은 파일이 있어 적용하지 않았습니다: " + esc(", ".join(bad[:5])))
+    units, skipped = classify(files)
+    if skipped:   # 막지 않고 기록만 — 무엇을 빼고 적용했는지 나중에 보이게
+        print("배포에서 빠진 파일(적용 안 함):", key, ", ".join(skipped), flush=True)
     units = {u: fs for u, fs in units.items() if fs}   # 문서(.md)만 바뀐 봇은 재시작·버전 기록 안 함
     _, added = git("diff", f"HEAD...{sha}")
     if SECRET_RE.search("\n".join(l for l in added.splitlines() if l.startswith("+"))):
@@ -1069,9 +1072,7 @@ def handle(st, upd):
             if rc or sha != offer_data['sha']:
                 return say('⚠️ 브랜치가 바뀌었습니다. 새 알림에서 눌러 주세요.')
             _, files = git('diff','--name-only','HEAD...'+sha)
-            units,bad = classify(files.splitlines())
-            if bad:
-                return say('⛔ 허용되지 않은 파일이 있어 중지를 요청하지 않았습니다.')
+            units, _skipped = classify(files.splitlines())   # 빠진 파일 때문에 중지 요청을 거부하지 않음
             for unit in DC.UNITS.values():
                 if units.get(unit):
                     DC.request(sys.modules[__name__],unit,key)
@@ -1093,8 +1094,8 @@ def handle(st, upd):
             if rc or sha != offer_data['sha']:
                 return say("⚠️ 브랜치가 바뀌었습니다. 업데이트 확인 후 새 버튼을 눌러 주세요.")
             _, files = git("diff", "--name-only", "HEAD..." + sha)
-            units, bad = classify(files.splitlines())
-            if bad or not units.get(unit):
+            units, _skipped = classify(files.splitlines())
+            if not units.get(unit):
                 return say("⛔ 해당 업데이트 대상 봇만 중지할 수 있습니다.")
             DC.request(sys.modules[__name__], unit, offer_key)
         elif act == "rs":
