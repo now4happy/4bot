@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-13 10:47 (KST) · 계기: 업데이트 적용 (staging: remove .upstream_head from staging (updater allowlist rejects dotfile; updater creates marker itself on first sync))
+- 갱신: 2026-11-13 12:03 (KST) · 계기: 업데이트 적용 (staging: 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 (office_briefing.py))
 
 ## 봇별 현재 상태
 
@@ -13,13 +13,13 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-13 10:46 KST부터) | v1.2.6 | 2026-11-13 10:47 | remove .upstream_head from staging (updater allowlist reject |
 | 3번 토스 적립 | `toss_dca` | ⚪ 꺼짐 | - | - | - |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-12 15:28 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-13 10:46 KST부터) | v1.7.3 | 2026-11-13 10:47 | remove .upstream_head from staging (updater allowlist reject |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-13 12:03 KST부터) | v1.7.4 | 2026-11-13 12:03 | 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 (office_briefing.py) |
 | 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.2 | 2026-11-08 10:11 | 메리츠 무매 평단 조절 추가 meritz_laoer v1.0.2 |
 | 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-13 10:46 KST부터) | v1.0.1 | 2026-11-12 13:20 | 메리츠 4번 need 브리핑 + 자동환전 (office_briefing vNEXT, meritz_dca v1 |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-12 19:17 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-13 12:03 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-12 15:28 KST부터)
 - 사무실 터널 `bot-office-tunnel`: ⚪ 꺼짐
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-13 09:51 KST부터)
@@ -28,6 +28,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-13 12:03 · 5번 사무실 비서 v1.7.4 · office_briefing.py · 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 (office_briefing.py)
 - 2026-11-13 10:47 · 5번 사무실 비서 v1.7.3 · sniper_picture.html, sniper_picture.py · remove .upstream_head from staging (updater allowlist reject
 - 2026-11-13 10:47 · 2번 토스 스나이퍼 v1.2.6 · plugin_updater.py · remove .upstream_head from staging (updater allowlist reject
 - 2026-11-13 10:33 · 2번 토스 스나이퍼 v1.2.5 · assassin_plugin.py, defense_plugin.py, main.py, quant_engine · sniper: upstream cd9e87b as-is migration (15 files, Case 99 
@@ -37,7 +38,6 @@
 - 2026-11-12 20:41 · 5번 사무실 비서 v1.6.9 · bot_updater.py · 업데이터 enable 고침: 재시작 때 실행 중이면 enable도 같이 (사무실 vNEXT)
 - 2026-11-12 15:20 · 2번 토스 스나이퍼 v1.2.4 · assassin_plugin.py, barbell_plugin.py, defense_plugin.py, ma · sniper: upstream c8c07d0 as-is migration (15 files)
 - 2026-11-12 15:00 · 5번 사무실 비서 v1.6.8 · live_board.py · office: live_board writes sniper_snapshot (vNEXT)
-- 2026-11-12 13:53 · 5번 사무실 비서 v1.6.7 · live_board.py · live_board: 한국만 열림에도 시트 현금 갱신 + 한투 달러화 43행 포함 (사무실 vNEXT)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 

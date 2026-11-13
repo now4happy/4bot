@@ -35,7 +35,7 @@
 - 사무실 v1.4.9 (2026-11-09): 필요 금액 표 한투·메리츠·빗썸 계산 및 브리핑 본문 표만 표시
 - 사무실 v1.4.5 (2026-11-07): --manual 수동 브리핑(manual_run) — 7번 비서 🗞 브리핑이 주말·휴장에도 전송 (정기 scheduled_run 주말 생략은 그대로 · state.json·seen 기록 안 함)
 - 사무실 v1.6.6 (4번 메리츠 need 추가) / v1.6.5 (2026-11-11): 한투 need를 당일 매수 체결액 제외 남은 필요로 계산 (frcr_buy_amt_smtl 조회, 실패 시 전액 폴백)
-- 사무실 vNEXT (2026-11-13): 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 — 바벨 모드(BARBELL_60_30_10)일 때만 need.json 토스 계좌에 '바벨 씨드' 줄을 넣는다. need = 기준시드 − SOXL평가액(보유 주수 × 현재가), holding = 토스 USD 매수가능금액, 부족액 = max(0, need − holding). 바벨 OFF·씨드 없음·SOXL 조회 실패면 줄 없음 (합산 제외). 일일 매수 필요액 계산은 그대로.
+- 사무실 v1.7.4 (2026-11-13): 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 — 바벨 모드(BARBELL_60_30_10)일 때만 need.json 토스 계좌에 '바벨 씨드' 줄을 넣는다. need = 기준시드 − SOXL평가액(보유 주수 × 현재가), holding = 토스 USD 매수가능금액, 부족액 = max(0, need − holding). 바벨 OFF·씨드 없음·SOXL 조회 실패면 줄 없음 (합산 제외). 일일 매수 필요액 계산은 그대로.
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid

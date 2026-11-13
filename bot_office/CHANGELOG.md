@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.4 · 2026-11-13 12:03 (KST)
+- 파일: office_briefing.py
+- 내용: 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 (office_briefing.py)
+- 브랜치: staging
+
 ## v1.7.3 · 2026-11-13 10:47 (KST)
 - 파일: sniper_picture.html, sniper_picture.py
 - 내용: remove .upstream_head from staging (updater allowlist rejects dotfile; updater creates marker itself on first sync)
