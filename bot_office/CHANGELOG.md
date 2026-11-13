@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.7 · 2026-11-13 15:11 (KST)
+- 파일: office_briefing.py
+- 내용: 사무실: sniper_ledger() 모의(SIM) 원장 제외 (실전 need 0·바벨 줄 누락 고침)
+- 브랜치: staging
+
 ## v1.7.6 · 2026-11-13 14:26 (KST)
 - 파일: office_briefing.py
 - 내용: 토스 브리핑 키 읽기 폴백 (TOSS_DIR → SNIPER_DIR, office_briefing vNEXT)
