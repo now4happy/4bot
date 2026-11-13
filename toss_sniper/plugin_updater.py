@@ -17,9 +17,13 @@ import glob
 import json
 import logging
 import os
+import io
 import re
+import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 import time
 import urllib.error
@@ -68,6 +72,23 @@ DEPRECATED_LEGACY_FILES: Tuple[str, ...] = (
     "tg_router.py",
     "state_SOXS.json",
     "soxs_stratum_ledger.json",
+)
+
+# ---------------------------------------------------------------------------
+# [Muse 수정 · 원작 직접 동기화] 원작 저장소(pipiosToss_bot)를 직접 fetch해
+# 스나이퍼 코어 모듈을 가져온다. 서버의 git 저장소는 4bot(우리 깃)이라
+# 기존 origin/main + git reset --hard 방식으로는 원작 새 버전을 찾을 수 없고,
+# reset --hard를 원작에 걸면 /home/gieokkim 전체가 원작 상태로 날아간다.
+# 그래서 'upstream' 리모트를 fetch한 뒤 14개 파일만 git archive로 가져온다.
+# ---------------------------------------------------------------------------
+UPSTREAM_REPO_URL = "https://github.com/pipios4006-boop/pipiosToss_bot.git"
+UPSTREAM_REMOTE_NAME = "upstream"
+UPSTREAM_MARKER_FILENAME = ".upstream_head"
+# 동기화 대상: 15대 코어 중 plugin_updater.py 자신을 제외한 14개.
+# 업데이터 자신을 원작본으로 덮어쓰면 이 수정이 사라져 다음부터 다시
+# 원작을 못 찾으므로 제외한다. 업데이터 자체의 원작 변경은 Muse가 별도 staging한다.
+UPSTREAM_SYNC_MODULES: Tuple[str, ...] = tuple(
+    f for f in REQUIRED_CORE_MODULES if f != "plugin_updater.py"
 )
 
 _TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{7,15}:[A-Za-z0-9_-]{25,60})\b")
@@ -894,12 +915,101 @@ def _run_cmd_sync(
     )
 
 
+
+def _ensure_upstream_remote_sync(target_dir: str) -> Tuple[bool, str]:
+    """'upstream' 리모트(원작 저장소)가 없으면 추가하고, 있으면 URL을 맞춘다."""
+    rc, out, _ = _run_cmd_sync(
+        ["git", "remote", "get-url", UPSTREAM_REMOTE_NAME],
+        cwd=target_dir, timeout_sec=8.0,
+    )
+    if rc == 0 and out.strip() == UPSTREAM_REPO_URL:
+        return True, "ok"
+    if rc == 0:
+        rc2, _, err2 = _run_cmd_sync(
+            ["git", "remote", "set-url", UPSTREAM_REMOTE_NAME, UPSTREAM_REPO_URL],
+            cwd=target_dir, timeout_sec=8.0,
+        )
+        return (rc2 == 0), (err2 if rc2 != 0 else "url-fixed")
+    rc3, _, err3 = _run_cmd_sync(
+        ["git", "remote", "add", UPSTREAM_REMOTE_NAME, UPSTREAM_REPO_URL],
+        cwd=target_dir, timeout_sec=8.0,
+    )
+    return (rc3 == 0), (err3 if rc3 != 0 else "added")
+
+
+def _read_upstream_marker_sync(target_dir: str) -> str:
+    try:
+        with open(os.path.join(target_dir, UPSTREAM_MARKER_FILENAME), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def _write_upstream_marker_sync(target_dir: str, sha: str) -> None:
+    try:
+        tmp_fp = os.path.join(target_dir, UPSTREAM_MARKER_FILENAME + ".tmp")
+        with open(tmp_fp, "w", encoding="utf-8") as f:
+            f.write(sha.strip())
+        os.replace(tmp_fp, os.path.join(target_dir, UPSTREAM_MARKER_FILENAME))
+    except Exception as exc:
+        logger.warning("원작 마커 기록 실패: %s", exc)
+
+
+def _extract_upstream_files_sync(
+    target_dir: str, ref: str, filenames: Tuple[str, ...]
+) -> Tuple[bool, str]:
+    """git archive로 원작 파일을 바이트 그대로 가져와 toss_sniper/에 덮어쓴다.
+    원작 파일은 저장소 루트에 있고 우리 파일은 toss_sniper/ 아래라,
+    archive를 임시 폴더에 풀어 복사한다. .env·원장은 건드리지 않는다."""
+    # git archive pathspec은 실행 위치 기준이다. 원작 파일은 저장소 루트에
+    # 있으므로, 저장소 최상위에서 실행해야 루트 경로가 맞는다.
+    # (toss_sniper/ 안에서 실행하면 :(top)도 '현재 디렉토리 밖'이라며 거부된다.)
+    try:
+        rc_top, toplevel, _ = _run_cmd_sync(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=target_dir, timeout_sec=8.0,
+        )
+        archive_cwd = toplevel.strip() if rc_top == 0 and toplevel.strip() else target_dir
+        proc = subprocess.run(
+            ["git", "archive", ref] + list(filenames),
+            cwd=archive_cwd, capture_output=True, timeout=30.0,
+        )
+    except Exception as exc:
+        return False, f"git archive 실행 예외: {exc}"
+    if proc.returncode != 0:
+        return False, (proc.stderr or b"").decode("utf-8", "replace").strip() or "git archive 실패"
+    tmpd = tempfile.mkdtemp(prefix="upstream_sync_")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tf:
+            tf.extractall(path=tmpd)
+        for fn in filenames:
+            src_fp = os.path.join(tmpd, fn)
+            dst_fp = os.path.join(target_dir, fn)
+            if not os.path.isfile(src_fp):
+                return False, f"원작 archive에 없음: {fn}"
+            shutil.copyfile(src_fp, dst_fp)
+        return True, ""
+    except Exception as exc:
+        return False, f"원작 파일 풀기/복사 예외: {exc}"
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+
 def _execute_git_pull_and_preflight_sync(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
+    """원작 저장소에서 스나이퍼 코어 모듈을 직접 가져와 동기화한다.
+
+    [Muse 수정 · 직접 원작 동기화]
+    기존 origin/main + git reset --hard 방식은 서버 git 저장소가 4bot이라
+    원작 새 버전을 못 찾는다. reset --hard를 원작에 걸면 /home/gieokkim
+    전체(사무실·문서 포함)가 원작 저장소 상태로 날아가므로, 원작은
+    'upstream' 리모트로 fetch만 하고 14개 파일만 git archive로 가져온다.
+    """
     target_dir = get_bot_base_dir(base_dir)
     protected_snapshots: Dict[str, bytes] = {}
-    did_git_reset = False
+    synced_backup: Dict[str, bytes] = {}
+    did_sync = False
 
     try:
         rc_h, prev_hash, _ = _run_cmd_sync(
@@ -908,16 +1018,17 @@ def _execute_git_pull_and_preflight_sync(
         if rc_h != 0 or not prev_hash:
             prev_hash = ""
 
-        rc_b, branch_name, _ = _run_cmd_sync(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=target_dir,
-            timeout_sec=10.0,
-        )
-        if rc_b != 0 or not branch_name or branch_name == "HEAD":
-            branch_name = "main"
+        ok_remote, remote_msg = _ensure_upstream_remote_sync(target_dir)
+        if not ok_remote:
+            ok_local, msg_local = verify_all_modules_compile(target_dir)
+            return (
+                ok_local,
+                f"원작 리모트 준비 실패({remote_msg}) · 로컬 검증: {msg_local}",
+                False,
+            )
 
         rc_f, _, err_f = _run_cmd_sync(
-            ["git", "fetch", "--all", "--prune"],
+            ["git", "fetch", UPSTREAM_REMOTE_NAME, "--prune"],
             cwd=target_dir,
             timeout_sec=25.0,
         )
@@ -929,7 +1040,7 @@ def _execute_git_pull_and_preflight_sync(
                     remove_pycache=True,
                 )
                 rc_f, _, _ = _run_cmd_sync(
-                    ["git", "fetch", "--all", "--prune"],
+                    ["git", "fetch", UPSTREAM_REMOTE_NAME, "--prune"],
                     cwd=target_dir,
                     timeout_sec=25.0,
                 )
@@ -937,30 +1048,29 @@ def _execute_git_pull_and_preflight_sync(
                 ok_local, msg_local = verify_all_modules_compile(target_dir)
                 return (
                     ok_local,
-                    f"로컬 검증 완료 (git fetch 스킵): {msg_local}",
+                    f"로컬 검증 완료 (원작 fetch 스킵): {msg_local}",
                     False,
                 )
 
-        target_ref = f"origin/{branch_name}"
-        rc_ref, _, _ = _run_cmd_sync(
-            ["git", "rev-parse", "--verify", target_ref],
+        rc_u, upstream_head, _ = _run_cmd_sync(
+            ["git", "rev-parse", f"{UPSTREAM_REMOTE_NAME}/main"],
             cwd=target_dir,
             timeout_sec=8.0,
         )
-        if rc_ref != 0:
-            target_ref = "origin/main"
+        if rc_u != 0 or not upstream_head:
+            ok_local, msg_local = verify_all_modules_compile(target_dir)
+            return (
+                ok_local,
+                f"원작 HEAD 확인 실패 · 로컬 검증: {msg_local}",
+                False,
+            )
+        upstream_head = upstream_head.strip()
 
-        rc_cnt, cnt_str, _ = _run_cmd_sync(
-            ["git", "rev-list", "--count", f"HEAD..{target_ref}"],
-            cwd=target_dir,
-            timeout_sec=8.0,
-        )
-        remote_ahead = safe_int(cnt_str, 0) if rc_cnt == 0 else 0
-
-        if remote_ahead <= 0:
+        deployed_head = _read_upstream_marker_sync(target_dir)
+        if deployed_head and deployed_head == upstream_head:
             purged_list = purge_deprecated_legacy_files(target_dir)
             ok_local, msg_local = verify_all_modules_compile(target_dir)
-            short_hash = prev_hash[:7] if prev_hash else "local"
+            short_hash = upstream_head[:7]
             purge_note = (
                 f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
             )
@@ -978,16 +1088,32 @@ def _execute_git_pull_and_preflight_sync(
 
         _flush_telegram_pending_updates_sync(target_dir)
         protected_snapshots = _snapshot_protected_local_files_sync(target_dir)
+        for fname in UPSTREAM_SYNC_MODULES:
+            fpath = os.path.join(target_dir, fname)
+            try:
+                with open(fpath, "rb") as rf:
+                    synced_backup[fpath] = rf.read()
+            except Exception:
+                pass
 
-        did_git_reset = True
-        rc_r, _, err_r = _run_cmd_sync(
-            ["git", "reset", "--hard", target_ref],
-            cwd=target_dir,
-            timeout_sec=15.0,
+        did_sync = True
+        ok_sync, sync_err = _extract_upstream_files_sync(
+            target_dir, f"{UPSTREAM_REMOTE_NAME}/main", UPSTREAM_SYNC_MODULES
         )
-        _restore_protected_local_files_sync(
-            target_dir, protected_snapshots
-        )
+        if not ok_sync:
+            for fpath, raw in synced_backup.items():
+                try:
+                    with open(fpath, "wb") as wf:
+                        wf.write(raw)
+                except Exception:
+                    pass
+            _restore_protected_local_files_sync(
+                target_dir, protected_snapshots
+            )
+            return False, f"원작 파일 동기화 실패: {sync_err}", False
+
+        _restore_protected_local_files_sync(target_dir, protected_snapshots)
+
         for ledger_ignore_name in (
             "soxl_stratum_ledger.json",
             "barbell_ledger.json",
@@ -1021,14 +1147,6 @@ def _execute_git_pull_and_preflight_sync(
             except Exception:
                 pass
 
-        if rc_r != 0:
-            return False, f"git reset 실패: {err_r}", False
-
-        _, new_hash, _ = _run_cmd_sync(
-            ["git", "rev-parse", "HEAD"], cwd=target_dir, timeout_sec=10.0
-        )
-        changed = bool(prev_hash and new_hash and prev_hash != new_hash)
-
         purged_list = purge_deprecated_legacy_files(target_dir)
 
         updater_script = os.path.join(target_dir, "plugin_updater.py")
@@ -1046,28 +1164,25 @@ def _execute_git_pull_and_preflight_sync(
         )
         if rc_v != 0:
             detail_err = out_v or err_v or "알 수 없는 컴파일/심볼 검증 오류"
-            if changed and prev_hash:
-                _run_cmd_sync(
-                    ["git", "reset", "--hard", prev_hash],
-                    cwd=target_dir,
-                    timeout_sec=15.0,
-                )
-            if did_git_reset:
-                _restore_protected_local_files_sync(
-                    target_dir, protected_snapshots
-                )
+            for fpath, raw in synced_backup.items():
+                try:
+                    with open(fpath, "wb") as wf:
+                        wf.write(raw)
+                except Exception:
+                    pass
+            _restore_protected_local_files_sync(
+                target_dir, protected_snapshots
+            )
             return (
                 False,
                 f"🚨 프리플라이트 컴파일 에러 감지:\n{detail_err}",
                 False,
             )
 
-        short_hash = new_hash[:7] if new_hash else "local"
-        status_note = (
-            f"신규 커밋({short_hash}) 적용 · 원장 100% 보존"
-            if changed
-            else f"현재 버전({short_hash}) 유지 · 원장 100% 보존"
-        )
+        _write_upstream_marker_sync(target_dir, upstream_head)
+
+        short_hash = upstream_head[:7]
+        status_note = f"신규 커밋({short_hash}) 적용 · 원장 100% 보존"
         verify_note = (
             out_v
             if out_v
@@ -1077,10 +1192,17 @@ def _execute_git_pull_and_preflight_sync(
             f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
         )
         summary_msg = f"{status_note} · {verify_note}{purge_note}"
-        return True, summary_msg, changed
+        return True, summary_msg, True
 
     except Exception as exc:
-        if did_git_reset and protected_snapshots:
+        if did_sync and synced_backup:
+            for fpath, raw in synced_backup.items():
+                try:
+                    with open(fpath, "wb") as wf:
+                        wf.write(raw)
+                except Exception:
+                    pass
+        if protected_snapshots:
             _restore_protected_local_files_sync(
                 target_dir, protected_snapshots
             )
