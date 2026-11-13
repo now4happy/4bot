@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.2.7 · 2026-11-13 15:23 (KST)
+- 파일: plugin_updater.py
+- 내용: sniper: plugin_updater commits synced files after direct upstream sync (bot_updater dirty-check fix)
+- 브랜치: staging
+
 ## v1.2.6 · 2026-11-13 10:47 (KST)
 - 파일: plugin_updater.py
 - 내용: remove .upstream_head from staging (updater allowlist rejects dotfile; updater creates marker itself on first sync)
