@@ -39,6 +39,7 @@
 - 사무실 v1.7.7 (2026-11-13): sniper_ledger() 모의(SIM) 원장 제외 — assassin_sim_ledger가 더 새로워 실전 need 0·바벨 줄 누락이 생겼음
 - 사무실 v1.7.6 (2026-11-13): 토스 키 읽기 폴백 — toss_dca_bot 삭제 뒤 스나이퍼 .env에서 읽음
 - 사무실 v1.7.4 (2026-11-13): 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 — 바벨 모드(BARBELL_60_30_10)일 때만 need.json 토스 계좌에 '바벨 씨드' 줄을 넣는다. need = 기준시드 − SOXL평가액(보유 주수 × 현재가), holding = 토스 USD 매수가능금액, 부족액 = max(0, need − holding). 바벨 OFF·씨드 없음·SOXL 조회 실패면 줄 없음 (합산 제외). 일일 매수 필요액 계산은 그대로.
+- 사무실 vNEXT (2026-11-13): 메리츠 4번에 SGOV 다음 회차 줄 추가 — 매수 3거래일(미국장) 전부터 보여준다. need = 다음 회차 금액(1회차면 first_tranche_usd, 이후 tranche_usd), holding = 메리츠 USD 추정잔고, 부족액 = max(0, need − holding). SGOV OFF·회차 없음·예정일 없음·3거래일 밖이면 줄 없음. 4번 적립(NKE/QLD) need는 그대로.
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
@@ -1613,6 +1614,50 @@ def barbell_seed_line(toss, usd_cash):
     return _need_line("USD", usd_cash, need, "unavailable", label="바벨 씨드")
 
 
+def _sgov_need_line(now, holding, auto_fx):
+    """SGOV 매수 3거래일 전부터: 다음 회차 금액 줄 (읽기 전용).
+    SGOV OFF·회차 없음·예정일 없음·3거래일 밖이면 None (줄 없음).
+    need = 다음 회차 금액(1회차면 first_tranche_usd, 이후 tranche_usd),
+    holding = 메리츠 USD 추정잔고, 부족액 = max(0, need − holding).
+    3거래일은 미국장 기준(is_trading_day, NYSE 휴장일 제외), 예정일은 미국 동부 날짜.
+    비교는 브리핑 기준(KST 날짜)으로 한다 — 미국 동부 날짜로 비교하면 KST 아침 브리핑이 반나절 늦게 뜬다."""
+    s = load(R / "etc/meritz-accum/settings.json", {})
+    if not s.get("enabled", False):
+        return None
+    state_dir = R / str(s.get("state_dir", "/var/lib/meritz-dca")).lstrip("/")
+    state = load(state_dir / ("dca_config.dry.json" if s.get("dry_run", True) else "dca_config.json"), None)
+    if not isinstance(state, dict):
+        return None
+    sg = state.get("sgov") or {}
+    if not sg.get("enabled", False):
+        return None
+    done = int(sg.get("tranches_done", 0) or 0)
+    total = int(sg.get("tranches_total", 0) or 0)
+    if done >= total:
+        return None
+    due_str = sg.get("next_due_date")
+    if not due_str:
+        return None
+    try:
+        due = datetime.strptime(str(due_str), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+    show_from = due
+    count = 0
+    while count < 3:
+        show_from = show_from - timedelta(days=1)
+        if is_trading_day(show_from):
+            count += 1
+    # 브리핑은 KST 기준이라 KST 날짜로 비교한다 (미국 동부 날짜로 비교하면 KST 아침 브리핑이 반나절 늦게 뜬다).
+    today = now.date()
+    if today < show_from or today > due:
+        return None
+    amount = float(sg.get("first_tranche_usd") if done == 0 else sg.get("tranche_usd") or 0)
+    if amount <= 0:
+        return None
+    return _need_line("USD", holding, amount, auto_fx, label="SGOV " + due.strftime("%m/%d"))
+
+
 def need_data(now=None):
     """오늘 매수 예정 합계·보유 현금·자동환전 상태 (읽기 전용)."""
     now = (now or datetime.now(KST)).astimezone(KST)
@@ -1632,10 +1677,19 @@ def need_data(now=None):
     accounts = [{"name": "토스", "lines": toss_lines}]
 
     meritz = []
+    est_4 = None
+    auto_fx_4 = "off"
     for label, by_currency, reason in meritz_fetch():
         est = _meritz_amount(by_currency, "USD", "estm_frcr_amt") if by_currency is not None else None
+        auto_fx = ("on" if load(R / "etc/meritz-accum/settings.json", {}).get("auto_fx",{}).get("on",False) else "off") if label == "4번" else _auto_fx(label)
+        if label == "4번":
+            est_4 = est
+            auto_fx_4 = auto_fx
         meritz.append(_need_line("USD", est, _meritz_dca_need(now) if label == "4번" else _fanding_need(label, now),
-                                 ("on" if load(R / "etc/meritz-accum/settings.json", {}).get("auto_fx",{}).get("on",False) else "off") if label == "4번" else _auto_fx(label), label=label))
+                                 auto_fx, label=label))
+    sgov_line = _sgov_need_line(now, est_4, auto_fx_4)
+    if sgov_line is not None:
+        meritz.append(sgov_line)
     accounts.append({"name": "메리츠", "lines": meritz})
 
     try:
