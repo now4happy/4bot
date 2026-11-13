@@ -955,6 +955,52 @@ def _write_upstream_marker_sync(target_dir: str, sha: str) -> None:
         logger.warning("원작 마커 기록 실패: %s", exc)
 
 
+def _commit_synced_files_sync(target_dir: str, sha: str) -> Tuple[bool, str]:
+    """동기화한 14개 파일을 git에 기록한다.
+
+    [Muse 수정 · 동기화 뒤 커밋] 원작 파일을 작업 폴더에 덮어만 쓰면
+    git에는 미저장 변경으로 남아, 사무실 업데이터(bot_updater)의
+    dirty 검사가 다음 텔레그램 업데이트를 멈춘다. 그래서 동기화한
+    파일만(다른 미저장 변경은 건드리지 않고) add + commit 한다.
+    마커(.upstream_head)는 gitignore·미추적이라 dirty 검사 대상이
+    아니라서 커밋하지 않는다. 커밋이 안 돼도 동기화 자체는
+    성공으로 본다(기록은 부기일 뿐).
+    """
+    try:
+        rc_a, _, err_a = _run_cmd_sync(
+            ["git", "add", "--"] + list(UPSTREAM_SYNC_MODULES),
+            cwd=target_dir,
+            timeout_sec=10.0,
+        )
+        if rc_a != 0:
+            return False, f"git add 실패: {err_a}"
+        rc_s, _, _ = _run_cmd_sync(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=target_dir,
+            timeout_sec=10.0,
+        )
+        if rc_s == 0:
+            return True, "바뀐 것 없음(커밋 생략)"
+        short = sha[:7] if sha else "?"
+        rc_c, _, err_c = _run_cmd_sync(
+            [
+                "git",
+                "-c", "user.name=now4happy",
+                "-c", "user.email=gieokkim@gmail.com",
+                "commit",
+                "-m",
+                f"sniper: upstream {short} direct sync",
+            ],
+            cwd=target_dir,
+            timeout_sec=15.0,
+        )
+        if rc_c != 0:
+            return False, f"git commit 실패: {err_c}"
+        return True, f"동기화분 커밋 완료 ({short})"
+    except Exception as exc:
+        return False, f"커밋 예외: {exc}"
+
+
 def _extract_upstream_files_sync(
     target_dir: str, ref: str, filenames: Tuple[str, ...]
 ) -> Tuple[bool, str]:
@@ -1181,6 +1227,12 @@ def _execute_git_pull_and_preflight_sync(
 
         _write_upstream_marker_sync(target_dir, upstream_head)
 
+        commit_ok, commit_note = _commit_synced_files_sync(
+            target_dir, upstream_head
+        )
+        if not commit_ok:
+            logger.warning("동기화분 커밋 실패(동기화는 성공): %s", commit_note)
+
         short_hash = upstream_head[:7]
         status_note = f"신규 커밋({short_hash}) 적용 · 원장 100% 보존"
         verify_note = (
@@ -1191,7 +1243,7 @@ def _execute_git_pull_and_preflight_sync(
         purge_note = (
             f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
         )
-        summary_msg = f"{status_note} · {verify_note}{purge_note}"
+        summary_msg = f"{status_note} · {verify_note}{purge_note} · {commit_note}"
         return True, summary_msg, True
 
     except Exception as exc:
