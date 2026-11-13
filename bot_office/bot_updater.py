@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-13): 옛(리베이스 전) 브랜치 되풀이 알림·충돌 방지 — ① 알림에 '서버보다 N개 뒤처짐'·'지금 적용하면 충돌할 파일'(git merge-tree, 미리 보기만) 표시
+#                       ② 같은 수정(제목+작성 시각 같음)이 이미 서버 HEAD나 다른 대기 브랜치에 있으면 '♻️ 옛 브랜치' 안내 + [🗑 옛 브랜치 지우기] 버튼
+#                          (누를 때 다시 확인 · 백업 태그 updater-backup/superseded-… 와 삭제를 한 번에 · 자동 삭제 없음 · main·staging 은 못 지움)
+#                       ③ '업데이트 확인'에서 알림을 다시 보냈는데도 '새로 올라온 수정이 없습니다'가 같이 뜨던 것 고침
+#                       ④ NAMES 의 meritz_dca.service 중복 키 정리 — 뒤 항목 '메리츠 적립'이 '3번 메리츠 적립'을 덮어쓰던 것
+#                       · 안전장치(버전 역전·되돌림 감지·dirty 검사·main 앞섬 검사·병합 실패 시 abort)는 그대로
 # 사무실 v1.8.0 (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 # 사무실 v1.7.5 (2026-11-13): 배포에서 빠진 파일은 막지 않고 넘김 — classify()가 (units, skipped) 반환, 테스트·점파일 등은 알림에 '⏭️ 배포에서 빠진 파일'로만 표시 (✅·중지 버튼 항상 표시, apply·중지 요청 거부 안 함)
 # 사무실 v1.7.2 (2026-11-13): 서버 미저장 변경 중단 안내에서 'Claude나 Gemini에게 확인을 요청해 주세요.' 문구 제거
@@ -99,7 +105,7 @@ CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
          "meritz_dca.service": "3번 메리츠 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서",
-         "meritz_laoer.service": "메리츠 SOXL 무매", "meritz_dca.service": "메리츠 적립"}
+         "meritz_laoer.service": "메리츠 SOXL 무매"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
 HUB_DIR = os.path.join(REPO, "alert-hub")
@@ -275,11 +281,13 @@ def gate_installed(unit):
 
 # ---------------------------------------------------------------- 새 업데이트 찾기
 def scan(st, force=False):
+    """새 업데이트 찾기 → 이번에 보낸 알림 개수 (GitHub 확인 실패면 None).
+    vNEXT: 대기 브랜치 목록을 먼저 다 모은 뒤 알림 — 옛 브랜치 안내(superseded)가 다른 대기 브랜치도 볼 수 있게. 감지 조건은 그대로."""
     rc, out = git("fetch", "-q", "--prune", "origin")
     if rc:
         if st.get("fetch_err") != out[:80]:
             st["fetch_err"] = out[:80]; say("⚠️ <b>[업데이트 비서] GitHub 확인 실패</b>\n▫️ " + esc(out[-200:]))
-        return
+        return None
     st["fetch_err"] = ""
     main_ahead_notice(st)
     rc, refs = git("for-each-ref", "--format=%(refname:short) %(objectname)", "refs/remotes/origin")
@@ -292,12 +300,16 @@ def scan(st, force=False):
         if git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue   # 이미 반영된 브랜치
         live[br] = sha
-        seen = st.setdefault("seen", {})
+    sent = 0
+    seen = st.setdefault("seen", {})
+    for br, sha in live.items():
         if seen.get(br) == sha and not force:
             continue
         seen[br] = sha
-        offer(st, br, sha)
+        offer(st, br, sha, live)
+        sent += 1
     prune(st, live)
+    return sent
 
 
 def main_ahead_notice(st):
@@ -413,7 +425,111 @@ def revert_check(sha, files):
     return out
 
 
-def offer(st, br, sha):
+# ---------------------------------------------------------------- 옛(리베이스 전) 브랜치 감지 (vNEXT)
+# 왜: scan 은 'main 이 아니고 서버 HEAD 의 조상이 아닌' 브랜치를 모두 새 수정으로 본다. 리베이스는 새 커밋을 만들 뿐
+#     옛 커밋을 HEAD 의 조상으로 만들지 않으므로, 옛 커밋을 가리키는 브랜치가 GitHub 에 남으면 영원히 '미반영'으로 보이고
+#     낡은 기준에서 같은 파일을 고친 것이라 병합 때마다 충돌한다. apply 의 자동 삭제는 적용한 브랜치 하나만 지운다.
+_BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+
+
+def behind_count(sha):
+    """서버 HEAD 에는 있고 이 브랜치에는 없는 커밋 수 (= 브랜치가 뒤처진 정도). 확인 실패 None."""
+    rc, n = git("rev-list", "--count", f"{sha}..HEAD")
+    return int(n) if rc == 0 and n.strip().isdigit() else None
+
+
+def predict_conflicts(sha):
+    """지금 HEAD 에 병합하면 충돌할 파일 목록 (미리 보기만 · 작업 폴더·인덱스·HEAD 는 건드리지 않음).
+    [] = 충돌 없음, None = 확인 불가 (git 2.38 미만 등 — 그때는 예전처럼 적용 때 판정)."""
+    rc, out = git("merge-tree", "--write-tree", "--name-only", "--no-messages", "HEAD", sha)
+    if rc == 0:
+        return []
+    if rc != 1:
+        return None
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    if not lines or not re.fullmatch(r"[0-9a-f]{40,64}", lines[0]):
+        return None
+    return lines[1:]
+
+
+def _commit_keys(rng):
+    """범위 안 병합 아닌 커밋 → [(작성 시각 원본, 제목, sha)]. 작성 시각(author date)은 리베이스·체리픽에서 그대로 남는다."""
+    rc, out = git("log", "--no-merges", "--format=%H%x09%ad%x09%s", "--date=raw", rng)
+    if rc:
+        return None
+    rows = []
+    for line in out.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3:
+            rows.append((parts[1], parts[2], parts[0]))
+    return rows
+
+
+def superseded(sha, others=None):
+    """이 브랜치의 수정이 전부(제목 + 작성 시각이 같은 커밋으로) 이미 서버 HEAD 나 다른 대기 브랜치에 들어 있는지.
+    → {"where": "HEAD" 또는 브랜치 이름, "by": 새 커밋 sha, "subject": 제목, "count": 커밋 수} / 아니면 None.
+    제목만 같은 것(예: GitHub 웹 기본 제목 'Update x.py')은 작성 시각이 달라 걸리지 않는다."""
+    targets_ = [("HEAD", "HEAD")] + sorted((b, s) for b, s in (others or {}).items() if s != sha)
+    for where, ref in targets_:
+        mine = _commit_keys(f"{ref}..{sha}")
+        theirs = _commit_keys(f"{sha}..{ref}")
+        if not mine or not theirs:
+            continue
+        index = {(d, s): h for d, s, h in theirs}
+        if all((d, s) in index for d, s, _h in mine):
+            d, s, _h = mine[0]
+            return {"where": where, "by": index[(d, s)], "subject": s, "count": len(mine)}
+    return None
+
+
+def _superseded_text(sup):
+    if sup["where"] == "HEAD":
+        return (f"♻️ <b>이미 서버에 반영된 옛 브랜치예요</b> — 같은 수정(제목·작성 시각 같음)이 다른 커밋 "
+                f"<code>{esc(sup['by'][:8])}</code>로 이미 들어와 있어요 (리베이스 전 원본으로 보임)."
+                "\n→ ✅·충돌 정리 말고 <b>🗑 옛 브랜치 지우기</b>를 눌러 주세요. 백업 태그를 남기고 지웁니다.")
+    return (f"♻️ <b>같은 수정의 새 브랜치가 따로 있어요</b>: <code>{esc(sup['where'])}</code> "
+            f"(<code>{esc(sup['by'][:8])}</code>, 리베이스본으로 보임)."
+            "\n→ 이 옛 브랜치 말고 새 브랜치 알림을 승인하고, 이건 <b>🗑 옛 브랜치 지우기</b>로 정리해 주세요.")
+
+
+def _drop_row(key):
+    return [{"text": "🗑 옛 브랜치 지우기 (백업 남김)", "callback_data": f"rm:{key}"}]
+
+
+def drop_superseded(st, key):
+    """🗑 옛 브랜치 지우기 — 누를 때 다시 확인: GitHub 최신 SHA 같음 + 여전히 '이미 반영된 옛 브랜치'.
+    백업 태그 만들기와 브랜치 삭제를 한 번에(--atomic), 그사이 브랜치가 바뀌었으면 거부(--force-with-lease).
+    서버 작업 폴더·HEAD·main·staging 은 건드리지 않는다. Git 출력은 보여 주지 않는다(주소에 인증값이 있을 수 있음)."""
+    o = st.get("offers", {}).get(key)
+    if not o:
+        return say("⚠️ 최신 업데이트 알림에서 다시 눌러 주세요.")
+    br, sha = o["branch"], o["sha"]
+    if br in ("main", "staging", "HEAD") or not _BRANCH_RE.fullmatch(br):
+        return say("⛔ 이 브랜치는 여기서 지울 수 없습니다.")
+    if git("fetch", "-q", "--prune", "origin")[0]:
+        return say("⚠️ GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요. (아무것도 지우지 않았습니다)")
+    rc, now_sha = git("rev-parse", f"origin/{br}")
+    if rc or now_sha != sha:
+        return say("⚠️ 그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림에서 다시 확인해 주세요. (아무것도 지우지 않았습니다)")
+    live = live_branches() or {}
+    sup = superseded(sha, live)
+    if not sup:
+        return say("⛔ 이미 반영된 옛 브랜치로 확인되지 않아 지우지 않았습니다.")
+    backup = "updater-backup/superseded-" + datetime.now(KST).strftime("%Y%m%d-%H%M%S") + "-" + sha[:8]
+    rc, _out = git("push", "--atomic", f"--force-with-lease=refs/heads/{br}:{sha}", "origin",
+                   f"{sha}:refs/tags/{backup}", f":refs/heads/{br}")
+    if rc:
+        return say(f"⛔ 옛 브랜치를 지우지 못했습니다 (코드 {rc}). 브랜치·태그 모두 그대로입니다.")
+    git("fetch", "-q", "--prune", "origin")
+    for k, ofr in list(st.get("offers", {}).items()):
+        if ofr.get("branch") == br:
+            st["offers"].pop(k, None)
+    st.setdefault("seen", {}).pop(br, None)
+    say(f"🗑 옛 브랜치 <code>{esc(br)}</code> 를 지웠습니다.\n▫️ 백업 태그: <code>{esc(backup)}</code> (필요하면 이 태그로 되살릴 수 있어요)"
+        "\n▫️ 서버 코드·main·staging 은 그대로입니다.")
+
+
+def offer(st, br, sha, live=None):
     _, files = git("diff", "--name-only", f"HEAD...{sha}")
     files = [f for f in files.splitlines() if f.strip()]
     units, skipped = classify(files)
@@ -432,7 +548,25 @@ def offer(st, br, sha):
                  + ("\n…외 " + str(len(reverts) - 6) + "건" if len(reverts) > 6 else "")
                  + "\n→ 최신 main 파일을 받아 다시 고쳐 올리는 걸 추천해요. 알고 올린 거면 그대로 승인해도 돼요.")
         st["offers"][key]["reverts"] = len(reverts)
+    # vNEXT: 낡은 정도 · 미리 본 충돌 · 옛 브랜치 안내 (모두 알림 정보만 — 적용 단계의 검사는 그대로)
+    try:
+        behind = behind_count(sha)
+        conflicts = predict_conflicts(sha)
+        sup = superseded(sha, live)
+    except Exception as e:
+        print("옛 브랜치 확인 실패:", type(e).__name__, e, flush=True); behind, conflicts, sup = None, None, None
+    if behind:
+        warn += f"\n\n🕰 기준: 서버보다 <b>{behind}개</b> 뒤처진 브랜치"
+    if conflicts:
+        warn += ("\n⛔ <b>지금 적용하면 충돌하는 파일</b>: " + esc(", ".join(conflicts[:6])) + (" 외" if len(conflicts) > 6 else "")
+                 + ("" if sup else "\n→ 최신 main 기준으로 다시 올려(리베이스) 주세요. 이대로 ✅를 누르면 충돌로 멈춥니다."))
+        st["offers"][key]["conflicts"] = len(conflicts)
+    if sup:
+        warn += "\n\n" + _superseded_text(sup)
+        st["offers"][key]["superseded"] = sup["where"]
     rows = [[{"text": "🔍 바뀐 내용 보기", "callback_data": f"df:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]]
+    if sup:
+        rows.append(_drop_row(key))
     if UC:
         rows.append([{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}])
     rows.insert(0, [{"text": "⚠️ 알고 있음 · 그래도 업데이트" if reverts else "✅ 업데이트", "callback_data": f"up:{key}"}])   # 빠진 파일이 있어도 항상 표시
@@ -910,8 +1044,13 @@ def apply(st, key):
     rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
     if rc:
         git("merge", "--abort")
-        return say("⛔ 서버 코드와 업데이트 브랜치가 충돌해 적용하지 않았습니다. 이미 처리한 이전 변경만 선택해 정리한 뒤 새 알림으로 승인하세요.",
-                   [[{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}]] if UC else None)
+        try:   # vNEXT: 옛(리베이스 전) 브랜치면 충돌 정리가 아니라 지우기를 안내 (안내만 · 병합 중단은 위와 같음)
+            sup = superseded(sha, live_branches())
+        except Exception:
+            sup = None
+        rows = ([_drop_row(key)] if sup else []) + ([[{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}]] if UC else [])
+        return say("⛔ 서버 코드와 업데이트 브랜치가 충돌해 적용하지 않았습니다. 이미 처리한 이전 변경만 선택해 정리한 뒤 새 알림으로 승인하세요."
+                   + ("\n\n" + _superseded_text(sup) if sup else ""), rows or None)
     bad_py = [f for fs in units.values() for f in fs if f.endswith(".py") and os.path.exists(os.path.join(REPO, f)) and sh(sys.executable, "-m", "py_compile", os.path.join(REPO, f))[0]]
     if bad_py:
         git("reset", "-q", "--hard", old_head)
@@ -1044,7 +1183,12 @@ def handle(st, upd):
         tg("answerCallbackQuery", callback_query_id=cb["id"])
         act, _, key = (cb.get("data") or "").partition(":")
         if act == "cp" and UC:
+            o = st.get("offers", {}).get(key)
+            if o and o.get("superseded"):   # vNEXT: 옛 브랜치면 정리보다 지우기가 맞다고 먼저 안내 (정리 화면도 그대로 열림)
+                say("ℹ️ 이 브랜치는 이미 반영된 옛 브랜치로 보여요. 충돌 정리보다 지우기가 맞습니다.", [_drop_row(key)])
             return UC.preview(sys.modules[__name__], st, key)
+        elif act == "rm":   # vNEXT: 🗑 옛 브랜치 지우기
+            return drop_superseded(st, key)
         elif act in ("ct", "cc", "cr", "cx") and UC:
             return UC.handle(sys.modules[__name__], st, act, key)
         elif act == "pa":
@@ -1112,7 +1256,7 @@ def handle(st, upd):
             if missing:   # 최신 알림이 지워졌거나 없던 브랜치는 새 알림을 다시 만든다
                 for b in missing:
                     st.setdefault('seen', {})[b] = live[b]
-                    offer(st, b, live[b])
+                    offer(st, b, live[b], live)
             head = ('🗑 반영 안 된 지난 알림 ' + str(removed) + '개를 지웠습니다.\n') if removed else ''
             if not offers:
                 return say(head + '✅ 정리할 업데이트가 없습니다. (GitHub에 대기 중인 수정 없음)')
@@ -1140,10 +1284,12 @@ def handle(st, upd):
             if not found:
                 say("✅ 업데이트용 일시중지/대기 중인 봇이 없습니다.")
         elif txt in ("업데이트", "업데이트 확인", "/update"):
-            say("🔄 GitHub를 확인합니다…"); before = len(st.get("offers", {}))
-            scan(st, force=True)
-            if len(st.get("offers", {})) == before:
+            say("🔄 GitHub를 확인합니다…")
+            sent = scan(st, force=True)   # vNEXT: 보낸 알림 수로 판단 (예전엔 같은 알림을 다시 보내고도 '없습니다'가 같이 떴음)
+            if sent == 0:
                 say("✅ 새로 올라온 수정이 없습니다.")
+            elif sent is None:
+                say("⚠️ GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요.")
  
  
 def _run_as_owner(*a, timeout=120):
