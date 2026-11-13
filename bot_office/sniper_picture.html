@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체 · 사무실 v1.2.8: 층 영역 지하층 줄(황금 칸)·상단 지하 주수 · 사무실 v1.3.3: Case 91 시멘트추가 횟수·운용 모드 줄) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
+<!-- 사무실 스나이퍼 매매 그림 (계단식 v9 + v2.0.0 서브 그리드 · 사무실 v1.1.6 · 사무실 v1.2.1: Case 89 사이클 줄 · 사무실 v1.2.5·v1.2.6 골든 표시 → 사무실 v1.2.7: 지하층 카드로 교체 · 사무실 v1.2.8: 층 영역 지하층 줄(황금 칸)·상단 지하 주수 · 사무실 v1.3.3: Case 91 시멘트추가 횟수·운용 모드 줄 · 사무실 vNEXT: 바벨·암살자 모드 그래프 카드) · 보기 전용 · 데이터: /api/sniper-picture (로그인 필요) · 주문·승인·설정 기능 없음 -->
 <!-- 설계: 비율·척도 무시, 위층일수록 오른쪽에서 시작, 바 길이 = 주수(1주=1칸), 전체가 틀을 넘으면 전체를 같은 비율로 축소, 주수는 층 옆, 칸 안 흰색, 상단 2열, 층별 중복 잔글씨 제거(상태는 목표 가격 옆 기호로), 바 세로 16px -->
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>스나이퍼 매매 그림</title>
@@ -64,6 +64,14 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     <div id="subpic" aria-label="서브 층별 가격 그림"></div>
     <div id="subwma" aria-label="서브 통합이평"></div>
     <div id="subnote" class="note"></div>
+  </div>
+  <div class="card" id="barbellcard">
+    <div class="legend"><span>바벨 (60/30/10 · SOXL 코어 / SGOV 방패 / 현금 · 수익은 별도 금고로)</span></div>
+    <div id="barbell" class="hold"></div>
+  </div>
+  <div class="card" id="assassincard">
+    <div class="legend"><span>암살자 (새벽 급락을 잡아 정규장 초반에 익절 · 모의/실전)</span></div>
+    <div id="assassin" class="hold"></div>
   </div>
   <p class="note" id="modeline" hidden></p>
   <div class="warn" id="reservewarn" hidden></div>
@@ -191,6 +199,51 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     });
   }
 
+  // 사무실 vNEXT: 바벨 그래프 — 60/30/10 바 너비는 비중(60%·30%·10%), 라벨은 실제 금액. 바벨 OFF면 목표만 참고로 보여 준다.
+  function drawBarbell(d){
+    var box=$('barbell');box.textContent='';
+    var b=d.barbell;if(!b){box.appendChild(el('div','note','바벨 원장 없음'));return}
+    var on=b.mode==='BARBELL_60_30_10';
+    var seed=b.initial_seed_usd||0;
+    var t1=seed*0.6,t2=seed*0.3,t3=seed*0.1;
+    box.appendChild(el('div',null,(on?'⚖️ 바벨 ON (60/30/10)':'⚖️ 바벨 OFF · 지금 '+(b.mode||'—'))+(b.is_initialized?'':' · 미초기화')));
+    var rows=[
+      ['SOXL 코어 60%',60,'목표 '+usd(t1)+(on?'':' · 바벨 OFF라 미적용')],
+      ['SGOV 방패 30%',30,'보유 '+b.sgov_held_qty+'주 · '+usd(b.sgov_invested_usd)+' / 목표 '+usd(t2)+' (현재가 '+usd(b.sgov_last_price)+')'],
+      ['현금 10%',10,usd(b.cash_bucket_usd)+' / 목표 '+usd(t3)],
+    ];
+    rows.forEach(function(r){
+      var w=el('div','lrow');
+      var tc=el('div','tiercol');tc.appendChild(el('div','tier',r[0]));w.appendChild(tc);
+      var wrap=el('div','barwrap');
+      var bar=el('div','bar');bar.style.width=r[1]+'%';bar.style.borderColor='var(--c-up)';
+      var c=el('div','cell');c.style.width='100%';c.style.background='var(--c-up)';c.style.opacity='0.25';bar.appendChild(c);
+      wrap.appendChild(bar);
+      wrap.appendChild(el('div','lp',r[2]));
+      w.appendChild(wrap);box.appendChild(w);
+    });
+    box.appendChild(el('div','note','🏦 수익금고: 사용 가능 '+usd(b.vault_available_usd)+' · 누적 실현 '+usd(b.vault_realized_profit_usd)+' · 완료 사이클 '+b.completed_barbell_cycles+'회 · SGOV 추가 매수 예산 '+usd(b.pending_sgov_buy_budget_usd)));
+  }
+
+  // 사무실 vNEXT: 암살자 그래프 — 오늘 게이트 라운드를 진입→청산 한 줄씩. 초록=익절, 빨강=손절/중단.
+  function drawAssassin(d){
+    var box=$('assassin');box.textContent='';
+    var a=d.assassin;if(!a){box.appendChild(el('div','note','암살자 원장 없음'));return}
+    var mode=a.execution_mode==='SIMULATED'?'모의':(a.execution_mode==='LIVE'?'실전':(a.execution_mode||'—'));
+    box.appendChild(el('div',null,'🗡️ 암살자 · '+mode+(a.is_enabled?' · 가동 중':' · 꺼짐')+' · '+(a.session_phase||'')+(a.live_order_hard_lock?' · 실주문 잠금':'')));
+    box.appendChild(el('div','note','오늘 정찰 '+a.day_scout_seq+'회 · 정찰 익절 '+a.prior_scout_wins_today+'회 · 게이트 익절 '+a.win_exits+'회 · 중단 '+a.cutoff_exits+'회'+(a.has_position?' · 보유 중':'')));
+    (a.rounds||[]).forEach(function(r){
+      var win=(r.status||'').indexOf('WIN')===0;
+      var row=el('div','lrow');
+      var tc=el('div','tiercol');tc.appendChild(el('div','tier',(r.round_no||'?')+'회 '+(r.gate_id||'')));row.appendChild(tc);
+      var wrap=el('div','barwrap');
+      var txt=(r.entry_time_est||'')+' '+usd(r.entry_price)+' → '+(r.exit_time_est||'')+' '+usd(r.exit_price)+' · '+(r.gain_pct!=null?(r.gain_pct>=0?'+':'')+Number(r.gain_pct).toFixed(2)+'%':'—')+(win?' ✓':' ✕');
+      wrap.appendChild(el('div','lp'+(win?' ok':''),txt));
+      row.appendChild(wrap);box.appendChild(row);
+    });
+    if(!(a.rounds||[]).length)box.appendChild(el('div','note','오늘 게이트 라운드 없음'));
+  }
+
   // 사무실 v1.2.1 · Case 89 사이클 줄: 백엔드 cycle 객체만 그린다. 값이 없으면(null) "—" (0 으로 지어내지 않음)
   function drawCycle(d){
     var box=$('cycle');box.textContent='';var c=d.cycle||{};
@@ -241,7 +294,7 @@ main{max-width:520px;margin:0 auto;padding:6px 12px 8px}
     }
     T2.appendChild(left);T2.appendChild(right);
     drawCycle(d);
-    draw(d);drawBasement(d);drawSub(d);
+    draw(d);drawBasement(d);drawSub(d);drawBarbell(d);drawAssassin(d);
     var rw=$('reservewarn');
     // 사무실 v1.3.3 · Case 91: 시멘트추가는 무제한 — 남은 회분 분수 없이 금액 · 총 횟수만
     if(d.reserve&&d.reserve.injected_usd>0){rw.hidden=false;var rc=Math.max(d.reserve.total_injected_cnt||0,d.reserve.used_portions||0);rw.textContent='⚠️ 시멘트추가 사용 중: '+usd(d.reserve.injected_usd)+' (총 '+rc+'회) — 2번 시멘트추가는 3번 적립 달러까지 쓸 수 있어요';}else rw.hidden=true;

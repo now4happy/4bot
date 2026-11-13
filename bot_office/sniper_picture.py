@@ -14,6 +14,8 @@
 #   holding.total_shares = 본 + 서브 + 지하층 (주수 합계만). 투자금·평단·미실현은 본·서브만 그대로 (지하층 금액 미포함).
 # 사무실 v1.3.3 (2026-11-06): 스나이퍼 v2.3.0(원작 a4b4790 Case 91) 대응 — reserve 에 total_injected_cnt·daily_injected_cnt 추가
 #   (무제한 시멘트추가 · 회분 상한 표시 없앰), mode 객체 추가(원장 portion_mode · 없으면 복리). 지하층·본·서브·사이클·캐시 그대로.
+# 사무실 vNEXT: 바벨·암살자 모드 그래프 — barbell_ledger.json(바벨 60/30/10·SGOV 방패·수익금고)와
+#   assassin_sim_ledger.json(모의/실전·오늘 게이트 라운드)을 읽어 barbell·assassin 객체로 내보냄 (읽기만 · 계산 없음).
 #  · 주문·승인·설정 변경·리셋 기능 없음. 원장 JSON 을 '읽기만' 한다 (쓰기·삭제 없음).
 #  · /api/board 와 섞지 않는다 (첫 화면의 '금액·수량 원문 없음' 규칙 유지). 이 데이터는 /sniper-picture 전용.
 #  · 계산을 새로 만들지 않는다: toss_sniper/quant_engine.py 의 원본 함수를 그대로 부른다.
@@ -317,6 +319,89 @@ def build(state, live_price=None, now_est=None, price_note=""):
             "fx": {"krw_per_usd": None, "note": "환율 미확인 · 달러만 표시"}}
 
 
+
+def _read_mode_ledgers(state):
+    """바벨·암살자 원장을 읽어 그림용 데이터를 만든다 (읽기만 · 계산 없음).
+    파일이 없어도 그림은 계속 그린다. 없는 값은 None/0으로 두지 않고 아예 빼지 않는다
+    (화면이 '—'로 표시하도록 None을 넣는다)."""
+    out = {"barbell": None, "assassin": None}
+    slug = ""
+    try:
+        slug = ((state or {}).get("SOXL") or {}).get("folder_slug") or ""
+    except Exception:
+        slug = ""
+
+    def _load_json(names):
+        for name in names:
+            fp = SNIPER_DIR / name
+            try:
+                if fp.is_file():
+                    with open(fp, "r", encoding="utf-8") as rf:
+                        return json.load(rf)
+            except Exception:
+                continue
+        return None
+
+    try:
+        names_b = ([f"barbell_ledger_{slug}.json", "barbell_ledger.json"] if slug else ["barbell_ledger.json"])
+        raw_b = _load_json(names_b)
+        if isinstance(raw_b, dict):
+            b = raw_b.get("BARBELL") or raw_b
+            if isinstance(b, dict):
+                out["barbell"] = {
+                    "mode": ((state or {}).get("SOXL") or {}).get("portion_mode"),
+                    "is_initialized": bool(b.get("is_initialized")),
+                    "initial_seed_usd": float(b.get("initial_seed_usd") or 0),
+                    "cash_bucket_usd": float(b.get("cash_bucket_usd") or 0),
+                    "sgov_held_qty": int(b.get("sgov_held_qty") or 0),
+                    "sgov_invested_usd": float(b.get("sgov_invested_usd") or 0),
+                    "sgov_last_price": float(b.get("sgov_last_price") or 0),
+                    "pending_sgov_buy_budget_usd": float(b.get("pending_sgov_buy_budget_usd") or 0),
+                    "vault_available_usd": float(b.get("vault_available_usd") or 0),
+                    "vault_realized_profit_usd": float(b.get("vault_realized_profit_usd") or 0),
+                    "completed_barbell_cycles": int(b.get("completed_barbell_cycles") or 0),
+                }
+    except Exception:
+        pass
+
+    try:
+        names_a = ([f"assassin_sim_ledger_{slug}.json", "assassin_sim_ledger.json"] if slug else ["assassin_sim_ledger.json"])
+        raw_a = _load_json(names_a)
+        if isinstance(raw_a, dict):
+            a = raw_a.get("SOXL") or raw_a
+            if isinstance(a, dict):
+                rounds = []
+                for r in (a.get("today_gt_gate_history") or []):
+                    if not isinstance(r, dict):
+                        continue
+                    rounds.append({
+                        "round_no": r.get("round_no"),
+                        "gate_id": r.get("gate_id"),
+                        "entry_time_est": r.get("entry_time_est"),
+                        "entry_price": r.get("entry_price"),
+                        "exit_time_est": r.get("exit_time_est"),
+                        "exit_price": r.get("exit_price"),
+                        "gain_pct": r.get("gain_pct"),
+                        "status": r.get("status"),
+                    })
+                out["assassin"] = {
+                    "execution_mode": a.get("execution_mode"),
+                    "is_enabled": bool(a.get("is_enabled")),
+                    "live_order_hard_lock": bool(a.get("live_order_hard_lock")),
+                    "session_phase": a.get("session_phase"),
+                    "session_date": a.get("current_session_date"),
+                    "day_scout_seq": int(a.get("day_scout_seq") or 0),
+                    "prior_scout_wins_today": int(a.get("prior_scout_wins_today") or 0),
+                    "win_exits": int(a.get("today_gt_gate_win_exits") or 0),
+                    "cutoff_exits": int(a.get("today_gt_gate_cutoff_exits") or 0),
+                    "has_position": bool(a.get("has_position")),
+                    "rounds": rounds,
+                }
+    except Exception:
+        pass
+    return out
+
+
 def picture():
     """/api/sniper-picture 본체 (15초 캐시)."""
     if _CACHE["data"] and time.monotonic() - _CACHE["at"] < 15:
@@ -330,6 +415,7 @@ def picture():
         data = build(state, live_price=lp, price_note=note)
         if data.get("ok"):
             data["ledger"] = {"file": f.name, "updated_kst": datetime.fromtimestamp(_mtime(f), KST).strftime("%m-%d %H:%M:%S")}
+            data.update(_read_mode_ledgers(state))
     _CACHE.update(at=time.monotonic(), data=data)
     return data
 
