@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.9 · 2026-11-13 16:58 (KST)
+- 파일: asset_board.py, board.html, office_board.py, test_asset_board.py
+- 내용: 사무실 자산 구성: 포트폴리오 버킷 6개 (asset_board v1.4.4)
+- 브랜치: staging
+
 ## vNEXT · 2026-11-13 (KST)
 - 파일: asset_board.py, office_board.py, board.html, test_asset_board.py
 - 내용: 자산 구성(mix)을 포트폴리오 버킷 6개로 (금·가상화폐·달러·단기채·간접자산·주식·전환 대기 현금) — 시트 '입력정리'!A103:B109 '포트폴리오 자산 구성' 블록을 읽음 (기존 A83:B87 4개 항목 블록은 안 읽음 · 시트에 새 블록 이미 넣음). amt 는 '전환 대기 현금' 항목에만 (이름 변경 · 천만 단위 표기는 보드 그대로). 1% 미만 버킷도 숨기지 않음 (HIDE_BELOW mix 0.0 · 금·가상화폐 도넛·목록에 보임). 투자 종목은 그대로 (한국관련주 매도분은 시트 B92에서 이미 반영). asset_board v1.4.3 → v1.4.4.
