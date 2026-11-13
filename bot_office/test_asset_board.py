@@ -2,6 +2,8 @@
 # 사무실 v1.3.7: asset_board.py · office_board.assets() 확인 (표준 라이브러리만 · 네트워크·비밀키 안 씀)
 # 사무실 v1.3.8: 자산 구성 1% 미만 숨김 테스트 추가
 # 사무실 v1.4.2: 수익률(월별 표 A67:H78 → returns) · office_board returns 전달 · 보드 하이브리드(도넛+막대) 테스트 추가
+# 사무실 v1.4.4: 자산 구성 mix 를 포트폴리오 버킷 6개로 (금·가상화폐·달러·단기채·간접자산·주식·전환 대기 현금)
+#   · amt 는 '전환 대기 현금' 항목에만 · 1% 미만 버킷도 숨기지 않음 (HIDE_BELOW mix 0.0)
 # 사무실 v1.4.3: 현금 amt(만원÷10 정수, 현금만) · stock 증권사별 segments (E27:E30·E34:E35·E37:E38) · 옛 assets.json 호환 테스트 추가
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
@@ -22,10 +24,10 @@ SA.write_text(json.dumps({"client_email": "test@example.iam.gserviceaccount.com"
 FAKE_SIGN = lambda key, data: b"sig"
 
 
-MIX_NAMES = ("현금", "주식·ETF", "코인", "간접자산")
+MIX_NAMES = ("금", "가상화폐", "달러·단기채", "간접자산", "주식", "전환 대기 현금")
 STOCK_NAMES = ("미국", "한국관련주", "중국관련주", "일본관련주", "SOXL", "TQQQ", "토스 해외주식", "코인")
 # 실제 시트 A열 형식 (퍼센트가 앞에 붙어 있음 · 퍼센트 숫자는 예시)
-MIX_REAL = ("42.7% 현금", "32.3% 주식·ETF", "0.1% 코인", "24.9% 간접자산")
+MIX_REAL = ("0.8% 금", "0.1% 가상화폐", "2.4% 달러·단기채", "25.0% 간접자산", "34.6% 주식", "37.0% 전환 대기 현금")
 STOCK_REAL = ("3.4% 미국", "49.3% 한국관련주", "7.1% 중국관련주", "3.8% 일본관련주", "26.4% SOXL", "8.9% TQQQ",
               "0.8% 토스 해외주식", "0.3% 코인")
 
@@ -70,7 +72,7 @@ class Http:
         return self.status, {}, self.body
 
 
-MIX = [500, 3000, 900, 600]
+MIX = [80, 10, 240, 2500, 3460, 3700]   # 금 0.8 · 가상화폐 0.1 · 달러 2.4 · 간접 25.0 · 주식 34.6 · 전환 대기 현금 37.0 (합계 9990)
 STOCK = [800, 2000, 160, 80, 380, 250, 140, 220]
 
 
@@ -175,19 +177,21 @@ class T(unittest.TestCase):
             self.skipTest("openssl 없음")
         self.assertEqual(len(AB.rs256_sign(key.stdout, b"hello")), 256)
 
-    # ---- v1.3.8: 자산 구성(mix)만 1% 미만 숨김
-    MIX_NOW = [427, 323, 1, 249]                      # 현재 비율과 같은 예시 (코인 0.1%)
+    # ---- v1.4.4: 자산 구성(mix)은 포트폴리오 버킷 6개 · 1% 미만도 숨기지 않음
+    MIX_NOW = [80, 10, 240, 2500, 3460, 3700]             # 금 0.8% · 가상화폐 0.1% · 달러 2.4% · 간접 25.0% · 주식 34.6% · 현금 37.0%
     STOCK_NOW = [34, 493, 71, 38, 264, 89, 8, 3]      # 토스 해외주식 0.8% · 코인 0.3%
 
     def charts_of(self, mix, stock):
         _, disk = self.run_update(Http(sheet(mix, stock, mix_names=MIX_REAL, stock_names=STOCK_REAL)))
         return {c["key"]: c for c in disk["charts"]}
 
-    def test_mix_hides_coin_below_1pct(self):
+    def test_mix_shows_small_buckets(self):
         c = self.charts_of(self.MIX_NOW, self.STOCK_NOW)
-        self.assertEqual([i["name"] for i in c["mix"]["items"]], ["현금", "주식·ETF", "간접자산"])
-        self.assertEqual({i["name"]: i["pct"] for i in c["mix"]["items"]}, {"현금": 42.7, "주식·ETF": 32.3, "간접자산": 24.9})
-        self.assertEqual(c["mix"]["check"], "ok")          # 숨긴 코인 금액도 합계에 포함 → 시트 합계와 일치
+        self.assertEqual([i["name"] for i in c["mix"]["items"]],
+                         ["금", "가상화폐", "달러·단기채", "간접자산", "주식", "전환 대기 현금"])
+        self.assertEqual({i["name"]: i["pct"] for i in c["mix"]["items"]},
+                         {"금": 0.8, "가상화폐": 0.1, "달러·단기채": 2.4, "간접자산": 25.0, "주식": 34.6, "전환 대기 현금": 37.0})
+        self.assertEqual(c["mix"]["check"], "ok")
         self.assertEqual(c["mix"]["zero"], [])
 
     def test_stock_keeps_small_items(self):
@@ -197,23 +201,21 @@ class T(unittest.TestCase):
         self.assertEqual((st["코인"], st["토스 해외주식"], st["한국관련주"]), (0.3, 0.8, 49.3))
         self.assertEqual(c["stock"]["check"], "ok")
 
-    def test_mix_coin_returns_at_1pct(self):
-        c = self.charts_of([4170, 3230, 100, 2500], self.STOCK_NOW)    # 코인 1.0% → 보임 (경계)
-        self.assertIn({"name": "코인", "pct": 1.0}, c["mix"]["items"])
-        c = self.charts_of([4170, 3230, 96, 2504], self.STOCK_NOW)     # 0.96% → 반올림 1.0% → 보임
-        self.assertIn({"name": "코인", "pct": 1.0}, c["mix"]["items"])
-        c = self.charts_of([4170, 3230, 95, 2505], self.STOCK_NOW)     # 0.95% → 기존 round() 로 0.9% → 숨김 (계산 방식 그대로)
-        self.assertNotIn("코인", [i["name"] for i in c["mix"]["items"]])
-        c = self.charts_of([4170, 3230, 94, 2506], self.STOCK_NOW)     # 0.94% → 0.9% → 숨김
-        self.assertNotIn("코인", [i["name"] for i in c["mix"]["items"]])
+    def test_mix_small_bucket_boundary(self):
+        # chart() hide_below 파라미터 자체는 그대로 동작 (경계값 테스트) · mix 기본값은 0.0이라 0.1%도 보임
+        c = self.charts_of([4170, 100, 3230, 1500, 1000, 0], self.STOCK_NOW)    # 가상화폐 1.0% → 보임 (경계)
+        self.assertIn({"name": "가상화폐", "pct": 1.0}, c["mix"]["items"])
+        c = self.charts_of([4170, 96, 3230, 1504, 1000, 0], self.STOCK_NOW)     # 0.96% → 반올림 1.0% → 보임
+        self.assertIn({"name": "가상화폐", "pct": 1.0}, c["mix"]["items"])
+        self.assertEqual(AB.HIDE_BELOW, {"mix": 0.0})
 
     def test_hiding_does_not_change_other_pct(self):
-        a = AB.chart([["현금", 427], ["주식·ETF", 323], ["코인", 1], ["간접자산", 249], ["합계", 1000]], MIX_NAMES)
-        b = AB.chart([["현금", 427], ["주식·ETF", 323], ["코인", 1], ["간접자산", 249], ["합계", 1000]], MIX_NAMES, 1.0)
-        self.assertEqual([i for i in a["items"] if i["name"] != "코인"], b["items"])
+        a = AB.chart([["금", 80], ["가상화폐", 10], ["달러·단기채", 240], ["간접자산", 2500], ["주식", 3460], ["전환 대기 현금", 3700], ["합계", 9990]], MIX_NAMES)
+        b = AB.chart([["금", 80], ["가상화폐", 10], ["달러·단기채", 240], ["간접자산", 2500], ["주식", 3460], ["전환 대기 현금", 3700], ["합계", 9990]], MIX_NAMES, 1.0)
+        self.assertEqual([i for i in a["items"] if i["pct"] >= 1.0], b["items"])
         self.assertEqual((a["check"], a["zero"]), (b["check"], b["zero"]))
-        self.assertEqual(AB.HIDE_BELOW, {"mix": 1.0})
-        self.assertEqual(AB.CHARTS[0][3][3], "간접자산")
+        self.assertEqual(AB.CHARTS[0][3], MIX_NAMES)
+        self.assertEqual(AB.CHARTS[0][3][5], "전환 대기 현금")
 
     # ---- v1.4.2: 수익률 (월별 표)
     def test_returns_current_month(self):
@@ -262,9 +264,10 @@ class T(unittest.TestCase):
                          "수익률 월 -7.7% · 수익률 년 +0.5% (2026-11)")
         self.assertIn("없음", AB.returns_line(None))
 
-    def test_returns_with_mix_hide_still_works(self):
+    def test_returns_with_mix_small_buckets_shown(self):
         c = self.charts_of(self.MIX_NOW, self.STOCK_NOW)
-        self.assertNotIn("코인", [i["name"] for i in c["mix"]["items"]])   # 코인 0.1% 숨김 그대로
+        self.assertIn("금", [i["name"] for i in c["mix"]["items"]])   # 금 0.8%도 보임
+        self.assertIn("가상화폐", [i["name"] for i in c["mix"]["items"]])   # 가상화폐 0.1%도 보임
         self.assertEqual(len(c["stock"]["items"]), 8)
 
     def test_dry_run_prints_returns_line(self):
@@ -325,21 +328,21 @@ class T(unittest.TestCase):
         self.assertFalse(a["stale"])
         self.assertEqual(len(a["charts"]), 2)
 
-    # ---- v1.4.3: 현금 amt · 증권사별 segments
+    # ---- v1.4.4: 전환 대기 현금 amt · 증권사별 segments
     def items_of(self, disk, key):
         return {i["name"]: i for c in disk["charts"] if c["key"] == key for i in c["items"]}
 
     def test_cash_amt_only(self):
         for cash, want in ((23481, 2348), (23485, 2349), (500, 50), (1004, 100), (1005, 101)):
-            _, disk = self.run_update(Http(sheet([cash, 3000, 900, 600], STOCK)))
+            _, disk = self.run_update(Http(sheet([80, 10, 240, 2500, 3460, cash], STOCK)))
             mix = self.items_of(disk, "mix")
-            self.assertEqual(mix["현금"]["amt"], want)
-            self.assertIsInstance(mix["현금"]["amt"], int)
-            self.assertEqual(mix["현금"]["amt"], int(Decimal(cash / 10).quantize(Decimal(1), ROUND_HALF_UP)))
-            self.assertFalse([n for n, i in mix.items() if n != "현금" and "amt" in i])   # 현금 외 mix 엔 amt 없음
+            self.assertEqual(mix["전환 대기 현금"]["amt"], want)
+            self.assertIsInstance(mix["전환 대기 현금"]["amt"], int)
+            self.assertEqual(mix["전환 대기 현금"]["amt"], int(Decimal(cash / 10).quantize(Decimal(1), ROUND_HALF_UP)))
+            self.assertFalse([n for n, i in mix.items() if n != "전환 대기 현금" and "amt" in i])   # 전환 대기 현금 외 mix 엔 amt 없음
             self.assertFalse([n for n, i in self.items_of(disk, "stock").items() if "amt" in i])
-        _, disk = self.run_update(Http(sheet(MIX, STOCK, mix_names=MIX_REAL, stock_names=STOCK_REAL)))   # '42.7% 현금' 도
-        self.assertEqual(self.items_of(disk, "mix")["현금"]["amt"], 50)
+        _, disk = self.run_update(Http(sheet(MIX, STOCK, mix_names=MIX_REAL, stock_names=STOCK_REAL)))   # '37.0% 전환 대기 현금' 도
+        self.assertEqual(self.items_of(disk, "mix")["전환 대기 현금"]["amt"], 370)
 
     def test_stock_segments(self):
         _, disk = self.run_update(Http(sheet(MIX, STOCK)))
@@ -356,7 +359,7 @@ class T(unittest.TestCase):
         self.assertEqual({n: i["pct"] for n, i in st.items()}["한국관련주"], round(2000 * 100 / 4030, 1))   # % 는 B열 기준 그대로
         self.assertFalse([i for i in self.items_of(disk, "mix").values() if "segments" in i])
         self.assertEqual(AB.SEG_RANGES, ("'입력정리'!E27:E30", "'입력정리'!E34:E35", "'입력정리'!E37:E38"))
-        self.assertEqual(AB.READ_RANGES[:4], ("'입력정리'!A14:Z14", "'입력정리'!A83:B87", "'입력정리'!A91:B99", "'입력정리'!E27:E30"))
+        self.assertEqual(AB.READ_RANGES[:4], ("'입력정리'!A14:Z14", "'입력정리'!A103:B109", "'입력정리'!A91:B99", "'입력정리'!E27:E30"))
 
     def test_segments_zero_dropped_and_bad_cell(self):
         seg = ([[150], [380], [0], [100]], [[""], [140]], [[200], [20]])          # 메리츠 P·토스 스나이퍼 0/빈칸
@@ -379,8 +382,8 @@ class T(unittest.TestCase):
         a = OB.assets()
         mix = {i["name"]: i for c in a["charts"] if c["key"] == "mix" for i in c["items"]}
         st = {i["name"]: i for c in a["charts"] if c["key"] == "stock" for i in c["items"]}
-        self.assertEqual(mix["현금"]["amt"], 50)
-        self.assertFalse([n for n, i in mix.items() if n != "현금" and "amt" in i])
+        self.assertEqual(mix["전환 대기 현금"]["amt"], 370)
+        self.assertFalse([n for n, i in mix.items() if n != "전환 대기 현금" and "amt" in i])
         self.assertEqual([g["broker"] for g in st["SOXL"]["segments"]], ["한투", "메리츠", "토스"])
         for g in st["SOXL"]["segments"]:
             self.assertEqual(set(g), {"broker", "val"})                       # 색 코드 없음
@@ -394,7 +397,7 @@ class T(unittest.TestCase):
         a = OB.assets()
         st = {i["name"]: i for c in a["charts"] if c["key"] == "stock" for i in c["items"]}
         self.assertEqual(st["SOXL"]["segments"], [{"broker": "메리츠", "val": 5.0}])
-        self.assertFalse([i for c in a["charts"] for i in c["items"] if "amt" in i and i["name"] != "현금"])
+        self.assertFalse([i for c in a["charts"] for i in c["items"] if "amt" in i and i["name"] != "전환 대기 현금"])
 
     def test_old_assets_json_without_amt_segments(self):
         old = {"version": "v1.4.2", "fetched_kst": "2026-11-06 10:00", "base_date": "2026.11.6", "error": "",
@@ -411,16 +414,16 @@ class T(unittest.TestCase):
 
     def test_board_html_amt_segments(self):
         html = (HERE / "board.html").read_text(encoding="utf-8")
-        self.assertIn("사무실 v1.4.3", html)
-        self.assertIn("ch.key==='mix'&&it.name==='현금'&&typeof it.amt==='number'", html)
+        self.assertIn("사무실 v1.4.4", html)
+        self.assertIn("ch.key==='mix'&&it.name==='전환 대기 현금'&&typeof it.amt==='number'", html)
         self.assertIn("var BROKER={'토스':'#2f6fd6','빗썸':'#d23a2a','한투':'#2f8a57','메리츠':'#7b4bc4'}", html)
         self.assertIn("BROKER[g.broker]||c", html)                            # 키움 = 지금 색
         self.assertIn("segments:i.segments", html)
 
     def test_versions_vnext(self):
-        self.assertEqual(OB.VERSION, "v1.4.3")
+        self.assertEqual(OB.VERSION, "v1.4.4")
         rec, _ = self.run_update(Http(sheet(MIX, STOCK)))
-        self.assertEqual(rec["version"], "v1.4.3")
+        self.assertEqual(rec["version"], "v1.4.4")
 
     def test_board_has_assets_and_services_kept(self):
         src = (HERE / "office_board.py").read_text(encoding="utf-8")

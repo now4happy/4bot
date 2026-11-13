@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_board.py   (사무실 v1.3.7 · 2026-11-06)
+#  · 사무실 v1.4.4: mix '현금' → '전환 대기 현금' (포트폴리오 자산 구성 6개 항목 · amt 도 그 항목에만)
 #  · 사무실 v1.4.3: assets 예외 2가지 전달 — (1) mix '현금' 항목의 amt(만원 ÷ 10 정수, 현금만) (2) stock 항목의 segments
 #    [{"broker": 키움·한투·메리츠·토스·빗썸, "val": 만원}] (증권사 이름·val 만 · 색은 board.html 이 정함 · 이상한 구간은 뺌)
 #  · 사무실 v1.4.2: assets 에 수익률 returns {month, monthly, yearly} 전달 (월 'YYYY-MM'·숫자만 검사 · 이상하면 뺌, 도넛·막대는 그대로)
@@ -24,7 +25,7 @@ import json, math, os, re, shutil, subprocess, time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-VERSION = "v1.4.3"
+VERSION = "v1.4.4"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 STATUS_COPY = R / "var/lib/bot-office/status.md"
 ASSETS_FILE = R / "var/lib/bot-office/assets/assets.json"   # asset_board.py --write (타이머) 가 씀
@@ -252,9 +253,9 @@ BROKERS = ("키움", "한투", "메리츠", "토스", "빗썸")
 
 
 def _amt(c, i):
-    """현금 금액(만원 ÷ 10 정수) · mix 의 '현금' 항목만 · 이상하면 None"""
+    """전환 대기 현금 금액(만원 ÷ 10 정수) · mix 의 '전환 대기 현금' 항목만 · 이상하면 None"""
     v = i.get("amt")
-    if c.get("key") != "mix" or i.get("name") != "현금" or isinstance(v, bool) or not isinstance(v, (int, float)):
+    if c.get("key") != "mix" or i.get("name") != "전환 대기 현금" or isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     return int(v) if math.isfinite(v) and v >= 0 else None
 

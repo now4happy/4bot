@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/asset_board.py   (사무실 v1.3.7)
-# v1.4.3: (1) 자산 구성(mix)에서 '현금' 항목만 금액 amt 저장 — 시트 현금(만원) ÷ 10 반올림 정수 (예외: 다른 mix 항목엔 amt 없음)
+# v1.4.4: 자산 구성(mix)을 포트폴리오 버킷 6개로 — 금·가상화폐·달러·단기채·간접자산·주식·전환 대기 현금
+#        (시트 '입력정리'!A103:B109 '포트폴리오 자산 구성' 블록을 읽음 · 기존 A83:B87 4개 항목 블록은 안 읽음)
+#        amt 는 이제 '전환 대기 현금' 항목에만 저장 (이름 변경 · 천만 단위 표기는 보드 그대로)
+#        HIDE_BELOW mix 1.0 → 0.0: 금 0.8%·가상화폐 0.1% 같은 작은 버킷도 도넛·목록에 보임
+#        (버전 번호는 승인 때 채움)
 #        (2) 투자 종목(stock) 항목마다 증권사별 구간 segments=[{"broker","val"(만원)}] 저장 — E열 구성 칸
 #            E27:E30·E34:E35·E37:E38 을 추가로 읽음 (기존 범위 그대로) · val 0 구간은 뺌 · pct 는 지금처럼 B열 기준
 #            미국·한국·중국·일본관련주 = 키움(B열 값 그대로 1구간) · SOXL = 한투 E28 + 메리츠 E29 + 토스 E34
@@ -17,7 +21,7 @@
 #    시트 "26년 계획"을 그 서비스 계정 이메일에 '보기' 권한으로 공유해야 읽힘. 파일이 없으면 '자료 없음'/오래된 값으로만 표시
 #  - 독립 파일: 서명(openssl)·HTTP 부품을 이 파일 안에 둠 (kiwoom_holdings.py 를 쓰지 않음)
 #  - 이름: A열 글자에서 앞에 붙은 '42.7% ' 같은 퍼센트를 떼고 씀 (보드가 계산한 % 와 이중 표시 방지)
-#  - 읽는 칸 (코드에 고정): '입력정리'!A14:Z14 (기준일), A83:B87 (자산 구성), A91:B99 (투자 종목), A67:H78 (월별 수익률)
+#  - 읽는 칸 (코드에 고정): '입력정리'!A14:Z14 (기준일), A103:B109 (포트폴리오 자산 구성), A91:B99 (투자 종목), A67:H78 (월별 수익률)
 #                          + v1.4.3: E27:E30, E34:E35, E37:E38 (투자 종목 증권사별 구성)
 #  - 저장: /var/lib/bot-office/assets/assets.json (0644) — 이름·비율(%)·기준일·가져온 시각·수익률(%)만.
 #          금액·계좌번호·토큰·주소는 저장하지 않음. 예외(v1.4.3): 현금 amt 1개 · stock segments 의 증권사별 val(만원)만. 웹서버(office_board.py)는 이 파일만 읽음.
@@ -42,11 +46,11 @@ TAB = "입력정리"
 DATE_RANGE = f"'{TAB}'!A14:Z14"
 # (키, 제목, 범위(이름 A열 + 값 B열, 마지막 줄 = 합계), 이름 칸이 비었을 때 쓸 이름)
 CHARTS = (
-    ("mix", "자산 구성", f"'{TAB}'!A83:B87", ("현금", "주식·ETF", "코인", "간접자산")),
+    ("mix", "자산 구성", f"'{TAB}'!A103:B109", ("금", "가상화폐", "달러·단기채", "간접자산", "주식", "전환 대기 현금")),
     ("stock", "투자 종목", f"'{TAB}'!A91:B99",
      ("미국", "한국관련주", "중국관련주", "일본관련주", "SOXL", "TQQQ", "토스 해외주식", "코인")),
 )
-HIDE_BELOW = {"mix": 1.0}   # 차트별: 반올림한 % 가 이 값 미만이면 그림에서만 숨김 (합계에는 포함) · stock 은 숨기지 않음
+HIDE_BELOW = {"mix": 0.0}   # v1.4.4: 포트폴리오 버킷은 1% 미만도 그림에 보임 (금·가상화폐 포함) · stock 은 숨기지 않음
 # 월별 표 (2026-01~12): A=월 B=총자산(만원) C=전월 차액 D=월 수익률 E=연초 대비 F=연초 수익률 G=전년 동월 H=1년 수익률
 RETURNS_RANGE = f"'{TAB}'!A67:H78"
 RETURNS_YEAR = 2026        # A열 글자에서 월을 못 읽을 때만 '행 순서 = 1~12월'로 씀
@@ -60,7 +64,7 @@ STOCK_SEGS = (None, None, None, None,
               (("한투", (27,)), ("메리츠", (30,))),                    # TQQQ
               (("토스", (35,)),),                                      # 토스 해외주식
               (("빗썸", (37, 38)),))                                   # 코인 (BTC+ETH)
-AMT_NAMES = {"mix": ("현금",)}   # 차트별: 금액(amt)을 저장하는 항목 이름 — 현금만
+AMT_NAMES = {"mix": ("전환 대기 현금",)}   # 차트별: 금액(amt)을 저장하는 항목 이름 — 전환 대기 현금만
 READ_RANGES = (DATE_RANGE,) + tuple(c[2] for c in CHARTS) + SEG_RANGES + (RETURNS_RANGE,)
 TOTAL_TOL = 0.005          # 항목 합 vs 시트 합계 차이 허용 (0.5%)
 PCT_PREFIX = re.compile(r"^\s*[-+]?\d+(?:[.,]\d+)?\s*%\s*")   # A열 '42.7% 현금' 의 앞 퍼센트
@@ -208,7 +212,7 @@ def segments(seg_values, idx, b_val):
 def chart(rows, defaults, hide_below=0.0, amt_names=(), seg_values=None):
     """rows = A·B 열 (항목 n줄 + 합계 1줄) → {"items":[{"name","pct"}], "check":"ok|diff|no_total", "zero":[...]}
     hide_below: pct(전체 합 대비, 소수 첫째 자리 반올림) < hide_below 인 항목은 items 에서만 뺌 (pct == hide_below 는 보임)
-    amt_names: 이 이름 항목에만 "amt"(만원 ÷ 10 반올림 정수) 추가 (v1.4.3 · mix 의 현금만)
+    amt_names: 이 이름 항목에만 "amt"(만원 ÷ 10 반올림 정수) 추가 (v1.4.4 · mix 의 전환 대기 현금만)
     seg_values: 주면 각 항목에 증권사별 "segments" 추가 (v1.4.3 · stock 만, E열 구성 칸 값)"""
     n = len(defaults)
     rows = list(rows) + [[]] * (n + 1 - len(rows))
@@ -309,7 +313,7 @@ def update(http, out_path=OUT, now=time.time, signer=None, sa=None):
         prev = json.loads(Path(out_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         prev = {}
-    rec = {"version": "v1.4.3", "tried_kst": now_kst(now), "error": "",
+    rec = {"version": "v1.4.4", "tried_kst": now_kst(now), "error": "",
            "fetched_kst": prev.get("fetched_kst", ""), "base_date": prev.get("base_date", ""),
            "charts": prev.get("charts", [])}
     if prev.get("returns"):
