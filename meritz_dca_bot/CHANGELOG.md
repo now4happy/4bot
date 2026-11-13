@@ -1,5 +1,10 @@
 # 메리츠 적립 변경 기록
 
+## v1.2.0 · 2026-11-13 15:48 (KST)
+- 파일: main.py, sgov.py, t_core.py, t_ui.py
+- 내용: meritz_dca v1.2.0: 하단 고정 메뉴·자금 패널·시드 설정·진행률 그래프 (방: 3. 미국주식 적립)
+- 브랜치: staging
+
 ## v1.1.1 · 2026-11-13 14:26 (KST)
 - 파일: main.py, t_core.py
 - 내용: 토스 브리핑 키 읽기 폴백 (TOSS_DIR → SNIPER_DIR, office_briefing vNEXT)
