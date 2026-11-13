@@ -1,5 +1,10 @@
 # 메리츠 적립 변경 기록
 
+## v1.0.2 · 2026-11-13 12:25 (KST)
+- 파일: main.py, meritz_api.py, t_core.py
+- 내용: 메리츠 4번 낮 자동환전 참고가 fallback (meritz_dca v1.0.2)
+- 브랜치: staging
+
 ## v1.0.1 · 2026-11-12 13:20 (KST)
 - 파일: main.py, meritz_api.py, t_core.py
 - 내용: 메리츠 4번 need 브리핑 + 자동환전 (office_briefing vNEXT, meritz_dca v1.0.1)
