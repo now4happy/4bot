@@ -12,6 +12,7 @@
 #   - 연속 건너뜀은 메뉴 설정(skip_cap_mode): review(기본) / proceed3
 #   - 현금 분리: SGOV 대기 달러(wait_usd)·회차 예약분은 적립 매수가 쓰지 못함. 금액은 설정에만 (코드에 달러 금액 없음)
 #   - 모의(dry_run): 주문·환전 API 를 부르지 않음 (주문은 main._order 의 모의 경로, 환전은 부르지 않음)
+# v1.2.0 (2026-11-13): SGOV 패널 금색 표식
 # =====================================================================
 import calendar
 import copy
@@ -487,7 +488,7 @@ def build_sgov_view(cfg: dict, notice: str = ""):
     act = {"buy": "매수", "skip_a": "건너뜀 (a 평균 환율)", "skip_b": "건너뜀 (b 7일 상승)"}.get(ld.get("action"), "-")
     probs = sgov_problems(sg)
     lines = [
-        f"🪙 [SGOV 달러 단기 회차 적립 ({BOT_VERSION})]",
+        f"🟨 [SGOV 달러 단기 회차 적립 ({BOT_VERSION})]",
         f"▫️ 상태: {'🟢 켜짐' if sg.get('enabled') else '⚪ 꺼짐'}" + (" · 🛑 재점검 대기 (매수 멈춤)" if sg.get("review_hold") else ""),
         f"▫️ 회차: {int(_f(sg.get('tranches_done')))}/{int(_f(sg.get('tranches_total')))}회 완료 · 간격 {int(_f(sg.get('interval_days')))}일 · 건너뜀 누적 {int(_f(sg.get('skips_total')))}회",
         f"▫️ 다음 예정일: {sg.get('next_due_date') or '-'} (미국 동부) · 이번 회차 ${tranche_amount(sg):,.2f}",

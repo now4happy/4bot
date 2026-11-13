@@ -11,6 +11,7 @@
 # v1.1.0 (2026-11-13): SGOV 회차 적립(sgov.py) — 잔고 자동 등록에서 SGOV(설정 sgov.symbol)는 일반 종목으로 넣지 않음
 # v1.1.1 (2026-11-13): BOT_VERSION만 (버튼 무응답 수정은 main.py — 다른 모듈은 CHAT_ID 를 t_core.CHAT_ID 로 볼 것)
 # v1.1.2 (2026-11-13): BOT_VERSION만 (SGOV FRED 자료 받기 urllib → requests, sgov.py HIST_FETCH)
+# v1.2.0 (2026-11-13): 하단 고정 메뉴 추가
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -18,7 +19,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.1.2"
+BOT_VERSION = "v1.2.0"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -74,6 +75,15 @@ def send_panel(text, inline_kb, msg_id=None):
         if res and (res.get("ok") or "not modified" in str(res.get("description", ""))): return
     tg_api("sendMessage", payload)
 
+
+
+# 하단 키보드는 인라인 키보드와 별도 메시지로 전송한다.
+def send_bottom_menu():
+    return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": "📌 메뉴", "reply_markup": {
+        "keyboard": [[{"text": "주식"}, {"text": "SGOV"}, {"text": "자금"}],
+                     [{"text": "보유종목"}, {"text": "종목 추가"}],
+                     [{"text": "관제탑"}, {"text": "설정"}]],
+        "resize_keyboard": True, "is_persistent": True}})
 
 def check_holiday():
     if datetime.now(EST_TZ).weekday() >= 5: return True, "주말 휴장 (Weekend, 미국 동부 기준)"

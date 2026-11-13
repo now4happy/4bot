@@ -17,6 +17,7 @@
 # v1.1.1 (2026-11-13): 버튼·메시지 무응답 수정 — 채팅방 검사가 `from t_core import *` 로 복사된 CHAT_ID("")를 보던 것을
 #   t_core.CHAT_ID(실제 읽은 값)로 바꿈 (TG_TOKEN 핫픽스와 같은 종류). 다른 채팅방/메시지 없는 콜백은 받은 채팅방 ID·data 를
 #   감사 로그에만 남김 (진단). 폴링·매매·SGOV 판단 로직은 그대로.
+# v1.2.0 (2026-11-13): 하단 메뉴·자금/시드/진행률 화면 및 수동 환전 확인
 # 사용:
 #   python3 main.py --fingerprint     키 지문만 출력 (expected_key_fp 에 넣을 값)
 #   python3 main.py --check           주문 없이 점검 + 종목별 오늘 판단 미리보기
@@ -612,6 +613,112 @@ def _other_chat_diag(cb: dict, m, got: str, want: str):
           chat_type=ctype, received_ref=RL.ref(got), configured=bool(want), has_message=m is not None, audit_ref=aref)
 
 
+SEED_FIELDS = {
+    "NKE": ("NKE 1회 금액", "stock"), "QLD": ("QLD 1회 금액", "stock"),
+    "target_usd_total": ("SGOV 총 목표", "float"),
+    "tranche_usd": ("SGOV 회차 금액", "float"),
+    "first_tranche_usd": ("SGOV 1회차 금액", "float"),
+    "tranches_total": ("SGOV 총 회차 수", "int"),
+    "interval_days": ("SGOV 회차 간격(일)", "int"),
+}
+
+# 자동환전 결과 코드 → 사용자에게 보이는 한글 문구 (Muse 직접 수정, 2026-11-13)
+# maybe_auto_fx의 반환값은 내부 코드라서 그대로 보여주면 알아보기 어렵다.
+FX_RESULT_KO = {
+    "ok": "환전 완료",
+    "outside_hours": "낮 시간(09:00–15:30 KST)이 아니어서 환전하지 않았습니다",
+    "us_holiday": "미국 휴장일이라 환전하지 않았습니다",
+    "disabled": "자동환전이 꺼져 있습니다",
+    "key_bad": "메리츠 키 확인이 필요합니다",
+    "gate_blocked": "실주문 안전장치로 환전하지 않았습니다",
+    "already_done": "오늘 이미 환전했습니다",
+    "master_off": "전체 전원이 꺼져 있습니다",
+    "no_price": "환율 시세가 없어 환전하지 않았습니다",
+    "no_gap": "환전할 금액이 없습니다",
+    "rate_error": "환율 조회 오류로 환전하지 않았습니다",
+    "krw_short": "원화 잔고가 부족합니다",
+    "rate_changed": "환율이 1% 이상 변해 환전을 중단했습니다",
+    "dry_run": "모의 모드라 실제 환전하지 않았습니다",
+    "stop": "환전을 중단했습니다",
+    "uncertain": "환전 결과를 확인할 수 없습니다",
+    "error": "환전 오류가 발생했습니다",
+}
+
+def build_seed_menu(cfg):
+    sg = SG.sgov_block(cfg)
+    stocks = cfg.get("stocks", {})
+    lines = ["⚙️ [시드 설정 — 입력만으로 주문·환전 없음]"]
+    kb = []
+    for key, (label, kind) in SEED_FIELDS.items():
+        if kind == "stock" and key not in stocks: continue
+        val = stocks[key].get("base_amount") if kind == "stock" else sg.get(key)
+        lines.append(f"• {label}: {val}")
+        kb.append([{"text":label, "callback_data":f"funds_seed_{key}"}])
+    kb.append([{"text":"🔙 자금", "callback_data":"funds"}])
+    return "\n".join(lines), kb
+
+def parse_seed_value(key, raw):
+    if not re.fullmatch(r"(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)", raw.strip()):
+        raise ValueError("양수 숫자만 입력하세요")
+    val = Decimal(raw.strip())
+    if not val.is_finite() or val <= 0: raise ValueError("0보다 커야 합니다")
+    if SEED_FIELDS[key][1] == "int":
+        if val != val.to_integral_value(): raise ValueError("정수를 입력하세요")
+        return int(val)
+    return float(val)
+
+def validate_seed_change(sg):
+    # 기존 sgov_problems는 enabled=false에서 검사를 생략하므로, 시드 수정에는 강제 검사.
+    proposed = copy.deepcopy(sg)
+    proposed["enabled"] = True
+    problems = SG.sgov_problems(proposed)
+    principal = float((sg.get("ledger") or {}).get("principal") or 0)
+    total = float(sg.get("target_usd_total") or 0)
+    if total < principal: problems.append("새 총 목표가 이미 매수한 장부 원금보다 작습니다")
+    done = int(sg.get("tranches_done") or 0)
+    n = int(sg.get("tranches_total") or 0)
+    if n < done: problems.append("총 회차가 완료 회차보다 작습니다")
+    # 기존 회차의 원금은 그대로 유지하고, 남은 회차만 계산.
+    remaining = max(0, n - done)
+    future = remaining * float(sg.get("tranche_usd") or 0)
+    if done == 0 and remaining > 0:
+        future += float(sg.get("first_tranche_usd") or 0) - float(sg.get("tranche_usd") or 0)
+    if principal + future > total * 1.01:
+        problems.append("이미 산 원금 + 남은 회차 합계가 총 목표의 101%를 초과합니다")
+    if principal + future < total * 0.99:
+        problems.append("남은 회차로 남은 목표를 채울 수 없습니다")
+    return problems
+
+async def save_seed_value(cfg, key, value):
+    latest = await DcaConfigManager.load()
+    if key in ("NKE", "QLD"):
+        if key not in latest.get("stocks", {}): raise ValueError("해당 종목이 없습니다")
+        latest["stocks"][key]["base_amount"] = value
+    else:
+        sg = SG.sgov_block(latest)
+        candidate = copy.deepcopy(sg)
+        candidate[key] = value
+        problems = validate_seed_change(candidate)
+        if problems: raise ValueError("; ".join(problems))
+        # 기존 매수 회차·원금·next_due_date는 변경하지 않는다.
+        latest["sgov"] = candidate
+    await DcaConfigManager.save(latest)
+
+async def show_fx_confirmation(client, msg_id):
+    cfg = await DcaConfigManager.load()
+    try:
+        need = await dca_fx_plan(client, cfg)
+        usd = await asyncio.to_thread(client.api.usd_estimated)
+        amount = fx_auto_amount(Decimal(str(need)) - Decimal(str(usd)))
+    except Exception as e:
+        send_panel(f"환전 계획 확인 실패: {type(e).__name__}", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
+        return
+    if amount is None:
+        send_panel("환전할 금액 없음", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
+        return
+    send_panel(f"이 금액만큼 자동환전할까요? ~${amount:,.2f} · 적립 + SGOV 합산분\n기존 낮 자동환전 안전장치 및 시간 제한 적용",
+               [[{"text":"실행", "callback_data":"funds_fx_confirm"}, {"text":"취소", "callback_data":"funds"}]], msg_id)
+
 async def handle_callback(cb: dict, client):
     _m = cb.get("message") if isinstance(cb.get("message"), dict) else None   # 인라인 메시지 콜백 등은 message 가 없음
     got, want = str(((_m or {}).get("chat") or {}).get("id", "")).strip(), _live_chat_id()
@@ -662,7 +769,23 @@ async def handle_callback(cb: dict, client):
         return
     if data == "sgov" or data.startswith(("sgovx_", "sgovmode_", "sgov_")):
         await handle_sgov_callback(data, msg_id); return
-    if data == "panel": send_panel(*(await build_panel_view(client)), msg_id)
+    if data in ("panel_view_now", "panel_view_done"):
+        PANEL_VIEW_CONTEXT["mode"] = "done" if data.endswith("done") else "now"
+        send_panel(*(await build_panel_view(client)), msg_id); send_bottom_menu()
+    elif data == "funds": send_panel(*(await build_funds_view(client)), msg_id)
+    elif data == "funds_seed": send_panel(*build_seed_menu(await DcaConfigManager.load()), msg_id)
+    elif data.startswith("funds_seed_"):
+        key = data[len("funds_seed_"):]
+        if key in SEED_FIELDS:
+            wait_state.update(mode="funds_seed", sym=key)
+            send_panel(f"💰 {SEED_FIELDS[key][0]} 새 값을 숫자로 입력하세요. (주문·환전 없음)",
+                       [[{"text":"취소", "callback_data":"funds_seed"}]], msg_id)
+    elif data == "funds_fx":
+        await show_fx_confirmation(client, msg_id)
+    elif data == "funds_fx_confirm":
+        result = await maybe_auto_fx(client)
+        send_panel(*(await build_funds_view(client, f"자동환전 결과: {FX_RESULT_KO.get(result, result)}")), msg_id)
+    elif data == "panel": send_panel(*(await build_panel_view(client)), msg_id); send_bottom_menu()
     elif data == "stock_list": send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])), msg_id)
     elif data.startswith("slist_"): send_panel(*(await build_stock_list_view(client, int(data.split("_")[1]))), msg_id)
     elif data.startswith("detail_"): send_panel(*(await build_stock_detail_view(client, data.split("_", 1)[1])), msg_id)
@@ -734,16 +857,39 @@ async def handle_message(msg: dict, client):
     if not _want or str(msg.get("chat", {}).get("id", "")).strip() != _want: return   # v1.1.1: live CHAT_ID (동작은 그대로 — 조용히 무시)
     text = msg.get("text", "").strip()
     if not text: return
-    _kind = "command" if text.startswith("/") else ("menu_word" if text in ["메뉴", "관제탑", "취소", "종목"] else (wait_state.get("mode") or "search"))
+    menu_words = {"메뉴", "관제탑", "취소", "종목", "주식", "SGOV", "자금", "보유종목", "종목 추가", "설정"}
+    _kind = "command" if text.startswith("/") else (wait_state.get("mode") or ("menu_word" if text in menu_words else "search"))
     RL.ev("user_event", "tg_message", "ok", None, actor="user", input_kind=_kind, text_len=len(text))
     cfg = await ensure_cycle_fields()
-    if text.startswith("/") or text in ["메뉴", "관제탑", "취소", "종목"]:
-        wait_state["mode"] = None
-        if text in ["종목"]: send_panel(*(await build_stock_list_view(client, 0)))
-        elif text.upper() in cfg.get("stocks", {}): send_panel(*(await build_stock_detail_view(client, text.upper())))
-        else: send_panel(*(await build_panel_view(client)))
+    # 입력 대기 중에는 메뉴 텍스트도 입력으로 처리. 취소만 대기 해제.
+    if text == "취소":
+        wait_state.update(mode=None, sym=None)
+        send_panel(*(await build_panel_view(client))); send_bottom_menu()
+        return
+    if wait_state.get("mode") is None and (text.startswith("/") or text in menu_words):
+        if text in ("주식", "보유종목", "종목"):
+            send_panel(*(await build_stock_list_view(client, 0)))
+        elif text == "SGOV": send_panel(*SG.build_sgov_view(cfg))
+        elif text in ("자금", "설정"): send_panel(*(await build_funds_view(client)))
+        elif text == "종목 추가":
+            wait_state["mode"] = "add_sym"
+            send_panel("➕ 미국 티커를 입력하세요 (예: NKE)", [[{"text":"취소", "callback_data":"panel"}]])
+        else:
+            send_panel(*(await build_panel_view(client))); send_bottom_menu()
         return
     stocks = cfg.get("stocks", {}); m, sym = wait_state.get("mode"), wait_state.get("sym")
+    if m == "funds_seed":
+        key = wait_state.get("sym")
+        if key not in SEED_FIELDS: return
+        try:
+            value = parse_seed_value(key, text)
+            await save_seed_value(cfg, key, value)
+        except (ValueError, TypeError) as e:
+            send_panel(f"❌ 저장 거부: {e}", [[{"text":"시드 설정", "callback_data":"funds_seed"}]])
+            return
+        wait_state.update(mode=None, sym=None)
+        send_panel(*(await build_funds_view(client, "✅ 시드 변경 저장 (주문·환전 없음)")))
+        return
     if m == "sgov_dist":
         wait_state["mode"] = None
         try:
@@ -1051,7 +1197,7 @@ async def run_service():
         if not poll_blocked(): send_panel(txt, [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
     elif not poll_blocked():
         t, kb = await build_panel_view(client)
-        send_panel(f"✨ [메리츠 적립봇 {BOT_VERSION} 시작]\n\n" + t, kb)
+        send_panel(f"✨ [메리츠 적립봇 {BOT_VERSION} 시작]\n\n" + t, kb); send_bottom_menu()
     RL.set_cid("")
     await asyncio.gather(polling_loop(client), scheduler_loop(client))
 
