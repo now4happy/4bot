@@ -2,6 +2,7 @@
 # FILE: meritz_dca_bot/sgov.py   (MERITZ_DCA v1.1.0)
 # SGOV(미국 초단기 국채 ETF) 회차 적립 — NKE/QLD 적립과 같은 봇·같은 4번 계좌, 판단 공식은 완전히 따로.
 # v1.1.0 (2026-11-13): 첫 버전.
+# v1.1.2 (2026-11-13): HIST_FETCH urllib -> requests (서버에서 urllib FRED 타임아웃, requests·curl은 0.2초 정상)
 #   - 설정: 상태 파일의 최상위 "sgov" 블록 (stocks 옆). stocks["SGOV"] 로 넣지 않음
 #   - 모으기만: 익절·N7 배수·분할매도·½ 매수 없음
 #   - 환율 관문 2개 (둘 다 통과해야 매수, 아니면 그 회차는 맨 뒤로 붙임 — 다음 회차에 몰아 사지 않음)
@@ -14,7 +15,7 @@
 # =====================================================================
 import calendar
 import copy
-import urllib.request
+import requests
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -52,9 +53,9 @@ _DAILY = {"day": ""}
 
 def HIST_FETCH(url):
     """공개 환율 자료 받기 (테스트에서 바꿔 끼움). 실패하면 예외"""
-    req = urllib.request.Request(url, headers={"User-Agent": "meritz-dca/" + BOT_VERSION})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return r.read().decode("utf-8", "replace")
+    r = requests.get(url, headers={"User-Agent": "meritz-dca/" + BOT_VERSION}, timeout=15)
+    r.raise_for_status()
+    return r.content.decode("utf-8", "replace")
 
 
 # ---------------------------------------------------------------- 설정 블록
