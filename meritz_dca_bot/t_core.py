@@ -1,5 +1,5 @@
 # =====================================================================
-# FILE: meritz_dca_bot/t_core.py   (MERITZ_DCA v1.1.0)
+# FILE: meritz_dca_bot/t_core.py   (MERITZ_DCA v1.1.1)
 # 메리츠 적립 봇 공통 부품. 3번 toss_dca_bot/t_core.py(v4.3.8)에서 옮김.
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로 옮김(바이트 동일): runtime_info, 익절 단계(tp_stage_reached·tp_sell_stage), calc_buy_amount,
@@ -9,6 +9,7 @@
 #   - 더함: 봇 장부(수량·원금, 입고 평단 안 씀) · 정수 주문 수량 계산(이월/최소 1주) · 모의 표시
 # v1.0.2 (2026-11-13): 낮 자동환전 참고가 fallback (BOT_VERSION만, 코드 변경은 main.py·meritz_api.py)
 # v1.1.0 (2026-11-13): SGOV 회차 적립(sgov.py) — 잔고 자동 등록에서 SGOV(설정 sgov.symbol)는 일반 종목으로 넣지 않음
+# v1.1.1 (2026-11-13): BOT_VERSION만 (버튼 무응답 수정은 main.py — 다른 모듈은 CHAT_ID 를 t_core.CHAT_ID 로 볼 것)
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -16,7 +17,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.1.0"
+BOT_VERSION = "v1.1.1"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")

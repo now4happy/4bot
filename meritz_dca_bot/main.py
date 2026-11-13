@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =====================================================================
-# FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.1.0)
+# FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.1.1)
 # 메리츠 적립 봇 (서비스 meritz_dca) — 3번 toss_dca_bot/main.py(v4.3.8) 엔진을 옮기고 토스 API 만 메리츠로 바꿈
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로: 100일 사이클(buy_1/pause/buy_2/sell/decision) · +1%↑ ½ 매수 · 익절 10%/20% 구간 20% 매도(단계는 위로만)
@@ -14,6 +14,9 @@
 # v1.1.0 (2026-11-13): SGOV 회차 적립 (판단은 sgov.py, 같은 4번 계좌·같은 봇). NKE/QLD 동작은 그대로.
 #   - 미국 단계: SGOV 회차를 먼저 판단·예약 → 적립 매수는 (USD 예수금 − SGOV 몫)으로만 달러 검사
 #   - 체결 반영: kind=sgov 주문은 SGOV 장부에만 · 아침 환전 금액에 SGOV 회차 몫 더함 · 관제탑 🪙 SGOV 메뉴 · --check 미리보기
+# v1.1.1 (2026-11-13): 버튼·메시지 무응답 수정 — 채팅방 검사가 `from t_core import *` 로 복사된 CHAT_ID("")를 보던 것을
+#   t_core.CHAT_ID(실제 읽은 값)로 바꿈 (TG_TOKEN 핫픽스와 같은 종류). 다른 채팅방/메시지 없는 콜백은 받은 채팅방 ID·data 를
+#   감사 로그에만 남김 (진단). 폴링·매매·SGOV 판단 로직은 그대로.
 # 사용:
 #   python3 main.py --fingerprint     키 지문만 출력 (expected_key_fp 에 넣을 값)
 #   python3 main.py --check           주문 없이 점검 + 종목별 오늘 판단 미리보기
@@ -591,8 +594,28 @@ async def add_symbol_from_text(client, text):
         f"\n⚠️ 메리츠에 이미 {q:g}주가 있어 증권사 평단으로 장부를 시작했습니다." if q > 0 else "")
 
 
+def _live_chat_id() -> str:
+    """v1.1.1: t_core.CHAT_ID (load_telegram 이 채운 값). `from t_core import *` 로 받은 CHAT_ID 는 import 때의 "" 로 남음"""
+    return str(t_core.CHAT_ID or "").strip()
+
+
+def _other_chat_diag(cb: dict, m, got: str, want: str):
+    """v1.1.1 진단: 버린 콜백의 받은 채팅방 ID·data 를 서버 로그에만 남김 (어디에도 보내지 않음, 답장·answerCallbackQuery 없음).
+    원값은 감사 로그(audit-*.jsonl, 권한 600)에만 · 일반 로그/저널에는 참조값·이유만 (replay_log 규칙: 일반 로그에 채팅 식별자 금지)."""
+    RL.count("tg_other_chat")   # 10분 요약 카운터는 그대로
+    reason = "no_message" if m is None else ("chat_id_not_loaded" if not want else "chat_mismatch")
+    data = str(cb.get("data", ""))
+    ctype = str(((m or {}).get("chat") or {}).get("type", "")) or None
+    aref = RL.audit("tg_other_chat", reason=reason, received_chat_id=got or None, received_chat_type=ctype,
+                    callback_data=data[:64], has_inline_message_id=bool(cb.get("inline_message_id")))
+    RL.ev("user_event", "tg_other_chat", "skipped", reason, actor="user", level="WARN", button=RL.button(data),
+          chat_type=ctype, received_ref=RL.ref(got), configured=bool(want), has_message=m is not None, audit_ref=aref)
+
+
 async def handle_callback(cb: dict, client):
-    if str(cb.get("message", {}).get("chat", {}).get("id", "")) != str(CHAT_ID): RL.count("tg_other_chat"); return
+    _m = cb.get("message") if isinstance(cb.get("message"), dict) else None   # 인라인 메시지 콜백 등은 message 가 없음
+    got, want = str(((_m or {}).get("chat") or {}).get("id", "")).strip(), _live_chat_id()
+    if not want or got != want: _other_chat_diag(cb, _m, got, want); return
     cb_id, data, msg_id = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
     _act, _sym = _cb_parts(data)
     RL.ev("user_event", "tg_button", "ok", None, actor="user", button=_act, sym_ref=RL.ref(_sym), seen_message_id=msg_id)
@@ -707,7 +730,8 @@ async def handle_sgov_callback(data, msg_id):
 
 
 async def handle_message(msg: dict, client):
-    if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
+    _want = _live_chat_id()
+    if not _want or str(msg.get("chat", {}).get("id", "")).strip() != _want: return   # v1.1.1: live CHAT_ID (동작은 그대로 — 조용히 무시)
     text = msg.get("text", "").strip()
     if not text: return
     _kind = "command" if text.startswith("/") else ("menu_word" if text in ["메뉴", "관제탑", "취소", "종목"] else (wait_state.get("mode") or "search"))
