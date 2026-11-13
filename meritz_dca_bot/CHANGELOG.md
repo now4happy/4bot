@@ -1,5 +1,10 @@
 # 메리츠 적립 변경 기록
 
+## v1.1.1 · 2026-11-13 14:26 (KST)
+- 파일: main.py, t_core.py
+- 내용: 토스 브리핑 키 읽기 폴백 (TOSS_DIR → SNIPER_DIR, office_briefing vNEXT)
+- 브랜치: staging
+
 ## v1.1.0 · 2026-11-13 12:38 (KST)
 - 파일: main.py, sgov.py, t_core.py, t_ui.py
 - 내용: SGOV 테스트 파일 staging에서 제외 (업데이터 허용 파일 아님)

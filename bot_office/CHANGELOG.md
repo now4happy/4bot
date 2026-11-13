@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.7.6 · 2026-11-13 14:26 (KST)
+- 파일: office_briefing.py
+- 내용: 토스 브리핑 키 읽기 폴백 (TOSS_DIR → SNIPER_DIR, office_briefing vNEXT)
+- 브랜치: staging
+
 ## v1.7.5 · 2026-11-13 12:50 (KST)
 - 파일: bot_updater.py
 - 내용: 업데이터: 배포에서 빠진 파일은 막지 않고 넘김 (사무실 vNEXT)
