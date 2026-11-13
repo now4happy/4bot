@@ -171,14 +171,13 @@ async def build_panel_view(client):
     try:
         usd = float(await asyncio.to_thread(client.api.usd_estimated))
         need = await today_funding(client, cfg)
-        lines.extend(["─────────────────", *progress_lines(cfg, usd, need, PANEL_VIEW_CONTEXT["mode"])])
+        # v1.2.4: 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
+        lines.extend(["─────────────────", *progress_lines(cfg, usd, need, "now")])
     except Exception as e:
         lines.append(f"📊 시드 대비 진행률: 조회 실패 ({type(e).__name__})")
     if decision_syms: lines.append(f"\n🚨 [기간 완료 종목: {', '.join(decision_syms)}] 아래 보유종목 리스트에서 다음 단계를 선택하세요!")
-    # v1.2.3: 관제탑 패널은 전체 현황 + 자금 + 전원 + 새로고침만. 주식·SGOV로 옮길 수 있는 버튼은 그쪽 패널로 이동.
-    #   보유종목 리스트·종목 추가는 주식 패널에 이미 있음, SGOV 적립은 하단 SGOV 버튼으로, 익절/매도비율·지수 배수는 주식 패널로.
+    # v1.2.4: 지금/완성 시 예상 토글 제거 — 관제탑 패널은 자금·전원·새로고침 3줄만.
     kb = [
-        [{"text": "지금", "callback_data": "panel_view_now"}, {"text": "완성 시 예상", "callback_data": "panel_view_done"}],
         [{"text": "💰 자금", "callback_data": "funds"}],
         [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}],
         [{"text": "🔄 새로고침", "callback_data": "panel"}]

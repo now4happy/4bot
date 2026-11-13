@@ -19,6 +19,7 @@
 # v1.2.3 (2026-11-13): 하단 키보드 3번째를 자금 → 관제탑으로. 자금은 관제탑 패널 안의 [💰 자금]으로 들어간다.
 #   관제탑 패널에서 주식·SGOV로 옮길 수 있는 버튼(보유종목 리스트·종목 추가·SGOV 적립·익절/매도비율·지수 배수)은
 #   주식/SGOV 패널로 이동 (내용은 t_ui.py·main.py에).
+# v1.2.4 (2026-11-13): 관제탑 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -26,7 +27,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.3"
+BOT_VERSION = "v1.2.4"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
