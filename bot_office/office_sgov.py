@@ -1,6 +1,6 @@
 # ==========================================================
 # FILE: /opt/bot-office/office_sgov.py   (OFFICE_SGOV — 새 파일)
-# 사무실 vNEXT (2026-11-14): 비서봇 SGOV 메뉴 (상황판·현황·자금·시드·분배금·건너뜀 모드·게이트 확인)
+# 사무실 v1.8.3 (2026-11-14): 비서봇 SGOV 메뉴 (상황판·현황·자금·시드·분배금·건너뜀 모드·게이트 확인)
 #  - 읽기만: meritz_dca_bot 이 만든 상태 스냅샷 <bridge>/snapshot.json
 #  - 명령(시드 변경·건너뜀·분배금·게이트·자동환전)은 요청 파일만 씀: <bridge>/requests/req_<id>.json
 #    → meritz_dca_bot(bridge.py·main.bridge_handle)이 검증·실행하고 <bridge>/results/res_<id>.json 을 씀 → 여기서 읽어 보여 줌

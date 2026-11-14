@@ -1,5 +1,10 @@
 # 3번 메리츠 적립 변경 기록
 
+## v1.2.6 · 2026-11-14 10:25 (KST)
+- 파일: bridge.py, main.py, t_core.py, t_ui.py
+- 내용: meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0.3, office vNEXT)
+- 브랜치: staging
+
 ## v1.2.5 · 2026-11-14 08:53 (KST)
 - 파일: meritz_api.py, sgov.py, t_core.py
 - 내용: meritz_dca v1.2.5: 시세 0 고침 (다음 거래소 조회) + SGOV 환율 캐시 폴백 (방: 3. 미국주식 적립)

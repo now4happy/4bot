@@ -1,5 +1,10 @@
 # 메리츠 SOXL 무매 변경 기록
 
+## v1.0.3 · 2026-11-14 10:25 (KST)
+- 파일: main.py, tg_menu.py
+- 내용: meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0.3, office vNEXT)
+- 브랜치: staging
+
 ## v1.0.2 · 2026-11-08 10:11 (KST)
 - 파일: config.py, main.py
 - 내용: 메리츠 무매 평단 조절 추가 meritz_laoer v1.0.2

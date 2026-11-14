@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
-# 사무실 vNEXT (2026-11-14): SGOV 메뉴 추가 — 하단 [📈 상황판 | ☰ 메뉴](SGOV) + [🏢 사무실 메뉴](예전 ☰ 메뉴 그대로). 화면·요청은 office_sgov.py
+# 사무실 v1.8.3 (2026-11-14): SGOV 메뉴 추가 — 하단 [📈 상황판 | ☰ 메뉴](SGOV) + [🏢 사무실 메뉴](예전 ☰ 메뉴 그대로). 화면·요청은 office_sgov.py
 # 사무실 v1.5.0 (2026-11-09): 브리핑 버튼·명령 제거, 잔액·메뉴 유지
 # 사무실 v1.4.4 (2026-11-07): 하단 메뉴 2개 [🗞 브리핑 | ☰ 메뉴] — 나머지는 ☰ 메뉴 안 · 📊 조회 글자도 메뉴를 보여 줌 (버튼 글자·명령 그대로)
 # 사무실 v1.4.5 (2026-11-07): ① 🗞 브리핑 = 수동 브리핑(--manual, 주말에도 전송) ② ☰ 메뉴에서 🔗 사무실 주소 버튼 삭제 (🏢 사무실만 · /주소 글자 명령 그대로)
@@ -154,7 +154,7 @@ class TG:
 # 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안 · 취소는 아래 다른 버튼).
 HOME = "🏠 메인 메뉴"
 MENU_OPEN = "☰ 메뉴"
-# vNEXT: 첫 줄 [📈 상황판, ☰ 메뉴] = SGOV (office_sgov.py). 예전 ☰ 메뉴 항목(잔액·PC 상태·사무실·도움말·메인 메뉴)은
+# v1.8.3: 첫 줄 [📈 상황판, ☰ 메뉴] = SGOV (office_sgov.py). 예전 ☰ 메뉴 항목(잔액·PC 상태·사무실·도움말·메인 메뉴)은
 #   둘째 줄 🏢 사무실 메뉴 안에 그대로 (두 메뉴 글자가 한 키보드에 섞이지 않게 따로 띄움)
 SGOV_CHART = "📈 상황판"
 OFFICE_MENU = "🏢 사무실 메뉴"
@@ -177,7 +177,7 @@ CANCEL_WORDS = ("잔액", "도움말", "help", "?")
 CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
 OFFICE_LABELS = {"💰 잔액", "🖥 PC 상태", "🏢 사무실", "❓ 도움말", HOME, "📊 조회", OFFICE_MENU, *BAL_ACTIONS}
 try:
-    import office_sgov   # vNEXT: SGOV 메뉴 (없으면 예전 메뉴만 동작)
+    import office_sgov   # v1.8.3: SGOV 메뉴 (없으면 예전 메뉴만 동작)
 except Exception as _e:
     office_sgov = None
     print("SGOV 메뉴 불러오기 실패:", type(_e).__name__, flush=True)
@@ -204,7 +204,7 @@ def handle_message(tg, st, msg):
     if not text:
         return
     raw = text
-    if office_sgov and office_sgov.handle(tg, st, raw, OFFICE_LABELS):   # vNEXT: SGOV 메뉴 글자 (아니면 아래 예전 처리)
+    if office_sgov and office_sgov.handle(tg, st, raw, OFFICE_LABELS):   # v1.8.3: SGOV 메뉴 글자 (아니면 아래 예전 처리)
         return
     if raw in OFFICE_LABELS:
         st["menu_ctx"] = "office"   # ❓ 도움말: 사무실 메뉴에서는 예전 도움말
@@ -218,7 +218,7 @@ def handle_message(tg, st, msg):
             return
     if raw in (HOME, SGOV_HOME):
         tg.send("🏠 <b>메인 메뉴</b> · 아래 버튼을 눌러 주세요", keyboard=MENU_KB); return
-    if raw in (OFFICE_MENU, MENU_OPEN, "📊 조회"):   # 📊 조회 = 옛 습관용 (같은 메뉴) · vNEXT: 🏢 사무실 메뉴 = 예전 ☰ 메뉴
+    if raw in (OFFICE_MENU, MENU_OPEN, "📊 조회"):   # 📊 조회 = 옛 습관용 (같은 메뉴) · v1.8.3: 🏢 사무실 메뉴 = 예전 ☰ 메뉴
         tg.send("☰ <b>메뉴</b> · 아래 버튼을 눌러 주세요", keyboard=SUB_KB["menu"]); return
     if raw == "🏢 사무실":
         office_open(tg); return
@@ -274,7 +274,7 @@ def main():
             print("사무실 주소 확인 오류:", type(e).__name__, flush=True)
         waiting = 0
         try:
-            waiting = office_sgov.tick(tg, st) if office_sgov else 0   # vNEXT: SGOV 요청 결과 확인 (meritz_dca_bot 이 쓴 결과 파일 읽기만)
+            waiting = office_sgov.tick(tg, st) if office_sgov else 0   # v1.8.3: SGOV 요청 결과 확인 (meritz_dca_bot 이 쓴 결과 파일 읽기만)
         except Exception as e:
             print("SGOV 결과 확인 오류:", type(e).__name__, flush=True)
         try:

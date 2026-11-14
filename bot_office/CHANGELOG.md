@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.8.3 · 2026-11-14 10:25 (KST)
+- 파일: office_secretary.py, office_sgov.py
+- 내용: meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0.3, office vNEXT)
+- 브랜치: staging
+
 ## v1.8.2 · 2026-11-14 09:23 (KST)
 - 파일: fanding_trade.py
 - 내용: 자동주문 모드 A를 알림 30분 뒤로 (fanding_trade v1.5.8)
