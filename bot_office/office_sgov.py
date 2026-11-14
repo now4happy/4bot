@@ -7,7 +7,7 @@
 #  - 이 파일은 메리츠 API·키·토큰(meritz_token.json)·SGOV 설정(/etc/meritz-accum/settings.json)·장부(dca_config*.json)를
 #    읽지도 쓰지도 않음. meritz_dca_bot 코드를 import 하지 않음.
 #  - <bridge> 기본값 /var/lib/meritz-dca/bridge (환경변수 OFFICE_MERITZ_BRIDGE 로 바꿀 수 있음)
-# 사무실 vNEXT (2026-11-14): SGOV 회차 알림 — tick() 이 <bridge>/alerts/alert_<id>.json(4번이 씀)을 읽어 이 방으로 1번 보내고, 보낸 뒤 <bridge>/alerts_sent/sent_<id>.json(이 파일만 씀) 표시
+# 사무실 v1.8.4 (2026-11-14): SGOV 회차 알림 — tick() 이 <bridge>/alerts/alert_<id>.json(4번이 씀)을 읽어 이 방으로 1번 보내고, 보낸 뒤 <bridge>/alerts_sent/sent_<id>.json(이 파일만 씀) 표시
 # ==========================================================
 import html, json, os, re, time, uuid
 from pathlib import Path

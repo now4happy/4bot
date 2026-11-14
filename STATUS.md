@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-14 10:25 (KST) · 계기: 업데이트 적용 (staging: meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0.3, office vNEXT))
+- 갱신: 2026-11-14 10:54 (KST) · 계기: 업데이트 적용 (staging: meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 bridge 알림 파일로 — 비서봇이 자기 방으로 1번 보냄 (방: 3. 미국주식 적립))
 
 ## 봇별 현재 상태
 
@@ -11,9 +11,9 @@
 |---|---|---|---|---|---|
 | 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-13 15:23 KST부터) | v1.2.7 | 2026-11-13 15:23 | sniper: plugin_updater commits synced files after direct ups |
-| 3번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-14 10:24 KST부터) | v1.2.6 | 2026-11-14 10:25 | meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0 |
+| 3번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-14 10:53 KST부터) | v1.2.7 | 2026-11-14 10:54 | meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-12 15:28 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-14 10:25 KST부터) | v1.8.3 | 2026-11-14 10:25 | meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0 |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-14 10:54 KST부터) | v1.8.4 | 2026-11-14 10:54 | meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br |
 | 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-14 10:24 KST부터) | v1.0.3 | 2026-11-14 10:25 | meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0 |
 
 ## 사무실 상시 서비스
@@ -27,6 +27,8 @@
 
 ## 최근 적용 10건
 
+- 2026-11-14 10:54 · 5번 사무실 비서 v1.8.4 · office_sgov.py · meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br
+- 2026-11-14 10:54 · 3번 메리츠 적립 v1.2.7 · bridge.py, sgov.py, t_core.py · meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br
 - 2026-11-14 10:25 · 메리츠 SOXL 무매 v1.0.3 · main.py, tg_menu.py · meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0
 - 2026-11-14 10:25 · 5번 사무실 비서 v1.8.3 · office_secretary.py, office_sgov.py · meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0
 - 2026-11-14 10:25 · 3번 메리츠 적립 v1.2.6 · bridge.py, main.py, t_core.py, t_ui.py · meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0
@@ -35,8 +37,6 @@
 - 2026-11-13 17:43 · 5번 사무실 비서 v1.8.1 · bot_updater.py · 업데이터 옛 브랜치 되풀이 방지 (bot_updater vNEXT) (방: 포트폴리오)
 - 2026-11-13 17:16 · 5번 사무실 비서 v1.8.0 · bot_updater.py, collect_inventory.py, deployment_control.py, · 메리츠 적립봇을 3번으로 (toss_dca 삭제, 표시·서비스·브리핑 정리)
 - 2026-11-13 16:58 · 5번 사무실 비서 v1.7.9 · asset_board.py, board.html, office_board.py, test_asset_boar · 사무실 자산 구성: 포트폴리오 버킷 6개 (asset_board v1.4.4)
-- 2026-11-13 16:34 · 3번 메리츠 적립 v1.2.4 · main.py, t_core.py, t_ui.py · meritz_dca v1.2.4: 관제탑 지금/완성 시 예상 토글 제거, 진행률은 항상 지금 기준 (방: 3
-- 2026-11-13 16:23 · 3번 메리츠 적립 v1.2.3 · main.py, t_core.py, t_ui.py · meritz_dca v1.2.3: 하단 키보드 자금→관제탑, 관제탑 버튼을 주식/SGOV 패널로 이동 (방:
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 

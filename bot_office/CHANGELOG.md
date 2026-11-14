@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.8.4 · 2026-11-14 10:54 (KST)
+- 파일: office_sgov.py
+- 내용: meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 bridge 알림 파일로 — 비서봇이 자기 방으로 1번 보냄 (방: 3. 미국주식 적립)
+- 브랜치: staging
+
 ## v1.8.3 · 2026-11-14 10:25 (KST)
 - 파일: office_secretary.py, office_sgov.py
 - 내용: meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0.3, office vNEXT)
