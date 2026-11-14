@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # ==========================================================
-# FILE: /opt/bot-office/fanding_direct_upload.py   (사무실 vNEXT · 2026-11-14)
+# FILE: /opt/bot-office/fanding_direct_upload.py   (사무실 v1.8.5 · 2026-11-14)
 # 팬딩 가격표 직접 넣기 — 웹 서버(/api/fanding/upload)를 거치지 않고 팬딩 INBOX 에 바로 넣는다
 #  · 웹 서버(bot-office.service)를 끈 뒤에도 수동으로 가격표 이미지를 넣을 수 있게 하는 대체 경로
 #  · 검사는 fanding_trade.http_upload() 과 같다:
@@ -35,7 +35,7 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fanding_trade as ft
 
-VERSION = "vNEXT"
+VERSION = "v1.8.5"
 
 
 class Reject(Exception):

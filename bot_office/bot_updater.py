@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT (2026-11-14): 웹 서버 끄기 준비 — ① 의도적 중단 표시 파일(/var/lib/bot-office/intentional_stop)이 있으면
+# 사무실 v1.8.5 (2026-11-14): 웹 서버 끄기 준비 — ① 의도적 중단 표시 파일(/var/lib/bot-office/intentional_stop)이 있으면
 #                       사무실 웹 서비스(bot-office.service)는 재시작·정상 확인(healthy)·enable 을 건너뜀 (로그 '의도적 중단, 재시작 건너뜀')
 #                       · 건너뜀은 성공으로 셈 (되돌림 없음) · 완료 알림에 '의도적 중단 — 재시작 건너뜀' 줄 따로 표시
 #                       · 'inactive' 상태만으로는 의도적 중단으로 보지 않음 (고장과 구별이 안 되므로) · 다른 서비스 재시작·enable 규칙은 그대로
@@ -99,7 +99,7 @@ TARGETS = os.environ.get("U_TARGETS", "/var/lib/bot-office-deploy/targets.json")
 STATE = os.environ.get("U_STATE", "/var/lib/bot-updater/state.json")
 OFFICE_DIR = os.environ.get("U_OFFICE", "/opt/bot-office")
 OFFICE_UNIT, SELF_UNIT, SELF_FILE = "bot-office.service", "bot-updater.service", "bot_updater.py"
-# vNEXT: 사무실 웹 서비스를 일부러 멈춰 둔 표시 — 멈출 때 운영 절차가 만들고 다시 켤 때 지움 (서비스 유닛 훅 아님). 있으면 재시작 건너뜀
+# v1.8.5: 사무실 웹 서비스를 일부러 멈춰 둔 표시 — 멈출 때 운영 절차가 만들고 다시 켤 때 지움 (서비스 유닛 훅 아님). 있으면 재시작 건너뜀
 INTENTIONAL_STOP = os.environ.get("U_INTENTIONAL_STOP", "/var/lib/bot-office/intentional_stop")
 # 사무실 폴더(/opt/bot-office)에서 따로 도는 상시 서비스 — 그 파일이 바뀌면 이 서비스도 다시 시작해야 새 코드가 반영됨
 SECRETARY_UNIT, FANDING_UNIT = "bot-office-secretary.service", "bot-office-fanding.service"
@@ -1070,7 +1070,7 @@ def apply(st, key):
     restart = [u for u in units if u != OFFICE_UNIT]
     if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py", "sniper_upstream.py") for f in office_files):
         restart.append(OFFICE_UNIT)   # 비서 화면·브리핑 등이 바뀌면 사무실 서비스 다시 시작
-    stop_skipped = []   # vNEXT: 의도적 중단 표시가 있으면 사무실 웹은 재시작·healthy·enable 모두 건너뜀 (성공으로 셈)
+    stop_skipped = []   # v1.8.5: 의도적 중단 표시가 있으면 사무실 웹은 재시작·healthy·enable 모두 건너뜀 (성공으로 셈)
     if OFFICE_UNIT in restart and os.path.isfile(INTENTIONAL_STOP):
         restart.remove(OFFICE_UNIT)
         stop_skipped.append(OFFICE_UNIT)

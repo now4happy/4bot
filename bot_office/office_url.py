@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: /opt/bot-office/office_url.py   (사무실 vNEXT · 2026-11-14)
+# FILE: /opt/bot-office/office_url.py   (사무실 v1.8.5 · 2026-11-14)
 # 사무실 주소(office_url) 한 곳 관리 — 지금은 임시 터널 주소(trycloudflare), 나중에 고정 도메인으로 쉽게 이동
 #
-#  · 사무실 vNEXT (2026-11-14): 웹 서버 끄기 준비 — WEB_OFF = True
+#  · 사무실 v1.8.5 (2026-11-14): 웹 서버 끄기 준비 — WEB_OFF = True
 #      ① tick(): 웹 건강 확인(health_check)·'사무실 접속 안 됨/복구' 알림을 하지 않음 → office_health.json 도 더 안 씀
 #      ② tick(): 임시 터널 주소 추적·갱신·'주소가 바뀌었어요' 알림도 멈춤 (할 일 4 · B안 · 터널 서비스 자체는 안 건드림)
 #      ③ /주소 · /주소변경 → "웹 없음" 안내만 (저장된 주소 파일·모드 파일은 고치지 않음) · /도메인안내는 그대로
@@ -36,7 +36,7 @@ HEALTH_FILE = R / "var/lib/bot-office/office_health.json"
 INSIDE_URL = "http://127.0.0.1:8765/healthz"
 METRICS_PORTS = range(20241, 20246)          # cloudflared 내부 창구 기본 포트 (127.0.0.1 만)
 FAIL_ALERT = 2                               # 연속 실패 몇 번째에 알릴지 (5분 × 2 = 약 10분)
-VERSION = "vNEXT"
+VERSION = "v1.8.5"
 WEB_OFF = True                               # 웹 서버(bot-office.service)를 일부러 꺼 둠 → 감시·터널 추적 안 함, /주소는 '웹 없음'
 WEB_OFF_TEXT = ("🔕 <b>웹 사무실 없음</b>\n"
                 "▫️ 웹 서버(bot-office)를 일부러 꺼 두었어요. 사무실 주소·바깥 접속 감시·임시 터널 주소 추적도 쉬는 중이에요.\n"
@@ -205,7 +205,7 @@ def health_check(tg, now):
 
 def tick(tg, now=None):
     """7번 비서 루프에서 호출. 5분마다 ① 임시 터널 주소 변경 확인(자동 모드) ② 사무실 바깥 접속 감시
-    vNEXT: WEB_OFF 이면 아무것도 하지 않음 (접속 확인·알림·터널 주소 추적·파일 쓰기 없음)"""
+    v1.8.5: WEB_OFF 이면 아무것도 하지 않음 (접속 확인·알림·터널 주소 추적·파일 쓰기 없음)"""
     if WEB_OFF:
         return None
     now = now or time.time()
