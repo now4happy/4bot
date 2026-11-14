@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v1.0.2)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v1.0.3)
 # 메리츠 SOXL 무한매수(V14) 새 봇 — 실행·안전장치
+# v1.0.3 (2026-11-14): 텔레그램 메뉴(tg_menu.py) — 상황판·맨밑 메뉴·도구. 기다리는 자리(time.sleep)에서 같은 스레드로 순서대로 처리
+#   - 주문·체결 반영·전략·안전장치는 그대로. --inject-start 본문은 cmd_inject_start() 로 옮김 (CLI·메뉴가 같은 함수)
 # v1.0.2 (2026-11-08): --add-shares --qty N --avg X 추가 (직접 산 주식을 지정 평단으로 장부 반영)
 #   - 메리츠 잔고 == 장부 + N 일 때만 · enabled=true·미국장 주문 시간이면 거부 · 주문 없음 · 전후 로그·텔레그램
 # v1.0.0 (2026-11-08): 첫 버전
@@ -37,8 +39,9 @@ import config as cfgmod                      # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
 from notifier import Notifier, _read_token, token_fp   # noqa: E402
+import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v1.0.2"
+BOT_VERSION = "v1.0.3"
 EST = ZoneInfo("America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -296,6 +299,25 @@ def pending_syncs(state):
 
 
 # ---------------------------------------------------------------- 상시 실행
+# ---------------------------------------------------------------- v1.0.3 기다리는 시간 = 텔레그램 메뉴 처리
+_MENU = {"bot": None}
+
+
+def idle(seconds):
+    """loop() 의 time.sleep 자리. 그 시간 동안 텔레그램 메뉴를 이 스레드에서 순서대로 처리 (주문·체결 반영과 동시에 돌지 않음).
+    메뉴가 안 되면(토큰 없음·다른 봇 토큰·오류) 그냥 기다림. 걸리는 시간은 seconds 와 같게 맞춤"""
+    t_end = time.time() + float(seconds)
+    try:
+        if _MENU["bot"] is None:
+            _MENU["bot"] = tg_menu.MenuBot(sys.modules[__name__])
+        _MENU["bot"].idle(load_settings(), t_end)
+    except Exception as e:
+        logging.warning(f"텔레그램 메뉴 처리 오류: {type(e).__name__}")
+    left = t_end - time.time()
+    if left > 0:
+        time.sleep(left)
+
+
 def loop():
     last_idle = 0
     while True:
@@ -308,14 +330,14 @@ def loop():
                 if time.time() - last_idle > 3600:
                     logging.info("enabled=false — 대기 (주문 없음)")
                     last_idle = time.time()
-                time.sleep(60)
+                idle(60)
                 continue
             live = not s.get("dry_run", True)
             if not os.path.isfile(str(s.get("key_file") or "")):
                 if time.time() - last_idle > 3600:
                     logging.warning("새 메리츠 키 파일 없음 — 대기 (주문 없음)")
                     last_idle = time.time()
-                time.sleep(60)
+                idle(60)
                 continue
             note = Notifier(s["telegram_file"], dry_run=not live)
             n = now_et()
@@ -338,8 +360,8 @@ def loop():
                 Notifier(load_settings()["telegram_file"]).send(f"⚠️ 오류 {type(e).__name__}: {str(e)[:200]}")
             except Exception:
                 pass
-            time.sleep(120)
-        time.sleep(30)
+            idle(120)
+        idle(30)
 
 
 def cmd_check(s):
@@ -449,6 +471,30 @@ def cmd_add_shares(s, qty, avg, api=None):
     return 0
 
 
+def cmd_inject_start(s, overwrite=False, api=None):
+    """--inject-start (v1.0.2 main() 안의 본문 그대로 옮김 — CLI·텔레그램 메뉴가 같은 함수) → 0/1"""
+    state = s["state_dir"]
+    os.makedirs(os.path.join(state, "data"), exist_ok=True)
+    bad = validate_settings(s) + check_identity(s)[0]
+    if not s.get("transfer_confirmed"):
+        bad.append("transfer_confirmed=false (입고 확인 먼저)")
+    if bad:
+        print("✗ 주입 안 함:\n" + "\n".join("- " + b for b in bad))
+        return 1
+    api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
+    hold, _, _ = api.holding(s["symbol"])
+    want = int(float(s["start"]["qty"]))
+    if hold != want:
+        print(f"✗ 메리츠 잔고 {hold}주 ≠ 시작 수량 {want}주 — 입고 미완료 또는 다른 계좌")
+        return 1
+    with in_dir(state):
+        cfg = ConfigManager(s)
+        pos, wrote = cfg.inject_start(overwrite=overwrite)
+        print(("장부 시작: " if wrote else "이미 장부 있음(덮어쓰려면 --overwrite): ")
+              + f"{pos['qty']}주 원금 ${pos['principal']:.2f} 평단 ${cfg.avg_price(pos):.4f}")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="메리츠 SOXL 무한매수 봇")
     g = ap.add_mutually_exclusive_group()
@@ -477,24 +523,7 @@ def main(argv=None):
         print("정지 표시 해제")
         return 0
     if a.inject_start:
-        bad = validate_settings(s) + check_identity(s)[0]
-        if not s.get("transfer_confirmed"):
-            bad.append("transfer_confirmed=false (입고 확인 먼저)")
-        if bad:
-            print("✗ 주입 안 함:\n" + "\n".join("- " + b for b in bad))
-            return 1
-        api = MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
-        hold, _, _ = api.holding(s["symbol"])
-        want = int(float(s["start"]["qty"]))
-        if hold != want:
-            print(f"✗ 메리츠 잔고 {hold}주 ≠ 시작 수량 {want}주 — 입고 미완료 또는 다른 계좌")
-            return 1
-        with in_dir(state):
-            cfg = ConfigManager(s)
-            pos, wrote = cfg.inject_start(overwrite=a.overwrite)
-            print(("장부 시작: " if wrote else "이미 장부 있음(덮어쓰려면 --overwrite): ")
-                  + f"{pos['qty']}주 원금 ${pos['principal']:.2f} 평단 ${cfg.avg_price(pos):.4f}")
-        return 0
+        return cmd_inject_start(s, a.overwrite)
     loop()
     return 0
 

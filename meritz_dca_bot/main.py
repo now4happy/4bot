@@ -21,6 +21,7 @@
 # v1.2.2 (2026-11-13): 시드 설정을 2개 메뉴로 나눔 (적립 / SGOV). 저장 뒤에는 같은 그룹 메뉴로 돌아감.
 # v1.2.3 (2026-11-13): 관제탑 버튼 정리 — 익절/매도비율·지수 배수를 주식 패널로 이동 (바꾼 뒤에도 주식 패널로 돌아감).
 # v1.2.4 (2026-11-13): 관제탑 지금/완성 시 예상 토글 제거 (내용은 t_ui.py에).
+# v1.2.6 (2026-11-14): 4번은 주식 적립만 (SGOV 메뉴 → 비서봇) · 맨밑 메뉴 [📈 상황판, ☰ 메뉴] · 비서봇 요청 파일 처리(bridge.py, 자동환전은 같은 합산 경로 1개)
 # 사용:
 #   python3 main.py --fingerprint     키 지문만 출력 (expected_key_fp 에 넣을 값)
 #   python3 main.py --check           주문 없이 점검 + 종목별 오늘 판단 미리보기
@@ -41,6 +42,7 @@ import t_core  # TG_TOKEN live global (from-import copy goes stale)
 from t_ui import *
 import dca_engine
 import sgov as SG
+import bridge as BR
 from dca_engine import load_settings, config_path
 from meritz_api import MeritzApi, MeritzDcaClient, MeritzError, WarnNeeded, key_fingerprint
 
@@ -578,7 +580,7 @@ async def add_symbol_from_text(client, text):
         return None, "❌ 미국 티커(영문)만 넣어 주세요. 예: NKE, QLD (한국주식은 이 봇에서 안 함)"
     cfg = await DcaConfigManager.load()
     if sym == SG.sgov_symbol(cfg):
-        return None, f"ℹ️ {sym} 는 일반 종목이 아니라 🪙 SGOV 회차 적립 메뉴에서 관리합니다."
+        return None, f"ℹ️ {sym} 는 일반 종목이 아니라 SGOV 회차 적립입니다. SGOV는 비서봇으로 옮겼어요. 비서봇 메뉴에서 봐 주세요."
     if sym in cfg.get("stocks", {}):
         return sym, f"ℹ️ {sym} 는 이미 목록에 있습니다."
     try:
@@ -652,17 +654,10 @@ def seed_group(key):
     return "stock" if SEED_FIELDS[key][1] == "stock" else "sgov"
 
 
-def build_seed_menu(cfg):
-    # v1.2.2: 시드 설정을 2개 메뉴로 나눔 (적립 / SGOV). 한 번에 7개가 보여서 섞이지 않게.
-    sg = SG.sgov_block(cfg)
-    stocks = cfg.get("stocks", {})
-    lines = ["⚙️ [시드 설정 — 입력만으로 주문·환전 없음]",
-             "• 적립: " + " · ".join(f"{sym} ${float(stocks[sym].get('base_amount') or 0):,.2f}/회" for sym in ("NKE", "QLD") if sym in stocks),
-             f"• SGOV: 총 ${float(sg.get('target_usd_total') or 0):,.2f} · {int(sg.get('tranches_total') or 0)}회 · 회차 ${float(sg.get('tranche_usd') or 0):,.2f}"]
-    kb = [[{"text": "📈 적립 시드", "callback_data": "funds_seed_stock"}],
-          [{"text": "🪙 SGOV 시드", "callback_data": "funds_seed_sgov"}],
-          [{"text": "🔙 자금", "callback_data": "funds"}]]
-    return "\n".join(lines), kb
+# v1.2.6: 예전 build_seed_menu(적립/SGOV 2개 고르기)는 뺌 — 4번 ⚙️ 시드·주식 은 적립 그룹으로 바로 감.
+#   SGOV 그룹(총 목표·회차 금액·1회차 금액·총 회차 수·회차 간격)은 비서봇 ⚙️ 시드·SGOV → 요청 파일 → bridge_handle 이 같은 검증으로 저장.
+SGOV_SEED_KEYS = ("target_usd_total", "tranche_usd", "first_tranche_usd", "tranches_total", "interval_days")
+SGOV_MOVED = "SGOV는 비서봇으로 옮겼어요. 비서봇 메뉴에서 봐 주세요."
 
 
 def build_seed_group_menu(cfg, group):
@@ -682,7 +677,7 @@ def build_seed_group_menu(cfg, group):
         val = stocks[key].get("base_amount") if kind == "stock" else sg.get(key)
         lines.append(f"• {label}: {val}")
         kb.append([{"text": label, "callback_data": f"funds_seed_{key}"}])
-    kb.append([{"text": "🔙 시드 설정", "callback_data": "funds_seed"}])
+    kb.append([{"text": "🔙 메뉴", "callback_data": "menu"}])
     return "\n".join(lines), kb
 
 def parse_seed_value(key, raw):
@@ -732,12 +727,23 @@ async def save_seed_value(cfg, key, value):
         latest["sgov"] = candidate
     await DcaConfigManager.save(latest)
 
-async def show_fx_confirmation(client, msg_id):
+async def fx_confirm_info(client):
+    """자동환전 확인 화면 금액 (예전 show_fx_confirmation 안의 계산 그대로): (합산 필요, 보유 USD, 금액 또는 None).
+    v1.2.6: 4번 버튼과 비서봇 요청(fx_preview)이 같은 계산을 씀"""
     cfg = await DcaConfigManager.load()
+    need = await dca_fx_plan(client, cfg)
+    usd = await asyncio.to_thread(client.api.usd_estimated)
+    amount = fx_auto_amount(Decimal(str(need)) - Decimal(str(usd)))
+    return need, usd, amount
+
+async def run_fx_from_confirm(client):
+    """확인 화면의 [실행] = 기존 maybe_auto_fx 1번 (시간창·enabled·자동환전 켜짐·키·안전장치·하루 1번 기록·dry-run 검사는 그 안에서 그대로).
+    v1.2.6: 4번 [실행]과 비서봇 요청(fx_run)이 이 함수 하나만 부름 → 환전 경로는 하나"""
+    return await maybe_auto_fx(client)
+
+async def show_fx_confirmation(client, msg_id):
     try:
-        need = await dca_fx_plan(client, cfg)
-        usd = await asyncio.to_thread(client.api.usd_estimated)
-        amount = fx_auto_amount(Decimal(str(need)) - Decimal(str(usd)))
+        need, usd, amount = await fx_confirm_info(client)
     except Exception as e:
         send_panel(f"환전 계획 확인 실패: {type(e).__name__}", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
         return
@@ -754,8 +760,25 @@ async def handle_callback(cb: dict, client):
     cb_id, data, msg_id = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
     _act, _sym = _cb_parts(data)
     RL.ev("user_event", "tg_button", "ok", None, actor="user", button=_act, sym_ref=RL.ref(_sym), seen_message_id=msg_id)
-    wait_state["mode"] = None; tg_api("answerCallbackQuery", {"callback_query_id": cb_id})
+    tg_api("answerCallbackQuery", {"callback_query_id": cb_id})
+    await dispatch_action(data, msg_id, client)   # v1.2.6: 예전 메시지의 인라인 버튼도 맨밑 버튼과 같은 처리
+
+
+async def dispatch_action(data: str, msg_id, client):
+    """버튼 1개 처리 (예전 handle_callback 본문). v1.2.6: 맨밑 버튼 글자(REPLY_MAP·고정 메뉴)도 여기로 옴"""
+    wait_state["mode"] = None
     cfg = await ensure_cycle_fields()
+    # v1.2.6 메뉴 이동 (맨밑 키보드)
+    if data == "menu": send_keyboard("☰ 메뉴 · 아래 버튼을 눌러 주세요", MENU_ROWS); return
+    if data == "tools": send_keyboard("🛠 도구 · 가끔 쓰는 기능이에요", TOOLS_ROWS); return
+    if data == "home": send_bottom_menu(); return
+    if data == "help": send_panel(HELP_TEXT, []); return
+    if data == "n7_view": send_panel(*(await build_n7_view(client))); return
+    if data == "setday_pick": send_panel(*(await build_setday_pick_view(client))); return
+    # v1.2.6 A1: SGOV 진입점은 4번에서 없앰 (예전 메시지 버튼도) — 비서봇 안내 + 메뉴
+    if data == "sgov" or data.startswith(("sgovx_", "sgovmode_", "sgov_")) or data == "funds_seed_sgov" \
+            or (data.startswith("funds_seed_") and data[len("funds_seed_"):] in SGOV_SEED_KEYS):
+        send_keyboard(SGOV_MOVED, MENU_ROWS); return
 
     # 종목별 매매 버튼 v1
     if data.startswith(("trade_on_", "trade_off_")):
@@ -795,15 +818,11 @@ async def handle_callback(cb: dict, client):
         send_panel("➕ [새 종목 추가 — 미국주식만]\n• 모아갈 미국 티커(영문)를 입력해 주세요. 예: NKE, QLD, SPY\n• 추가하면 ⏸ 중지 상태로 등록됩니다 (기준금액 $40).",
                    [[{"text": "🔙 취소", "callback_data": "panel"}]], msg_id)
         return
-    if data == "sgov" or data.startswith(("sgovx_", "sgovmode_", "sgov_")):
-        await handle_sgov_callback(data, msg_id); return
     if data in ("panel_view_now", "panel_view_done"):
         PANEL_VIEW_CONTEXT["mode"] = "done" if data.endswith("done") else "now"
-        send_panel(*(await build_panel_view(client)), msg_id); send_bottom_menu()
+        send_panel(*(await build_panel_view(client)), msg_id)
     elif data == "funds": send_panel(*(await build_funds_view(client)), msg_id)
-    elif data == "funds_seed": send_panel(*build_seed_menu(await DcaConfigManager.load()), msg_id)
-    elif data == "funds_seed_stock": send_panel(*build_seed_group_menu(await DcaConfigManager.load(), "stock"), msg_id)
-    elif data == "funds_seed_sgov": send_panel(*build_seed_group_menu(await DcaConfigManager.load(), "sgov"), msg_id)
+    elif data in ("funds_seed", "funds_seed_stock"): send_panel(*build_seed_group_menu(await DcaConfigManager.load(), "stock"), msg_id)
     elif data.startswith("funds_seed_"):
         key = data[len("funds_seed_"):]
         if key in SEED_FIELDS:
@@ -813,9 +832,9 @@ async def handle_callback(cb: dict, client):
     elif data == "funds_fx":
         await show_fx_confirmation(client, msg_id)
     elif data == "funds_fx_confirm":
-        result = await maybe_auto_fx(client)
+        result = await run_fx_from_confirm(client)
         send_panel(*(await build_funds_view(client, f"자동환전 결과: {FX_RESULT_KO.get(result, result)}")), msg_id)
-    elif data == "panel": send_panel(*(await build_panel_view(client)), msg_id); send_bottom_menu()
+    elif data in ("panel", "panel_refresh"): send_panel(*(await build_panel_view(client)), msg_id)
     elif data == "stock_list": send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])), msg_id)
     elif data.startswith("slist_"): send_panel(*(await build_stock_list_view(client, int(data.split("_")[1]))), msg_id)
     elif data.startswith("detail_"): send_panel(*(await build_stock_detail_view(client, data.split("_", 1)[1])), msg_id)
@@ -842,8 +861,8 @@ async def handle_callback(cb: dict, client):
         latest = await DcaConfigManager.load(); before = bool(latest.get("n7_enabled", False))
         latest["n7_enabled"] = not before; await DcaConfigManager.save(latest)
         RL.ev("state_change", "n7_enabled", "ok", None, actor="user", before=before, after=latest["n7_enabled"])
-        # v1.2.3: 지수 배수 버튼이 주식 패널로 옮겨서, 바꾼 뒤에도 주식 패널로 돌아간다.
-        send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])), msg_id)
+        # v1.2.6: 지수 배수 버튼은 🛠 도구 → 📐 지수 연동 배수 화면에 있어서, 바꾼 뒤에도 그 화면으로 돌아간다.
+        send_panel(*(await build_n7_view(client, "✅ 지수 연동 배수: " + ("켜짐" if latest["n7_enabled"] else "꺼짐"))), msg_id)
     elif data.startswith("idx_"):
         sym = data.split("_", 1)[1].strip().upper()
         latest = await DcaConfigManager.load(); stocks = latest.get("stocks", {})
@@ -854,8 +873,9 @@ async def handle_callback(cb: dict, client):
         send_panel(*(await build_stock_detail_view(client, sym)), msg_id)
     elif data == "ask_tp": wait_state["mode"] = "tp"; send_panel("🎯 [1차익절% 매도비율%] 입력 (예: 10 20)", [[{"text": "🔙 주식 목록", "callback_data": "stock_list"}]], msg_id)
 
-async def handle_sgov_callback(data, msg_id):
-    """SGOV 메뉴 버튼. 설정만 바꾸고 화면을 다시 보여 줌 — 어떤 버튼도 주문·환전을 하지 않음 (다음 회차 판단부터 적용)"""
+async def sgov_menu_action(data):
+    """SGOV 메뉴 버튼 처리 (예전 handle_sgov_callback 의 설정 바꾸기 부분 그대로) → 안내 문구 ("" = 바꾼 것 없음).
+    v1.2.6: 4번에서는 부르지 않음. 비서봇 요청 파일 → bridge_handle 이 부름. 어떤 버튼도 주문·환전을 하지 않음"""
     notice = ""
     if data.startswith("sgovx_"):
         try: v = float(data.split("_", 1)[1])
@@ -875,12 +895,28 @@ async def handle_sgov_callback(data, msg_id):
         latest = await DcaConfigManager.load(); on = not bool(SG.sgov_block(latest).get("enabled"))
         await SG.sgov_menu_set("enabled", on)
         notice = "▶️ SGOV 회차 적립을 켰습니다. 예정일이 되면 판단합니다 (지금 매수 없음)." if on else "⏸ SGOV 회차 적립을 껐습니다."
-    elif data == "sgov_dist":
-        wait_state["mode"] = "sgov_dist"
-        send_panel("💵 [SGOV 분배금 기록]\n• 들어온 분배금(달러)을 숫자로 입력해 주세요. 예: 12.34\n• SGOV 장부·대기 달러에만 더하고 다음 회차에 재투자합니다 (NKE/QLD 와 따로).",
-                   [[{"text": "🔙 취소", "callback_data": "sgov"}]], msg_id)
-        return
-    send_panel(*SG.build_sgov_view(await DcaConfigManager.load(), notice), msg_id)
+    return notice
+
+
+def parse_dist_amount(text):
+    """분배금 입력 (예전 handle_message 의 sgov_dist 처리 그대로): 숫자만 골라 4자리 반올림, 0 이하 거부 → 값 또는 ValueError"""
+    try:
+        val = round(float("".join(ch for ch in str(text) if ch.isdigit() or ch == ".")), 4)
+    except Exception:
+        raise ValueError("not_a_number")
+    if val <= 0: raise ValueError("not_a_number")
+    return val
+
+
+# v1.2.6 맨밑 고정 메뉴 글자 → 처리 (MAIN_ROW·MENU_ROWS·TOOLS_ROWS 글자와 같음)
+FIXED_BUTTONS = {
+    "📈 상황판": "panel", "☰ 메뉴": "menu",
+    "📋 보유종목": "stock_list", "➕ 종목 추가": "add_symbol",
+    "💰 자금·주식": "funds", "⚙️ 시드·주식": "funds_seed_stock",
+    "🛠 도구": "tools", "❓ 도움말": "help", "🏠 처음 화면": "home", "🔙 메뉴": "menu",
+    "📐 지수 연동 배수": "n7_view", "🎯 익절/매도비율": "ask_tp",
+    "🔎 종목 검색": "stock_search", "🔢 진행일수 보정": "setday_pick",
+}
 
 
 async def handle_message(msg: dict, client):
@@ -889,24 +925,29 @@ async def handle_message(msg: dict, client):
     text = msg.get("text", "").strip()
     if not text: return
     menu_words = {"메뉴", "관제탑", "취소", "종목", "주식", "SGOV", "자금", "보유종목", "종목 추가", "설정"}
-    _kind = "command" if text.startswith("/") else (wait_state.get("mode") or ("menu_word" if text in menu_words else "search"))
+    _btn = FIXED_BUTTONS.get(text) or REPLY_MAP.get(text)
+    _kind = "button" if _btn else ("command" if text.startswith("/") else (wait_state.get("mode") or ("menu_word" if text in menu_words else "search")))
     RL.ev("user_event", "tg_message", "ok", None, actor="user", input_kind=_kind, text_len=len(text))
+    if _btn:
+        # v1.2.6: 맨밑 버튼 = 예전 인라인 버튼과 같음 (누르면 입력 대기 해제 후 그 버튼 처리)
+        RL.ev("user_event", "tg_button", "ok", None, actor="user", button=_cb_parts(_btn)[0], via="reply_keyboard")
+        await dispatch_action(_btn, None, client); return
     cfg = await ensure_cycle_fields()
     # 입력 대기 중에는 메뉴 텍스트도 입력으로 처리. 취소만 대기 해제.
     if text == "취소":
         wait_state.update(mode=None, sym=None)
-        send_panel(*(await build_panel_view(client))); send_bottom_menu()
+        send_panel(*(await build_panel_view(client)))
         return
     if wait_state.get("mode") is None and (text.startswith("/") or text in menu_words):
         if text in ("주식", "보유종목", "종목"):
             send_panel(*(await build_stock_list_view(client, 0)))
-        elif text == "SGOV": send_panel(*SG.build_sgov_view(cfg))
+        elif text == "SGOV": send_keyboard(SGOV_MOVED, MENU_ROWS)   # v1.2.6 A3: SGOV 화면은 4번에서 안 보여 줌
         elif text in ("자금", "설정"): send_panel(*(await build_funds_view(client)))
         elif text == "종목 추가":
             wait_state["mode"] = "add_sym"
             send_panel("➕ 미국 티커를 입력하세요 (예: NKE)", [[{"text":"취소", "callback_data":"panel"}]])
         else:
-            send_panel(*(await build_panel_view(client))); send_bottom_menu()
+            send_panel(*(await build_panel_view(client)))
         return
     stocks = cfg.get("stocks", {}); m, sym = wait_state.get("mode"), wait_state.get("sym")
     if m == "funds_seed":
@@ -922,17 +963,6 @@ async def handle_message(msg: dict, client):
         cfg2 = await DcaConfigManager.load()
         menu_text, kb = build_seed_group_menu(cfg2, seed_group(key))
         send_panel("✅ 시드 변경 저장 (주문·환전 없음)\n\n" + menu_text, kb)
-        return
-    if m == "sgov_dist":
-        wait_state["mode"] = None
-        try:
-            val = round(float("".join(ch for ch in text if ch.isdigit() or ch == ".")), 4)
-            if val <= 0: raise ValueError
-        except Exception:
-            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="sgov_dist")
-            send_panel("❌ 숫자(달러)를 입력해 주세요. 예: 12.34", [[{"text": "💵 다시 입력", "callback_data": "sgov_dist"}, {"text": "🪙 SGOV", "callback_data": "sgov"}]])
-            return
-        send_panel(*SG.build_sgov_view(await SG.sgov_add_distribution(val), f"✅ 분배금 ${val:.2f} 기록 — SGOV 대기 달러로 다음 회차에 재투자합니다."))
         return
     if m == "stock_search":
         wait_state["mode"] = None
@@ -1153,6 +1183,122 @@ async def maybe_auto_fx(client, now=None):
         RL.err("auto_fx",e,event_type="decision")
         return "error"
 
+# ---------------------------------------------------------------- v1.2.6 비서봇 요청·결과·상태 스냅샷 (bridge.py)
+# SGOV 설정·장부의 주인은 이 봇 하나. 비서봇은 요청 파일만 쓰고, 이 봇이 검증·실행해 결과 파일을 씀.
+BRIDGE_SNAPSHOT_SEC = 300    # 제안값(근거 없음): 상태 스냅샷을 다시 만드는 간격 (요청을 처리한 뒤에도 바로 다시 만듦)
+SNAP_SGOV_KEYS = ("enabled", "symbol", "target_usd_total", "tranche_usd", "first_tranche_usd", "tranches_total",
+                  "tranches_done", "interval_days", "next_due_date", "skip_jump_pct", "skip_cap_mode", "fx_avg_months",
+                  "wait_usd", "skip_streak", "skip_streak_b", "skips_total", "review_hold", "last_decision", "ledger")
+
+
+async def build_bridge_snapshot(client):
+    """비서봇이 읽는 읽기 전용 상태 (키·토큰 없음). 보유 달러는 4번 자금과 같은 곳(client.api.usd_estimated)에서 읽음"""
+    cfg = await DcaConfigManager.load()
+    sg = SG.sgov_block(copy.deepcopy(cfg))
+    now = time.time()
+    snap = {"v": 1, "ts": now, "ts_kst": datetime.now(KST_TZ).strftime("%Y-%m-%d %H:%M:%S"), "bot_version": BOT_VERSION,
+            "mode": {"enabled": bool(SETTINGS.get("enabled")), "dry_run": bool(RUN.get("dry", True)),
+                     "auto_fx_on": bool((SETTINGS.get("auto_fx") or {}).get("on")), "master_on": bool(cfg.get("is_master_active", False))},
+            "ledger_file": os.path.basename(DcaConfigManager.CONFIG_FILE or ""),
+            "usd": None, "usd_error": None, "need_total": None, "need_sgov": None, "need_stock": None, "need_error": None,
+            "sgov": {k: copy.deepcopy(sg.get(k)) for k in SNAP_SGOV_KEYS}, "sgov_tranche_now": SG.tranche_amount(sg),
+            "sgov_problems": SG.sgov_problems(sg), "sgov_view_text": SG.build_sgov_view(cfg)[0],
+            "skip_x_choices": list(SG.SKIP_X_CHOICES), "cap_modes": dict(SG.CAP_MODES)}
+    try: snap["usd"] = round(float(await asyncio.to_thread(client.api.usd_estimated)), 2)
+    except Exception as e: snap["usd_error"] = type(e).__name__
+    from main import FxNoPrice as _NoPrice   # funds_split(t_ui) 이 쓰는 것과 같은 모듈의 예외 (build_funds_view 와 같은 방식)
+    try:
+        snap["need_total"], snap["need_sgov"], snap["need_stock"] = await funds_split(client, cfg)
+    except _NoPrice as e: snap["need_error"] = f"참고가 조회 불가: {e}"
+    except Exception as e: snap["need_error"] = f"환전 계획 조회 실패: {type(e).__name__}"
+    if snap["usd"] is not None and snap["need_total"] is not None:
+        usd = Decimal(str(snap["usd"]))
+        amt = lambda need: (lambda x: float(x) if x is not None else None)(fx_auto_amount(Decimal(str(need)) - usd))
+        # 화면 표시용 (각 쪽 분만 본 값) + 실제 실행 기준(합산 부족분)
+        snap["fx_amount_stock_side"], snap["fx_amount_sgov_side"] = amt(snap["need_stock"]), amt(snap["need_sgov"])
+        snap["fx_amount_total"] = amt(snap["need_total"])
+    return snap
+
+
+async def bridge_handle(req: dict, client):
+    """요청 1개 실행 → (상태, 문구, data). 기존 함수만 부르고, 기존 검증을 그대로 다시 함. 부분 적용 없음 (기존 함수가 한 번에 저장)"""
+    t, a = req.get("type"), req.get("args") or {}
+    if t == "snapshot":
+        return "ok", "상태를 새로 만들었습니다.", {}
+    if t == "fx_preview":
+        need, usd, amount = await fx_confirm_info(client)
+        if amount is None: return "ok", "환전할 금액 없음", {"need": need, "usd": float(usd), "amount": None}
+        return "ok", (f"이 금액만큼 자동환전할까요? ~${amount:,.2f} · 적립 + SGOV 합산분\n"
+                      "기존 낮 자동환전 안전장치 및 시간 제한 적용"), {"need": need, "usd": float(usd), "amount": float(amount)}
+    if t == "fx_run":
+        code = await run_fx_from_confirm(client)
+        return ("ok" if code in ("ok", "dry_run") else "rejected"), f"자동환전 결과: {FX_RESULT_KO.get(code, code)}", {"code": code}
+    if t == "sgov_seed":
+        key, raw = str(a.get("key") or ""), str(a.get("value") or "")
+        if key not in SGOV_SEED_KEYS: return "rejected", "저장 거부: SGOV 시드 항목이 아님", {}
+        try:
+            value = parse_seed_value(key, raw)
+            await save_seed_value(await DcaConfigManager.load(), key, value)
+        except (ValueError, TypeError) as e:
+            return "rejected", f"❌ 저장 거부: {e}", {"key": key}
+        return "ok", f"✅ 시드 변경 저장 (주문·환전 없음): {SEED_FIELDS[key][0]} = {value}", {"key": key, "value": value}
+    if t == "sgov_dist":
+        try: val = parse_dist_amount(a.get("amount"))
+        except ValueError:
+            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="sgov_dist", via="bridge")
+            return "rejected", "❌ 숫자(달러)를 입력해 주세요. 예: 12.34", {}
+        await SG.sgov_add_distribution(val)
+        return "ok", f"✅ 분배금 ${val:.2f} 기록 — SGOV 대기 달러로 다음 회차에 재투자합니다.", {"amount": val}
+    if t in ("sgov_x", "sgov_mode", "sgov_review_ok"):
+        data = {"sgov_x": f"sgovx_{a.get('x')}", "sgov_mode": f"sgovmode_{a.get('mode')}", "sgov_review_ok": "sgov_review_ok"}[t]
+        notice = await sgov_menu_action(data)
+        return ("ok" if notice else "rejected"), (notice or "❌ 허용되지 않은 값이라 바꾸지 않았습니다."), {}
+    if t == "sgov_enable":
+        want = a.get("on")
+        if not isinstance(want, bool): return "rejected", "❌ on 값 오류 (true/false)", {}
+        cur = bool(SG.sgov_block(await DcaConfigManager.load()).get("enabled"))
+        if cur == want: return "ok", "이미 " + ("켜져" if cur else "꺼져") + " 있어 바꾸지 않았습니다.", {"enabled": cur}
+        return "ok", await sgov_menu_action("sgov_toggle"), {"enabled": want}
+    if t == "sgov_gate":
+        lines = await SG.sgov_preview_lines(client, await DcaConfigManager.load(), datetime.now(EST_TZ).strftime("%Y-%m-%d"))
+        return "ok", "🔎 [SGOV 게이트 확인 — 조회만, 주문·저장 없음]\n" + "\n".join(lines), {}
+    return "invalid", "모르는 요청", {}
+
+
+async def bridge_pass(client, now=None):
+    """요청 처리 1번 + 필요하면 스냅샷 → 처리한 요청 수"""
+    base = BR.bridge_dir(SETTINGS)
+    n = 0
+    for rid, req, bad, why in BR.pending_requests(base, now):
+        rtype = (req or {}).get("type") if isinstance(req, dict) else None
+        if bad:
+            BR.write_result(base, rid, rtype, bad, why)
+            RL.ev("user_event", "bridge_request", "skipped", bad, actor="user", kind=str(rtype)[:20]); n += 1; continue
+        BR.write_result(base, rid, rtype, "processing", "처리 중")          # 먼저 표시 → 재시작해도 다시 실행 안 함
+        try: st, text, data = await bridge_handle(req, client)
+        except Exception as e:
+            RL.err("bridge_handle", e, event_type="user_event", kind=rtype)
+            st, text, data = "error", f"처리 오류: {type(e).__name__}", {}
+        BR.write_result(base, rid, rtype, st, text, data)
+        RL.ev("user_event", "bridge_request", "ok" if st == "ok" else "failed", None if st == "ok" else st, actor="user", kind=rtype)
+        n += 1
+    return n
+
+
+async def bridge_loop(client):
+    last_snap = 0.0
+    while True:
+        try:
+            if SETTINGS.get("state_dir"):
+                n = await bridge_pass(client)
+                if n or time.time() - last_snap >= float(SETTINGS.get("bridge_snapshot_sec") or BRIDGE_SNAPSHOT_SEC):
+                    BR.write_snapshot(BR.bridge_dir(SETTINGS), await build_bridge_snapshot(client)); last_snap = time.time()
+                    BR.cleanup_results(BR.bridge_dir(SETTINGS))
+        except Exception as e:
+            RL.err("bridge_loop", e, event_type="decision")
+        await asyncio.sleep(5)
+
+
 async def scheduler_loop(client):
     n_pass = 0
     while True:
@@ -1231,9 +1377,9 @@ async def run_service():
         if not poll_blocked(): send_panel(txt, [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
     elif not poll_blocked():
         t, kb = await build_panel_view(client)
-        send_panel(f"✨ [메리츠 적립봇 {BOT_VERSION} 시작]\n\n" + t, kb); send_bottom_menu()
+        send_panel(f"✨ [메리츠 적립봇 {BOT_VERSION} 시작]\n\n" + t, kb)
     RL.set_cid("")
-    await asyncio.gather(polling_loop(client), scheduler_loop(client))
+    await asyncio.gather(polling_loop(client), scheduler_loop(client), bridge_loop(client))
 
 
 # ---------------------------------------------------------------- 명령줄 (주문 없음)

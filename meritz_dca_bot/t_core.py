@@ -21,6 +21,7 @@
 #   주식/SGOV 패널로 이동 (내용은 t_ui.py·main.py에).
 # v1.2.5 (2026-11-14): BOT_VERSION 갱신 (시세·SGOV 수정은 각각 해당 모듈).
 # v1.2.4 (2026-11-13): 관제탑 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
+# v1.2.6 (2026-11-14): 모든 메뉴·화면 버튼을 맨밑 키보드로 (첫 줄 [📈 상황판, ☰ 메뉴]) · 인라인 버튼 안 보냄 · SGOV 메뉴는 비서봇으로.
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -28,7 +29,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.5"
+BOT_VERSION = "v1.2.6"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -75,23 +76,58 @@ def tg_api(method, payload=None):
     return res
 
 
+# v1.2.6: 화면 버튼은 모두 맨밑 키보드(ReplyKeyboard). 첫 줄은 항상 [📈 상황판, ☰ 메뉴].
+#   각 화면이 만든 버튼 목록({"text", "callback_data"})은 그대로 두고, 보낼 때 맨밑 키보드로 바꾼다.
+#   눌린 글자 → 원래 callback_data 는 REPLY_MAP 에 둔다 (가장 최근에 보낸 키보드 1개 · 메모리만).
+#   화면 이동용(관제탑 callback "panel")은 📈 상황판 으로 대신하므로 뺀다. SGOV 버튼(callback "sgov…")은 비서봇으로 옮겨서 뺀다.
+MAIN_ROW = ["📈 상황판", "☰ 메뉴"]
+MENU_ROWS = [["📋 보유종목", "➕ 종목 추가"], ["💰 자금·주식", "⚙️ 시드·주식"], ["🛠 도구", "❓ 도움말"], ["🏠 처음 화면"]]
+TOOLS_ROWS = [["📐 지수 연동 배수", "🎯 익절/매도비율"], ["🔎 종목 검색", "🔢 진행일수 보정"], ["🔙 메뉴"]]
+REPLY_MAP = {}
+
+
+def _drop_button(cb: str) -> bool:
+    return cb == "panel" or cb.startswith("sgov")
+
+
+def reply_rows(inline_kb):
+    """화면 버튼 목록 → (맨밑 키보드 줄, 글자→callback_data). 첫 줄 [📈 상황판, ☰ 메뉴]는 넣지 않음"""
+    rows, amap = [], {}
+    for row in inline_kb or []:
+        out = []
+        for b in row or []:
+            t, cb = str((b or {}).get("text") or "").strip(), str((b or {}).get("callback_data") or "")
+            if not t or not cb or _drop_button(cb) or t in amap or t in MAIN_ROW: continue
+            amap[t] = cb; out.append({"text": t})
+        if out: rows.append(out)
+    return rows, amap
+
+
+def reply_markup(rows):
+    return {"keyboard": rows, "resize_keyboard": True, "is_persistent": True}
+
+
 def send_panel(text, inline_kb, msg_id=None):
+    """v1.2.6: 화면 1개 = 새 메시지 1개 + 맨밑 키보드 (msg_id 는 예전 호출 모양 유지용, 쓰지 않음)"""
     head = ("🧪[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
-    payload = {"chat_id": CHAT_ID, "text": head + "\n" + text, "reply_markup": {"inline_keyboard": inline_kb}}
-    if msg_id:
-        payload["message_id"] = msg_id
-        res = tg_api("editMessageText", payload)
-        if res and (res.get("ok") or "not modified" in str(res.get("description", ""))): return
-    tg_api("sendMessage", payload)
+    rows, amap = reply_rows(inline_kb)
+    REPLY_MAP.clear(); REPLY_MAP.update(amap)
+    kb = [[{"text": t} for t in MAIN_ROW]] + rows
+    return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": head + "\n" + text, "reply_markup": reply_markup(kb)})
 
 
+def send_keyboard(text, rows_labels):
+    """메뉴·도구·처음 화면 키보드 (글자 줄 그대로). 화면 버튼 표(REPLY_MAP)는 비움"""
+    REPLY_MAP.clear()
+    head = ("🧪[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
+    return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": head + "\n" + text,
+                                  "reply_markup": reply_markup([[{"text": t} for t in row] for row in rows_labels])})
 
-# 하단 키보드는 인라인 키보드와 별도 메시지로 전송한다.
-# v1.2.1: 하단에는 3개 메뉴(주식·SGOV·자금)만. 나머지 4개는 각 메뉴 안의 인라인 버튼으로.
-def send_bottom_menu():
-    return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": "📌 메뉴", "reply_markup": {
-        "keyboard": [[{"text": "주식"}, {"text": "SGOV"}, {"text": "관제탑"}]],
-        "resize_keyboard": True, "is_persistent": True}})
+
+# 하단 키보드는 별도 메시지로 전송한다.
+# v1.2.6: 처음 화면 = 첫 줄 [📈 상황판, ☰ 메뉴] 만 (예전 [주식, SGOV, 관제탑] 대신).
+def send_bottom_menu(text="📌 처음 화면 · 아래 버튼을 눌러 주세요"):
+    return send_keyboard(text, [MAIN_ROW])
 
 def check_holiday():
     if datetime.now(EST_TZ).weekday() >= 5: return True, "주말 휴장 (Weekend, 미국 동부 기준)"

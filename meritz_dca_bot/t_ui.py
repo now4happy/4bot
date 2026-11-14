@@ -8,9 +8,9 @@
 #   - 뺌: 환전 필요액 화면(build_fx_view, 3번에서도 버튼 없음) · 한국주식 표시
 # v1.1.0 (2026-11-13): 관제탑에 SGOV 회차 적립 요약 1줄 + 🪙 SGOV 적립 버튼 (화면은 sgov.build_sgov_view)
 # v1.2.0 (2026-11-13): 진행률·자금 패널·오늘 적립 예상
+# v1.2.6 (2026-11-14): SGOV 줄·버튼 뺌(비서봇으로) · 자금은 주식분만 · 화면 이동 버튼(🔙 관제탑) 뺌 · 익절/지수 배수는 🛠 도구로
 # =====================================================================
 from t_core import *
-from sgov import sgov_panel_line, sgov_block
 from decimal import Decimal
 
 
@@ -74,12 +74,7 @@ def progress_lines(cfg, usd, need, mode="now"):
         if mode == "done": day, value = target, float(st.get("base_amount") or 0) * target
         pct = min(100, 100*day/target) if target > 0 else 0
         assets.append((value, sym, f"{progress_bar(pct, icon)} {sym} {pct:.0f}% ({day}/{target}일 · ${value:,.0f})"))
-    sg = sgov_block(cfg)
-    done, total = int(sg.get("tranches_done") or 0), int(sg.get("tranches_total") or 0)
-    value = float((sg.get("ledger") or {}).get("principal") or 0)
-    if mode == "done": done, value = total, float(sg.get("target_usd_total") or 0)
-    pct = min(100, 100*done/total) if total > 0 else 0
-    assets.append((value, "SGOV", f"{progress_bar(pct, '🟨')} SGOV {pct:.0f}% ({done}/{total}회 · ${value:,.0f})"))
+    # v1.2.6: SGOV 줄은 뺌 (SGOV 진행률은 비서봇 SGOV 상황판에서). NKE·QLD·현금만.
     pct = min(100, 100*usd/need) if need > 0 else (100 if usd > 0 else 0)
     assets.append((usd, "현금", f"{progress_bar(pct, '🟩')} 현금 {pct:.0f}% (오늘 필요 ${need:,.0f} · ${usd:,.0f})"))
     assets.sort(key=lambda item: item[0], reverse=True)
@@ -95,39 +90,42 @@ async def today_funding(client, cfg):
     from main import dca_fx_plan
     return await dca_fx_plan(client, cfg)
 
-async def stock_today_estimate(client, cfg):
+async def funds_split(client, cfg):
+    """v1.2.6: (합산, SGOV분, 주식분). 합산은 기존 dca_fx_plan 그대로(바꾸지 않음), SGOV분은 sgov_fx_need,
+    주식분 = 합산 − SGOV분 (예전 stock_today_estimate 와 같은 식). 환전 실행 판단은 여전히 합산으로만 한다."""
     from sgov import sgov_fx_need
     need = await today_funding(client, cfg)
     sg_need = await sgov_fx_need(client, cfg, datetime.now(KST_TZ).strftime("%Y-%m-%d"))
-    return max(0, need - sg_need)
+    return round(float(need), 2), round(float(sg_need), 2), round(max(0, float(need) - float(sg_need)), 2)
+
+async def stock_today_estimate(client, cfg):
+    return (await funds_split(client, cfg))[2]
 
 async def build_funds_view(client, notice=""):
+    """v1.2.6: 4번 자금 = 주식분만 (SGOV분은 비서봇 자금에서). 보유 달러는 같은 계좌라 같은 곳(usd_estimated)에서 읽음.
+    환전할 금액(주식분 기준) = fx_auto_amount(주식분 − 보유 달러) — 이 화면 표시용. 실제 자동환전은 합산 부족분 1번."""
     from main import fx_auto_amount, FxNoPrice
     cfg = await DcaConfigManager.load()
-    sg = sgov_block(cfg)
     usd = float(await asyncio.to_thread(client.api.usd_estimated))
     need, error = None, None
-    try: need = await today_funding(client, cfg)
+    try: need = (await funds_split(client, cfg))[2]
     except FxNoPrice as e: error = f"참고가 조회 불가: {e}"
     except Exception as e: error = f"환전 계획 조회 실패: {type(e).__name__}"
     amount = fx_auto_amount(Decimal(str(need)) - Decimal(str(usd))) if need is not None else None
     stocks = cfg.get("stocks", {})
-    lines = ["💰 [자금 · 매매 상황판]", f"보유 달러: ${usd:,.2f}",
+    lines = ["💰 [자금 · 주식]", f"보유 달러: ${usd:,.2f}",
              "매매: " + ("자동" if SETTINGS.get("enabled") else "중지") + " / " + ("모의" if RUN.get("dry", True) else "실전"),
              "자동환전: " + ("켜짐" if SETTINGS.get("auto_fx", {}).get("on") else "꺼짐"),
              "적립 시드 (100일): " + " · ".join(f"{sym} ${float(stocks[sym].get('base_amount') or 0):,.2f}/회" for sym in ("NKE","QLD") if sym in stocks),
-             f"SGOV 시드: 총 ${float(sg.get('target_usd_total') or 0):,.2f} · {int(sg.get('tranches_total') or 0)}회",
-             "─────────────────", "환전: 적립 + SGOV 합산"]
-    lines.append(f"오늘 필요: ${need:,.2f}" if need is not None else f"오늘 필요: 미확인 ({error})")
+             "─────────────────", "환전: 주식분 (이 화면)"]
+    lines.append(f"오늘 필요 (주식분): ${need:,.2f}" if need is not None else f"오늘 필요 (주식분): 미확인 ({error})")
     lines.append(f"보유 USD: ${usd:,.2f}")
-    lines.append(f"환전할 금액: ${amount:,.2f}" if amount is not None else "환전할 금액 없음")
-    lines.extend(["─────────────────", "⚙️ 시드 설정",
-                  f"SGOV 회차 금액 ${float(sg.get('tranche_usd') or 0):,.2f} · 1회차 ${float(sg.get('first_tranche_usd') or 0):,.2f} · 간격 {int(sg.get('interval_days') or 0)}일"])
+    lines.append(f"환전할 금액 (주식분 기준): ${amount:,.2f}" if amount is not None else "환전할 금액 없음 (주식분 기준)")
+    lines += ["ℹ️ SGOV분은 비서봇 자금에서",
+              "ℹ️ [자동환전 실행]은 (주식 필요 + SGOV 필요) − 보유 달러 합산 부족분으로 한 번만 합니다"]
     if notice: lines.insert(0, notice)
-    kb = []
-    if amount is not None: kb.append([{"text":"자동환전 실행", "callback_data":"funds_fx"}])
-    kb += [[{"text":"시드 설정", "callback_data":"funds_seed"}],
-           [{"text":"🔄 새로고침", "callback_data":"funds"}, {"text":"🔙 관제탑", "callback_data":"panel"}]]
+    kb = [[{"text":"자동환전 실행", "callback_data":"funds_fx"}, {"text":"시드·주식", "callback_data":"funds_seed_stock"}],
+          [{"text":"🔙 메뉴", "callback_data":"menu"}]]
     return "\n".join(lines), kb
 
 async def build_panel_view(client):
@@ -156,7 +154,6 @@ async def build_panel_view(client):
         " • 매수 배율: 수익률 +1.0%↑ 시 1/2배 (그 외 1배)",
         " • 정수 주문: " + ("남은 금액은 다음 날로 이월 (평균 = 기준금액)" if SETTINGS.get("us_int_buy_mode", "carry") != "min1" else "금액이 1주보다 작아도 최소 1주"),
         *n7_status_lines(cfg),
-        sgov_panel_line(cfg),
         " • 100일 종료 시: [N일 정지 / N일 분할매도 / N일 2차매수] 선택", "─────────────────",
         "📊 [수익률 구간별 매도 계획]",
         f" • {tp1:.0f}% 수익 도달 시 ➔ 잔고의 {sr:.0f}% 매도",
@@ -170,18 +167,15 @@ async def build_panel_view(client):
     ]
     try:
         usd = float(await asyncio.to_thread(client.api.usd_estimated))
-        need = await today_funding(client, cfg)
+        need = (await funds_split(client, cfg))[2]   # v1.2.6: 현금 줄의 오늘 필요 = 주식분
         # v1.2.4: 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
         lines.extend(["─────────────────", *progress_lines(cfg, usd, need, "now")])
     except Exception as e:
         lines.append(f"📊 시드 대비 진행률: 조회 실패 ({type(e).__name__})")
     if decision_syms: lines.append(f"\n🚨 [기간 완료 종목: {', '.join(decision_syms)}] 아래 보유종목 리스트에서 다음 단계를 선택하세요!")
-    # v1.2.4: 지금/완성 시 예상 토글 제거 — 관제탑 패널은 자금·전원·새로고침 3줄만.
-    kb = [
-        [{"text": "💰 자금", "callback_data": "funds"}],
-        [{"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}],
-        [{"text": "🔄 새로고침", "callback_data": "panel"}]
-    ]
+    # v1.2.6: 상황판 맨밑 키보드 = [📈 상황판, ☰ 메뉴] + [🔄 새로고침, 전원 켜기/끄기]. 💰 자금은 ☰ 메뉴 안으로.
+    kb = [[{"text": "🔄 새로고침", "callback_data": "panel_refresh"},
+           {"text": "🔴 전체 전원 끄기" if is_master else "🟢 전체 전원 켜기", "callback_data": "toggle_master"}]]
     return "\n".join(lines), kb
 
 
@@ -266,13 +260,10 @@ async def build_stock_list_view(client, page: int = 0, market=None, status=None,
     if nav:
         kb.append(nav)
     kb.append([{"text": "🔎 종목 검색", "callback_data": "stock_search"}, {"text": "➕ 종목 추가", "callback_data": "add_symbol"}])
-    # v1.2.3: 관제탑에서 옮겨온 주식 적립 설정 (익절/매도비율·지수 연동 배수).
-    kb.append([{"text": "🎯 익절/매도비율 변경", "callback_data": "ask_tp"},
-               {"text": "📐 지수 연동 배수 끄기" if cfg.get("n7_enabled", False) else "📐 지수 연동 배수 켜기", "callback_data": "toggle_n7"}])
+    # v1.2.6: 익절/매도비율·지수 연동 배수는 ☰ 메뉴 → 🛠 도구 로 옮김. 🔙 관제탑 버튼은 뺌 (맨밑 첫 줄 📈 상황판).
     kb.append([btn("🔄 새로고침", pg=page)])
     if query:
         kb.append([btn("검색 해제", keep=False)])
-    kb.append([{"text": "🔙 관제탑 메인으로", "callback_data": "panel"}])
     return "\n".join(lines), kb
 
 
@@ -320,7 +311,6 @@ async def build_stock_detail_view(client, sym: str):
         kb.append([{"text": "📤 몇 일 동안 나눠서 매도할지 설정", "callback_data": f"next_sell_{sym}"}])
         kb.append([{"text": "🛒 몇 일 동안 2차 매수할지 설정", "callback_data": f"next_buy2_{sym}"}])
     kb.append([{"text": "🔄 새로고침", "callback_data": f"detail_{sym}"}, {"text": "📋 종목 리스트로", "callback_data": stock_list_callback()}])
-    kb.append([{"text": "🔙 관제탑 메인으로", "callback_data": "panel"}])
 
     # 종목별 매매 버튼 v1
     trade_enabled = bool(s.get("enabled", True))
@@ -330,3 +320,36 @@ async def build_stock_detail_view(client, sym: str):
         {"text": "⏸ 매매 중지", "callback_data": f"trade_off_{sym}"}
     ])
     return "\n".join(lines), kb
+
+
+# ---------------------------------------------------------------- v1.2.6 🛠 도구 화면 (기존 동작을 부르는 진입점만)
+async def build_n7_view(client=None, notice=""):
+    """📐 지수 연동 배수: 지금 상태(n7_status_lines) + 켜기/끄기 버튼 (누르면 기존 toggle_n7)"""
+    cfg = await DcaConfigManager.load()
+    lines = ["📐 [지수 연동 배수 (N7)]", *n7_status_lines(cfg)]
+    if notice: lines.insert(0, notice)
+    kb = [[{"text": "📐 지수 연동 배수 끄기" if cfg.get("n7_enabled", False) else "📐 지수 연동 배수 켜기", "callback_data": "toggle_n7"}],
+          [{"text": "🔙 메뉴", "callback_data": "menu"}]]
+    return "\n".join(lines), kb
+
+
+async def build_setday_pick_view(client=None):
+    """🔢 진행일수 보정: 종목을 고르면 기존 setday_{종목} 입력으로 감"""
+    cfg = await DcaConfigManager.load()
+    items = select_stock_items(cfg.get("stocks", {}))
+    lines = ["🔢 [진행일수 보정] 종목을 골라 주세요."]
+    kb = [[{"text": f"🔢 [{sym}] 진행일수 보정", "callback_data": f"setday_{sym}"}] for sym, _ in items[:20]]
+    if not items: lines.append("목록에 종목이 없습니다.")
+    kb.append([{"text": "🔙 메뉴", "callback_data": "menu"}])
+    return "\n".join(lines), kb
+
+
+HELP_TEXT = "\n".join([
+    "❓ [도움말 · 메리츠 적립 4번]",
+    "▫️ 맨밑 첫 줄: 📈 상황판 (예전 관제탑) · ☰ 메뉴",
+    "▫️ ☰ 메뉴: 📋 보유종목 · ➕ 종목 추가 · 💰 자금·주식 · ⚙️ 시드·주식 · 🛠 도구 · ❓ 도움말 · 🏠 처음 화면",
+    "▫️ 🛠 도구: 📐 지수 연동 배수 · 🎯 익절/매도비율 · 🔎 종목 검색 · 🔢 진행일수 보정 · 🔙 메뉴",
+    "▫️ 글자 명령(예전 그대로): 주식 · 보유종목 · 종목 · 자금 · 설정 · 종목 추가 · 관제탑 · 메뉴 · 취소",
+    "▫️ SGOV 는 비서봇으로 옮겼어요. 비서봇 메뉴에서 봐 주세요.",
+    "▫️ 자동환전은 주식분 + SGOV분 합산 부족분으로 한 번만 합니다 (어느 봇에서 눌러도 같은 실행 1개).",
+])
