@@ -1,5 +1,10 @@
 # 3번 빗썸 적립 변경 기록
 
+## v4.3.6 · 2026-11-14 14:48 (KST)
+- 파일: b_core.py, b_ui.py, main.py
+- 내용: bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황판·거래내역 (vNEXT)
+- 브랜치: staging
+
 ## v4.3.5 · 2026-11-14 14:12 (KST)
 - 파일: b_core.py, b_ui.py, main.py
 - 내용: bithumb-menu: 처음 화면을 BTC·ETH 설정 중심으로 (v4.3.5)
