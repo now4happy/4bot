@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 vNEXT (2026-11-14): 웹 사무실 완전 제거에 맞춰 8번 비서를 SGOV 메뉴 전용으로 정리 — 🏢 사무실·/주소·🖥 PC 상태·💰 잔액·Update 안내 삭제
+#                         (남김: SGOV 메뉴 office_sgov.py · 허브 신호 · 전략·종목·금액·enabled 변경 없음)
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.3 (2026-11-14): SGOV 메뉴 추가 — 하단 [📈 상황판 | ☰ 메뉴](SGOV) + [🏢 사무실 메뉴](예전 ☰ 메뉴 그대로). 화면·요청은 office_sgov.py
 # 사무실 v1.5.0 (2026-11-09): 브리핑 버튼·명령 제거, 잔액·메뉴 유지
@@ -13,11 +15,10 @@
 # V4 (2026-10-26): 비서봇에서 팬딩 모듈 import 및 팬딩 콜백 제거. 팬딩은 전용 봇에서만 처리.
 # V3 (2026-10-26): 하단 메인 메뉴·하위 메뉴 정리
 # 텔레그램 "사무실 비서" 대화 담당 (항상 실행: bot-office-secretary.service)
-#  - 하단 메뉴: ☰ 메뉴(잔액·PC 상태·사무실·도움말·메인 메뉴)
-#  - 코드 수정은 GitHub staging → 6. Update 승인 방식만 씀 (이 비서는 수정 요청·결재를 받지 않음)
+#  - 하단 메뉴: [📈 상황판 | ☰ 메뉴] = SGOV 메뉴 (office_sgov.py) 뿐
 #  안전: 등록된 대표님 채팅방(chat_id)에서 온 것만 처리.
 # ==========================================================
-import html, json, os, re, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
+import html, json, os, re, sys, tempfile, time, urllib.parse, urllib.request, uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # --- alert-hub: 기존 전송은 그대로, 자율 알림만 hub DB에 복사 (실패해도 봇은 계속) ---
@@ -51,19 +52,14 @@ from zoneinfo import ZoneInfo
 
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 TELEGRAM_CFG = R / "etc/bot-office/telegram.json"
-OFFICE_URL = R / "etc/bot-office/office_url"
 STATE = R / "var/lib/bot-office/secretary.json"
 TELEGRAM_API = os.environ.get("OFFICE_TELEGRAM_API", "https://api.telegram.org")
 SYSTEMCTL = os.environ.get("OFFICE_SYSTEMCTL", "systemctl")
-BRIEFING = os.environ.get("OFFICE_BRIEFING", "/opt/bot-office/office_briefing.py")
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 
-HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
-        "▫️ <b>☰ 메뉴 → 🏢 사무실</b> : 사무실 상황판을 바로 여는 버튼\n"
-        "▫️ <b>☰ 메뉴 → 💰 잔액</b> → 회사 선택(한국투자·토스·메리츠·빗썸·전체) : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
-        "▫️ <b>☰ 메뉴 → 🖥 PC 상태</b> : 한국 PC 연결·매직스플릿 실행 확인\n"
-        "▫️ /주소 : 지금 사무실 주소 확인 (/주소변경 으로 고정 도메인 이동)\n"
-        "▫️ 봇 코드 수정은 Claude·GPT 에게 맡겨 GitHub staging 에 올리고 9. Update 에서 승인해요.")
+HELP = ("🤖 <b>8번 비서 사용법</b> (SGOV 메뉴)\n"
+        "▫️ <b>📈 상황판</b> : SGOV 상황판\n"
+        "▫️ <b>☰ 메뉴</b> : 🪙 SGOV 현황 · 💰 자금·SGOV · ⚙️ 시드·SGOV · 💵 분배금 기록 · 🛠 도구 · ❓ 도움말")
 
 
 def load(p, default):
@@ -153,50 +149,20 @@ class TG:
 # ---------------------------------------------------------- 버튼 메뉴 (/start 로 하단 버튼이 뜬다)
 # 버튼은 기존 글자 명령과 똑같이 처리된다. 글자를 꼭 입력해야 하는 기능(수정 내용·상품명·금액)은
 # 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안 · 취소는 아래 다른 버튼).
-HOME = "🏠 메인 메뉴"
+HOME = "🏠 메인 메뉴"   # 예전 하단 버튼이 남아 있을 때도 처음 화면으로
 MENU_OPEN = "☰ 메뉴"
-# v1.8.3: 첫 줄 [📈 상황판, ☰ 메뉴] = SGOV (office_sgov.py). 예전 ☰ 메뉴 항목(잔액·PC 상태·사무실·도움말·메인 메뉴)은
-#   둘째 줄 🏢 사무실 메뉴 안에 그대로 (두 메뉴 글자가 한 키보드에 섞이지 않게 따로 띄움)
+# vNEXT: 처음 화면은 SGOV 진입 버튼 2개뿐 [📈 상황판, ☰ 메뉴] (office_sgov.py 가 받아서 SGOV 상황판·SGOV 메뉴로)
 SGOV_CHART = "📈 상황판"
-OFFICE_MENU = "🏢 사무실 메뉴"
 SGOV_HOME = "🏠 처음 화면"
-MAIN_LABELS = [[SGOV_CHART, MENU_OPEN], [OFFICE_MENU]]
-SUB_LABELS = {
-    "menu": [["💰 잔액", "🖥 PC 상태"], ["🏢 사무실", "❓ 도움말"], [HOME]],
-
-}
+MAIN_LABELS = [[SGOV_CHART, MENU_OPEN]]
 MENU_KB = [[{"text": t} for t in row] for row in MAIN_LABELS]
-SUB_KB = {k: [[{"text": t} for t in row] for row in v] for k, v in SUB_LABELS.items()}
-MENU_ALIAS = {"❓ 도움말": "/help", "🖥 PC 상태": "/pc_status"}
-BAL_ACTIONS = {"🏦 한국투자": "kis", "🔷 토스": "toss", "🏛 메리츠": "meritz", "🪙 빗썸": "bithumb", "🧾 전체": "all"}
-BAL_ROWS = [[{"text": "🏦 한국투자", "callback_data": "bl:kis"}, {"text": "🔷 토스", "callback_data": "bl:toss"}],
-            [{"text": "🏛 메리츠", "callback_data": "bl:meritz"}, {"text": "🪙 빗썸", "callback_data": "bl:bithumb"}],
-            [{"text": "🧾 전체", "callback_data": "bl:all"}, {"text": "✖ 닫기", "callback_data": "mn:x"}]]
-BAL_NAME = {v: k for k, v in BAL_ACTIONS.items()}
-MENU_SPECIAL = (MENU_OPEN, "📊 조회", "🏢 사무실", "💰 잔액", HOME)
-CANCEL_WORDS = ("잔액", "도움말", "help", "?")
 CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
-OFFICE_LABELS = {"💰 잔액", "🖥 PC 상태", "🏢 사무실", "❓ 도움말", HOME, "📊 조회", OFFICE_MENU, *BAL_ACTIONS}
+OFFICE_LABELS = {HOME, "❓ 도움말"}   # office_sgov.handle 에 넘기는 '비서봇 버튼 글자' (숫자 입력 대기 해제용)
 try:
     import office_sgov   # v1.8.3: SGOV 메뉴 (없으면 예전 메뉴만 동작)
 except Exception as _e:
     office_sgov = None
     print("SGOV 메뉴 불러오기 실패:", type(_e).__name__, flush=True)
-def office_open(tg):
-    """🏢 사무실: 지금 사무실 주소를 여는 버튼 (주소는 /etc/bot-office/office_url · 임시 터널이면 바뀔 때마다 자동 갱신)"""
-    try:
-        url = OFFICE_URL.read_text(encoding="utf-8").strip()
-    except OSError:
-        url = ""
-    if not re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?/?", url):
-        tg.send("🏢 사무실 주소를 아직 몰라요. 🔗 사무실 주소 (/주소) 로 확인해 주세요."); return
-    tg.send("🏢 <b>사무실 상황판</b> · 아래 버튼을 누르면 열려요 (로그인 필요)",
-            [[{"text": "🏢 사무실 열기", "url": url.rstrip("/") + "/"}]])
-
-
-def balance(tg, key):
-    tg.send(f"💰 {BAL_NAME.get(key, '전체')} 잔액을 조회하고 있어요…")
-    subprocess.Popen([sys.executable, BRIEFING, "--balances", key], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # ---------------------------------------------------------- 메인 루프
@@ -205,38 +171,14 @@ def handle_message(tg, st, msg):
     if not text:
         return
     raw = text
-    if office_sgov and office_sgov.handle(tg, st, raw, OFFICE_LABELS):   # v1.8.3: SGOV 메뉴 글자 (아니면 아래 예전 처리)
+    if office_sgov and office_sgov.handle(tg, st, raw, OFFICE_LABELS):   # SGOV 메뉴 글자 (📈 상황판·☰ 메뉴 포함)
         return
-    if raw in OFFICE_LABELS:
-        st["menu_ctx"] = "office"   # ❓ 도움말: 사무실 메뉴에서는 예전 도움말
-    text = MENU_ALIAS.get(raw, raw)   # 하단 버튼 글자 → 같은 명령
-    if text in ("/pc_status", "/PC상태", "PC 상태", "PC상태"):
-        import pc_monitor
-        tg.send(pc_monitor.status_text()); return
-    if text in ("/주소", "주소", "/office_url", "/도메인안내", "도메인안내") or text.startswith("/주소변경"):
-        import office_url
-        if office_url.handle_text(tg, text):
-            return
     if raw in (HOME, SGOV_HOME):
-        tg.send("🏠 <b>메인 메뉴</b> · 아래 버튼을 눌러 주세요", keyboard=MENU_KB); return
-    if raw in (OFFICE_MENU, MENU_OPEN, "📊 조회"):   # 📊 조회 = 옛 습관용 (같은 메뉴) · v1.8.3: 🏢 사무실 메뉴 = 예전 ☰ 메뉴
-        tg.send("☰ <b>메뉴</b> · 아래 버튼을 눌러 주세요", keyboard=SUB_KB["menu"]); return
-    if raw == "🏢 사무실":
-        office_open(tg); return
-    if raw == "💰 잔액":
-        tg.send("💰 <b>어느 회사 잔액을 볼까요?</b>", BAL_ROWS); return
-    if raw in BAL_ACTIONS:   # 예전 하단 버튼이 남아 있을 때도 동작
-        balance(tg, BAL_ACTIONS[raw]); return
+        tg.send("🏠 <b>처음 화면</b> · 아래 버튼을 눌러 주세요", keyboard=MENU_KB); return
     low = text.lower()
-    if low in ("/start", "/help", "도움말", "help", "?"):
-        tg.send(HELP + "\n▫️ 아래 버튼 메뉴로 모든 기능을 쓸 수 있어요.", keyboard=MENU_KB); return
-    if low in ("/잔액", "잔액", "/balances"):
-        balance(tg, "all"); return
-    if low in ("/사무실", "사무실", "/office"):
-        office_open(tg); return
-    if text.startswith("/"):
-        tg.send("모르는 명령이에요. <b>도움말</b>을 보내 보세요."); return
-    tg.send("아래 버튼 메뉴로 써 주세요. 봇 코드 수정은 이제 GitHub staging → 9. Update 승인으로만 해요.", keyboard=MENU_KB)
+    if low in ("/start", "/help", "도움말", "help", "?") or raw == "❓ 도움말":
+        tg.send(HELP, keyboard=MENU_KB); return
+    tg.send("모르는 명령이에요. 아래 버튼(📈 상황판 · ☰ 메뉴)으로 써 주세요.", keyboard=MENU_KB)
 
 
 def handle_callback(tg, st, cb):
@@ -244,13 +186,9 @@ def handle_callback(tg, st, cb):
     msg_id = (cb.get("message") or {}).get("message_id")
     if data == "mn:x":
         st.pop("await", None); tg.answer(cb_id, "취소했어요"); tg.buttons(msg_id, []); return
-    if data.startswith("bl:"):
-        key = data[3:]
-        if key not in BAL_NAME:
-            tg.answer(cb_id); return
-        tg.answer(cb_id, BAL_NAME[key]); balance(tg, key); return
     if data.startswith(("mq:", "rb:", "ch:", "rq:", "cx:", "ap:", "apy:", "keep:", "rj:", "df:")):   # 삭제한 수정 요청·결재 버튼 (예전 메시지)
         tg.answer(cb_id, "수정 요청·결재 기능은 없어졌어요"); tg.buttons(msg_id, []); return
+    tg.answer(cb_id, "없어진 버튼이에요"); tg.buttons(msg_id, [])   # vNEXT: 예전 메시지의 삭제된 버튼(옛 잔액 회사 선택 등) — 버튼만 지움
 
 
 def main():
@@ -263,16 +201,6 @@ def main():
     print("사무실 비서 대화 담당 시작", flush=True)
     while True:
         _hub_beat('8번 비서')
-        try:
-            import pc_monitor
-            pc_monitor.tick(tg)
-        except Exception as e:
-            print("PC 감시 확인 오류:", type(e).__name__, flush=True)
-        try:
-            import office_url
-            office_url.tick(tg)
-        except Exception as e:
-            print("사무실 주소 확인 오류:", type(e).__name__, flush=True)
         waiting = 0
         try:
             waiting = office_sgov.tick(tg, st) if office_sgov else 0   # v1.8.3: SGOV 요청 결과 확인 (meritz_dca_bot 이 쓴 결과 파일 읽기만)

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-14): 웹 사무실 완전 제거 — 웹 서비스 재시작·의도적 중단 건너뜀·웹 healthz 대리 신호·터널 상태 줄 삭제,
+#                       bot_office/ 분류 뿌리는 서비스가 아닌 폴더 키 OFFICE_KEY('bot-office')로 유지 (태그·CHANGELOG·/opt/bot-office 복사 그대로,
+#                       재시작 없음 · 비서·팬딩은 OFFICE_EXTRA 로만 재시작) · 8번 비서 표시 '8번 비서(SGOV)' · 전략·종목·금액·enabled 변경 없음
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.5 (2026-11-14): 웹 서버 끄기 준비 — ① 의도적 중단 표시 파일(/var/lib/bot-office/intentional_stop)이 있으면
 #                       사무실 웹 서비스(bot-office.service)는 재시작·정상 확인(healthy)·enable 을 건너뜀 (로그 '의도적 중단, 재시작 건너뜀')
@@ -99,12 +102,13 @@ TG_CFG = os.environ.get("U_TG", "/etc/bot-office/telegram.json")
 TARGETS = os.environ.get("U_TARGETS", "/var/lib/bot-office-deploy/targets.json")
 STATE = os.environ.get("U_STATE", "/var/lib/bot-updater/state.json")
 OFFICE_DIR = os.environ.get("U_OFFICE", "/opt/bot-office")
-OFFICE_UNIT, SELF_UNIT, SELF_FILE = "bot-office.service", "bot-updater.service", "bot_updater.py"
-# v1.8.5: 사무실 웹 서비스를 일부러 멈춰 둔 표시 — 멈출 때 운영 절차가 만들고 다시 켤 때 지움 (서비스 유닛 훅 아님). 있으면 재시작 건너뜀
-INTENTIONAL_STOP = os.environ.get("U_INTENTIONAL_STOP", "/var/lib/bot-office/intentional_stop")
+SELF_UNIT, SELF_FILE = "bot-updater.service", "bot_updater.py"
+# vNEXT: 저장소 bot_office/ ↔ 서버 /opt/bot-office 묶음의 키 — systemd 서비스가 아님 (웹 사무실 삭제). 재시작하지 않고
+#   태그(bot-office-vX.Y.Z)·CHANGELOG(bot_office/CHANGELOG.md)·복사(office_deploy)에만 씀. 비서·팬딩·업데이터 재시작은 아래 OFFICE_EXTRA·SELF_FILE 로
+OFFICE_KEY, OFFICE_NAME = "bot-office", "사무실 파일(bot_office)"
 # 사무실 폴더(/opt/bot-office)에서 따로 도는 상시 서비스 — 그 파일이 바뀌면 이 서비스도 다시 시작해야 새 코드가 반영됨
 SECRETARY_UNIT, FANDING_UNIT = "bot-office-secretary.service", "bot-office-fanding.service"
-OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_briefing.py", "gemini_usage.py", "meritz_client.py", "toss_token_share.py", "pc_monitor.py", "office_url.py"),
+OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_sgov.py", "gemini_usage.py", "meritz_client.py", "toss_token_share.py"),
                 FANDING_UNIT: ("fanding_trade.py", "fanding_vr6.py", "meritz_client.py", "gemini_usage.py")}
 OFFICE_EXT = (".py", ".html", ".css", ".js")
 SYSTEMCTL = os.environ.get("U_SYSTEMCTL", "systemctl")
@@ -112,7 +116,7 @@ TG_API = os.environ.get("U_TG_API", "https://api.telegram.org")
 CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
-         "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립", OFFICE_UNIT: "사무실 비서(번호 없음)",
+         "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립",
          "meritz_laoer.service": "7번 메리츠 무매"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
@@ -217,6 +221,11 @@ def say(text, rows=None, keyboard=None):
     return tg("sendMessage", **p)
  
  
+def uname(u):
+    """표시 이름 — 봇 서비스는 NAMES, 사무실 폴더 키는 OFFICE_NAME"""
+    return OFFICE_NAME if u == OFFICE_KEY else NAMES.get(u, u)
+
+
 def esc(s):
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
  
@@ -224,8 +233,10 @@ def esc(s):
 # ---------------------------------------------------------------- 어떤 봇이 바뀌는지
 def targets():
     t = load(TARGETS, {}).get("targets", {})
+    office_root = os.path.realpath(os.path.join(REPO, "bot_office"))
     out = {u: os.path.realpath(v["root"]) for u, v in t.items() if isinstance(v, dict) and v.get("root")}
-    out[OFFICE_UNIT] = os.path.realpath(os.path.join(REPO, "bot_office"))   # 5번 비서: 저장소 bot_office/ ↔ 서버 /opt/bot-office
+    out = {u: r for u, r in out.items() if r != office_root}   # vNEXT: 서버 targets.json 에 옛 웹 서비스 항목이 남아 있어도 bot_office/ 는 폴더 키로만
+    out[OFFICE_KEY] = office_root   # 저장소 bot_office/ ↔ 서버 /opt/bot-office (8번 비서·4번 팬딩·9번 업데이터 파일 · 서비스 아님)
     return out
  
  
@@ -248,9 +259,9 @@ def classify(files):
         if name.endswith(".md"):
             if unit: units.setdefault(unit, [])
             continue
-        if unit == OFFICE_UNIT and name.endswith(OFFICE_EXT):
+        if unit == OFFICE_KEY and name.endswith(OFFICE_EXT):   # 사무실 폴더: 예전과 같은 확장자 규칙 (삭제된 파일도 여기로 → /opt/bot-office 에서 지움)
             units.setdefault(unit, []).append(f)
-        elif unit and unit != OFFICE_UNIT and name.endswith(".py") and not name.startswith(("bot_office_", "test_")):
+        elif unit and unit != OFFICE_KEY and name.endswith(".py") and not name.startswith(("bot_office_", "test_")):
             units.setdefault(unit, []).append(f)
         else:
             skipped.append(f)
@@ -544,7 +555,7 @@ def offer(st, br, sha, live=None):
     _, log = git("log", "--format=%an · %s", f"HEAD..{sha}", "-n", "5")
     key = sha[:12]
     st.setdefault("offers", {})[key] = {"branch": br, "sha": sha, "at": time.time()}
-    bots = ", ".join(NAMES.get(u, u) for u, fs in units.items() if fs) or "봇 코드 없음(문서만)"
+    bots = ", ".join(uname(u) for u, fs in units.items() if fs) or "봇 코드 없음(문서만)"
     warn = ("\n⏭️ <b>배포에서 빠진 파일</b>: " + esc(", ".join(skipped[:5])) + (" 외 " + str(len(skipped) - 5) + "개" if len(skipped) > 5 else "")
             + " (서버에 적용하지 않고 넘김 · 업데이트는 그대로 진행 가능)") if skipped else ""
     try:
@@ -594,8 +605,7 @@ def offer(st, br, sha, live=None):
 STATUS_FILE = "STATUS.md"
 SNIPER_TIERS_FILE = "sniper_tiers.json"
 NEED_FILE = "need.json"
-EXTRA_UNITS = {SECRETARY_UNIT: "8번 비서(브리핑·PC감시)", FANDING_UNIT: "4번 팬딩 가격표", "bot-office-tunnel.service": "사무실 터널",
-               SELF_UNIT: "9번 업데이트 비서"}
+EXTRA_UNITS = {SECRETARY_UNIT: "8번 비서(SGOV)", FANDING_UNIT: "4번 팬딩 가격표", SELF_UNIT: "9번 업데이트 비서"}
 _CL_RE = re.compile(r"^## (\S+) · ([\d-]+ [\d:]+) \(KST\)\n((?:- .*\n?)*)", re.M)
 
 
@@ -649,6 +659,10 @@ def build_status(reason):
         ver, when, _, what = cl[0] if cl else ("-", "-", "", "-")
         L.append(f"| {name} | `{u.replace('.service', '')}` | {mark}{' (' + since + ' KST부터)' if since and mark.startswith('🟢') else ''} | {ver} | {when} | {_cell(what)[:60]} |")
         recent += [(w, name, v, f, t) for v, w, f, t in cl]
+    cl = _changelog(roots.get(OFFICE_KEY, ""), 10) if roots.get(OFFICE_KEY) else []   # vNEXT: 사무실 파일은 서비스가 없어 상태 칸 대신 '파일 묶음'
+    ver, when, _, what = cl[0] if cl else ("-", "-", "", "-")
+    L.append(f"| {OFFICE_NAME} | `{OFFICE_KEY}` (서비스 없음) | 📁 파일 묶음 | {ver} | {when} | {_cell(what)[:60]} |")
+    recent += [(w, OFFICE_NAME, v, f, t) for v, w, f, t in cl]
     L += ["", "## 사무실 상시 서비스", ""]
     for u, name in EXTRA_UNITS.items():
         mark, since = _svc(u)
@@ -814,10 +828,10 @@ def status_daily(st, force=False):
 
 # ---------------------------------------------------------------- 적용
 def _office_perm(existing):
-    """복사할 파일의 주인·그룹·권한. 주인은 그대로, 그룹·읽기 권한은 server.py 와 같게 (웹서버 bot-office 계정이 읽을 수 있게)
+    """복사할 파일의 주인·그룹·권한. 주인은 그대로, 그룹·읽기 권한은 office_secretary.py 와 같게 (비서 계정이 읽을 수 있게)
     (예전엔 새 파일을 root 전용 640 으로 만들어 pc_monitor.py 502, 있던 파일은 권한을 그대로 둬서 pixel_office.html 첫 화면 끊김)"""
     try:
-        ref = os.stat(os.path.join(OFFICE_DIR, "server.py"))
+        ref = os.stat(os.path.join(OFFICE_DIR, "office_secretary.py"))
     except OSError:
         ref = None
     try:
@@ -834,12 +848,12 @@ def _office_perm(existing):
         if gid != ref.st_gid:                 # 그룹을 웹서버 그룹으로 바꿀 땐 그룹 쓰기 권한은 주지 않음
             gid = ref.st_gid
             mode &= ~0o020
-        mode |= ref.st_mode & 0o044           # server.py 가 그룹·모두에게 읽기를 열어 둔 만큼 똑같이
+        mode |= ref.st_mode & 0o044           # office_secretary.py 가 그룹·모두에게 읽기를 열어 둔 만큼 똑같이
     return uid, gid, mode | 0o400             # 주인은 항상 읽을 수 있게
 
 
 def office_perm_repair():
-    """/opt/bot-office 의 .py·.html·.css·.js 중 server.py 기준 읽기 권한이 빠진 파일만 고침 → 고친 파일 이름 목록"""
+    """/opt/bot-office 의 .py·.html·.css·.js 중 office_secretary.py 기준 읽기 권한이 빠진 파일만 고침 → 고친 파일 이름 목록"""
     fixed = []
     try:
         names = sorted(os.listdir(OFFICE_DIR))
@@ -1033,8 +1047,8 @@ def apply(st, key):
                 if not DC.ready(sys.modules[__name__],unit):
                     return say("⏳ " + NAMES[unit] + " 보유/미체결 또는 실행 차단 확인 대기 중입니다. 적용하지 않았습니다.", DC.resume_rows(unit))
                 pause_verified.add(unit)
-    busy = [f"{NAMES.get(u, u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
-    if {os.path.basename(f) for f in units.get(OFFICE_UNIT, [])} & set(OFFICE_EXTRA[FANDING_UNIT]) and (r := busy_reason(FANDING_UNIT)):
+    busy = [f"{uname(u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
+    if {os.path.basename(f) for f in units.get(OFFICE_KEY, [])} & set(OFFICE_EXTRA[FANDING_UNIT]) and (r := busy_reason(FANDING_UNIT)):
         busy.append("4번 팬딩: " + r)
     if busy:
         return say("⏸ <b>지금은 적용하지 않았습니다</b>\n▫️ " + "\n▫️ ".join(esc(b) for b in busy) + "\n▫️ 나중에 같은 알림의 ✅를 다시 눌러 주세요.",
@@ -1048,7 +1062,7 @@ def apply(st, key):
                    "▫️ 그대로 적용하면 main 업로드가 실패하고 서버·main 이 더 어긋납니다.\n"
                    "→ main 기준 새 브랜치로 먼저 승인하거나, 이 브랜치를 최신 main 기준으로 다시 올려 주세요.")
     _, old_head = git("rev-parse", "HEAD")
-    say(f"⏳ 업데이트 적용 중… ({esc(', '.join(NAMES.get(u, u) for u in units) or '문서')})")
+    say(f"⏳ 업데이트 적용 중… ({esc(', '.join(uname(u) for u in units) or '문서')})")
     rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
     if rc:
         git("merge", "--abort")
@@ -1063,19 +1077,12 @@ def apply(st, key):
     if bad_py:
         git("reset", "-q", "--hard", old_head)
         return say("⛔ 문법 오류가 있어 원래대로 되돌렸습니다: " + esc(", ".join(bad_py)))
-    vers = bump_versions([u for u in units if u != OFFICE_UNIT], old_head)
-    office_files = units.get(OFFICE_UNIT, [])
+    vers = bump_versions([u for u in units if u != OFFICE_KEY], old_head)
+    office_files = units.get(OFFICE_KEY, [])
     saved = office_deploy(office_files) if office_files else []
     perm_fixed = office_perm_repair() if office_files else []
     self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py", "sniper_upstream.py") for f in office_files)
-    restart = [u for u in units if u != OFFICE_UNIT]
-    if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py", "sniper_upstream.py") for f in office_files):
-        restart.append(OFFICE_UNIT)   # 비서 화면·브리핑 등이 바뀌면 사무실 서비스 다시 시작
-    stop_skipped = []   # v1.8.5: 의도적 중단 표시가 있으면 사무실 웹은 재시작·healthy·enable 모두 건너뜀 (성공으로 셈)
-    if OFFICE_UNIT in restart and os.path.isfile(INTENTIONAL_STOP):
-        restart.remove(OFFICE_UNIT)
-        stop_skipped.append(OFFICE_UNIT)
-        print("의도적 중단, 재시작 건너뜀:", OFFICE_UNIT, flush=True)
+    restart = [u for u in units if u != OFFICE_KEY]   # vNEXT: 사무실 폴더 키는 서비스가 아니라 재시작하지 않음 (웹 사무실 삭제)
     names_changed = {os.path.basename(f) for f in office_files}
     for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
         if names_changed & set(xfiles) and sh(SYSTEMCTL, "is-active", xu)[1].strip() == "active":   # 지금 실행 중인 것만 (비서는 disabled 지만 실행 중)
@@ -1092,7 +1099,7 @@ def apply(st, key):
         office_restore(saved)
         for u in restart:
             restart_service(u, was_active[u])
-        return say("🚨 <b>업데이트 후 봇이 정상 실행되지 않아 원래 코드로 되돌렸습니다</b>\n▫️ " + esc(", ".join(NAMES.get(u, u) for u in failed)) + "\n▫️ 봇은 이전 버전으로 다시 켜졌습니다.")
+        return say("🚨 <b>업데이트 후 봇이 정상 실행되지 않아 원래 코드로 되돌렸습니다</b>\n▫️ " + esc(", ".join(uname(u) for u in failed)) + "\n▫️ 봇은 이전 버전으로 다시 켜졌습니다.")
     # 버전 기록 (봇 폴더 CHANGELOG.md) → 커밋 → 태그 → main 업로드
     _, msgs = git("log", "--format=%s", f"{old_head}..{sha}", "-n", "8")
     tags, roots, now = [], targets(), datetime.now(KST).strftime("%Y-%m-%d %H:%M")
@@ -1104,10 +1111,11 @@ def apply(st, key):
             ver = next_tag(prefix)
         if git("rev-parse", "-q", "--verify", f"refs/tags/{prefix}-{ver}")[0] == 0:
             ver = next_tag(prefix)
-        fill_vnext(units[u], ver, u == OFFICE_UNIT)
-        log = os.path.join(roots[u], "CHANGELOG.md"); head = f"# {NAMES.get(u, u)} 변경 기록\n\n"
+        fill_vnext(units[u], ver, u == OFFICE_KEY)   # bot_office/ 파일은 /opt/bot-office 복사본에도 버전 채움 (office=True 유지)
+        log = os.path.join(roots[u], "CHANGELOG.md"); head = f"# {uname(u)} 변경 기록\n\n"
         old = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
-        body = old[len(head):] if old.startswith(head) else old
+        m_head = re.match(r"# [^\n]*변경 기록\n\n", old)   # vNEXT: 이름이 바뀐 옛 제목 줄도 한 줄만 남게 (예: '# 5번 사무실 비서 변경 기록')
+        body = old[m_head.end():] if m_head else old
         fl = ", ".join(os.path.basename(f) for f in units[u]) or "문서"
         open(log, "w", encoding="utf-8").write(head + f"## {ver} · {now} (KST)\n- 파일: {fl}\n- 내용: {msgs.splitlines()[0] if msgs else br}\n- 브랜치: {br}\n\n" + body)
         os.chown(log, OWNER.pw_uid, OWNER.pw_gid)
@@ -1133,10 +1141,9 @@ def apply(st, key):
         git("push", "-q", "origin", "--delete", br)
     git("push", "-q", "-f", "origin", "HEAD:staging")   # 다음 수정은 항상 최신 main 기준 staging 에서
     st.setdefault("seen", {}).pop(br, None)
-    done = ", ".join(NAMES.get(u, u) + " " + t.rsplit("-", 1)[-1] for u, t in zip(units, tags)) or "문서만 반영"
+    done = ", ".join(uname(u) + " " + t.rsplit("-", 1)[-1] for u, t in zip(units, tags)) or "문서만 반영"
     say(f"🎉 <b>업데이트 완료</b>\n▫️ {esc(done)}\n"
         + (f"▫️ 사무실 파일 읽기 권한 고침: {esc(', '.join(perm_fixed))}\n" if perm_fixed else "")
-        + (f"▫️ 의도적 중단 — 재시작 건너뜀: {esc(', '.join(NAMES.get(u, u) for u in stop_skipped))}\n" if stop_skipped else "")
         + f"▫️ 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
         + ("\n▫️ 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
     for unit in units:
@@ -1425,28 +1432,6 @@ def hub_data_perm_repair():
         return "hub 권한 정리 오류: " + type(e).__name__
 
 
-OFFICE_HEALTH_URL = "http://127.0.0.1:8765/healthz"
-_office_beat_at = [0.0]
-
-
-def office_beat_proxy(every=60.0):
-    """8번 사무실 비서 대리 신호: 사무실 웹이 healthz 에 200으로 답하면 hub에 신호 (60초에 1번).
-    bot-office.service 는 ProtectHome 보호로 /home 아래 hub 를 못 볼 수 있어, 보호 없는 업데이터가 대신 기록한다.
-    웹이 답하지 않으면 신호를 보내지 않는다 → watchdog 가 무소식을 알린다. 예외를 밖으로 던지지 않는다."""
-    try:
-        now = time.time()
-        if 0 <= now - _office_beat_at[0] < every:
-            return
-        _office_beat_at[0] = now
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # 내부 주소는 프록시 없이 직접
-        with opener.open(OFFICE_HEALTH_URL, timeout=3) as r:
-            ok = r.status == 200
-        if ok:
-            _hub_beat('사무실 비서(번호 없음)')
-    except Exception:
-        pass
-
-
 def main():
     st = load(STATE, {})
     if git("rev-parse", "-q", "--verify", "refs/remotes/origin/staging")[0]:
@@ -1469,7 +1454,6 @@ def main():
     offset = st.get("offset")
     while True:
         _hub_beat('9번 업데이트 비서')
-        office_beat_proxy()
         if time.time() - last >= CHECK_EVERY:
             last = time.time()
             try:

@@ -5,6 +5,7 @@
 # 사무실 v1.4.4: 자산 구성 mix 를 포트폴리오 버킷 6개로 (금·가상화폐·달러·단기채·간접자산·주식·전환 대기 현금)
 #   · amt 는 '전환 대기 현금' 항목에만 · 1% 미만 버킷도 숨기지 않음 (HIDE_BELOW mix 0.0)
 # 사무실 v1.4.3: 현금 amt(만원÷10 정수, 현금만) · stock 증권사별 segments (E27:E30·E34:E35·E37:E38) · 옛 assets.json 호환 테스트 추가
+# 사무실 vNEXT (2026-11-14): 웹 사무실 삭제로 office_board.py·board.html 이 없어져 그 부분 테스트만 뺌 (asset_board 테스트는 그대로)
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from decimal import Decimal, ROUND_HALF_UP
@@ -16,7 +17,6 @@ sys.path.insert(0, str(HERE))
 TMP = Path(tempfile.mkdtemp())
 os.environ["OFFICE_ROOT"] = str(TMP)
 import asset_board as AB      # noqa: E402
-import office_board as OB     # noqa: E402
 
 SA = TMP / "sa.json"
 SA.write_text(json.dumps({"client_email": "test@example.iam.gserviceaccount.com", "private_key": "x",
@@ -122,9 +122,6 @@ class T(unittest.TestCase):
         self.assertEqual(bad["charts"], good["charts"])
         self.assertEqual(bad["fetched_kst"], good["fetched_kst"])
         self.assertTrue(bad["error"])
-        OB.ASSETS_FILE = TMP / "assets.json"
-        a = OB.assets()
-        self.assertTrue(a["ok"] and a["stale"])
 
     def test_http_error_and_bad_cell(self):
         rec, _ = self.run_update(Http({"error": {"status": "PERMISSION_DENIED"}}, status=403))
@@ -280,53 +277,10 @@ class T(unittest.TestCase):
         self.assertIn("수익률 월 -7.7% · 수익률 년 +0.5% (2026-11)", lines)
         self.assertFalse((TMP / "dry.json").exists())          # dry-run 은 파일 안 씀
 
-    def test_office_board_passes_returns(self):
-        self.run_update(Http(sheet(MIX, STOCK)))
-        OB.ASSETS_FILE = TMP / "assets.json"
-        self.assertEqual(OB.assets()["returns"], {"month": "2026-11", "monthly": -7.7, "yearly": 0.5})
-        p = TMP / "ret_bad.json"
-        good = json.loads(OB.ASSETS_FILE.read_text(encoding="utf-8"))
-        for bad in ({"month": "2026-11", "monthly": "x", "yearly": 0.5}, {"month": "<b>", "monthly": 1, "yearly": 1},
-                    {"month": "2026-11", "monthly": float("nan"), "yearly": 1}, "oops", None):
-            p.write_text(json.dumps(dict(good, returns=bad)))
-            OB.ASSETS_FILE = p
-            a = OB.assets()
-            self.assertNotIn("returns", a)
-            self.assertTrue(a["ok"])                           # 도넛·막대는 그대로
-
-    def test_board_hybrid(self):
-        html = (HERE / "board.html").read_text(encoding="utf-8")
-        self.assertNotIn("minHalf", html)                      # 두 도넛 맞추기 로직 삭제
-        self.assertIn("function donutSVG(ch){", html)
-        self.assertIn("function barsHTML(ch)", html)
-        self.assertNotIn("bandHTML", html)
-        self.assertIn('id="assetRet"', html)
-        self.assertIn(".donut.mix svg{max-width:240px}", html)
-
     def test_date_formats(self):
         for txt, want in (("2026.11.6", "2026.11.6"), ("2026. 11. 6", "2026.11.6"), ("2026-11-06", "2026.11.6"),
                           ("2026년 11월 6일", "2026.11.6"), ("없음", "")):
             self.assertEqual(AB.base_date([["기준일", txt]]), want)
-
-    def test_office_board_missing_and_broken_file(self):
-        OB.ASSETS_FILE = TMP / "nope.json"
-        self.assertEqual(OB.assets(), {"ok": False, "why": "no_file"})
-        p = TMP / "broken.json"
-        p.write_text("{not json")
-        OB.ASSETS_FILE = p
-        self.assertEqual(OB.assets()["why"], "unreadable")
-        p.write_text(json.dumps({"charts": [{"items": [{"name": "x", "pct": "bad"}]}]}))
-        self.assertFalse(OB.assets()["ok"])
-
-    def test_office_board_fresh(self):
-        self.run_update(Http(sheet(MIX, STOCK)))
-        OB.ASSETS_FILE = TMP / "assets.json"
-        d = json.loads(OB.ASSETS_FILE.read_text(encoding="utf-8"))
-        now = datetime.strptime(d["fetched_kst"], "%Y-%m-%d %H:%M").replace(tzinfo=OB.KST)
-        a = OB.assets(now=now)
-        self.assertTrue(a["ok"])
-        self.assertFalse(a["stale"])
-        self.assertEqual(len(a["charts"]), 2)
 
     # ---- v1.4.4: 전환 대기 현금 amt · 증권사별 segments
     def items_of(self, disk, key):
@@ -376,64 +330,9 @@ class T(unittest.TestCase):
         self.assertNotIn("segments", st["SOXL"])
         self.assertEqual(len(st["미국"]["segments"]), 1)
 
-    def test_office_board_passes_amt_segments(self):
-        self.run_update(Http(sheet(MIX, STOCK)))
-        OB.ASSETS_FILE = TMP / "assets.json"
-        a = OB.assets()
-        mix = {i["name"]: i for c in a["charts"] if c["key"] == "mix" for i in c["items"]}
-        st = {i["name"]: i for c in a["charts"] if c["key"] == "stock" for i in c["items"]}
-        self.assertEqual(mix["전환 대기 현금"]["amt"], 370)
-        self.assertFalse([n for n, i in mix.items() if n != "전환 대기 현금" and "amt" in i])
-        self.assertEqual([g["broker"] for g in st["SOXL"]["segments"]], ["한투", "메리츠", "토스"])
-        for g in st["SOXL"]["segments"]:
-            self.assertEqual(set(g), {"broker", "val"})                       # 색 코드 없음
-        p = TMP / "seg_bad.json"
-        d = json.loads(OB.ASSETS_FILE.read_text(encoding="utf-8"))
-        d["charts"][1]["items"][4]["segments"] = [{"broker": "해킹", "val": 1}, {"broker": "토스", "val": "x"},
-                                                  {"broker": "한투", "val": float("nan")}, "oops", {"broker": "메리츠", "val": 5}]
-        d["charts"][0]["items"][1]["amt"] = 999                               # 현금 아닌 항목 amt → 버림
-        p.write_text(json.dumps(d))
-        OB.ASSETS_FILE = p
-        a = OB.assets()
-        st = {i["name"]: i for c in a["charts"] if c["key"] == "stock" for i in c["items"]}
-        self.assertEqual(st["SOXL"]["segments"], [{"broker": "메리츠", "val": 5.0}])
-        self.assertFalse([i for c in a["charts"] for i in c["items"] if "amt" in i and i["name"] != "전환 대기 현금"])
-
-    def test_old_assets_json_without_amt_segments(self):
-        old = {"version": "v1.4.2", "fetched_kst": "2026-11-06 10:00", "base_date": "2026.11.6", "error": "",
-               "charts": [{"key": "mix", "title": "자산 구성", "check": "ok", "zero": [],
-                           "items": [{"name": "현금", "pct": 42.7}, {"name": "주식·ETF", "pct": 57.3}]},
-                          {"key": "stock", "title": "투자 종목", "check": "ok", "zero": [],
-                           "items": [{"name": "SOXL", "pct": 60.0}, {"name": "미국", "pct": 40.0}]}]}
-        p = TMP / "old.json"
-        p.write_text(json.dumps(old, ensure_ascii=False))
-        OB.ASSETS_FILE = p
-        a = OB.assets()
-        self.assertTrue(a["ok"])
-        self.assertFalse([i for c in a["charts"] for i in c["items"] if "amt" in i or "segments" in i])
-
-    def test_board_html_amt_segments(self):
-        html = (HERE / "board.html").read_text(encoding="utf-8")
-        self.assertIn("사무실 v1.4.4", html)
-        self.assertIn("ch.key==='mix'&&it.name==='전환 대기 현금'&&typeof it.amt==='number'", html)
-        self.assertIn("var BROKER={'토스':'#2f6fd6','빗썸':'#d23a2a','한투':'#2f8a57','메리츠':'#7b4bc4'}", html)
-        self.assertIn("BROKER[g.broker]||c", html)                            # 키움 = 지금 색
-        self.assertIn("segments:i.segments", html)
-
     def test_versions_vnext(self):
-        self.assertEqual(OB.VERSION, "v1.4.4")
         rec, _ = self.run_update(Http(sheet(MIX, STOCK)))
         self.assertEqual(rec["version"], "v1.4.4")
-
-    def test_board_has_assets_and_services_kept(self):
-        src = (HERE / "office_board.py").read_text(encoding="utf-8")
-        self.assertIn('"assets": assets()', src)
-        self.assertIn('"services": svc', src)          # 기존 필드 그대로
-        html = (HERE / "board.html").read_text(encoding="utf-8")
-        self.assertNotIn('id="lights"', html)          # 봇 신호등 삭제
-        self.assertIn('id="donuts"', html)
-        for tab in ('data-t="sniper"', 'data-t="fanding"', 'data-t="server"', 'data-t="log"'):
-            self.assertIn(tab, html)
 
 
 if __name__ == "__main__":
