@@ -73,6 +73,7 @@
 # 1.14.0 (사무실 v1.2.4): 자동주문 켤 때 시간 선택(판독후 1시간뒤 / 마감 1시간전, 모드 없는 기존 ON 은 마감 10분 전 그대로·지난 시각 소급 안 함) · 메뉴 토글 3종을 동작 표시 버튼으로(⚡ 켜기 / 💤 끄기, 옛 글자는 별칭)
 # 1.14.5: 자동환전 $10 단위를 반올림(half-up) → 올림(ceiling)으로 — 반올림이 내림이 되면 부족이 남아 매수 자금이 모자람 (2026-11-11, 부족 $942.16 → $940 환전돼 매수 $2 부족 사례)
 # 1.14.6: 배수 맞추기 주단위 + 나머지 하루 더 (사용자 지시 2026-11-11) — 일수 선택지 6/12/24일 → 5/10/20일(주 단위), 나머지는 마지막 예정일에 몰아넣지 않고 예정일이 끝난 다음 날에 한 번에 삼 (예: 20주·6일이면 3주씩 6일 + 마지막 날 2주, 총 7일)
+# 1.14.7: 자동주문 모드 A를 알림 1시간 뒤 → 30분 뒤로 (사용자 지시 2026-11-14, 월요일 09:30 자동주문)
 # 1.14.4 (사무실 v1.3.4): 검산 오탐 + 주문 버튼 사라짐 수정 (사용자 지시 2026-11-06, P 표 33차 종가 40.87 사례)
 #        ① 매도가 상한을 종가 2배만으로 보지 않음 → 직전 가격표 최고 매도가 +10% (없으면 보유 평단 2배) 와 비교.
 #          기준이 없으면 '이상한 매도가' 대신 '기준 없음, 확인 필요' (통과 아님 = 자동주문 판정은 예전과 같음)
@@ -157,7 +158,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.5.7"
+VERSION = "v1.5.8"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -2762,7 +2763,7 @@ def main_menu_text():
 
 
 # ---------- 자동주문 시간 선택 (1.14.0): 켤 때 판독후 1시간뒤(A) / 마감 1시간전(B) 중 고름. 모드 없는 ON(legacy)은 마감 10분 전
-AUTO_MODES = {"A": "판독후 1시간뒤", "B": "마감 1시간전"}
+AUTO_MODES = {"A": "판독후 30분뒤", "B": "마감 1시간전"}
 
 
 def auto_mode(c=None):
@@ -2773,9 +2774,9 @@ def auto_mode(c=None):
 
 
 def auto_mode_time(sheet, mode):
-    """자동주문 시각 (KST). A = 알림일 09:00 + 1시간, B = 예약 마감 − 1시간, 모드 없음 = 기존 마감 10분 전"""
+    """자동주문 시각 (KST). A = 알림일 09:00 + 30분, B = 예약 마감 − 1시간, 모드 없음 = 기존 마감 10분 전"""
     if mode == "A":
-        return sheet_notice_time(sheet) + timedelta(hours=1)
+        return sheet_notice_time(sheet) + timedelta(minutes=30)
     if mode == "B":
         return deadlines(sheet)[2] - timedelta(hours=1)
     return deadlines(sheet)[1]
