@@ -11,7 +11,11 @@
 #   - 같은 요청 두 번 실행 막기: 결과 파일이 있으면(처리 중 'processing' 포함) 다시 실행하지 않음. 실행 전에 'processing' 결과를 먼저 씀.
 #   - 오래된 요청(REQ_TTL_SEC 초과)·미래 시각·형식 오류는 실행하지 않고 그 사유를 결과에 씀.
 #   - 키·토큰은 이 파일들에 넣지 않음.
+# v1.2.7 (2026-11-14): SGOV 알림 파일 추가 — <bridge>/alerts/alert_<id>.json (meritz_dca_bot 만 씀, 비서봇은 읽기만).
+#   비서봇이 보낸 뒤 남기는 표시 <bridge>/alerts_sent/sent_<id>.json 은 비서봇만 씀 (여기서는 읽지도 쓰지도 않음).
+#   기존 snapshot.json·requests/·results/ 의 형식·동작은 그대로.
 # =====================================================================
+import hashlib
 import json
 import os
 import re
@@ -110,5 +114,52 @@ def cleanup_results(base, now=None):
         p = os.path.join(rd, name)
         try:
             if now - os.path.getmtime(p) > RESULT_KEEP_SEC: os.remove(p); n += 1
+        except OSError: pass
+    return n
+
+
+# ---------------------------------------------------------------- v1.2.7 SGOV 알림 파일 (meritz_dca_bot 만 씀)
+ALERT_KEEP_SEC = 3 * 86400      # 제안(초안): 알림 파일 보관 3일 (비서봇 표시 파일 보관 4일보다 짧게 — 표시가 먼저 지워져 다시 가는 일 없게)
+ALERT_PRUNE_EVERY = 3600        # 제안(초안): 정리는 알림을 쓸 때 최대 1시간에 1번
+_ALERT_PRUNE = {"ts": 0.0}
+
+
+def alerts_dir(base): return os.path.join(base, "alerts")
+def alert_path(base, aid): return os.path.join(alerts_dir(base), f"alert_{aid}.json")
+
+
+def alert_id(kind: str, day: str, text: str) -> str:
+    """같은 날(미국 동부)·같은 종류·같은 문구 = 같은 id → 같은 알림을 두 번 써도 파일 1개 (비서봇은 id 로 1번만 보냄)"""
+    return hashlib.sha256(f"{kind}|{day}|{text}".encode("utf-8")).hexdigest()[:32]
+
+
+def write_alert(base, kind: str, day: str, text: str, now=None):
+    """알림 1개 → alerts/alert_<id>.json (원자적). 이미 있으면 다시 쓰지 않음 (처음 쓴 시각 유지) → (id, 새로 썼는지)"""
+    now = time.time() if now is None else now
+    aid = alert_id(kind, day, text)
+    p = alert_path(base, aid)
+    if os.path.exists(p):
+        return aid, False
+    write_json_atomic(p, {"v": 1, "id": aid, "kind": str(kind), "day": str(day), "ts": now,
+                          "ts_kst": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(now + 9 * 3600)),
+                          "text": str(text), "from": "meritz_dca_bot"})
+    if now - _ALERT_PRUNE["ts"] >= ALERT_PRUNE_EVERY:
+        _ALERT_PRUNE["ts"] = now
+        cleanup_alerts(base, now)
+    return aid, True
+
+
+def cleanup_alerts(base, now=None):
+    """보관 기간 지난 알림 파일만 지움 (meritz_dca_bot 이 쓴 자기 파일만. alerts_sent/ 는 건드리지 않음)"""
+    now = time.time() if now is None else now
+    d = alerts_dir(base)
+    try: names = os.listdir(d)
+    except OSError: return 0
+    n = 0
+    for name in names:
+        if not (name.startswith("alert_") and name.endswith(".json")): continue
+        p = os.path.join(d, name)
+        try:
+            if now - os.path.getmtime(p) > ALERT_KEEP_SEC: os.remove(p); n += 1
         except OSError: pass
     return n

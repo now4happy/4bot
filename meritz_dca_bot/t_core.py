@@ -22,6 +22,7 @@
 # v1.2.5 (2026-11-14): BOT_VERSION 갱신 (시세·SGOV 수정은 각각 해당 모듈).
 # v1.2.4 (2026-11-13): 관제탑 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
 # v1.2.6 (2026-11-14): 모든 메뉴·화면 버튼을 맨밑 키보드로 (첫 줄 [📈 상황판, ☰ 메뉴]) · 인라인 버튼 안 보냄 · SGOV 메뉴는 비서봇으로.
+# v1.2.7 (2026-11-14): BOT_VERSION만 (SGOV 알림을 4번 방 대신 bridge 알림 파일로 — 내용은 sgov.py·bridge.py, send_panel 은 그대로)
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -29,7 +30,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.6"
+BOT_VERSION = "v1.2.7"
 BOT_TITLE = "🟦메리츠 적립"
 HUB_NAME = "메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")

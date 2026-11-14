@@ -1,6 +1,7 @@
 # =====================================================================
 # FILE: meritz_dca_bot/sgov.py   (MERITZ_DCA v1.1.0)
 # SGOV(미국 초단기 국채 ETF) 회차 적립 — NKE/QLD 적립과 같은 봇·같은 4번 계좌, 판단 공식은 완전히 따로.
+# v1.2.7 (2026-11-14): sgov_step 의 SGOV 알림 7곳을 4번 방(send_panel) 대신 bridge 알림 파일(bridge.write_alert)로 — 비서봇이 자기 방으로 보냄 (문구 그대로)
 # v1.2.5 (2026-11-14): 환율 자료 조회 실패 시 저장된 캐시 폴백.
 # v1.1.0 (2026-11-13): 첫 버전.
 # v1.1.2 (2026-11-13): HIST_FETCH urllib -> requests (서버에서 urllib FRED 타임아웃, requests·curl은 0.2초 정상)
@@ -22,6 +23,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from t_core import *
+import bridge as BR   # v1.2.7: SGOV 알림 파일 (표준 라이브러리만)
 
 SKIP_X_CHOICES = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
 CAP_MODES = {
@@ -336,6 +338,15 @@ def _gate_txt(gi, g, x, months=36):
     return a, b
 
 
+def _alert(kind: str, day: str, text: str):
+    """v1.2.7: SGOV 알림 1개 → bridge 알림 파일 (비서봇이 자기 방으로 보냄). 4번 방으로는 보내지 않음.
+    문구(text)는 예전 send_panel 에 넘기던 것 그대로. 실패해도 예외를 밖으로 내지 않음 (회차 판단·예약·저장에 영향 없음)"""
+    try:
+        BR.write_alert(BR.bridge_dir(SETTINGS), kind, day, text)
+    except Exception as e:
+        RL.err("sgov_alert", e, event_type="external_call", kind=kind)
+
+
 # ---------------------------------------------------------------- 하루 단계 (main.execute_us_step 이 적립 매수 전에 부름)
 async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
     """SGOV 회차 1번 판단·주문. 돌려줌 {"reserve": 적립 매수가 쓰면 안 되는 달러, "logs": [...]}.
@@ -352,13 +363,11 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
         if pre:
             if pre == "config_problem" and RL.once("sgov|config_problem"):
                 RL.ev("decision", "sgov_tranche", "skipped", "config_problem", actor="scheduler", n=len(sgov_problems(sg)))
-                send_panel("⛔ [SGOV 설정 확인 필요 — 회차 판단 안 함]\n" + "\n".join("• " + b for b in sgov_problems(sg)),
-                           [[{"text": "🪙 SGOV 적립", "callback_data": "sgov"}]])
+                _alert("config_problem", today_str, "⛔ [SGOV 설정 확인 필요 — 회차 판단 안 함]\n" + "\n".join("• " + b for b in sgov_problems(sg)))
             elif pre == "review_hold" and RL.once("sgov|review_hold"):
                 RL.ev("decision", "sgov_tranche", "skipped", "review_hold", actor="scheduler", streak=sg.get("skip_streak"))
-                send_panel("🛑 [SGOV 재점검 대기 — 매수 안 함]\n• 3회 연속 건너뛰어 회차를 멈췄습니다 (강제 매수 없음).\n"
-                           "• 규칙·환율 자료·남은 일정을 확인한 뒤 SGOV 메뉴에서 '재점검 완료'를 눌러 주세요.",
-                           [[{"text": "🪙 SGOV 적립", "callback_data": "sgov"}]])
+                _alert("review_hold", today_str, "🛑 [SGOV 재점검 대기 — 매수 안 함]\n• 3회 연속 건너뛰어 회차를 멈췄습니다 (강제 매수 없음).\n"
+                           "• 규칙·환율 자료·남은 일정을 확인한 뒤 SGOV 메뉴에서 '재점검 완료'를 눌러 주세요.")
             elif pre not in ("disabled", "not_due", "done_today", "complete"):
                 RL.count("sgov_skip:" + pre)
             return out
@@ -383,7 +392,7 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
                    f"• 이 회차는 맨 뒤로 붙였습니다 (전체 {sg['tranches_total']}회). 다음 회차에 몰아 사지 않습니다.\n"
                    f"• 다음 예정일: {sg['next_due_date']} (미국 동부) · 연속 건너뜀 {sg['skip_streak']}회")
             if sg.get("review_hold"): msg += "\n🛑 3회 연속 → 재점검 대기로 멈춤 (SGOV 메뉴에서 '재점검 완료')"
-            send_panel(msg, [[{"text": "🪙 SGOV 적립", "callback_data": "sgov"}, {"text": "🎛 관제탑", "callback_data": "panel"}]])
+            _alert("skip", today_str, msg)
             return out
         # ---- 관문 통과 → (ii) 이 회차 달러를 먼저 예약
         buf = float(SETTINGS.get("buy_cash_buffer_pct", 1.0))
@@ -393,8 +402,7 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
         if price <= 0:
             if RL.once("sgov|price"):
                 RL.ev("decision", "sgov_tranche", "skipped", "price_zero_deferred", actor="scheduler")
-                send_panel(f"⚠️ [SGOV {n_now}회차 미룸]\n• 현재가 조회 실패 — 오늘은 주문 안 함, 다음 거래일 다시 확인 (건너뜀 아님)",
-                           [[{"text": "🪙 SGOV 적립", "callback_data": "sgov"}]])
+                _alert("price_deferred", today_str, f"⚠️ [SGOV {n_now}회차 미룸]\n• 현재가 조회 실패 — 오늘은 주문 안 함, 다음 거래일 다시 확인 (건너뜀 아님)")
             return out
         plan = buy_plan(sg, price, buf)
         out["reserve"] = round(plan["need"] + plan["left"], 2)
@@ -406,8 +414,7 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
                 fail_reasons[sym] = f"SGOV 장부 {lq:g}주 ≠ 메리츠 {bq if bq is not None else '?'}주"
                 if RL.once("sgov|ledger_mismatch"):
                     RL.ev("decision", "sgov_tranche", "skipped", "ledger_mismatch", actor="scheduler", audit_ref=aref)
-                    send_panel(f"⛔ [SGOV 오늘 주문 안 함]\n• {fail_reasons[sym]}\n• 입고·수동 매매·체결 누락을 확인해 주세요. (건너뜀 아님, 회차 그대로)",
-                               [[{"text": "🪙 SGOV 적립", "callback_data": "sgov"}]])
+                    _alert("ledger_mismatch", today_str, f"⛔ [SGOV 오늘 주문 안 함]\n• {fail_reasons[sym]}\n• 입고·수동 매매·체결 누락을 확인해 주세요. (건너뜀 아님, 회차 그대로)")
                 return out
         if plan["qty"] <= 0:
             apply_buy(sg, plan, today_str); await save_sgov_progress(sg)
@@ -421,9 +428,8 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
             fail_reasons[sym] = f"SGOV 달러 부족 (필요 ${plan['need']:.2f} / 보유 ${usd_before:.2f})"
             if RL.once("sgov|usd_insufficient"):
                 RL.ev("decision", "sgov_tranche", "skipped", "usd_insufficient_deferred", actor="scheduler", audit_ref=aref)
-                send_panel(f"⚠️ [SGOV {n_now}회차 미룸 — 달러 부족]\n• 필요 ${plan['need']:.2f} / 보유 ${usd_before:.2f}\n"
-                           f"• 건너뜀이 아니라 미룸입니다 (예정일 그대로, 다음 거래일 다시 확인).\n• SGOV 몫을 먼저 떼어 두어 적립 매수는 남은 달러로만 합니다.",
-                           [[{"text": "🪙 SGOV 적립", "callback_data": "sgov"}, {"text": "🎛 관제탑", "callback_data": "panel"}]])
+                _alert("usd_deferred", today_str, f"⚠️ [SGOV {n_now}회차 미룸 — 달러 부족]\n• 필요 ${plan['need']:.2f} / 보유 ${usd_before:.2f}\n"
+                           f"• 건너뜀이 아니라 미룸입니다 (예정일 그대로, 다음 거래일 다시 확인).\n• SGOV 몫을 먼저 떼어 두어 적립 매수는 남은 달러로만 합니다.")
             return out
         if not (await DcaConfigManager.load()).get("is_master_active", False):
             RL.ev("decision", "sgov_tranche", "skipped", "master_turned_off", actor="scheduler"); return out
@@ -434,8 +440,7 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
         except Exception as oe:
             sg2 = sgov_block(await DcaConfigManager.load()); sg2["last_exec_date"] = today_str
             await save_sgov_progress(sg2)            # 거절·응답 없음 모두 오늘은 다시 주문하지 않음 (회차·예정일 그대로)
-            send_panel(f"⚠️ [SGOV {n_now}회차 주문 안 됨]\n• {str(oe)[:160]}\n• 오늘은 다시 주문하지 않습니다. 응답이 끊긴 경우 체결됐을 수 있으니 메리츠 앱에서 확인해 주세요.",
-                       [[{"text": "🪙 SGOV 적립", "callback_data": "sgov"}]])
+            _alert("order_failed", today_str, f"⚠️ [SGOV {n_now}회차 주문 안 됨]\n• {str(oe)[:160]}\n• 오늘은 다시 주문하지 않습니다. 응답이 끊긴 경우 체결됐을 수 있으니 메리츠 앱에서 확인해 주세요.")
             return out
         spent = round(plan["qty"] * price * (1 + buf / 100.0), 2)
         apply_buy(sg, plan, today_str); await save_sgov_progress(sg); fail_reasons.pop(sym, None)

@@ -7,6 +7,7 @@
 #  - 이 파일은 메리츠 API·키·토큰(meritz_token.json)·SGOV 설정(/etc/meritz-accum/settings.json)·장부(dca_config*.json)를
 #    읽지도 쓰지도 않음. meritz_dca_bot 코드를 import 하지 않음.
 #  - <bridge> 기본값 /var/lib/meritz-dca/bridge (환경변수 OFFICE_MERITZ_BRIDGE 로 바꿀 수 있음)
+# 사무실 vNEXT (2026-11-14): SGOV 회차 알림 — tick() 이 <bridge>/alerts/alert_<id>.json(4번이 씀)을 읽어 이 방으로 1번 보내고, 보낸 뒤 <bridge>/alerts_sent/sent_<id>.json(이 파일만 씀) 표시
 # ==========================================================
 import html, json, os, re, time, uuid
 from pathlib import Path
@@ -360,4 +361,87 @@ def tick(tg, st, now=None):
             pend.pop(rid, None); _drop_request(rid)
     if not pend:
         st.pop("sgov_req", None)
-    return len([1 for v in pend.values() if not v.get("timed_out")])
+    waiting = len([1 for v in pend.values() if not v.get("timed_out")])
+    try:
+        alerts_pass(tg, now)     # 요청 결과 확인을 다 한 뒤에 (결과 확인을 늦추거나 막지 않게)
+    except Exception as e:
+        print("SGOV 알림 확인 오류:", type(e).__name__, flush=True)
+    return waiting
+
+
+# ---------------------------------------------------------- SGOV 회차 알림 (meritz_dca_bot 이 alerts/ 에 씀 → 여기서 이 방으로 보냄)
+ALERT_RE = re.compile(r"^alert_([0-9a-f]{32})\.json$")
+ALERT_MAX_AGE = 86400        # 제안(초안): 만든 지 24시간 넘은 알림은 보내지 않고 'expired' 표시만 (비서봇이 오래 꺼져 있던 경우)
+SENT_KEEP_SEC = 4 * 86400    # 제안(초안): 표시 파일 보관 4일 (4번의 알림 파일 보관 3일보다 길게)
+ALERTS_PER_TICK = 5          # 제안(초안): tick 1번에 최대 5개 (텔레그램 대기·결과 확인 지연 방지)
+MAX_ALERT_BYTES = 8192
+_PRUNE = {"ts": 0.0}
+
+
+def _mark(aid, status, extra=None):
+    """보냈다/만료 표시 (이 비서봇만 씀 · 원자적: .tmp 로 쓰고 이름 바꿈)"""
+    d = BRIDGE / "alerts_sent"
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"sent_{aid}.json.tmp"
+    tmp.write_text(json.dumps(dict({"id": aid, "status": status, "ts": time.time()}, **(extra or {})), ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, d / f"sent_{aid}.json")
+
+
+def alerts_pass(tg, now=None):
+    """새 알림을 만든 순서대로 보냄 → 보낸 개수. 보내기가 성공한 뒤에만 표시를 남김 (표시가 있으면 다시 보내지 않음)"""
+    now = time.time() if now is None else now
+    try:
+        names = sorted(os.listdir(BRIDGE / "alerts"))
+    except OSError:
+        names = []
+    todo = []
+    for n in names:
+        m = ALERT_RE.match(n)
+        if not m or (BRIDGE / "alerts_sent" / f"sent_{m.group(1)}.json").exists():
+            continue
+        p = BRIDGE / "alerts" / n
+        try:
+            if p.stat().st_size > MAX_ALERT_BYTES:
+                continue
+        except OSError:
+            continue
+        a = _read(p)
+        if not isinstance(a, dict) or str(a.get("id")) != m.group(1) or a.get("from") != "meritz_dca_bot" \
+                or not isinstance(a.get("text"), str) or not isinstance(a.get("ts"), (int, float)):
+            continue
+        todo.append(a)
+    todo.sort(key=lambda a: float(a["ts"]))
+    sent = 0
+    for a in todo:
+        if now - float(a["ts"]) > ALERT_MAX_AGE:
+            _mark(a["id"], "expired"); continue
+        if sent >= ALERTS_PER_TICK:
+            break
+        r = tg.send(_esc(a["text"]))          # 알림 문구 그대로 (html.escape 만) · 버튼 없음 · 이 비서봇의 방
+        if not (isinstance(r, dict) and r.get("message_id")):
+            break                             # 못 보냄 → 표시 안 함 → 다음 tick 에 다시 (순서 유지)
+        _mark(a["id"], "sent", {"message_id": r.get("message_id")})
+        sent += 1
+    if now - _PRUNE["ts"] >= 3600:
+        _PRUNE["ts"] = now
+        _prune_marks(now)
+    return sent
+
+
+def _prune_marks(now):
+    """보관 기간 지난 표시 파일만 지움 (이 비서봇이 쓴 자기 파일만. alerts/ 는 건드리지 않음)"""
+    d = BRIDGE / "alerts_sent"
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    n = 0
+    for name in names:
+        if not (name.startswith("sent_") and name.endswith(".json")):
+            continue
+        try:
+            if now - (d / name).stat().st_mtime > SENT_KEEP_SEC:
+                (d / name).unlink(); n += 1
+        except OSError:
+            pass
+    return n
