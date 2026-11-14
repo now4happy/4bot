@@ -67,3 +67,9 @@
 *.log
 __pycache__/
 venv/
+
+# 캡처 폴더 (Claude 검토용, B안 2026-11-15)
+!/three-spaces/
+/three-spaces/*
+!/three-spaces/*.pdf
+!/three-spaces/*.png
