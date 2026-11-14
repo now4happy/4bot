@@ -1,6 +1,7 @@
 from datetime import datetime
 from b_core import *
 
+# v4.3.6: 하단 키보드 전환 — 처음 화면·전체 상황판은 (본문, None), 코인별 상황판·거래내역 추가
 # v4.3.1: 자산 상황판의 코드 블록 제거 — 텔레그램 기본 글씨 크기 사용
 
 # v4.2.0 (draft): unified SMA법 with independent amount, ratio, and approval lock.
@@ -20,6 +21,43 @@ def calc_today_required_krw(accs):
         total_req += req; details.append(f"{coin}({req:,.0f}원)")
     return total_req, details
 
+def _coin_row(cur, accs):
+    """코인 1개의 상황판 행 계산 (전체 상황판·코인별 상황판 공용, v4.3.6). 등록 안 된 코인은 None."""
+    if cur not in config.get("coins", {}):
+        return None
+    a = accs.get(cur, {})
+    bal = float(a.get("balance", 0)) + float(a.get("locked", 0))
+    avg_p = float(a.get("avg_buy_price", 0))
+    t = get_ticker(cur)
+    cur_p = float(t["trade_price"]) if t else avg_p
+    eval_krw = bal * cur_p
+    prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 else 0.0
+    base_amt = float(config.get("coins", {}).get(cur, 10000))
+    if state.get("buy_days", {}).get(cur, 0) == 0 and bal > 0 and avg_p > 0 and base_amt > 0:
+        state.setdefault("buy_days", {})[cur] = max(1, int(round((bal * avg_p) / base_amt)))
+        save_json(STATE_FILE, state)
+    if coin_method(cur) == 2:
+        method = f"SMA{TREND_PERIOD[cur]}"
+        status = "매매가능" if method2_ready(cur) else "설정필요·주문잠금"
+    else:
+        method = "스마트적립"
+        status = f"{int(state.get('buy_days', {}).get(cur, 0))}일차"
+    return (cur, method, status, bal, eval_krw, prof_pct, avg_p, cur_p)
+
+
+def _coin_row_lines(row):
+    """상황판의 코인 1개 줄 (전체·코인별 공용, v4.3.6)."""
+    cur, method, status, bal, ev, profit, avg, current = row
+    return [
+        f"🪙 {cur} · {method} · {status}",
+        f"수량: {bal:.6f}",
+        f"평가액: {ev:,.0f}원",
+        f"수익률: {profit:+.2f}%",
+        f"평단가: {avg:,.0f}원",
+        f"현재가: {current:,.0f}원",
+    ]
+
+
 def build_balance_board():
     """Compact fixed-width board. No account changes, only presentation."""
     accs = {a["currency"]: a for a in get_accounts() if isinstance(a, dict) and "currency" in a}
@@ -29,27 +67,11 @@ def build_balance_board():
     total_eval = krw_bal
     rows = []
     for cur in ("BTC", "ETH"):
-        if cur not in config.get("coins", {}):
+        row = _coin_row(cur, accs)
+        if row is None:
             continue
-        a = accs.get(cur, {})
-        bal = float(a.get("balance", 0)) + float(a.get("locked", 0))
-        avg_p = float(a.get("avg_buy_price", 0))
-        t = get_ticker(cur)
-        cur_p = float(t["trade_price"]) if t else avg_p
-        eval_krw = bal * cur_p
-        total_eval += eval_krw
-        prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 else 0.0
-        base_amt = float(config.get("coins", {}).get(cur, 10000))
-        if state.get("buy_days", {}).get(cur, 0) == 0 and bal > 0 and avg_p > 0 and base_amt > 0:
-            state.setdefault("buy_days", {})[cur] = max(1, int(round((bal * avg_p) / base_amt)))
-            save_json(STATE_FILE, state)
-        if coin_method(cur) == 2:
-            method = f"SMA{TREND_PERIOD[cur]}"
-            status = "매매가능" if method2_ready(cur) else "설정필요·주문잠금"
-        else:
-            method = "스마트적립"
-            status = f"{int(state.get('buy_days', {}).get(cur, 0))}일차"
-        rows.append((cur, method, status, bal, eval_krw, prof_pct, avg_p, cur_p))
+        total_eval += row[4]
+        rows.append(row)
     # Monospace code blocks use a smaller font on mobile.
     # Plain text restores the user's normal Telegram chat font size.
     lines = [
@@ -59,16 +81,9 @@ def build_balance_board():
         f"💳 잔액: {'부족 ' + format(shortfall, ',.0f') + '원' if shortfall else '충분'}",
         f"🔌 전체 전원: {'ON' if config.get('power', True) else 'OFF'}",
     ]
-    for cur, method, status, bal, ev, profit, avg, current in rows:
-        lines.extend([
-            "──────────────",
-            f"🪙 {cur} · {method} · {status}",
-            f"수량: {bal:.6f}",
-            f"평가액: {ev:,.0f}원",
-            f"수익률: {profit:+.2f}%",
-            f"평단가: {avg:,.0f}원",
-            f"현재가: {current:,.0f}원",
-        ])
+    for row in rows:
+        lines.append("──────────────")
+        lines.extend(_coin_row_lines(row))
     if not rows:
         lines.append("설정된 BTC/ETH가 없습니다")
     lines.extend([
@@ -77,9 +92,38 @@ def build_balance_board():
         f"📈 완성 일봉 추세: {trend_line()}",
         f"⏱ {datetime.now(KST).strftime('%H:%M:%S')} 기준",
     ])
-    kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "📝 거래내역", "callback_data": "history"}],
-          [{"text": "🔙 메인", "callback_data": "main"}]]
-    return "\n".join(lines), kb
+    return "\n".join(lines), None   # v4.3.6: 인라인 버튼 없음 → 하단 키보드
+
+
+def build_coin_board(coin):
+    """코인별 상황판 (v4.3.6): 그 코인 행 + 그 코인 추세 한 줄만. 현금·오늘 필요·총 추정자산은 전체 상황판에만."""
+    if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", None
+    accs = {a["currency"]: a for a in get_accounts() if isinstance(a, dict) and "currency" in a}
+    row = _coin_row(coin, accs)
+    # 추세는 전체 상황판과 같은 trend_line() 출처에서 그 코인 조각만 고른다
+    trend = [p for p in trend_line().split(" · ") if p.split(" ", 1)[0] == coin]
+    lines = [f"🪙 {coin} 상황판 {BOT_VERSION}", "──────────────"]
+    lines.extend(_coin_row_lines(row))
+    lines.extend(["──────────────", f"📈 완성 일봉 추세: {trend[0] if trend else coin + ' 확인불가'}",
+                  f"⏱ {datetime.now(KST).strftime('%H:%M:%S')} 기준"])
+    return "\n".join(lines), None
+
+
+def _history_coin(line):
+    """add_history() 형식 '[MM-DD HH:MM] {coin} {action}: {detail}' 에서 '] ' 뒤 첫 단어만 본다."""
+    try:
+        return line.split("] ", 1)[1].split(" ", 1)[0]
+    except (IndexError, AttributeError):
+        return None
+
+
+def build_coin_history(coin):
+    """코인별 거래내역 (v4.3.6): 그 코인 줄만 최근 15건. 부분 문자열 검색 안 함."""
+    if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", None
+    mine = [h for h in history if _history_coin(h) == coin]
+    return f"📝 [{coin} 최근 거래내역 ({BOT_VERSION})]\n\n" + ("\n".join(mine[-15:]) if mine else "내역 없음"), None
 
 def get_bithumb_schedule_status() -> str:
     now = datetime.now(KST)
@@ -156,12 +200,11 @@ def build_coin_method_choice(coin):
             "설정이 없으면 주문은 잠깁니다.",
             [[{"text":("✅ " if current==1 else "")+"1번 스마트 적립", "callback_data":f"method_set_{coin}_1"}],
              [{"text":("✅ " if current==2 else "")+f"SMA법 (SMA{TREND_PERIOD[coin]})", "callback_data":f"method_set_{coin}_2"}],
+             [{"text":"📈 상황판", "callback_data":f"coin_board_{coin}"}, {"text":"📝 거래내역", "callback_data":f"coin_history_{coin}"}],
              [{"text":"🔙 메인", "callback_data":"main"}]])
 
 
 def build_main_view():
     text = (f"🤖 [빗썸 스마트 적립 모듈형 관제탑 ({BOT_VERSION})]\n\n• 매일 19:00 정기 매수 (+1.0%↑ 시 1/2배, 그 외 1배)\n• 10% / 20% 도달 시 잔고의 20% 분할매도 (30%↑ 미정)\n• ⚡ 스케줄 상태: {get_bithumb_schedule_status()}\n"
             f"• 🔌 전체 전원: {'🟢 ON' if config.get('power', True) else '🔴 OFF'}")
-    kb = [[{"text": "🪙 BTC 설정", "callback_data": "method_coin_BTC"}, {"text": "🪙 ETH 설정", "callback_data": "method_coin_ETH"}],
-          [{"text": "💰 내 자산 상황판", "callback_data": "balance"}], [{"text": "📝 거래내역", "callback_data": "history"}]]
-    return text, kb
+    return text, None   # v4.3.6: 인라인 버튼 없음 → 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정]
