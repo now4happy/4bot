@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
-# 사무실 vNEXT (2026-11-14): 웹 사무실 완전 제거에 맞춰 8번 비서를 SGOV 메뉴 전용으로 정리 — 🏢 사무실·/주소·🖥 PC 상태·💰 잔액·Update 안내 삭제
+# 사무실 v1.8.7 (2026-11-14): 웹 사무실 완전 제거에 맞춰 8번 비서를 SGOV 메뉴 전용으로 정리 — 🏢 사무실·/주소·🖥 PC 상태·💰 잔액·Update 안내 삭제
 #                         (남김: SGOV 메뉴 office_sgov.py · 허브 신호 · 전략·종목·금액·enabled 변경 없음)
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.3 (2026-11-14): SGOV 메뉴 추가 — 하단 [📈 상황판 | ☰ 메뉴](SGOV) + [🏢 사무실 메뉴](예전 ☰ 메뉴 그대로). 화면·요청은 office_sgov.py
@@ -151,7 +151,7 @@ class TG:
 # 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안 · 취소는 아래 다른 버튼).
 HOME = "🏠 메인 메뉴"   # 예전 하단 버튼이 남아 있을 때도 처음 화면으로
 MENU_OPEN = "☰ 메뉴"
-# vNEXT: 처음 화면은 SGOV 진입 버튼 2개뿐 [📈 상황판, ☰ 메뉴] (office_sgov.py 가 받아서 SGOV 상황판·SGOV 메뉴로)
+# v1.8.7: 처음 화면은 SGOV 진입 버튼 2개뿐 [📈 상황판, ☰ 메뉴] (office_sgov.py 가 받아서 SGOV 상황판·SGOV 메뉴로)
 SGOV_CHART = "📈 상황판"
 SGOV_HOME = "🏠 처음 화면"
 MAIN_LABELS = [[SGOV_CHART, MENU_OPEN]]
@@ -188,7 +188,7 @@ def handle_callback(tg, st, cb):
         st.pop("await", None); tg.answer(cb_id, "취소했어요"); tg.buttons(msg_id, []); return
     if data.startswith(("mq:", "rb:", "ch:", "rq:", "cx:", "ap:", "apy:", "keep:", "rj:", "df:")):   # 삭제한 수정 요청·결재 버튼 (예전 메시지)
         tg.answer(cb_id, "수정 요청·결재 기능은 없어졌어요"); tg.buttons(msg_id, []); return
-    tg.answer(cb_id, "없어진 버튼이에요"); tg.buttons(msg_id, [])   # vNEXT: 예전 메시지의 삭제된 버튼(옛 잔액 회사 선택 등) — 버튼만 지움
+    tg.answer(cb_id, "없어진 버튼이에요"); tg.buttons(msg_id, [])   # v1.8.7: 예전 메시지의 삭제된 버튼(옛 잔액 회사 선택 등) — 버튼만 지움
 
 
 def main():

@@ -5,7 +5,7 @@
 # 사무실 v1.4.4: 자산 구성 mix 를 포트폴리오 버킷 6개로 (금·가상화폐·달러·단기채·간접자산·주식·전환 대기 현금)
 #   · amt 는 '전환 대기 현금' 항목에만 · 1% 미만 버킷도 숨기지 않음 (HIDE_BELOW mix 0.0)
 # 사무실 v1.4.3: 현금 amt(만원÷10 정수, 현금만) · stock 증권사별 segments (E27:E30·E34:E35·E37:E38) · 옛 assets.json 호환 테스트 추가
-# 사무실 vNEXT (2026-11-14): 웹 사무실 삭제로 office_board.py·board.html 이 없어져 그 부분 테스트만 뺌 (asset_board 테스트는 그대로)
+# 사무실 v1.8.7 (2026-11-14): 웹 사무실 삭제로 office_board.py·board.html 이 없어져 그 부분 테스트만 뺌 (asset_board 테스트는 그대로)
 #   python3 test_asset_board.py      → 마지막 줄 'OK n개' 면 통과
 import json, os, sys, tempfile, unittest
 from decimal import Decimal, ROUND_HALF_UP

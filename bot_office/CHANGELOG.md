@@ -1,3 +1,10 @@
+# 사무실 비서(번호 없음) 변경 기록
+
+## v1.8.7 · 2026-11-14 14:21 (KST)
+- 파일: board.html, bot_updater.py, login.html, office_board.py, office_secretary.py, office_sgov.py, office_url.py, pc_monitor.py, server.py, sniper_picture.html, test_asset_board.py, thought_mindmap.html
+- 내용: web-office-remove: 웹 사무실 완전 제거 + 8번 비서 SGOV 전용 (vNEXT)
+- 브랜치: staging
+
 # 5번 사무실 비서 변경 기록
 
 ## v1.8.6 · 2026-11-14 13:57 (KST)

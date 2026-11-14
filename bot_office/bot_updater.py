@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT (2026-11-14): 웹 사무실 완전 제거 — 웹 서비스 재시작·의도적 중단 건너뜀·웹 healthz 대리 신호·터널 상태 줄 삭제,
+# 사무실 v1.8.7 (2026-11-14): 웹 사무실 완전 제거 — 웹 서비스 재시작·의도적 중단 건너뜀·웹 healthz 대리 신호·터널 상태 줄 삭제,
 #                       bot_office/ 분류 뿌리는 서비스가 아닌 폴더 키 OFFICE_KEY('bot-office')로 유지 (태그·CHANGELOG·/opt/bot-office 복사 그대로,
 #                       재시작 없음 · 비서·팬딩은 OFFICE_EXTRA 로만 재시작) · 8번 비서 표시 '8번 비서(SGOV)' · 전략·종목·금액·enabled 변경 없음
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
@@ -103,7 +103,7 @@ TARGETS = os.environ.get("U_TARGETS", "/var/lib/bot-office-deploy/targets.json")
 STATE = os.environ.get("U_STATE", "/var/lib/bot-updater/state.json")
 OFFICE_DIR = os.environ.get("U_OFFICE", "/opt/bot-office")
 SELF_UNIT, SELF_FILE = "bot-updater.service", "bot_updater.py"
-# vNEXT: 저장소 bot_office/ ↔ 서버 /opt/bot-office 묶음의 키 — systemd 서비스가 아님 (웹 사무실 삭제). 재시작하지 않고
+# v1.8.7: 저장소 bot_office/ ↔ 서버 /opt/bot-office 묶음의 키 — systemd 서비스가 아님 (웹 사무실 삭제). 재시작하지 않고
 #   태그(bot-office-vX.Y.Z)·CHANGELOG(bot_office/CHANGELOG.md)·복사(office_deploy)에만 씀. 비서·팬딩·업데이터 재시작은 아래 OFFICE_EXTRA·SELF_FILE 로
 OFFICE_KEY, OFFICE_NAME = "bot-office", "사무실 파일(bot_office)"
 # 사무실 폴더(/opt/bot-office)에서 따로 도는 상시 서비스 — 그 파일이 바뀌면 이 서비스도 다시 시작해야 새 코드가 반영됨
@@ -235,7 +235,7 @@ def targets():
     t = load(TARGETS, {}).get("targets", {})
     office_root = os.path.realpath(os.path.join(REPO, "bot_office"))
     out = {u: os.path.realpath(v["root"]) for u, v in t.items() if isinstance(v, dict) and v.get("root")}
-    out = {u: r for u, r in out.items() if r != office_root}   # vNEXT: 서버 targets.json 에 옛 웹 서비스 항목이 남아 있어도 bot_office/ 는 폴더 키로만
+    out = {u: r for u, r in out.items() if r != office_root}   # v1.8.7: 서버 targets.json 에 옛 웹 서비스 항목이 남아 있어도 bot_office/ 는 폴더 키로만
     out[OFFICE_KEY] = office_root   # 저장소 bot_office/ ↔ 서버 /opt/bot-office (8번 비서·4번 팬딩·9번 업데이터 파일 · 서비스 아님)
     return out
  
@@ -659,7 +659,7 @@ def build_status(reason):
         ver, when, _, what = cl[0] if cl else ("-", "-", "", "-")
         L.append(f"| {name} | `{u.replace('.service', '')}` | {mark}{' (' + since + ' KST부터)' if since and mark.startswith('🟢') else ''} | {ver} | {when} | {_cell(what)[:60]} |")
         recent += [(w, name, v, f, t) for v, w, f, t in cl]
-    cl = _changelog(roots.get(OFFICE_KEY, ""), 10) if roots.get(OFFICE_KEY) else []   # vNEXT: 사무실 파일은 서비스가 없어 상태 칸 대신 '파일 묶음'
+    cl = _changelog(roots.get(OFFICE_KEY, ""), 10) if roots.get(OFFICE_KEY) else []   # v1.8.7: 사무실 파일은 서비스가 없어 상태 칸 대신 '파일 묶음'
     ver, when, _, what = cl[0] if cl else ("-", "-", "", "-")
     L.append(f"| {OFFICE_NAME} | `{OFFICE_KEY}` (서비스 없음) | 📁 파일 묶음 | {ver} | {when} | {_cell(what)[:60]} |")
     recent += [(w, OFFICE_NAME, v, f, t) for v, w, f, t in cl]
@@ -1082,7 +1082,7 @@ def apply(st, key):
     saved = office_deploy(office_files) if office_files else []
     perm_fixed = office_perm_repair() if office_files else []
     self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py", "sniper_upstream.py") for f in office_files)
-    restart = [u for u in units if u != OFFICE_KEY]   # vNEXT: 사무실 폴더 키는 서비스가 아니라 재시작하지 않음 (웹 사무실 삭제)
+    restart = [u for u in units if u != OFFICE_KEY]   # v1.8.7: 사무실 폴더 키는 서비스가 아니라 재시작하지 않음 (웹 사무실 삭제)
     names_changed = {os.path.basename(f) for f in office_files}
     for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
         if names_changed & set(xfiles) and sh(SYSTEMCTL, "is-active", xu)[1].strip() == "active":   # 지금 실행 중인 것만 (비서는 disabled 지만 실행 중)
@@ -1114,7 +1114,7 @@ def apply(st, key):
         fill_vnext(units[u], ver, u == OFFICE_KEY)   # bot_office/ 파일은 /opt/bot-office 복사본에도 버전 채움 (office=True 유지)
         log = os.path.join(roots[u], "CHANGELOG.md"); head = f"# {uname(u)} 변경 기록\n\n"
         old = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
-        m_head = re.match(r"# [^\n]*변경 기록\n\n", old)   # vNEXT: 이름이 바뀐 옛 제목 줄도 한 줄만 남게 (예: '# 5번 사무실 비서 변경 기록')
+        m_head = re.match(r"# [^\n]*변경 기록\n\n", old)   # v1.8.7: 이름이 바뀐 옛 제목 줄도 한 줄만 남게 (예: '# 5번 사무실 비서 변경 기록')
         body = old[m_head.end():] if m_head else old
         fl = ", ".join(os.path.basename(f) for f in units[u]) or "문서"
         open(log, "w", encoding="utf-8").write(head + f"## {ver} · {now} (KST)\n- 파일: {fl}\n- 내용: {msgs.splitlines()[0] if msgs else br}\n- 브랜치: {br}\n\n" + body)
