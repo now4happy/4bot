@@ -4,10 +4,11 @@ from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from math import isfinite
 
-BOT_VERSION = "v4.3.4"
+BOT_VERSION = "v4.3.5"
 # v4.2.0 (draft rework): unified SMA법; separate per-coin buy amount and explicit approval.
 # v4.0.4 (2026-10-28): 재생 로그 추가 — 버튼·명령 / 매매 판단 / 빗썸 주문·조회 / 설정 변경 / 보낸 메시지를 logs/ 에 한 줄 JSON 으로.
 #                     금액·코인·수량은 감사 로그(logs/audit-*, 권한 600)에만. 실패 시 이유 코드 필수.
+# v4.3.5 (2026-11-14): 처음 화면을 BTC·ETH 설정 중심으로 — 전술 제어반 화면 없앰, 제어반으로 가던 버튼·명령은 처음 화면으로 (b_ui.py·main.py, 매매 동작 변경 없음)
 # v4.3.4 (2026-11-14): 봇 번호 정리 — 알림 이름 '4번 빗썸 적립' → '3번 빗썸 적립' (main.py, 매매 동작 변경 없음)
 # v4.1.0 (2026-10-29): 관찰 전용 BTC·ETH 추세 신호 추가 — 매수·매도 동작 변경 없음.
 #                     일봉 종가 기준 BTC SMA100, ETH SMA200, 완성된 봉만 사용, 하루 1회 갱신, 상황판 표시만.

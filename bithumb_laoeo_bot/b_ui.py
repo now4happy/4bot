@@ -77,8 +77,8 @@ def build_balance_board():
         f"📈 완성 일봉 추세: {trend_line()}",
         f"⏱ {datetime.now(KST).strftime('%H:%M:%S')} 기준",
     ])
-    kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "⚙️ 제어반", "callback_data": "control"}],
-          [{"text": "📝 거래내역", "callback_data": "history"}, {"text": "🔙 메인", "callback_data": "main"}]]
+    kb = [[{"text": "🔄 새로고침", "callback_data": "balance"}, {"text": "📝 거래내역", "callback_data": "history"}],
+          [{"text": "🔙 메인", "callback_data": "main"}]]
     return "\n".join(lines), kb
 
 def get_bithumb_schedule_status() -> str:
@@ -96,7 +96,7 @@ def get_bithumb_schedule_status() -> str:
 
 def build_coin_sma_view(coin):
     if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
-        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반", "callback_data":"control"}]]
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 메인", "callback_data":"main"}]]
     method = coin_method(coin)
     if method == 1:
         return build_smart_settings(coin)
@@ -114,14 +114,14 @@ def build_coin_sma_view(coin):
         [{"text":"📊 매매법 변경", "callback_data":f"method_choose_{coin}"}],
         [{"text":"💵 SMA 매수금액", "callback_data":f"method_buy_{coin}"}],
         [{"text":"📉 SMA 매도비율", "callback_data":f"method_ratio_{coin}"}],
-        [{"text":"🔙 제어반", "callback_data":"control"}],
+        [{"text":"🔙 메인", "callback_data":"main"}],
     ]
     return text, kb
 
 
 def build_smart_settings(coin):
     if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
-        return "❌ 코인 설정을 확인하세요.", [[{"text":"🔙 제어반", "callback_data":"control"}]]
+        return "❌ 코인 설정을 확인하세요.", [[{"text":"🔙 메인", "callback_data":"main"}]]
     pwr = config.get("power", True)
     tp = float(config.get("target_profit_pct", 10.0))
     sr = float(config.get("sell_ratio_pct", 20.0))
@@ -139,14 +139,14 @@ def build_smart_settings(coin):
          {"text":("✅ " if tp==5 and sr==20 else "")+"5%·10% / 20% 매도", "callback_data":"prof_5_20"}],
         [{"text":"💵 코인 시드 설정", "callback_data":"ask_buy"}, {"text":"🔢 매수일수 보정", "callback_data":"ask_day"}],
         [{"text":"🎯 익절·매도비율 입력 (공통)", "callback_data":"ask_custom"}],
-        [{"text":"🔙 제어반", "callback_data":"control"}],
+        [{"text":"🔙 메인", "callback_data":"main"}],
     ]
     return text, kb
 
 
 def build_coin_method_choice(coin):
     if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
-        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 제어반", "callback_data":"control"}]]
+        return "❌ 등록된 BTC·ETH만 설정할 수 있습니다.", [[{"text":"🔙 메인", "callback_data":"main"}]]
     current = coin_method(coin)
     return (f"🪙 {coin} 매매법 선택\n\n"
             "① 스마트 적립 — 기존 정기매수·분할익절\n"
@@ -156,21 +156,12 @@ def build_coin_method_choice(coin):
             "설정이 없으면 주문은 잠깁니다.",
             [[{"text":("✅ " if current==1 else "")+"1번 스마트 적립", "callback_data":f"method_set_{coin}_1"}],
              [{"text":("✅ " if current==2 else "")+f"SMA법 (SMA{TREND_PERIOD[coin]})", "callback_data":f"method_set_{coin}_2"}],
-             [{"text":"🔙 제어반", "callback_data":"control"}]])
+             [{"text":"🔙 메인", "callback_data":"main"}]])
 
-
-def build_control_view():
-    text = (f"⚙️ 매매법 제어반 ({BOT_VERSION})\n\n"
-            f"전체 전원: {'🟢 ON' if config.get('power', True) else '🔴 OFF'}\n"
-            "BTC 또는 ETH를 선택해 매매법과 해당 설정을 관리하세요.\n"
-            "SMA법은 선택 즉시 승인되며 금액·비율이 유효하면 자동주문이 가능합니다.")
-    kb = [[{"text":"🪙 BTC 설정", "callback_data":"method_coin_BTC"},
-           {"text":"🪙 ETH 설정", "callback_data":"method_coin_ETH"}],
-          [{"text":"💰 자산 상황판", "callback_data":"balance"},
-           {"text":"🔙 메인", "callback_data":"main"}]]
-    return text, kb
 
 def build_main_view():
-    text = f"🤖 [빗썸 스마트 적립 모듈형 관제탑 ({BOT_VERSION})]\n\n• 매일 19:00 정기 매수 (+1.0%↑ 시 1/2배, 그 외 1배)\n• 10% / 20% 도달 시 잔고의 20% 분할매도 (30%↑ 미정)\n• ⚡ 스케줄 상태: {get_bithumb_schedule_status()}"
-    kb = [[{"text": "💰 내 자산 상황판", "callback_data": "balance"}], [{"text": "⚙️ 전술 제어반", "callback_data": "control"}], [{"text": "📝 거래내역", "callback_data": "history"}]]
+    text = (f"🤖 [빗썸 스마트 적립 모듈형 관제탑 ({BOT_VERSION})]\n\n• 매일 19:00 정기 매수 (+1.0%↑ 시 1/2배, 그 외 1배)\n• 10% / 20% 도달 시 잔고의 20% 분할매도 (30%↑ 미정)\n• ⚡ 스케줄 상태: {get_bithumb_schedule_status()}\n"
+            f"• 🔌 전체 전원: {'🟢 ON' if config.get('power', True) else '🔴 OFF'}")
+    kb = [[{"text": "🪙 BTC 설정", "callback_data": "method_coin_BTC"}, {"text": "🪙 ETH 설정", "callback_data": "method_coin_ETH"}],
+          [{"text": "💰 내 자산 상황판", "callback_data": "balance"}], [{"text": "📝 거래내역", "callback_data": "history"}]]
     return text, kb

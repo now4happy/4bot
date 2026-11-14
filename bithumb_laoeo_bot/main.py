@@ -58,18 +58,18 @@ def handle_callback(cb):
     if data.startswith(("method_coin_", "smart_settings_", "method_choose_")):
         wait_state["coin"] = data.rsplit("_", 1)[-1]
     if data == "balance": send_panel(*(build_balance_board()), msg_id)
-    elif data == "control": send_panel(*(build_control_view()), msg_id)
+    elif data == "control": send_panel(*(build_main_view()), msg_id)   # 옛 메시지의 control 버튼 호환 (v4.3.5)
     elif data == "main": send_panel(*(build_main_view()), msg_id)
     elif data == "history": send_panel(f"📝 [최근 거래내역 ({BOT_VERSION})]\n\n" + ("\n".join(history[-15:]) if history else "내역 없음"), [[{"text": "💰 상황판", "callback_data": "balance"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]], msg_id)
     elif data == "toggle_power":
         config["power"] = not config.get("power", True); save_json(CONFIG_FILE, config)
         RL.ev("state_change", "master_power", "ok", None, actor="user", before=not config["power"], after=config["power"])
-        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_control_view()), msg_id)
+        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_main_view()), msg_id)
     elif data.startswith("prof_"):
         _, tp, sr = data.split("_"); before = [config.get("target_profit_pct"), config.get("sell_ratio_pct")]
         config["target_profit_pct"], config["sell_ratio_pct"] = float(tp), float(sr); save_json(CONFIG_FILE, config)
         RL.ev("state_change", "take_profit_rule", "ok", None, actor="user", before=before, after=[float(tp), float(sr)])
-        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_control_view()), msg_id)
+        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_main_view()), msg_id)
     elif data.startswith("method_coin_"):
         coin = data.removeprefix("method_coin_")
         send_panel(*(build_coin_method_choice(coin)), msg_id)
@@ -99,12 +99,12 @@ def handle_callback(cb):
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
             wait_state["mode"] = "set_sma_buy"; wait_state["coin"] = coin
             send_panel(f"💵 {coin} SMA 매수금액을 숫자로 입력하세요.\n예: 100000 (원)\n시드와 별개이며 5,000원 이상입니다.",
-                       [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
+                       [[{"text":"🔙 메인", "callback_data":"main"}]], msg_id)
     elif data.startswith("method_ratio_"):
         coin = data.removeprefix("method_ratio_")
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
             wait_state["mode"] = "set_method2_ratio"; wait_state["coin"] = coin
-            send_panel(f"📉 {coin} SMA 매도비율을 숫자로 입력하세요.\n예: 50 (50% 매도)\n1~100 사이로 입력하세요.", [[{"text":"🔙 제어반", "callback_data":"control"}]], msg_id)
+            send_panel(f"📉 {coin} SMA 매도비율을 숫자로 입력하세요.\n예: 50 (50% 매도)\n1~100 사이로 입력하세요.", [[{"text":"🔙 메인", "callback_data":"main"}]], msg_id)
     elif data == "ask_buy": wait_state["mode"] = "setbuy"; send_panel("💵 [코인 시드 설정] 예: BTC 20000 / 삭제: BTC 0", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
     elif data == "ask_day": wait_state["mode"] = "setday"; send_panel("🔢 [코인 매수일수 보정] 예: BTC 5 또는 ETH 6", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
     elif data == "ask_custom": wait_state["mode"] = "setcustom"; send_panel("🎯 [1차익절% 매도비율%] 예: 10 20 (두 코인 공통)", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
@@ -118,7 +118,7 @@ def handle_message(msg):
     if text.startswith("/") or text in ["메뉴", "상황판", "잔고", "제어반", "취소"]:
         wait_state["mode"] = None
         if text in ["/balance", "상황판", "잔고"]: send_panel(*(build_balance_board()))
-        elif text in ["/control", "제어반"]: send_panel(*(build_control_view()))
+        elif text in ["/control", "제어반"]: send_panel(*(build_main_view()))   # 옛 습관 입력 호환 (v4.3.5)
         else: send_panel(*(build_main_view()))
         return
     if wait_state["mode"] == "set_sma_buy":
@@ -135,7 +135,7 @@ def handle_message(msg):
             send_panel(*(build_coin_sma_view(coin)))
         except (ValueError, TypeError):
             send_panel("❌ SMA법 매수금액은 5,000원 이상의 정수로 입력하세요.",
-                       [[{"text":"🔙 제어반", "callback_data":"control"}]])
+                       [[{"text":"🔙 메인", "callback_data":"main"}]])
         return
     if wait_state["mode"] == "set_method2_ratio":
         coin = wait_state.get("coin")
@@ -149,7 +149,7 @@ def handle_message(msg):
             wait_state["mode"] = None
             send_panel(*(build_coin_sma_view(coin)))
         except (ValueError, TypeError):
-            send_panel("❌ 1~100 사이 숫자를 입력하세요.", [[{"text":"🔙 제어반", "callback_data":"control"}]])
+            send_panel("❌ 1~100 사이 숫자를 입력하세요.", [[{"text":"🔙 메인", "callback_data":"main"}]])
         return
     if wait_state["mode"] == "setday":
         parts = text.split()
@@ -157,8 +157,8 @@ def handle_message(msg):
             coin = parts[0].upper(); d = max(0, int(parts[1].replace("일", "").replace("차", "")))
             RL.ev("state_change", "buy_day_manual", "ok", None, actor="user", coin_ref=RL.ref(coin), day_before=state.get("buy_days", {}).get(coin), day_after=d)
             state.setdefault("buy_days", {})[coin] = d; save_json(STATE_FILE, state); wait_state["mode"] = None
-            send_panel(*(build_smart_settings(coin)) if coin in TREND_PERIOD else build_control_view())
-        except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setday"); send_panel("❌ 예: BTC 5", [[{"text": "🔙 제어반", "callback_data": "control"}]])
+            send_panel(*(build_smart_settings(coin)) if coin in TREND_PERIOD else build_main_view())
+        except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setday"); send_panel("❌ 예: BTC 5", [[{"text": "🔙 메인", "callback_data": "main"}]])
         return
     if wait_state["mode"] == "setbuy":
         parts = text.split()
@@ -170,8 +170,8 @@ def handle_message(msg):
             else: config["coins"][coin] = amt
             save_json(CONFIG_FILE, config); wait_state["mode"] = None
             RL.ev("state_change", "coin_seed", "ok", None, actor="user", coin_ref=RL.ref(coin), removed=amt <= 0, audit_ref=aref)
-            send_panel(*(build_smart_settings(coin)) if coin in TREND_PERIOD else build_control_view())
-        except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setbuy"); send_panel("❌ 예: BTC 20000", [[{"text": "🔙 제어반", "callback_data": "control"}]])
+            send_panel(*(build_smart_settings(coin)) if coin in TREND_PERIOD else build_main_view())
+        except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setbuy"); send_panel("❌ 예: BTC 20000", [[{"text": "🔙 메인", "callback_data": "main"}]])
         return
     elif wait_state["mode"] == "setcustom":
         parts = text.split()
@@ -181,8 +181,8 @@ def handle_message(msg):
             if len(parts) >= 2: config["sell_ratio_pct"] = float(parts[1])
             save_json(CONFIG_FILE, config); wait_state["mode"] = None
             RL.ev("state_change", "take_profit_rule", "ok", None, actor="user", before=before, after=[config["target_profit_pct"], config["sell_ratio_pct"]])
-            send_panel(*(build_control_view()))
-        except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setcustom"); send_panel("❌ 예: 10 20", [[{"text": "🔙 제어반", "callback_data": "control"}]])
+            send_panel(*(build_main_view()))
+        except: RL.ev("user_event", "bad_input", "failed", "bad_format", actor="user", wait_mode="setcustom"); send_panel("❌ 예: 10 20", [[{"text": "🔙 메인", "callback_data": "main"}]])
         return
     send_panel(*(build_main_view()))
 
@@ -392,7 +392,7 @@ if __name__ == "__main__":
     RL.new_cid("svc", "start")
     RL.ev("state_change", "service_start", "ok", None, buy_hour_kst=config.get("buy_hour", 19), loop_sec=60, power=config.get("power", True))
     signal.signal(signal.SIGTERM, _on_stop)
-    t, kb = build_control_view()
+    t, kb = build_main_view()
     send_panel(f"✨ [빗썸 봇 {BOT_VERSION} 모듈 분리 및 자동백업 완료!]\n\n" + t, kb)
     RL.set_cid("")
     threading.Thread(target=telegram_polling_loop, daemon=True).start()
