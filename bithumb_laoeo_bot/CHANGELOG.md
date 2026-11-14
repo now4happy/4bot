@@ -1,5 +1,10 @@
 # 3번 빗썸 적립 변경 기록
 
+## v4.3.5 · 2026-11-14 14:12 (KST)
+- 파일: b_core.py, b_ui.py, main.py
+- 내용: bithumb-menu: 처음 화면을 BTC·ETH 설정 중심으로 (v4.3.5)
+- 브랜치: staging
+
 ## v4.3.4 · 2026-11-14 13:57 (KST)
 - 파일: b_core.py, main.py
 - 내용: bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
