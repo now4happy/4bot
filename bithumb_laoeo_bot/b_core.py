@@ -4,10 +4,11 @@ from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from math import isfinite
 
-BOT_VERSION = "v4.3.5"
+BOT_VERSION = "v4.3.6"
 # v4.2.0 (draft rework): unified SMA법; separate per-coin buy amount and explicit approval.
 # v4.0.4 (2026-10-28): 재생 로그 추가 — 버튼·명령 / 매매 판단 / 빗썸 주문·조회 / 설정 변경 / 보낸 메시지를 logs/ 에 한 줄 JSON 으로.
 #                     금액·코인·수량은 감사 로그(logs/audit-*, 권한 600)에만. 실패 시 이유 코드 필수.
+# v4.3.6 (2026-11-14): 메뉴를 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정]로 — 인라인 버튼은 코인별 화면·입력 안내에만, 상황판·거래내역 코인별 화면 추가 (b_core.py·b_ui.py·main.py, 매매 동작 변경 없음)
 # v4.3.5 (2026-11-14): 처음 화면을 BTC·ETH 설정 중심으로 — 전술 제어반 화면 없앰, 제어반으로 가던 버튼·명령은 처음 화면으로 (b_ui.py·main.py, 매매 동작 변경 없음)
 # v4.3.4 (2026-11-14): 봇 번호 정리 — 알림 이름 '4번 빗썸 적립' → '3번 빗썸 적립' (main.py, 매매 동작 변경 없음)
 # v4.1.0 (2026-10-29): 관찰 전용 BTC·ETH 추세 신호 추가 — 매수·매도 동작 변경 없음.
@@ -109,14 +110,19 @@ def tg_api(method, payload=None):
     RL.tg_result(method, payload, res, int((time.time() - t0) * 1000))
     return res
 
-def send_panel(text, inline_kb, msg_id=None):
-    payload = {"chat_id": CHAT_ID, "text": text, "reply_markup": {"inline_keyboard": inline_kb}}
+# v4.3.6: 화면 맨 아래에 항상 붙어 있는 하단 키보드 (8번 비서 send() 방식) — 딱 한 줄, 딱 2개
+BOTTOM_KB = [[{"text": "🪙 BTC 설정"}, {"text": "🪙 ETH 설정"}]]
+
+def send_panel(text, inline_kb=None):
+    # 텔레그램 메시지 1개에는 reply_markup 1개만: 인라인 버튼이 있으면 인라인만, 없으면 하단 키보드만.
+    # 메시지 고침(edit) API로는 하단 키보드를 붙일 수 없어 항상 새 메시지로 보낸다.
+    if inline_kb:
+        markup = {"inline_keyboard": inline_kb}
+    else:
+        markup = {"keyboard": BOTTOM_KB, "resize_keyboard": True, "is_persistent": True}
+    payload = {"chat_id": CHAT_ID, "text": text, "reply_markup": markup}
     if "<pre>" in text and "</pre>" in text:
         payload["parse_mode"] = "HTML"
-    if msg_id:
-        payload["message_id"] = msg_id
-        res = tg_api("editMessageText", payload)
-        if res and (res.get("ok") or "not modified" in str(res.get("description", ""))): return
     tg_api("sendMessage", payload)
 
 def bithumb_headers(query_params=None):

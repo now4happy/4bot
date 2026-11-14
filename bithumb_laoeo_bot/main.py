@@ -4,6 +4,7 @@ from b_ui import *
 
 wait_state = {"mode": None}
 
+# ---------------------------------------------------------------- v4.3.6 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] + 코인별 상황판·거래내역 (콜백은 항상 새 메시지)
 # ---------------------------------------------------------------- v4.3.0 coin method-first UI and selection-is-approval
 # ---------------------------------------------------------------- v4.2.0 SMA법 재작업 초안 (승인 전 주문 잠금)
 # ---------------------------------------------------------------- v4.1.0 관찰 전용 추세 신호 (매매 동작은 그대로)
@@ -50,41 +51,51 @@ def _on_stop(signum, frame):
     RL.new_cid("svc", "stop"); RL.ev("state_change", "service_stop", "ok", None, signal=signum)
     RL._maybe_flush(force=True); os._exit(0)   # 예전처럼 바로 종료 (기록만 먼저 남김)
 
+BOTTOM_COIN_BUTTONS = {"🪙 BTC 설정": "BTC", "🪙 ETH 설정": "ETH"}   # 하단 키보드 글자 → 코인 (v4.3.6)
+MENU_WORDS = ["메뉴", "상황판", "잔고", "제어반", "취소"] + list(BOTTOM_COIN_BUTTONS)
+
 def handle_callback(cb):
     if str(cb.get("message", {}).get("chat", {}).get("id", "")) != str(CHAT_ID): RL.count("tg_other_chat"); return
-    cb_id, data, msg_id = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
-    RL.ev("user_event", "tg_button", "ok", None, actor="user", button=RL.button(data), seen_message_id=msg_id)
+    cb_id, data, seen_mid = cb["id"], cb.get("data", ""), cb.get("message", {}).get("message_id")
+    RL.ev("user_event", "tg_button", "ok", None, actor="user", button=RL.button(data), seen_message_id=seen_mid)
     wait_state["mode"] = None; tg_api("answerCallbackQuery", {"callback_query_id": cb_id})
-    if data.startswith(("method_coin_", "smart_settings_", "method_choose_")):
+    # v4.3.6: 예전 메시지 버튼도 메시지를 고치지 않고 같은 화면을 새 메시지로 보낸다
+    if data.startswith(("method_coin_", "smart_settings_", "method_choose_", "coin_board_", "coin_history_")):
         wait_state["coin"] = data.rsplit("_", 1)[-1]
-    if data == "balance": send_panel(*(build_balance_board()), msg_id)
-    elif data == "control": send_panel(*(build_main_view()), msg_id)   # 옛 메시지의 control 버튼 호환 (v4.3.5)
-    elif data == "main": send_panel(*(build_main_view()), msg_id)
-    elif data == "history": send_panel(f"📝 [최근 거래내역 ({BOT_VERSION})]\n\n" + ("\n".join(history[-15:]) if history else "내역 없음"), [[{"text": "💰 상황판", "callback_data": "balance"}, {"text": "🔙 메인 메뉴", "callback_data": "main"}]], msg_id)
+    if data == "balance": send_panel(*(build_balance_board()))
+    elif data == "control": send_panel(*(build_main_view()))   # 옛 메시지의 control 버튼 호환 (v4.3.5)
+    elif data == "main": send_panel(*(build_main_view()))
+    elif data == "history": send_panel(f"📝 [최근 거래내역 ({BOT_VERSION})]\n\n" + ("\n".join(history[-15:]) if history else "내역 없음"))
+    elif data.startswith("coin_board_"):
+        coin = data.removeprefix("coin_board_")
+        send_panel(*(build_coin_board(coin) if coin in TREND_PERIOD and coin in config.get("coins", {}) else build_main_view()))
+    elif data.startswith("coin_history_"):
+        coin = data.removeprefix("coin_history_")
+        send_panel(*(build_coin_history(coin) if coin in TREND_PERIOD and coin in config.get("coins", {}) else build_main_view()))
     elif data == "toggle_power":
         config["power"] = not config.get("power", True); save_json(CONFIG_FILE, config)
         RL.ev("state_change", "master_power", "ok", None, actor="user", before=not config["power"], after=config["power"])
-        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_main_view()), msg_id)
+        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_main_view()))
     elif data.startswith("prof_"):
         _, tp, sr = data.split("_"); before = [config.get("target_profit_pct"), config.get("sell_ratio_pct")]
         config["target_profit_pct"], config["sell_ratio_pct"] = float(tp), float(sr); save_json(CONFIG_FILE, config)
         RL.ev("state_change", "take_profit_rule", "ok", None, actor="user", before=before, after=[float(tp), float(sr)])
-        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_main_view()), msg_id)
+        send_panel(*(build_smart_settings(wait_state.get("coin")) if wait_state.get("coin") in TREND_PERIOD else build_main_view()))
     elif data.startswith("method_coin_"):
         coin = data.removeprefix("method_coin_")
-        send_panel(*(build_coin_method_choice(coin)), msg_id)
+        send_panel(*(build_coin_method_choice(coin)))
     elif data.startswith("smart_settings_"):
         coin = data.removeprefix("smart_settings_")
-        send_panel(*(build_smart_settings(coin)), msg_id)
+        send_panel(*(build_smart_settings(coin)))
     elif data.startswith("method_choose_"):
         coin = data.removeprefix("method_choose_")
-        send_panel(*(build_coin_method_choice(coin)), msg_id)
+        send_panel(*(build_coin_method_choice(coin)))
     elif data.startswith("method_set_"):
         parts = data.split("_")
         if len(parts) == 4 and parts[2] in TREND_PERIOD and parts[2] in config.get("coins", {}) and parts[3] in ("1", "2"):
             coin, method = parts[2], int(parts[3])
             if coin_method(coin) == method:
-                send_panel(*(build_coin_sma_view(coin)), msg_id)
+                send_panel(*(build_coin_sma_view(coin)))
                 return
             config.setdefault("coin_methods", {})[coin] = method
             # Preserve prior processed signal when the same method is reselected.
@@ -93,31 +104,34 @@ def handle_callback(cb):
             state.setdefault("method2_selected_on", {}).pop(coin, None)
             save_json(CONFIG_FILE, config); save_json(STATE_FILE, state)
             RL.ev("state_change", "coin_method", "ok", None, actor="user", coin_ref=RL.ref(coin), method=method)
-            send_panel(*(build_coin_sma_view(coin)), msg_id)
+            send_panel(*(build_coin_sma_view(coin)))
     elif data.startswith("method_buy_"):
         coin = data.removeprefix("method_buy_")
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
             wait_state["mode"] = "set_sma_buy"; wait_state["coin"] = coin
             send_panel(f"💵 {coin} SMA 매수금액을 숫자로 입력하세요.\n예: 100000 (원)\n시드와 별개이며 5,000원 이상입니다.",
-                       [[{"text":"🔙 메인", "callback_data":"main"}]], msg_id)
+                       [[{"text":"🔙 메인", "callback_data":"main"}]])
     elif data.startswith("method_ratio_"):
         coin = data.removeprefix("method_ratio_")
         if coin in TREND_PERIOD and coin in config.get("coins", {}):
             wait_state["mode"] = "set_method2_ratio"; wait_state["coin"] = coin
-            send_panel(f"📉 {coin} SMA 매도비율을 숫자로 입력하세요.\n예: 50 (50% 매도)\n1~100 사이로 입력하세요.", [[{"text":"🔙 메인", "callback_data":"main"}]], msg_id)
-    elif data == "ask_buy": wait_state["mode"] = "setbuy"; send_panel("💵 [코인 시드 설정] 예: BTC 20000 / 삭제: BTC 0", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
-    elif data == "ask_day": wait_state["mode"] = "setday"; send_panel("🔢 [코인 매수일수 보정] 예: BTC 5 또는 ETH 6", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
-    elif data == "ask_custom": wait_state["mode"] = "setcustom"; send_panel("🎯 [1차익절% 매도비율%] 예: 10 20 (두 코인 공통)", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]], msg_id)
+            send_panel(f"📉 {coin} SMA 매도비율을 숫자로 입력하세요.\n예: 50 (50% 매도)\n1~100 사이로 입력하세요.", [[{"text":"🔙 메인", "callback_data":"main"}]])
+    elif data == "ask_buy": wait_state["mode"] = "setbuy"; send_panel("💵 [코인 시드 설정] 예: BTC 20000 / 삭제: BTC 0", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]])
+    elif data == "ask_day": wait_state["mode"] = "setday"; send_panel("🔢 [코인 매수일수 보정] 예: BTC 5 또는 ETH 6", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]])
+    elif data == "ask_custom": wait_state["mode"] = "setcustom"; send_panel("🎯 [1차익절% 매도비율%] 예: 10 20 (두 코인 공통)", [[{"text": "🔙 스마트 적립", "callback_data": f"smart_settings_{wait_state.get('coin', 'BTC')}"}]])
 
 def handle_message(msg):
     if str(msg.get("chat", {}).get("id", "")) != str(CHAT_ID): return
     text = msg.get("text", "").strip()
     if not text: return
     RL.ev("user_event", "tg_message", "ok", None, actor="user", text_len=len(text),
-          input_kind="command" if text.startswith("/") else ("menu_word" if text in ["메뉴", "상황판", "잔고", "제어반", "취소"] else (wait_state.get("mode") or "other")))
-    if text.startswith("/") or text in ["메뉴", "상황판", "잔고", "제어반", "취소"]:
-        wait_state["mode"] = None
-        if text in ["/balance", "상황판", "잔고"]: send_panel(*(build_balance_board()))
+          input_kind="command" if text.startswith("/") else ("menu_word" if text in MENU_WORDS else (wait_state.get("mode") or "other")))
+    if text.startswith("/") or text in MENU_WORDS:
+        wait_state["mode"] = None   # 숫자 입력 대기 중 하단 버튼이 와도 대기를 풀고 해당 화면으로 (v4.3.6)
+        if text in BOTTOM_COIN_BUTTONS:
+            wait_state["coin"] = BOTTOM_COIN_BUTTONS[text]
+            send_panel(*(build_coin_method_choice(BOTTOM_COIN_BUTTONS[text])))
+        elif text in ["/balance", "상황판", "잔고"]: send_panel(*(build_balance_board()))
         elif text in ["/control", "제어반"]: send_panel(*(build_main_view()))   # 옛 습관 입력 호환 (v4.3.5)
         else: send_panel(*(build_main_view()))
         return
@@ -277,12 +291,12 @@ def method2_daily_step(coin, krw_bal, acc, today_str):
     if ok:
         state["last_action_type"][coin] = "SMA매수" if direction == "up" else "SMA매도"
         save_json(STATE_FILE, state)
-        send_panel(f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수", [[{"text":"💰 상황판","callback_data":"balance"}]]); _hub_alert("3번 빗썸 적립", "info", f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수")
+        send_panel(f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수"); _hub_alert("3번 빗썸 적립", "info", f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수")
         if direction == "up":
             krw_bal -= size
     else:
         _decide(coin, "method2_order", "failed", "order_failed_or_unknown", daily=True)
-        send_panel(f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다.", [[{"text":"💰 상황판","callback_data":"balance"}]]); _hub_alert("3번 빗썸 적립", "critical", f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다.")
+        send_panel(f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다."); _hub_alert("3번 빗썸 적립", "critical", f"{coin} SMA법 주문 결과 확인 필요. 재주문하지 않습니다.")
     return krw_bal
 
 def trading_monitor_loop():
@@ -317,7 +331,7 @@ def trading_monitor_loop():
                 if req_krw > 0 and krw_bal < req_krw and (time.time() - float(state.get("last_low_bal_ts", 0)) >= 1800):
                     state["last_low_bal_ts"] = time.time(); save_json(STATE_FILE, state)
                     RL.ev("decision", "low_krw_alert", "ok", None, actor="scheduler", audit_ref=RL.audit("low_krw", need=req_krw, have=krw_bal))
-                    send_panel(f"⚠️ [빗썸 잔액 부족 ({BOT_VERSION})]\n• 필요: {req_krw:,.0f}원 / 보유: {krw_bal:,.0f}원", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("3번 빗썸 적립", "critical", f"빗썸 잔액 부족: 필요 {req_krw:,.0f}원 / 보유 {krw_bal:,.0f}원")
+                    send_panel(f"⚠️ [빗썸 잔액 부족 ({BOT_VERSION})]\n• 필요: {req_krw:,.0f}원 / 보유: {krw_bal:,.0f}원"); _hub_alert("3번 빗썸 적립", "critical", f"빗썸 잔액 부족: 필요 {req_krw:,.0f}원 / 보유 {krw_bal:,.0f}원")
                 tp1, sr = float(config.get("target_profit_pct", 10.0)), float(config.get("sell_ratio_pct", 20.0))
                 for coin, base_amt in list(config.get("coins", {}).items()):
                     if base_amt <= 0 and coin_method(coin) != 2: continue
@@ -345,11 +359,11 @@ def trading_monitor_loop():
                                 # 통신 오류(응답 없음)는 체결됐을 수 있으므로 같은 단계를 다시 매도하지 않음
                                 state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = "확인필요"
                                 save_json(STATE_FILE, state); add_history(coin, f"⚠️{target_stg}차익절 응답없음", sell_res[:60])
-                                send_panel(f"⚠️ [{coin} {target_stg}차 익절 주문 응답 없음]\n• 체결됐을 수 있어 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요.\n• 사유: {sell_res[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("3번 빗썸 적립", "critical", f"{coin} {target_stg}차 익절 주문 응답 없음"); continue
+                                send_panel(f"⚠️ [{coin} {target_stg}차 익절 주문 응답 없음]\n• 체결됐을 수 있어 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요.\n• 사유: {sell_res[:120]}"); _hub_alert("3번 빗썸 적립", "critical", f"{coin} {target_stg}차 익절 주문 응답 없음"); continue
                             if ok:
                                 state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = f"{target_stg}차익절"
                                 save_json(STATE_FILE, state); add_history(coin, f"🎯{target_stg}차익절", f"{prof_pct:+.2f}% ({sr:.0f}% 매도)")
-                                send_panel(f"🎉 [{coin} {target_stg}차 익절 완료] {prof_pct:+.2f}%", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("3번 빗썸 적립", "info", f"{coin} {target_stg}차 익절 완료 {prof_pct:+.2f}%"); continue
+                                send_panel(f"🎉 [{coin} {target_stg}차 익절 완료] {prof_pct:+.2f}%"); _hub_alert("3번 빗썸 적립", "info", f"{coin} {target_stg}차 익절 완료 {prof_pct:+.2f}%"); continue
                     if state["last_action_date"].get(coin) == today_str: _decide(coin, "buy", "skipped", "done_today", daily=True)
                     elif now.hour < config.get("buy_hour", 19): _decide(coin, "buy", "skipped", "before_buy_hour", daily=True, buy_hour=config.get("buy_hour", 19))
                     if state["last_action_date"].get(coin) != today_str and now.hour >= config.get("buy_hour", 19):
@@ -370,20 +384,20 @@ def trading_monitor_loop():
                                 state["cycle_days"] = s_days
                                 save_json(STATE_FILE, state); add_history(coin, "🛒정기매수", f"{buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
                                 RL.ev("state_change", "buy_day", "ok", None, actor="scheduler", coin_ref=RL.ref(coin), day_after=state["buy_days"][coin], cycle_day_after=s_days[coin])
-                                send_panel(f"✅ [{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원 ({prof_pct:+.2f}%)", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("3번 빗썸 적립", "info", f"{coin} 19:00 정기매수 완료 {buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
+                                send_panel(f"✅ [{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원 ({prof_pct:+.2f}%)"); _hub_alert("3번 빗썸 적립", "info", f"{coin} 19:00 정기매수 완료 {buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
                             elif isinstance(res_json, str):
                                 # 통신 오류(응답 없음)는 체결됐을 수 있으므로 오늘은 다시 매수하지 않음 (중복 매수 방지)
                                 state["last_action_date"][coin], state["last_action_type"][coin] = today_str, "확인필요"
                                 save_json(STATE_FILE, state); add_history(coin, "⚠️정기매수 응답없음", f"{buy_amt:,.0f}원 · {res_json[:60]}")
                                 RL.ev("state_change", "no_reorder_today", "ok", None, actor="scheduler", coin_ref=RL.ref(coin), why="order_no_response")
-                                send_panel(f"⚠️ [{coin} 정기매수 주문 응답 없음] {buy_amt:,.0f}원\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요. (체결 안 됐으면 내일 정상 매수)\n• 사유: {res_json[:120]}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("3번 빗썸 적립", "critical", f"{coin} 정기매수 주문 응답 없음 {buy_amt:,.0f}원")
+                                send_panel(f"⚠️ [{coin} 정기매수 주문 응답 없음] {buy_amt:,.0f}원\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요. (체결 안 됐으면 내일 정상 매수)\n• 사유: {res_json[:120]}"); _hub_alert("3번 빗썸 적립", "critical", f"{coin} 정기매수 주문 응답 없음 {buy_amt:,.0f}원")
                             else:
                                 fk = f"fail_{today_str}_{coin}"
-                                if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 실패] {res_json}", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("3번 빗썸 적립", "critical", f"{coin} 매수 실패")
+                                if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 실패] {res_json}"); _hub_alert("3번 빗썸 적립", "critical", f"{coin} 매수 실패")
                         elif now.minute >= 15:
                             _decide(coin, "buy", "skipped", "krw_insufficient", _snap(coin, buy_krw=buy_amt, krw_balance=krw_bal) if RL.once(f"{coin}|krw_snap") else None, daily=True)
                             fk = f"fail_{today_str}_{coin}"
-                            if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 미진행] 원화 부족", [[{"text": "💰 상황판", "callback_data": "balance"}]]); _hub_alert("3번 빗썸 적립", "critical", f"{coin} 매수 미진행 원화 부족")
+                            if not state.get(fk): state[fk] = True; save_json(STATE_FILE, state); send_panel(f"🚨 [{coin} 매수 미진행] 원화 부족"); _hub_alert("3번 빗썸 적립", "critical", f"{coin} 매수 미진행 원화 부족")
         except Exception as e: RL.err("scheduler_pass", e, event_type="decision", reason="accounts_unavailable" if "잔고 조회 실패" in str(e) else None)
         finally: RL.set_cid("")
         runtime_info["count"] += 1; time.sleep(60)
