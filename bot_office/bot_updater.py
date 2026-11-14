@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-14): 웹 서버 끄기 준비 — ① 의도적 중단 표시 파일(/var/lib/bot-office/intentional_stop)이 있으면
+#                       사무실 웹 서비스(bot-office.service)는 재시작·정상 확인(healthy)·enable 을 건너뜀 (로그 '의도적 중단, 재시작 건너뜀')
+#                       · 건너뜀은 성공으로 셈 (되돌림 없음) · 완료 알림에 '의도적 중단 — 재시작 건너뜀' 줄 따로 표시
+#                       · 'inactive' 상태만으로는 의도적 중단으로 보지 않음 (고장과 구별이 안 되므로) · 다른 서비스 재시작·enable 규칙은 그대로
+#                       ② HUB_BOT_NAMES 에서 웹 사무실 항목 제거 (새로 설치할 때 .env 를 채우는 값 · 이미 있는 서버 .env 는 안 바꿈)
 # 사무실 v1.8.1 (2026-11-13): 옛(리베이스 전) 브랜치 되풀이 알림·충돌 방지 — ① 알림에 '서버보다 N개 뒤처짐'·'지금 적용하면 충돌할 파일'(git merge-tree, 미리 보기만) 표시
 #                       ② 같은 수정(제목+작성 시각 같음)이 이미 서버 HEAD나 다른 대기 브랜치에 있으면 '♻️ 옛 브랜치' 안내 + [🗑 옛 브랜치 지우기] 버튼
 #                          (누를 때 다시 확인 · 백업 태그 updater-backup/superseded-… 와 삭제를 한 번에 · 자동 삭제 없음 · main·staging 은 못 지움)
@@ -94,6 +99,8 @@ TARGETS = os.environ.get("U_TARGETS", "/var/lib/bot-office-deploy/targets.json")
 STATE = os.environ.get("U_STATE", "/var/lib/bot-updater/state.json")
 OFFICE_DIR = os.environ.get("U_OFFICE", "/opt/bot-office")
 OFFICE_UNIT, SELF_UNIT, SELF_FILE = "bot-office.service", "bot-updater.service", "bot_updater.py"
+# vNEXT: 사무실 웹 서비스를 일부러 멈춰 둔 표시 — 멈출 때 운영 절차가 만들고 다시 켤 때 지움 (서비스 유닛 훅 아님). 있으면 재시작 건너뜀
+INTENTIONAL_STOP = os.environ.get("U_INTENTIONAL_STOP", "/var/lib/bot-office/intentional_stop")
 # 사무실 폴더(/opt/bot-office)에서 따로 도는 상시 서비스 — 그 파일이 바뀌면 이 서비스도 다시 시작해야 새 코드가 반영됨
 SECRETARY_UNIT, FANDING_UNIT = "bot-office-secretary.service", "bot-office-fanding.service"
 OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_briefing.py", "gemini_usage.py", "meritz_client.py", "toss_token_share.py", "pc_monitor.py", "office_url.py"),
@@ -112,7 +119,7 @@ HUB_DIR = os.path.join(REPO, "alert-hub")
 HUB_VENV = os.path.join(HUB_DIR, ".venv")
 HUB_PY = os.path.join(HUB_VENV, "bin", "python")
 HUB_PIP = os.path.join(HUB_VENV, "bin", "pip")
-HUB_BOT_NAMES = "1번 한투 라오어,2번 토스 스나이퍼,3번 메리츠 적립,4번 빗썸 적립,8번 사무실 비서,5번 팬딩 가격표,6번 업데이트 비서:1500,7번 비서"
+HUB_BOT_NAMES = "1번 한투 라오어,2번 토스 스나이퍼,3번 메리츠 적립,4번 빗썸 적립,5번 팬딩 가격표,6번 업데이트 비서:1500,7번 비서"
 OWNER = pwd.getpwuid(os.stat(REPO).st_uid)
 try:   # 2번 스나이퍼 원작자 새 버전 알림 부품 (알림 전용 · 없어도 비서는 정상 작동)
     import sniper_upstream as SU
@@ -1063,6 +1070,11 @@ def apply(st, key):
     restart = [u for u in units if u != OFFICE_UNIT]
     if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py", "sniper_upstream.py") for f in office_files):
         restart.append(OFFICE_UNIT)   # 비서 화면·브리핑 등이 바뀌면 사무실 서비스 다시 시작
+    stop_skipped = []   # vNEXT: 의도적 중단 표시가 있으면 사무실 웹은 재시작·healthy·enable 모두 건너뜀 (성공으로 셈)
+    if OFFICE_UNIT in restart and os.path.isfile(INTENTIONAL_STOP):
+        restart.remove(OFFICE_UNIT)
+        stop_skipped.append(OFFICE_UNIT)
+        print("의도적 중단, 재시작 건너뜀:", OFFICE_UNIT, flush=True)
     names_changed = {os.path.basename(f) for f in office_files}
     for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
         if names_changed & set(xfiles) and sh(SYSTEMCTL, "is-active", xu)[1].strip() == "active":   # 지금 실행 중인 것만 (비서는 disabled 지만 실행 중)
@@ -1123,6 +1135,7 @@ def apply(st, key):
     done = ", ".join(NAMES.get(u, u) + " " + t.rsplit("-", 1)[-1] for u, t in zip(units, tags)) or "문서만 반영"
     say(f"🎉 <b>업데이트 완료</b>\n▫️ {esc(done)}\n"
         + (f"▫️ 사무실 파일 읽기 권한 고침: {esc(', '.join(perm_fixed))}\n" if perm_fixed else "")
+        + (f"▫️ 의도적 중단 — 재시작 건너뜀: {esc(', '.join(NAMES.get(u, u) for u in stop_skipped))}\n" if stop_skipped else "")
         + f"▫️ 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
         + ("\n▫️ 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
     for unit in units:
