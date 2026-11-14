@@ -1,5 +1,10 @@
 # 메리츠 SOXL 무매 변경 기록
 
+## v1.0.4 · 2026-11-14 13:57 (KST)
+- 파일: main.py, notifier.py, tg_menu.py
+- 내용: bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
+- 브랜치: staging
+
 ## v1.0.3 · 2026-11-14 10:25 (KST)
 - 파일: main.py, tg_menu.py
 - 내용: meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0.3, office vNEXT)

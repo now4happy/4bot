@@ -1,5 +1,10 @@
 # 3번 메리츠 적립 변경 기록
 
+## v1.2.8 · 2026-11-14 13:57 (KST)
+- 파일: t_core.py
+- 내용: bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
+- 브랜치: staging
+
 ## v1.2.7 · 2026-11-14 10:54 (KST)
 - 파일: bridge.py, sgov.py, t_core.py
 - 내용: meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 bridge 알림 파일로 — 비서봇이 자기 방으로 1번 보냄 (방: 3. 미국주식 적립)

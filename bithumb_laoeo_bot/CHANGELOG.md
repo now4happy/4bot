@@ -1,5 +1,10 @@
 # 4번 빗썸 적립 변경 기록
 
+## v4.3.4 · 2026-11-14 13:57 (KST)
+- 파일: b_core.py, main.py
+- 내용: bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
+- 브랜치: staging
+
 ## v4.3.3 · 2026-11-01 14:58 (KST)
 - 파일: main.py
 - 내용: feat: alert-hub 연동 2차 — 매매 봇 자율 알림

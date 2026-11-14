@@ -1,4 +1,4 @@
-# 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
+# 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 """Review and repair an update branch without changing the running checkout.
 
 CLI first previews; --apply plus explicit --discard paths repairs that same branch.

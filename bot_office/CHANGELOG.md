@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.8.6 · 2026-11-14 13:57 (KST)
+- 파일: bot_updater.py, fanding_trade.py, office_briefing.py, office_secretary.py, office_url.py, pc_monitor.py, sniper_upstream.py, update_conflicts.py
+- 내용: bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
+- 브랜치: staging
+
 ## v1.8.5 · 2026-11-14 13:30 (KST)
 - 파일: bot_updater.py, fanding_direct_upload.py, office_url.py
 - 내용: web-server-off-prep: office health check off, intentional-stop skip, fanding direct upload (vNEXT)

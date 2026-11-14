@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-14 13:30 (KST) · 계기: 업데이트 적용 (staging: web-server-off-prep: office health check off, intentional-stop skip, fanding direct upload (vNEXT))
+- 갱신: 2026-11-14 13:57 (KST) · 계기: 업데이트 적용 (staging: bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT))
 
 ## 봇별 현재 상태
 
@@ -11,32 +11,32 @@
 |---|---|---|---|---|---|
 | 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-13 15:23 KST부터) | v1.2.7 | 2026-11-13 15:23 | sniper: plugin_updater commits synced files after direct ups |
-| 3번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-14 10:53 KST부터) | v1.2.7 | 2026-11-14 10:54 | meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br |
-| 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-12 15:28 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-14 13:29 KST부터) | v1.8.5 | 2026-11-14 13:30 | web-server-off-prep: office health check off, intentional-st |
-| 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-14 10:24 KST부터) | v1.0.3 | 2026-11-14 10:25 | meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0 |
+| 3번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-14 13:56 KST부터) | v1.2.8 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
+| 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-14 13:56 KST부터) | v4.3.4 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
+| 5번 사무실 비서 | `bot-office` | ⚪ 꺼짐 | v1.8.6 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
+| 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-14 13:56 KST부터) | v1.0.4 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-14 13:30 KST부터)
-- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-14 09:23 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-14 13:56 KST부터)
+- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-14 13:57 KST부터)
 - 사무실 터널 `bot-office-tunnel`: ⚪ 꺼짐
-- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-13 17:43 KST부터)
+- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-14 13:30 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
 - 디스크 사용: 40% (남은 12.4GB)
 
 ## 최근 적용 10건
 
+- 2026-11-14 13:57 · 메리츠 SOXL 무매 v1.0.4 · main.py, notifier.py, tg_menu.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
+- 2026-11-14 13:57 · 5번 사무실 비서 v1.8.6 · bot_updater.py, fanding_trade.py, office_briefing.py, office · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
+- 2026-11-14 13:57 · 4번 빗썸 적립 v4.3.4 · b_core.py, main.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
+- 2026-11-14 13:57 · 3번 메리츠 적립 v1.2.8 · t_core.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
 - 2026-11-14 13:30 · 5번 사무실 비서 v1.8.5 · bot_updater.py, fanding_direct_upload.py, office_url.py · web-server-off-prep: office health check off, intentional-st
 - 2026-11-14 10:54 · 5번 사무실 비서 v1.8.4 · office_sgov.py · meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br
 - 2026-11-14 10:54 · 3번 메리츠 적립 v1.2.7 · bridge.py, sgov.py, t_core.py · meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br
 - 2026-11-14 10:25 · 메리츠 SOXL 무매 v1.0.3 · main.py, tg_menu.py · meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0
 - 2026-11-14 10:25 · 5번 사무실 비서 v1.8.3 · office_secretary.py, office_sgov.py · meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0
 - 2026-11-14 10:25 · 3번 메리츠 적립 v1.2.6 · bridge.py, main.py, t_core.py, t_ui.py · meritz split: 4번 주식만·SGOV 비서봇·무매봇 메뉴 (dca v1.2.6, laoer v1.0
-- 2026-11-14 09:23 · 5번 사무실 비서 v1.8.2 · fanding_trade.py · 자동주문 모드 A를 알림 30분 뒤로 (fanding_trade v1.5.8)
-- 2026-11-14 08:53 · 3번 메리츠 적립 v1.2.5 · meritz_api.py, sgov.py, t_core.py · meritz_dca v1.2.5: 시세 0 고침 (다음 거래소 조회) + SGOV 환율 캐시 폴백 (방: 3
-- 2026-11-13 17:43 · 5번 사무실 비서 v1.8.1 · bot_updater.py · 업데이터 옛 브랜치 되풀이 방지 (bot_updater vNEXT) (방: 포트폴리오)
-- 2026-11-13 17:16 · 5번 사무실 비서 v1.8.0 · bot_updater.py, collect_inventory.py, deployment_control.py, · 메리츠 적립봇을 3번으로 (toss_dca 삭제, 표시·서비스·브리핑 정리)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
