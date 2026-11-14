@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v1.0.3 — 새 파일)
 # 메리츠 무매 SOXL 텔레그램 메뉴: 📈 상황판 · ☰ 메뉴 · 🛠 도구 (맨밑 키보드만, 인라인 버튼 없음)
+# v1.0.4 (2026-11-14): 봇 번호 정리 — 표시 이름 '메리츠 무매 SOXL' → '7번 메리츠 무매' (머리글·도움말·상황판)
 # v1.0.3 (2026-11-14): 첫 버전.
 #   - 토큰: 설정 telegram_file (notifier.py 와 같은 파일, 새 토큰 없음). 토큰 원문은 어디에도 출력·기록하지 않음 (지문 token_fp 만)
 #   - check_identity() 가 '텔레그램 토큰이 다른 봇과 같음' 이면 폴링하지 않음 (forbid_telegram_files 검사 그대로)
@@ -31,10 +32,10 @@ HALT_OK, INJECT_OK, INJECT_OVER = "⛔ 정지 해제 확인", "📥 장부 시�
 CONFIRM_SEC = 60            # 제안값: 확인 버튼 유효 시간
 WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
-HEAD = "🟦메리츠 무매 SOXL"
+HEAD = "🟦7번 메리츠 무매"
 
 HELP = "\n".join([
-    "❓ [도움말 · 메리츠 무매 SOXL]",
+    "❓ [도움말 · 7번 메리츠 무매]",
     "▫️ 맨밑 첫 줄: 📈 상황판 · ☰ 메뉴",
     "▫️ ☰ 메뉴: 📋 오늘 계획 · 📒 장부·체결 내역 · 💰 자금 · ⚙️ 전원·모드 · 🛠 도구 · ❓ 도움말 · 🏠 처음 화면",
     "▫️ 🛠 도구: 🔍 점검(--check) · ➕ 직접 산 주식 반영(--add-shares) · ⛔ 정지 해제(--clear-halt) · "
@@ -185,7 +186,7 @@ class MenuBot:
     def board_text(self, s):
         d = self.board(s)
         pos = d["pos"]
-        lines = [f"📈 [메리츠 무매 SOXL 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
+        lines = [f"📈 [7번 메리츠 무매 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
         if pos:
             lines.append(f"▫️ 장부: {pos['qty']}주 · 평단 ${d['avg']:.4f} · T {d['t']:.2f} · 목표 ${d['target']:.2f}")
         else:

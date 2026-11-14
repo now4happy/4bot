@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v1.0.3)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v1.0.4)
 # 메리츠 SOXL 무한매수(V14) 새 봇 — 실행·안전장치
+# v1.0.4 (2026-11-14): BOT_VERSION만 (봇 번호 정리 — 표시 이름 '7번 메리츠 무매'는 tg_menu.py·notifier.py)
 # v1.0.3 (2026-11-14): 텔레그램 메뉴(tg_menu.py) — 상황판·맨밑 메뉴·도구. 기다리는 자리(time.sleep)에서 같은 스레드로 순서대로 처리
 #   - 주문·체결 반영·전략·안전장치는 그대로. --inject-start 본문은 cmd_inject_start() 로 옮김 (CLI·메뉴가 같은 함수)
 # v1.0.2 (2026-11-08): --add-shares --qty N --avg X 추가 (직접 산 주식을 지정 평단으로 장부 반영)
@@ -41,7 +42,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_token, token_fp   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v1.0.3"
+BOT_VERSION = "v1.0.4"
 EST = ZoneInfo("America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.0 (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """사무실 비서 필요 금액 JSON 발행 (평일 09:00 · 16:30 KST, systemd timer)
 - 읽기 전용: 주문·설정 변경 없음. 잔고 조회만 합니다.
@@ -67,8 +68,8 @@ BITHUMB_API = os.environ.get("BRIEF_BITHUMB_API", "https://api.bithumb.com")
 TELEGRAM_API = os.environ.get("BRIEF_TELEGRAM_API", "https://api.telegram.org")
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 UNITS = [("1번 한투 라오어", "han4384tubot.service"), ("2번 토스 스나이퍼", "toss_sniper.service"),
-         ("3번 메리츠 적립", "meritz_dca.service"), ("4번 빗썸 적립", "bithumb_bot.service"),
-         ("5번 팬딩", "bot-office-fanding.service")]
+         ("6번 메리츠 적립", "meritz_dca.service"), ("3번 빗썸 적립", "bithumb_bot.service"),
+         ("4번 팬딩", "bot-office-fanding.service")]
 
 
 SEP = "━━━━━━━━━━━━━━━"   # 항목 구분선

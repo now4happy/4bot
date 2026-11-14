@@ -1,3 +1,4 @@
+# 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 """Review and repair an update branch without changing the running checkout.
 
 CLI first previews; --apply plus explicit --discard paths repairs that same branch.
@@ -44,7 +45,7 @@ def snapshot(host, branch, expected=None, main_expected=None):
         if host.git('merge-base', '--is-ancestor', head, main)[0] == 0:
             raise RepairError('GitHub main에 서버를 거치지 않은 수정이 있습니다 (main이 서버보다 앞섬). '
                               '충돌 정리로는 고치지 않습니다. GitHub에서 main 기준 새 브랜치를 만들어 '
-                              '6. Update 알림으로 먼저 승인하세요.')
+                              '9. Update 알림으로 먼저 승인하세요.')
         if host.git('merge-base', '--is-ancestor', main, head)[0] == 0:
             raise RepairError('서버에 적용된 결과가 아직 GitHub main에 올라가지 않았습니다 (서버가 앞섬). '
                               '직전 업데이트 완료 알림의 main 업로드 결과를 먼저 확인해야 합니다.')

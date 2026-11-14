@@ -1,3 +1,4 @@
+# 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 """Korean Windows PC and Magic Split health; notifications only, no trading."""
 import fcntl
 import hmac
@@ -159,7 +160,7 @@ def tick(tg,now=None):
     for kind,value,text in alerts(snapshot,now,c):
         reply=tg.send(text)
         _lvl='critical' if (kind=='pc' and value=='offline') else ('info' if value is None else 'warning')
-        _hub_alert('7번 비서',_lvl,text)
+        _hub_alert('8번 비서',_lvl,text)
         if not isinstance(reply,dict) or not reply.get('message_id'):
             continue
         with state() as current:

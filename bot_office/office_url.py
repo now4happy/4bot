@@ -3,6 +3,7 @@
 # FILE: /opt/bot-office/office_url.py   (사무실 v1.8.5 · 2026-11-14)
 # 사무실 주소(office_url) 한 곳 관리 — 지금은 임시 터널 주소(trycloudflare), 나중에 고정 도메인으로 쉽게 이동
 #
+#  · 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 #  · 사무실 v1.8.5 (2026-11-14): 웹 서버 끄기 준비 — WEB_OFF = True
 #      ① tick(): 웹 건강 확인(health_check)·'사무실 접속 안 됨/복구' 알림을 하지 않음 → office_health.json 도 더 안 씀
 #      ② tick(): 임시 터널 주소 추적·갱신·'주소가 바뀌었어요' 알림도 멈춤 (할 일 4 · B안 · 터널 서비스 자체는 안 건드림)
@@ -179,7 +180,7 @@ def health_check(tg, now):
     if not ok and fails >= FAIL_ALERT and not alerted:
         what = {"inside_down": ("사무실 서버(bot-office)가 응답하지 않아요.",
                                 "<code>sudo systemctl restart bot-office</code>"),
-                "no_url": ("저장된 사무실 주소가 없어요.", "7번 비서에 /주소 → 안 나오면 터널 재시작"),
+                "no_url": ("저장된 사무실 주소가 없어요.", "8번 비서에 /주소 → 안 나오면 터널 재시작"),
                 "tunnel_down": ("사무실 서버는 정상인데 바깥 주소(임시 터널)가 끊겼어요.",
                                 "<code>sudo systemctl restart bot-office-tunnel</code>\n▫️ 재시작하면 주소가 바뀌고, 5분 안에 새 주소와 한국 PC 한 줄을 보내 드려요")}[cause]
         msg = (f"🚨 <b>사무실 접속 안 됨</b> (약 {fails * CHECK_EVERY // 60}분째)\n▫️ {what[0]}\n"

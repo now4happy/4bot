@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.3 (2026-11-14): SGOV 메뉴 추가 — 하단 [📈 상황판 | ☰ 메뉴](SGOV) + [🏢 사무실 메뉴](예전 ☰ 메뉴 그대로). 화면·요청은 office_sgov.py
 # 사무실 v1.5.0 (2026-11-09): 브리핑 버튼·명령 제거, 잔액·메뉴 유지
 # 사무실 v1.4.4 (2026-11-07): 하단 메뉴 2개 [🗞 브리핑 | ☰ 메뉴] — 나머지는 ☰ 메뉴 안 · 📊 조회 글자도 메뉴를 보여 줌 (버튼 글자·명령 그대로)
@@ -62,7 +63,7 @@ HELP = ("🏢 <b>사무실 비서 사용법</b>\n"
         "▫️ <b>☰ 메뉴 → 💰 잔액</b> → 회사 선택(한국투자·토스·메리츠·빗썸·전체) : 계좌별 USD/KRW 잔액 (/잔액은 전체)\n"
         "▫️ <b>☰ 메뉴 → 🖥 PC 상태</b> : 한국 PC 연결·매직스플릿 실행 확인\n"
         "▫️ /주소 : 지금 사무실 주소 확인 (/주소변경 으로 고정 도메인 이동)\n"
-        "▫️ 봇 코드 수정은 Claude·GPT 에게 맡겨 GitHub staging 에 올리고 6. Update 에서 승인해요.")
+        "▫️ 봇 코드 수정은 Claude·GPT 에게 맡겨 GitHub staging 에 올리고 9. Update 에서 승인해요.")
 
 
 def load(p, default):
@@ -235,7 +236,7 @@ def handle_message(tg, st, msg):
         office_open(tg); return
     if text.startswith("/"):
         tg.send("모르는 명령이에요. <b>도움말</b>을 보내 보세요."); return
-    tg.send("아래 버튼 메뉴로 써 주세요. 봇 코드 수정은 이제 GitHub staging → 6. Update 승인으로만 해요.", keyboard=MENU_KB)
+    tg.send("아래 버튼 메뉴로 써 주세요. 봇 코드 수정은 이제 GitHub staging → 9. Update 승인으로만 해요.", keyboard=MENU_KB)
 
 
 def handle_callback(tg, st, cb):
@@ -261,7 +262,7 @@ def main():
     offset = st.get("offset")
     print("사무실 비서 대화 담당 시작", flush=True)
     while True:
-        _hub_beat('7번 비서')
+        _hub_beat('8번 비서')
         try:
             import pc_monitor
             pc_monitor.tick(tg)

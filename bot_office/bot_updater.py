@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.5 (2026-11-14): 웹 서버 끄기 준비 — ① 의도적 중단 표시 파일(/var/lib/bot-office/intentional_stop)이 있으면
 #                       사무실 웹 서비스(bot-office.service)는 재시작·정상 확인(healthy)·enable 을 건너뜀 (로그 '의도적 중단, 재시작 건너뜀')
 #                       · 건너뜀은 성공으로 셈 (되돌림 없음) · 완료 알림에 '의도적 중단 — 재시작 건너뜀' 줄 따로 표시
@@ -111,15 +112,15 @@ TG_API = os.environ.get("U_TG_API", "https://api.telegram.org")
 CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
-         "meritz_dca.service": "3번 메리츠 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서",
-         "meritz_laoer.service": "메리츠 SOXL 무매"}
+         "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립", OFFICE_UNIT: "사무실 비서(번호 없음)",
+         "meritz_laoer.service": "7번 메리츠 무매"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
 HUB_DIR = os.path.join(REPO, "alert-hub")
 HUB_VENV = os.path.join(HUB_DIR, ".venv")
 HUB_PY = os.path.join(HUB_VENV, "bin", "python")
 HUB_PIP = os.path.join(HUB_VENV, "bin", "pip")
-HUB_BOT_NAMES = "1번 한투 라오어,2번 토스 스나이퍼,3번 메리츠 적립,4번 빗썸 적립,5번 팬딩 가격표,6번 업데이트 비서:1500,7번 비서"
+HUB_BOT_NAMES = "1번 한투 라오어,2번 토스 스나이퍼,3번 빗썸 적립,4번 팬딩 가격표,6번 메리츠 적립,8번 비서,9번 업데이트 비서:1500"
 OWNER = pwd.getpwuid(os.stat(REPO).st_uid)
 try:   # 2번 스나이퍼 원작자 새 버전 알림 부품 (알림 전용 · 없어도 비서는 정상 작동)
     import sniper_upstream as SU
@@ -277,7 +278,7 @@ def busy_reason(unit, pause_verified=False):
     if unit == "han4384tubot.service" and 925 <= e <= 1605 and now_e.weekday() < 5:
         return "1번 봇 미국 정규장 시간"
     if unit == FANDING_UNIT and now_e.weekday() < 5 and 750 <= e <= 835:
-        return "5번 팬딩 예약주문 마감 전후 (08:30 ET 전후)"
+        return "4번 팬딩 예약주문 마감 전후 (08:30 ET 전후)"
     return ""
  
  
@@ -593,8 +594,8 @@ def offer(st, br, sha, live=None):
 STATUS_FILE = "STATUS.md"
 SNIPER_TIERS_FILE = "sniper_tiers.json"
 NEED_FILE = "need.json"
-EXTRA_UNITS = {SECRETARY_UNIT: "7번 비서(브리핑·PC감시)", FANDING_UNIT: "5번 팬딩 가격표", "bot-office-tunnel.service": "사무실 터널",
-               SELF_UNIT: "6번 업데이트 비서"}
+EXTRA_UNITS = {SECRETARY_UNIT: "8번 비서(브리핑·PC감시)", FANDING_UNIT: "4번 팬딩 가격표", "bot-office-tunnel.service": "사무실 터널",
+               SELF_UNIT: "9번 업데이트 비서"}
 _CL_RE = re.compile(r"^## (\S+) · ([\d-]+ [\d:]+) \(KST\)\n((?:- .*\n?)*)", re.M)
 
 
@@ -678,7 +679,7 @@ def build_status(reason):
     L += ["", "## AI·사람 작업 순서 (요약)", "",
           "1. 이 파일과 START.md 를 먼저 읽는다. 위 표가 서버의 실제 상태다 (다른 문서의 '현재 상태'보다 우선).",
           "2. 고칠 파일은 **main 의 최신본**을 받아서 고친다 (기억·예전 대화의 파일로 고치지 않는다).",
-          "3. 고친 파일은 staging 에 올리고 6. Update 에서 승인한다. 예전 파일로 덮어쓰면 승인 알림에 🚨 경고가 뜬다.",
+          "3. 고친 파일은 staging 에 올리고 9. Update 에서 승인한다. 예전 파일로 덮어쓰면 승인 알림에 🚨 경고가 뜬다.",
           "4. 작업 기록은 docs/log/날짜_AI이름_작업.md 새 파일로 남긴다 (공용 문서를 여럿이 고치지 않는다).", ""]
     return "\n".join(L)
 
@@ -1034,7 +1035,7 @@ def apply(st, key):
                 pause_verified.add(unit)
     busy = [f"{NAMES.get(u, u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
     if {os.path.basename(f) for f in units.get(OFFICE_UNIT, [])} & set(OFFICE_EXTRA[FANDING_UNIT]) and (r := busy_reason(FANDING_UNIT)):
-        busy.append("5번 팬딩: " + r)
+        busy.append("4번 팬딩: " + r)
     if busy:
         return say("⏸ <b>지금은 적용하지 않았습니다</b>\n▫️ " + "\n▫️ ".join(esc(b) for b in busy) + "\n▫️ 나중에 같은 알림의 ✅를 다시 눌러 주세요.",
                    [[{"text": "✅ 다시 시도", "callback_data": f"up:{key}"}]] +
@@ -1441,7 +1442,7 @@ def office_beat_proxy(every=60.0):
         with opener.open(OFFICE_HEALTH_URL, timeout=3) as r:
             ok = r.status == 200
         if ok:
-            _hub_beat('8번 사무실 비서')
+            _hub_beat('사무실 비서(번호 없음)')
     except Exception:
         pass
 
@@ -1467,7 +1468,7 @@ def main():
     last = 0.0
     offset = st.get("offset")
     while True:
-        _hub_beat('6번 업데이트 비서')
+        _hub_beat('9번 업데이트 비서')
         office_beat_proxy()
         if time.time() - last >= CHECK_EVERY:
             last = time.time()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_vNEXT)
+# 사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
 # 1.2.0: 매매 규칙 분석용 기록 시작 — 가격표의 모든 칸(잔금·사이클 시작$·실현수익 등)과 주문 결과를
@@ -1937,7 +1938,7 @@ def auto_fx_before_alert(st, sheet, now=None):
     replay("auto_fx", "ok" if r["result"] == "ok" else ("skipped" if r["result"] in ("no_gap", "unknown", "outside_hours") else "failed"),
            r["result"], event_type="external_call" if r["result"] in ("ok", "uncertain") else "decision", sheet=date, when="before_alert")
     if r["result"] in ("stop", "uncertain", "error"):
-        _hub_alert('5번 팬딩 가격표', 'warning', "P 자동환전 " + r["result"] + " · " + date)
+        _hub_alert('4번 팬딩 가격표', 'warning', "P 자동환전 " + r["result"] + " · " + date)
     return r["lines"]
 
 
@@ -2092,7 +2093,7 @@ def _auto_rfx_run(tg, m, key, amount, est, need):
     after = account_snapshot(m)
     text = "\n".join(fx_result_lines(f"🅿 ✅ <b>P 역자동환전 완료</b> · {key} 회차", amount, info["res"], info["rate"], after,
                                      krw_label="입금 원화") + [base])
-    tg.send(text); _hub_alert('5번 팬딩 가격표', 'info', text)
+    tg.send(text); _hub_alert('4번 팬딩 가격표', 'info', text)
     return "ok"
 
 
@@ -2136,7 +2137,7 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>", st=N
     sheet["notice_pending"] = not bool(sheet["msg_id"])
     if not sheet["notice_pending"]:
         sheet["notice_sent_at"] = now_kst().isoformat()
-        _hub_alert('5번 팬딩 가격표','info',text)
+        _hub_alert('4번 팬딩 가격표','info',text)
     return not sheet["notice_pending"]
 
 
@@ -2184,7 +2185,7 @@ def process_inbox(tg):
             print(f"가격표 처리 오류({n}번째):", type(e).__name__, e, flush=True)
             if n == 1 and meta.get("mode") != "history":
                 tg.send("⚠️ <b>팬딩 서버 판독 단계 실패</b>\n이미지 수신은 완료됐지만 AI 처리 실패. 2분 뒤 재시도합니다. /판독 · /진단 확인")
-                _hub_alert('5번 팬딩 가격표','warning','팬딩 서버 판독 단계 실패: 이미지 수신 완료, AI 처리 실패, 2분 뒤 재시도')
+                _hub_alert('4번 팬딩 가격표','warning','팬딩 서버 판독 단계 실패: 이미지 수신 완료, AI 처리 실패, 2분 뒤 재시도')
             if n < 5:                                 # 2분 뒤 다시 (Gemini 일시 장애 대비)
                 meta.update(tries=n, retry_at=time.time() + 120, last_error=str(e)[:200])
                 mf.write_text(json.dumps(meta, ensure_ascii=False))
@@ -2193,7 +2194,7 @@ def process_inbox(tg):
             if meta.get("mode") != "history":
                 tg.send(f"🚨 <b>팬딩 가격표 처리 실패</b> (5번 시도)\n{html.escape(str(e))[:300]}\n"
                         "윈도우 PC에서 <code>py fanding_fetch.py send</code> 로 다시 보내거나 가격표를 직접 확인해 주세요.")
-                _hub_alert('5번 팬딩 가격표','critical','팬딩 가격표 처리 실패 (5번 시도)')
+                _hub_alert('4번 팬딩 가격표','critical','팬딩 가격표 처리 실패 (5번 시도)')
         f.unlink(missing_ok=True)
         mf.unlink(missing_ok=True)
         if meta.get("mode") != "history":
@@ -2616,7 +2617,7 @@ def loop():
             tg.send(f"👋 <b>팬딩 봇 연결 완료</b> (v{VERSION})\n앞으로 팬딩 가격표 알림·주문 버튼은 여기로 와요.\n" + HELP_TEXT)
             save(HOME / "tg_offset.json", {"hello": True})
     while True:
-        _hub_beat('5번 팬딩 가격표')
+        _hub_beat('4번 팬딩 가격표')
         try:
             process_inbox(tg)
             recovery_tick(tg)

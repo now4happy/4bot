@@ -2,6 +2,7 @@
 # =====================================================================
 # FILE: bot_office/sniper_upstream.py   (업데이트 비서 부품 · 2번 스나이퍼 원작자 새 버전 '알림 전용')
 #
+#  사무실 vNEXT (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 #  사무실 v1.5.3 (2026-11-10): 매일 09:02 자동 확인 기본 꺼짐 (U_SNIPER_AUTO=1일 때만) — 원작 체크는 Muse 일일 체크로 이관 · 수동 '원작 확인'(force=True)은 그대로
 #  사무실 v1.0.49 (2026-10-28): 알림 전용으로 다시 켬 — 자동 합치기·자동 업로드 없음
 #   · 하루 1번(아침 브리핑 직후 09:02 KST) 원작 저장소(pipios4006-boop/pipiosToss_bot) 확인 · 6. Update 에 '원작 확인'이면 즉시
@@ -172,7 +173,7 @@ def show(u, st, key):
     sl = _slot(st)
     o = sl["offers"].get(key)
     if not o:
-        return u.say("⚠️ 이 원작 버전 정보를 찾지 못했습니다. 6. Update 에 '원작 확인'이라고 보내 주세요.")
+        return u.say("⚠️ 이 원작 버전 정보를 찾지 못했습니다. 9. Update 에 '원작 확인'이라고 보내 주세요.")
     base = _base(sl)
     rc, log = _g("log", "--format=■ %h %cd", "--date=format-local:%m-%d %H:%M", "--name-only", "-n", "15", f"{base}..{o['sha']}")
     if rc:
@@ -191,10 +192,10 @@ def merge(u, st, key):
             return u.say("⚠️ 되돌릴 이전 기준이 없습니다.")
         sl["base"], sl["prev_base"] = sl["prev_base"], ""
         sl["last_day"] = ""
-        return u.say(f"↩️ 기준을 <code>{sl['base'][:7]}</code> 로 되돌렸습니다. 6. Update 에 '원작 확인'을 보내면 다시 알려 드려요.")
+        return u.say(f"↩️ 기준을 <code>{sl['base'][:7]}</code> 로 되돌렸습니다. 9. Update 에 '원작 확인'을 보내면 다시 알려 드려요.")
     o = sl["offers"].get(key)
     if not o:
-        return u.say("⚠️ 이 원작 버전 정보를 찾지 못했습니다. 6. Update 에 '원작 확인'이라고 보내 주세요.")
+        return u.say("⚠️ 이 원작 버전 정보를 찾지 못했습니다. 9. Update 에 '원작 확인'이라고 보내 주세요.")
     sha = o["sha"]
     sl["prev_base"], sl["base"] = _base(sl), sha
     sl["offers"].pop(key, None)
