@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-14 08:53 (KST) · 계기: 업데이트 적용 (staging: meritz_dca v1.2.5: 시세 0 고침 (다음 거래소 조회) + SGOV 환율 캐시 폴백 (방: 3. 미국주식 적립))
+- 갱신: 2026-11-14 09:23 (KST) · 계기: 업데이트 적용 (staging: 자동주문 모드 A를 알림 30분 뒤로 (fanding_trade v1.5.8))
 
 ## 봇별 현재 상태
 
@@ -13,13 +13,13 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-13 15:23 KST부터) | v1.2.7 | 2026-11-13 15:23 | sniper: plugin_updater commits synced files after direct ups |
 | 3번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-14 08:52 KST부터) | v1.2.5 | 2026-11-14 08:53 | meritz_dca v1.2.5: 시세 0 고침 (다음 거래소 조회) + SGOV 환율 캐시 폴백 (방: 3 |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-12 15:28 KST부터) | v4.3.3 | 2026-11-01 14:58 | feat: alert-hub 연동 2차 — 매매 봇 자율 알림 |
-| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-13 17:15 KST부터) | v1.8.1 | 2026-11-13 17:43 | 업데이터 옛 브랜치 되풀이 방지 (bot_updater vNEXT) (방: 포트폴리오) |
+| 5번 사무실 비서 | `bot-office` | 🟢 실행 중 (11-14 09:23 KST부터) | v1.8.2 | 2026-11-14 09:23 | 자동주문 모드 A를 알림 30분 뒤로 (fanding_trade v1.5.8) |
 | 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.2 | 2026-11-08 10:11 | 메리츠 무매 평단 조절 추가 meritz_laoer v1.0.2 |
 
 ## 사무실 상시 서비스
 
 - 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-13 17:16 KST부터)
-- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-12 15:28 KST부터)
+- 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-14 09:23 KST부터)
 - 사무실 터널 `bot-office-tunnel`: ⚪ 꺼짐
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-13 17:43 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
@@ -27,6 +27,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-14 09:23 · 5번 사무실 비서 v1.8.2 · fanding_trade.py · 자동주문 모드 A를 알림 30분 뒤로 (fanding_trade v1.5.8)
 - 2026-11-14 08:53 · 3번 메리츠 적립 v1.2.5 · meritz_api.py, sgov.py, t_core.py · meritz_dca v1.2.5: 시세 0 고침 (다음 거래소 조회) + SGOV 환율 캐시 폴백 (방: 3
 - 2026-11-13 17:43 · 5번 사무실 비서 v1.8.1 · bot_updater.py · 업데이터 옛 브랜치 되풀이 방지 (bot_updater vNEXT) (방: 포트폴리오)
 - 2026-11-13 17:16 · 5번 사무실 비서 v1.8.0 · bot_updater.py, collect_inventory.py, deployment_control.py, · 메리츠 적립봇을 3번으로 (toss_dca 삭제, 표시·서비스·브리핑 정리)
@@ -36,7 +37,6 @@
 - 2026-11-13 16:18 · 5번 사무실 비서 v1.7.8 · office_briefing.py · office_briefing: 메리츠 4번에 SGOV 다음 회차 줄 추가, 매수 3거래일 전부터 표시 (방:
 - 2026-11-13 15:57 · 3번 메리츠 적립 v1.2.2 · main.py, t_core.py · meritz_dca v1.2.2: 시드 설정을 2개 메뉴로 나눔 (방: 3. 미국주식 적립)
 - 2026-11-13 15:53 · 3번 메리츠 적립 v1.2.1 · t_core.py · meritz_dca v1.2.1: 하단 키보드는 3개 메뉴만 (방: 3. 미국주식 적립)
-- 2026-11-13 15:48 · 3번 메리츠 적립 v1.2.0 · main.py, sgov.py, t_core.py, t_ui.py · meritz_dca v1.2.0: 하단 고정 메뉴·자금 패널·시드 설정·진행률 그래프 (방: 3. 미국주식 
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
