@@ -3,24 +3,24 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-15 13:49 (KST) · 계기: 업데이트 적용 (staging: 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영 점검 v2))
+- 갱신: 2026-11-16 06:10 (KST) · 계기: 매일 점검
 
 ## 봇별 현재 상태
 
 | 봇 | 서비스 | 상태 | 버전 | 마지막 적용 | 내용 |
 |---|---|---|---|---|---|
-| 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-12 15:28 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
-| 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-13 15:23 KST부터) | v1.2.7 | 2026-11-13 15:23 | sniper: plugin_updater commits synced files after direct ups |
-| 6번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-14 13:56 KST부터) | v1.2.8 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
-| 3번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-14 14:48 KST부터) | v4.3.6 | 2026-11-14 14:48 | bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황 |
-| 7번 메리츠 무매 | `meritz_laoer` | 🟢 실행 중 (11-14 13:56 KST부터) | v1.0.4 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
+| 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
+| 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.2.7 | 2026-11-13 15:23 | sniper: plugin_updater commits synced files after direct ups |
+| 6번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.2.8 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
+| 3번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-15 14:21 KST부터) | v4.3.6 | 2026-11-14 14:48 | bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황 |
+| 7번 메리츠 무매 | `meritz_laoer` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.0.4 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
 | 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 📁 파일 묶음 | v1.8.8 | 2026-11-15 13:49 | 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영 |
 
 ## 사무실 상시 서비스
 
-- 8번 비서(SGOV) `bot-office-secretary`: 🟢 실행 중 (11-14 14:21 KST부터)
-- 4번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-14 13:57 KST부터)
-- 9번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-14 14:21 KST부터)
+- 8번 비서(SGOV) `bot-office-secretary`: 🟢 실행 중 (11-15 14:21 KST부터)
+- 4번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-15 14:21 KST부터)
+- 9번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-15 16:17 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
 - 디스크 사용: 40% (남은 12.4GB)
 
