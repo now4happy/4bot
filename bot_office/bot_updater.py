@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT (2026-11-15): 한 달 무인 운영 대비 — ① 매일 06:10 STATUS 기록 때 대상 서비스·상시 서비스의 실행(is-active)·부팅 자동시작(is-enabled)을 확인해
+# 사무실 v1.8.8 (2026-11-15): 한 달 무인 운영 대비 — ① 매일 06:10 STATUS 기록 때 대상 서비스·상시 서비스의 실행(is-active)·부팅 자동시작(is-enabled)을 확인해
 #                       문제가 있으면 8번 방(alert-hub 긴급)으로 즉시 알림 ② STATUS 기록이 같은 이유로 이틀 연속 건너뛰어지면 하루 1번 긴급 알림
 #                       ③ 서버가 GitHub main 보다 앞선 커밋이 2번 원작 자동 동기화(sniper: upstream … direct sync)뿐이고 staging 대기도 없으면 main·staging 에 그대로 올림(빨리감기만, 강제 없음)
 #                       ④ alert-hub 설치 판정에서 폐기된 watchdog cron 조건 제거 · 설치 cron 에 watchdog 줄 안 씀 ⑤ captures/ 브랜치는 업데이트 알림 대상에서 제외
@@ -1425,7 +1425,7 @@ def _hub_cron_present():
 
 
 def _hub_installed():
-    # vNEXT: watchdog 폐기(2026-11-13) 뒤로는 cron 의 watchdog 줄을 설치 조건으로 보지 않는다
+    # v1.8.8: watchdog 폐기(2026-11-13) 뒤로는 cron 의 watchdog 줄을 설치 조건으로 보지 않는다
     #        (예전 조건이면 cron 을 지운 서버에서 업데이터가 시작할 때마다 재설치·테스트 메시지·watchdog 줄 재생성)
     return (os.path.isfile(HUB_PY)
             and os.path.isfile(os.path.join(HUB_DIR, ".env")))
@@ -1485,7 +1485,7 @@ def hub_install():
             briefing = "0 23 * * *"
         else:
             briefing = None
-        cron_lines = ["# alert-hub — watchdog 줄 없음 (2026-11-13 폐기, vNEXT)"]
+        cron_lines = ["# alert-hub — watchdog 줄 없음 (2026-11-13 폐기, v1.8.8)"]
         if briefing:
             cron_lines.append(briefing + " " + OWNER.pw_name + " cd " + HUB_DIR + " && .venv/bin/python -m alert_hub briefing >> data/briefing.log 2>&1")
         try:

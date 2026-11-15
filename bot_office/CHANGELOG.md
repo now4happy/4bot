@@ -1,4 +1,9 @@
-# 사무실 비서(번호 없음) 변경 기록
+# 사무실 파일(bot_office) 변경 기록
+
+## v1.8.8 · 2026-11-15 13:49 (KST)
+- 파일: bot_updater.py
+- 내용: 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영 점검 v2)
+- 브랜치: staging
 
 ## v1.8.7 · 2026-11-14 14:21 (KST)
 - 파일: board.html, bot_updater.py, login.html, office_board.py, office_secretary.py, office_sgov.py, office_url.py, pc_monitor.py, server.py, sniper_picture.html, test_asset_board.py, thought_mindmap.html
