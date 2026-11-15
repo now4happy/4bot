@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-15): 한 달 무인 운영 대비 — ① 매일 06:10 STATUS 기록 때 대상 서비스·상시 서비스의 실행(is-active)·부팅 자동시작(is-enabled)을 확인해
+#                       문제가 있으면 8번 방(alert-hub 긴급)으로 즉시 알림 ② STATUS 기록이 같은 이유로 이틀 연속 건너뛰어지면 하루 1번 긴급 알림
+#                       ③ 서버가 GitHub main 보다 앞선 커밋이 2번 원작 자동 동기화(sniper: upstream … direct sync)뿐이고 staging 대기도 없으면 main·staging 에 그대로 올림(빨리감기만, 강제 없음)
+#                       ④ alert-hub 설치 판정에서 폐기된 watchdog cron 조건 제거 · 설치 cron 에 watchdog 줄 안 씀 ⑤ captures/ 브랜치는 업데이트 알림 대상에서 제외
+#                       · 전략·종목·금액·enabled·승인·적용 흐름 변경 없음
 # 사무실 v1.8.7 (2026-11-14): 웹 사무실 완전 제거 — 웹 서비스 재시작·의도적 중단 건너뜀·웹 healthz 대리 신호·터널 상태 줄 삭제,
 #                       bot_office/ 분류 뿌리는 서비스가 아닌 폴더 키 OFFICE_KEY('bot-office')로 유지 (태그·CHANGELOG·/opt/bot-office 복사 그대로,
 #                       재시작 없음 · 비서·팬딩은 OFFICE_EXTRA 로만 재시작) · 8번 비서 표시 '8번 비서(SGOV)' · 전략·종목·금액·enabled 변경 없음
@@ -299,6 +304,9 @@ def gate_installed(unit):
 
 
 # ---------------------------------------------------------------- 새 업데이트 찾기
+CAPTURE_PREFIX = "captures/"
+
+
 def scan(st, force=False):
     """새 업데이트 찾기 → 이번에 보낸 알림 개수 (GitHub 확인 실패면 None).
     v1.8.1: 대기 브랜치 목록을 먼저 다 모은 뒤 알림 — 옛 브랜치 안내(superseded)가 다른 대기 브랜치도 볼 수 있게. 감지 조건은 그대로."""
@@ -316,6 +324,8 @@ def scan(st, force=False):
         br = ref.split("/", 1)[1] if "/" in ref else ref
         if br in ("main", "HEAD") or ref == "origin":
             continue
+        if br.startswith(CAPTURE_PREFIX):
+            continue   # 캡처·참고 파일 브랜치(AI 작업 보드 B안)는 업데이트가 아님 — 알림·옛 브랜치 판정에서 뺌
         if git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue   # 이미 반영된 브랜치
         live[br] = sha
@@ -385,7 +395,7 @@ def live_branches():
     for line in refs.splitlines():
         ref, sha = line.split()
         br = ref.split("/", 1)[1] if "/" in ref else ref
-        if br in ("main", "HEAD") or ref == "origin":
+        if br in ("main", "HEAD") or ref == "origin" or br.startswith(CAPTURE_PREFIX):
             continue
         if git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue
@@ -684,7 +694,7 @@ def build_status(reason):
     for line in refs.splitlines():
         ref, sha = (line.split() + [""])[:2]
         br = ref.split("/", 1)[1] if "/" in ref else ref
-        if not sha or br in ("main", "HEAD") or ref == "origin" or git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
+        if not sha or br in ("main", "HEAD") or ref == "origin" or br.startswith(CAPTURE_PREFIX) or git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue
         _, fs = git("diff", "--name-only", f"HEAD...{sha}")
         fs = [x for x in fs.splitlines() if x.strip()]
@@ -794,18 +804,103 @@ def write_status(reason):
     return True
 
 
+HEALTH_OK_ENABLED = ("enabled", "enabled-runtime", "static", "generated", "indirect", "alias")
+SYNC_SUBJ_RE = re.compile(r"^sniper: upstream [0-9a-f]{7,40} direct sync$")   # 2번 plugin_updater 가 남기는 커밋 제목
+
+
+def health_units():
+    """매일 점검할 서비스: 대상 봇 서비스(사무실 폴더 키 제외) + 사무실 상시 서비스"""
+    return [u for u in targets() if u != OFFICE_KEY] + [u for u in EXTRA_UNITS if u not in targets()]
+
+
+def health_check(st, today):
+    """실행·부팅 자동시작 확인 → 문제 목록. 문제가 있으면 8번 방(alert-hub 긴급)·9번 방으로 알림 (같은 날 같은 내용은 1번)"""
+    bad = []
+    for u in health_units():
+        a = sh(SYSTEMCTL, "is-active", u)[1].strip()
+        e = sh(SYSTEMCTL, "is-enabled", u)[1].strip()
+        name = EXTRA_UNITS.get(u) or uname(u)
+        if a != "active":
+            bad.append(f"{name} ({u}): 실행 상태 {a or '확인 불가'}")
+        if e not in HEALTH_OK_ENABLED:
+            bad.append(f"{name} ({u}): 부팅 자동시작 {e or '확인 불가'}")
+    sig = today + "|" + "|".join(bad)
+    if bad and st.get("health_sig") != sig:
+        st["health_sig"] = sig
+        text = "🚨 [9번 업데이트 비서] 매일 점검 — 서비스 확인 필요\n" + "\n".join("▫️ " + b for b in bad)
+        _hub_alert("9번 업데이트 비서", "critical", text)
+        say(esc(text))
+    if not bad:
+        st.pop("health_sig", None)
+    return bad
+
+
+def _only_sync_ahead(main, head):
+    """서버 HEAD 가 origin/main 의 빨리감기이고, 앞선 커밋이 전부 2번 원작 자동 동기화 커밋이면 True"""
+    if not main or main == head or git("merge-base", "--is-ancestor", main, head)[0] != 0:
+        return False
+    rc, subj = git("log", "--format=%s", main + ".." + head)
+    lines = [x for x in subj.splitlines() if x.strip()]
+    return rc == 0 and bool(lines) and all(SYNC_SUBJ_RE.match(x.strip()) for x in lines)
+
+
+def status_skip_watch(st, today, result):
+    """STATUS 기록을 건너뛴 이유가 이틀 연속 같으면 하루 1번 긴급 알림 (무인 기간에 STATUS 가 조용히 멈추지 않게)"""
+    if not (isinstance(result, str) and result.endswith("건너뜀")):
+        st.pop("status_skip", None)
+        return False
+    sk = st.get("status_skip") or {}
+    if sk.get("reason") != result:
+        st["status_skip"] = {"reason": result, "since": today}
+        return False
+    if sk.get("since", today) >= today or sk.get("alerted") == today:
+        return False
+    sk["alerted"] = today
+    st["status_skip"] = sk
+    text = ("⚠️ [9번 업데이트 비서] STATUS.md 기록이 " + sk["since"] + " 부터 멈춰 있습니다\n"
+            "▫️ 이유: " + result + "\n▫️ 봇 매매와는 별개입니다. 서버·GitHub 상태 확인이 필요합니다.")
+    _hub_alert("9번 업데이트 비서", "critical", text)
+    say(esc(text))
+    return True
+
+
 def status_daily(st, force=False):
-    """하루 1번(06:10 KST 이후) STATUS.md 갱신 → main·staging 업로드. 대기 중인 업로드가 있으면 다음 날로 (staging 을 건드리지 않음)"""
+    """하루 1번(06:10 KST 이후) STATUS.md 갱신 → main·staging 업로드. 대기 중인 업로드가 있으면 다음 날로 (staging 을 건드리지 않음)
+    + 매일 서비스 점검(health_check)과 기록 건너뜀 감시(status_skip_watch) — 수동 기록(force)에서는 하지 않음"""
     now = datetime.now(KST)
     today = now.strftime("%Y-%m-%d")
     if not force and (now.hour * 100 + now.minute < 610 or st.get("status_day") == today):
         return None
     st["status_day"] = today
+    if not force:
+        try:
+            health_check(st, today)
+        except Exception as e:
+            print("매일 점검 오류:", type(e).__name__, e, flush=True)
+    r = _status_daily_write(st, force)
+    if not force:
+        try:
+            status_skip_watch(st, today, r)
+        except Exception as e:
+            print("기록 건너뜀 감시 오류:", type(e).__name__, e, flush=True)
+    return r
+
+
+def _status_daily_write(st, force=False):
     if _dirty_code_files():
         return "서버에 저장 안 된 변경이 있어 건너뜀"
     _, head = git("rev-parse", "HEAD")
     rc_m, main = git("rev-parse", "origin/main")
     rc_s, stg = git("rev-parse", "origin/staging")
+    if rc_m == 0 and main != head and (rc_s != 0 or stg == main) and _only_sync_ahead(main, head):
+        # 2번 원작 자동 동기화 커밋만 앞서 있음 → 빨리감기로 main·staging 에 올림 (강제 없음 · 실패하면 아래에서 건너뜀으로 끝남)
+        rc_p, out_p = git("push", "-q", "origin", "HEAD:main", "HEAD:staging")
+        if rc_p == 0:
+            git("fetch", "-q", "origin")
+            rc_m, main = git("rev-parse", "origin/main")
+            rc_s, stg = git("rev-parse", "origin/staging")
+        else:
+            print("원작 동기화 커밋 업로드 실패:", SECRET_RE.sub("***", out_p[-160:]), flush=True)
     if rc_m or main != head:
         return "서버와 GitHub main 이 달라 건너뜀"
     if rc_s == 0 and stg != head:
@@ -1330,9 +1425,10 @@ def _hub_cron_present():
 
 
 def _hub_installed():
+    # vNEXT: watchdog 폐기(2026-11-13) 뒤로는 cron 의 watchdog 줄을 설치 조건으로 보지 않는다
+    #        (예전 조건이면 cron 을 지운 서버에서 업데이터가 시작할 때마다 재설치·테스트 메시지·watchdog 줄 재생성)
     return (os.path.isfile(HUB_PY)
-            and os.path.isfile(os.path.join(HUB_DIR, ".env"))
-            and _hub_cron_present())
+            and os.path.isfile(os.path.join(HUB_DIR, ".env")))
 
 
 def hub_install():
@@ -1389,9 +1485,7 @@ def hub_install():
             briefing = "0 23 * * *"
         else:
             briefing = None
-        cron_lines = [
-            "*/10 * * * * " + OWNER.pw_name + " cd " + HUB_DIR + " && .venv/bin/python -m alert_hub watchdog >> data/watchdog.log 2>&1",
-        ]
+        cron_lines = ["# alert-hub — watchdog 줄 없음 (2026-11-13 폐기, vNEXT)"]
         if briefing:
             cron_lines.append(briefing + " " + OWNER.pw_name + " cd " + HUB_DIR + " && .venv/bin/python -m alert_hub briefing >> data/briefing.log 2>&1")
         try:
