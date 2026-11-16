@@ -42,6 +42,7 @@
 - 사무실 v1.7.6 (2026-11-13): 토스 키 읽기 폴백 — toss_dca_bot 삭제 뒤 스나이퍼 .env에서 읽음
 - 사무실 v1.7.4 (2026-11-13): 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 — 바벨 모드(BARBELL_60_30_10)일 때만 need.json 토스 계좌에 '바벨 씨드' 줄을 넣는다. need = 기준시드 − SOXL평가액(보유 주수 × 현재가), holding = 토스 USD 매수가능금액, 부족액 = max(0, need − holding). 바벨 OFF·씨드 없음·SOXL 조회 실패면 줄 없음 (합산 제외). 일일 매수 필요액 계산은 그대로.
 - 사무실 v1.7.8 (2026-11-13): 메리츠 4번에 SGOV 다음 회차 줄 추가 — 매수 3거래일(미국장) 전부터 보여준다. need = 다음 회차 금액(1회차면 first_tranche_usd, 이후 tranche_usd), holding = 메리츠 USD 추정잔고, 부족액 = max(0, need − holding). SGOV OFF·회차 없음·예정일 없음·3거래일 밖이면 줄 없음. 4번 적립(NKE/QLD) need는 그대로.
+- 사무실 vNEXT (2026-11-16): 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX) — QLD가 나스닥(OQ)·뉴욕(NY)에 없어 0으로 읽혀 need가 null(확인 불가)이 되던 문제. 첫 번째 0보다 큰 시세를 쓴다 (봇 v1.2.5와 같은 방식). 전부 0이면 그대로 null.
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
@@ -1440,8 +1441,20 @@ def _meritz_dca_need(now=None):
             if not stock.get("enabled",True) or stock.get("s_mode","buy_1") not in ("buy_1","buy_2"): continue
             if stock.get("last_exec_date") == now.strftime("%Y-%m-%d"): continue
             # Use the broker price and ledger cost basis, not the fanding sheet.
-            rows = m._call("GET","/market/v1/overseas/prices",{"mrkt_div_code":"OV","mrkt_cls_code":"NY" if sym=="NKE" else "OQ","iscd":sym,"dely_rltm_cls_code":"0"})
-            price = balance_value((rows.get("data") or {}).get("prpr"))
+            # vNEXT: QLD는 나스닥(OQ)·뉴욕(NY)에 없어 0으로 읽혀 need가 null이 됐다.
+            # OQ→NY→AX 순서로 첫 번째 0보다 큰 시세를 쓴다 (봇 v1.2.5와 같은 방식).
+            price = 0.0
+            for _cls in ("OQ", "NY", "AX"):
+                try:
+                    _rows = m._call("GET", "/market/v1/overseas/prices",
+                                    {"mrkt_div_code": "OV", "mrkt_cls_code": _cls,
+                                     "iscd": sym, "dely_rltm_cls_code": "0"})
+                    _p = balance_value((_rows.get("data") or {}).get("prpr"))
+                except Exception:
+                    continue
+                if _p > 0:
+                    price = _p
+                    break
             if price <= 0: return None
             lg = stock.get("ledger") or {}
             qty = float(lg.get("qty",stock.get("qty",0)) or 0)
