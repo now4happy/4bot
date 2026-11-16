@@ -1,5 +1,10 @@
 # 사무실 파일(bot_office) 변경 기록
 
+## v1.8.9 · 2026-11-16 11:14 (KST)
+- 파일: office_briefing.py
+- 내용: 사무실 vNEXT: 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX)
+- 브랜치: staging
+
 ## v1.8.8 · 2026-11-15 13:49 (KST)
 - 파일: bot_updater.py
 - 내용: 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영 점검 v2)
