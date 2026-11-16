@@ -39,6 +39,13 @@
 /bithumb_laoeo_bot/*
 !/bithumb_laoeo_bot/*.py
 !/bithumb_laoeo_bot/README.md
+
+# 한국단타봇 수집기: 패키지 안 .py만 (테스트·서비스 파일은 올리지 않음)
+!/honginki_collector/
+/honginki_collector/*
+!/honginki_collector/hk_collector/
+/honginki_collector/hk_collector/*
+!/honginki_collector/hk_collector/*.py
 !/bot_office/
 /bot_office/*
 !/bot_office/*.py
