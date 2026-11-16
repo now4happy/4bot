@@ -46,6 +46,9 @@
 !/honginki_collector/hk_collector/
 /honginki_collector/hk_collector/*
 !/honginki_collector/hk_collector/*.py
+!/honginki_collector/hk_bot/
+/honginki_collector/hk_bot/*
+!/honginki_collector/hk_bot/*.py
 !/bot_office/
 /bot_office/*
 !/bot_office/*.py
