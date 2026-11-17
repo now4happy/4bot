@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-17): live-board 브랜치를 업데이트 알림 대상에서 제외 — 보드용 고아 브랜치가 1분마다 커밋을 올려 매번 새 업데이트 알림이 뜨던 폭주 수정 (음수 refspec 가드와 별개로 코드에서도 제외)
 # 사무실 v1.8.8 (2026-11-15): 한 달 무인 운영 대비 — ① 매일 06:10 STATUS 기록 때 대상 서비스·상시 서비스의 실행(is-active)·부팅 자동시작(is-enabled)을 확인해
 #                       문제가 있으면 8번 방(alert-hub 긴급)으로 즉시 알림 ② STATUS 기록이 같은 이유로 이틀 연속 건너뛰어지면 하루 1번 긴급 알림
 #                       ③ 서버가 GitHub main 보다 앞선 커밋이 2번 원작 자동 동기화(sniper: upstream … direct sync)뿐이고 staging 대기도 없으면 main·staging 에 그대로 올림(빨리감기만, 강제 없음)
@@ -305,6 +306,9 @@ def gate_installed(unit):
 
 # ---------------------------------------------------------------- 새 업데이트 찾기
 CAPTURE_PREFIX = "captures/"
+# live-board: 사무실 보드용 live_board.json 전용 고아 브랜치 — 1분마다 커밋이 올라가므로 업데이트가 아님.
+# 음수 refspec 가드와 별개로 코드에서도 제외 (refspec이 빠져도 알림 폭주 재발 방지 · 2026-11-17)
+LIVE_BOARD_BRANCH = "live-board"
 
 
 def scan(st, force=False):
@@ -326,6 +330,8 @@ def scan(st, force=False):
             continue
         if br.startswith(CAPTURE_PREFIX):
             continue   # 캡처·참고 파일 브랜치(AI 작업 보드 B안)는 업데이트가 아님 — 알림·옛 브랜치 판정에서 뺌
+        if br == LIVE_BOARD_BRANCH:
+            continue   # 보드용 고아 브랜치 — 1분마다 커밋이라 매번 새 업데이트로 보임 (알림 폭주 원인)
         if git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue   # 이미 반영된 브랜치
         live[br] = sha
@@ -395,7 +401,7 @@ def live_branches():
     for line in refs.splitlines():
         ref, sha = line.split()
         br = ref.split("/", 1)[1] if "/" in ref else ref
-        if br in ("main", "HEAD") or ref == "origin" or br.startswith(CAPTURE_PREFIX):
+        if br in ("main", "HEAD") or ref == "origin" or br.startswith(CAPTURE_PREFIX) or br == LIVE_BOARD_BRANCH:
             continue
         if git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue
@@ -694,7 +700,7 @@ def build_status(reason):
     for line in refs.splitlines():
         ref, sha = (line.split() + [""])[:2]
         br = ref.split("/", 1)[1] if "/" in ref else ref
-        if not sha or br in ("main", "HEAD") or ref == "origin" or br.startswith(CAPTURE_PREFIX) or git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
+        if not sha or br in ("main", "HEAD") or ref == "origin" or br.startswith(CAPTURE_PREFIX) or br == LIVE_BOARD_BRANCH or git("merge-base", "--is-ancestor", sha, "HEAD")[0] == 0:
             continue
         _, fs = git("diff", "--name-only", f"HEAD...{sha}")
         fs = [x for x in fs.splitlines() if x.strip()]
