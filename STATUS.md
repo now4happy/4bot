@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-17 06:13 (KST) · 계기: 매일 점검
+- 갱신: 2026-11-17 09:44 (KST) · 계기: 업데이트 적용 (staging: meritz_dca_bot v1.2.9: SGOV 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10% + 오래된 FRED 자료 덮지 않기 (방: 3. 미국주식 적립))
 
 ## 봇별 현재 상태
 
@@ -11,7 +11,7 @@
 |---|---|---|---|---|---|
 | 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.2.7 | 2026-11-13 15:23 | sniper: plugin_updater commits synced files after direct ups |
-| 6번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.2.8 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
+| 6번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-17 09:44 KST부터) | v1.2.9 | 2026-11-17 09:44 | meritz_dca_bot v1.2.9: SGOV 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10% + |
 | 3번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-15 14:21 KST부터) | v4.3.6 | 2026-11-14 14:48 | bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황 |
 | 7번 메리츠 무매 | `meritz_laoer` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.0.4 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
 | 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 📁 파일 묶음 | v1.8.9 | 2026-11-16 11:14 | 사무실 vNEXT: 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX) |
@@ -22,10 +22,11 @@
 - 4번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-15 14:21 KST부터)
 - 9번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-15 16:17 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
-- 디스크 사용: 43% (남은 11.8GB)
+- 디스크 사용: 48% (남은 10.7GB)
 
 ## 최근 적용 10건
 
+- 2026-11-17 09:44 · 6번 메리츠 적립 v1.2.9 · sgov.py, t_core.py · meritz_dca_bot v1.2.9: SGOV 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10% +
 - 2026-11-16 11:14 · 사무실 파일(bot_office) v1.8.9 · office_briefing.py · 사무실 vNEXT: 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX)
 - 2026-11-15 13:49 · 사무실 파일(bot_office) v1.8.8 · bot_updater.py · 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영
 - 2026-11-14 14:48 · 3번 빗썸 적립 v4.3.6 · b_core.py, b_ui.py, main.py · bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황
@@ -35,7 +36,6 @@
 - 2026-11-14 13:57 · 7번 메리츠 무매 v1.0.4 · main.py, notifier.py, tg_menu.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
 - 2026-11-14 13:57 · 6번 메리츠 적립 v1.2.8 · t_core.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
 - 2026-11-14 13:57 · 3번 빗썸 적립 v4.3.4 · b_core.py, main.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
-- 2026-11-14 13:30 · 사무실 파일(bot_office) v1.8.5 · bot_updater.py, fanding_direct_upload.py, office_url.py · web-server-off-prep: office health check off, intentional-st
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
