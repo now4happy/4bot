@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-17 09:05:00",
+  "as_of_kst": "2026-11-17 11:50:00",
   "accounts": [
     {
       "name": "토스",
@@ -63,9 +63,9 @@
       "lines": [
         {
           "currency": "USD",
-          "holding": 1277.13,
-          "need": 318.83500000000004,
-          "sufficient": true,
+          "holding": 293.78,
+          "need": 1303.125,
+          "sufficient": false,
           "auto_fx": "unavailable"
         },
         {
@@ -90,6 +90,6 @@
       ]
     }
   ],
-  "total_need_usd": 14121.724999999999,
+  "total_need_usd": 15106.015,
   "total_need_krw": 60000.0
 }

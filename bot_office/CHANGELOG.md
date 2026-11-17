@@ -1,5 +1,10 @@
 # 사무실 파일(bot_office) 변경 기록
 
+## v1.9.0 · 2026-11-17 16:18 (KST)
+- 파일: bot_updater.py, fanding_trade.py, fanding_vault.py
+- 내용: fanding_vault v0.1.1-shadow: 매수 현금 한도 + 8,000 한도 기록 (방: P매매 SOXL 수익금 분리 백테스트)
+- 브랜치: staging
+
 ## v1.8.9 · 2026-11-16 11:14 (KST)
 - 파일: office_briefing.py
 - 내용: 사무실 vNEXT: 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX)
