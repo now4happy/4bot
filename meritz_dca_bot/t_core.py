@@ -23,6 +23,7 @@
 # v1.2.4 (2026-11-13): 관제탑 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
 # v1.2.6 (2026-11-14): 모든 메뉴·화면 버튼을 맨밑 키보드로 (첫 줄 [📈 상황판, ☰ 메뉴]) · 인라인 버튼 안 보냄 · SGOV 메뉴는 비서봇으로.
 # v1.2.7 (2026-11-14): BOT_VERSION만 (SGOV 알림을 4번 방 대신 bridge 알림 파일로 — 내용은 sgov.py·bridge.py, send_panel 은 그대로)
+# v1.2.9 (2026-11-17): BOT_VERSION만 (SGOV 환율 재시도 창 캐시 폴백·시장가 주문 여유 10%·오래된 FRED 자료로 캐시 덮지 않기 — 내용은 sgov.py)
 # v1.2.8 (2026-11-14): 봇 번호 정리 — 알림 허브 이름 HUB_NAME '메리츠 적립' → '6번 메리츠 적립' (매매 동작 변경 없음)
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
@@ -31,7 +32,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.8"
+BOT_VERSION = "v1.2.9"
 BOT_TITLE = "🟦6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
