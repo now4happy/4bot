@@ -81,6 +81,7 @@ from toss_api import (
     TARGET_SYMBOL,
     _NonRetryableApiError,
     generate_client_order_id,
+    resolve_trading_session_date_est,
     safe_float,
     safe_int,
 )
@@ -131,6 +132,8 @@ class SniperL1TrailSlot:
     armed: bool = False
     stepped_125: bool = False
     armed_minute_key: str = ""
+    armed_wall_minute_key: str = ""
+    armed_closed_bar_key: str = ""
     forgiven_ha_minute_key: str = ""
     forgive_count: int = 0
     peak_p: float = 0.0
@@ -147,6 +150,8 @@ class SniperL1TrailSlot:
         self.armed = False
         self.stepped_125 = False
         self.armed_minute_key = ""
+        self.armed_wall_minute_key = ""
+        self.armed_closed_bar_key = ""
         self.forgiven_ha_minute_key = ""
         self.forgive_count = 0
         self.peak_p = 0.0
@@ -195,7 +200,7 @@ class SniperL1TrailSlot:
             )
 
     def refresh_stop_price(self) -> float:
-        # MODIFIED: 스텝 돌파 전 무스탑(0.0) 순수 1분봉 HA 추종 · 돌파 후 보존선/+2% 여유콜백 잠금
+        # MODIFIED [Case 106]: 스텝 돌파 전 무스탑(0.0) · 돌파 후 오직 +1.60% 하드보존선만 잠금(실시간 틱 콜백 가로채기 영구 소각)
         if not self.armed or self.ref_cost <= 0.0:
             self.active_stop_p = 0.0
             return 0.0
@@ -207,20 +212,25 @@ class SniperL1TrailSlot:
         if not self.stepped_125:
             self.active_stop_p = 0.0
             return 0.0
-        pk_gain = ((self.peak_p - self.ref_cost) / self.ref_cost) * 100.0
-        if pk_gain >= SNIPER_L1_TRAIL_BOOST_TIER2_PCT:
-            cb_raw = round(
-                self.peak_p * (1.0 - SNIPER_L1_TRAIL_CB_WIDE_PCT / 100.0), 2
-            )
-            self.active_stop_p = round(max(self.lock_floor_p, cb_raw), 2)
-        else:
-            self.active_stop_p = round(self.lock_floor_p, 2)
+        if SNIPER_L1_TRAIL_CB_WIDE_PCT > 0.0:
+            pk_gain = ((self.peak_p - self.ref_cost) / self.ref_cost) * 100.0
+            if pk_gain >= SNIPER_L1_TRAIL_BOOST_TIER2_PCT:
+                cb_raw = round(
+                    self.peak_p
+                    * (1.0 - SNIPER_L1_TRAIL_CB_WIDE_PCT / 100.0),
+                    2,
+                )
+                self.active_stop_p = round(max(self.lock_floor_p, cb_raw), 2)
+                return self.active_stop_p
+        self.active_stop_p = round(self.lock_floor_p, 2)
         return self.active_stop_p
 
     def release_forgive(self, bad_ha_minute_key: str = "") -> None:
         self.armed = False
         self.stepped_125 = False
         self.armed_minute_key = ""
+        self.armed_wall_minute_key = ""
+        self.armed_closed_bar_key = ""
         self.peak_p = 0.0
         self.lock_floor_p = 0.0
         self.active_stop_p = 0.0
@@ -233,6 +243,8 @@ class SniperL1TrailSlot:
             self.armed = False
             self.stepped_125 = False
             self.armed_minute_key = ""
+            self.armed_wall_minute_key = ""
+            self.armed_closed_bar_key = ""
             self.peak_p = 0.0
             self.lock_floor_p = 0.0
             self.active_stop_p = 0.0
@@ -1122,6 +1134,24 @@ async def _commit_filled_sell_and_reanchor_ledger(
     # MODIFIED [🎯 1 ~ 🎯 4 & Case 19, 59 ~ 91 + 바벨 모드(실현수익 별도 금고 영구 격리 및 0주 졸업 60/30/10 리밸런싱) + 실전 암살자 0주 인계]:
     """
     st = context.ledger.get_state(TARGET_SYMBOL)
+    sess_date_sell = resolve_trading_session_date_est(
+        datetime.now(EST_TZ),
+        last_closing_report_date=str(
+            st.get("last_closing_report_date") or ""
+        ),
+    )
+    if str(st.get("logical_date") or "") < sess_date_sell and hasattr(
+        context.ledger, "rollover_daily_counters_if_needed"
+    ):
+        st = await context.ledger.rollover_daily_counters_if_needed(
+            sess_date_sell
+        )
+        try:
+            await ensure_barbell_ledger(context).rollover_daily_if_needed(
+                sess_date_sell
+            )
+        except Exception:
+            pass
     buckets = buckets_from_dicts(st.get("buckets", []))
     sub_buckets = buckets_from_dicts(st.get("sub_buckets", []))
     fill_p = round(max(0.01, safe_float(avg_fill_price, 0.01)), 4)
@@ -2531,31 +2561,40 @@ def _step_l1_trail_slot_candidate(
     closed_ha_bull: bool,
     qqq_vel_max: float,
     closed_ha_shaved_bull: Optional[bool] = None,
+    cur_bar_min_key: str = "",
 ) -> Tuple[str, bool]:
     """
-    # NEW [Case 99 : 🛡️ ⑥ 하드보존(1%➔1.25%) + 완결 1분봉 HA 음봉 + 콜백 1차 후보 판정기]
+    # MODIFIED [Case 99 & Case 103 : 점화 시 기완결 분봉(armed_closed_bar_key) 3중 분리 락온으로 +1분 오프셋 1초 조기청산 차단]
     반환값: (trigger_code, just_ignited)
     """
     if slot.qty <= 0 or slot.ref_cost <= 0.0 or live_p <= 0.0:
         return "", False
 
     probe_h = max(live_p, safe_float(wick_high_p, 0.0))
+    wall_mk = str(cur_min_key or "").strip()
+    bar_mk = str(cur_bar_min_key or "").strip()
+    c_mk = str(closed_min_key or "").strip()
+    eff_form_mk = bar_mk if (bar_mk and bar_mk > wall_mk) else wall_mk
 
     if not slot.armed:
         if probe_h < slot.arm_100_p - 1e-9:
             return "", False
         if probe_h >= slot.cap_500_p - 1e-9:
             slot.armed = True
-            slot.armed_minute_key = cur_min_key
+            slot.armed_wall_minute_key = wall_mk
+            slot.armed_minute_key = eff_form_mk
+            slot.armed_closed_bar_key = c_mk
             slot.peak_p = probe_h
             slot.stepped_125 = True
             slot.lock_floor_p = slot.lock_125_p
             slot.refresh_stop_price()
             return "TRAIL_CAP_500", True
 
-        # MODIFIED: 점화 시 lock_floor_p=0.0 무스탑 시작 및 엄격 미만(<) 판정으로 자기격발 원천 차단
+        # MODIFIED: 점화 시 기완결 분봉 키를 박제하여 점화봉 마감 전 과거 봉 오격발 원천 차단
         slot.armed = True
-        slot.armed_minute_key = cur_min_key
+        slot.armed_wall_minute_key = wall_mk
+        slot.armed_minute_key = eff_form_mk
+        slot.armed_closed_bar_key = c_mk
         slot.peak_p = max(probe_h, slot.arm_100_p)
         slot.lock_floor_p = 0.0
         slot.stepped_125 = False
@@ -2563,6 +2602,16 @@ def _step_l1_trail_slot_candidate(
         if stop_now > 0.0 and wick_high_p > live_p and live_p < stop_now - 1e-9:
             return "TRAIL_CB_STOP", True
         return "", True
+
+    if (
+        wall_mk
+        and slot.armed_wall_minute_key
+        and wall_mk == slot.armed_wall_minute_key
+    ):
+        if bar_mk and bar_mk > slot.armed_minute_key:
+            slot.armed_minute_key = bar_mk
+        if c_mk and c_mk > slot.armed_closed_bar_key:
+            slot.armed_closed_bar_key = c_mk
 
     slot.peak_p = max(slot.peak_p, probe_h)
     stop_now = slot.refresh_stop_price()
@@ -2573,19 +2622,31 @@ def _step_l1_trail_slot_candidate(
     if stop_now > 0.0 and live_p < stop_now - 1e-9:
         return "TRAIL_CB_STOP", False
 
-    # MODIFIED [Case 103]: 완결 1분봉이 무밑꼬리 강세 HA양봉(eff_shaved_bull)일 때만 패스(홀딩)
+    # MODIFIED [Case 103]: 점화 이후 새로 마감된 완결 1분봉에서만 무밑꼬리 강세 HA양봉 패스/익절 판정
     eff_shaved_bull = (
         bool(closed_ha_bull and closed_ha_shaved_bull)
         if closed_ha_shaved_bull is not None
         else bool(closed_ha_bull)
     )
+    is_post_ignition_closed_bar = bool(
+        bool(c_mk)
+        and bool(slot.armed_minute_key)
+        and (c_mk >= slot.armed_minute_key)
+        and (
+            not slot.armed_closed_bar_key
+            or c_mk > slot.armed_closed_bar_key
+        )
+        and (
+            not slot.armed_wall_minute_key
+            or not wall_mk
+            or wall_mk > slot.armed_wall_minute_key
+        )
+    )
     if (
         closed_ha_ready
         and (not eff_shaved_bull)
-        and bool(closed_min_key)
-        and bool(slot.armed_minute_key)
-        and (closed_min_key >= slot.armed_minute_key)
-        and (closed_min_key != slot.forgiven_ha_minute_key)
+        and is_post_ignition_closed_bar
+        and (c_mk != slot.forgiven_ha_minute_key)
         and (qqq_vel_max < SNIPER_L1_TRAIL_QQQ_BYPASS_PCT)
     ):
         return "TRAIL_CLOSED_HA_RED", False
@@ -2846,6 +2907,15 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             closed_shaved_bull,
             qqq_vel_max,
         ) = await _get_closed_1m_ha_and_qqq_snapshot(context, live_p, dt_now)
+        raw_c_map = getattr(context, "candle_metrics_cache", None)
+        cur_bar_mk = (
+            str(
+                (raw_c_map.get(TARGET_SYMBOL) or {}).get("cur_bar_minute_key")
+                or ""
+            ).strip()
+            if isinstance(raw_c_map, dict)
+            else ""
+        )
         if bool(sell_eval.get("hit_wma_grad")):
             main_slot.full_reset()
         elif main_slot.qty > 0:
@@ -2859,15 +2929,17 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 closed_ha_bull=closed_bull,
                 qqq_vel_max=qqq_vel_max,
                 closed_ha_shaved_bull=closed_shaved_bull,
+                cur_bar_min_key=cur_bar_mk,
             )
             if ign_m:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [SOXL 본 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s · 강세HA양봉 홀딩 추적 개시",
+                    "🔥 [SOXL 본 1층 완결1분HA 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(스텝락=$%.2f) · 점화분=%s(기완결=%s) · 강세HA양봉 홀딩 추적 개시",
                     main_slot.ref_cost,
                     main_slot.arm_100_p,
                     main_slot.lock_125_p,
                     main_slot.armed_minute_key,
+                    main_slot.armed_closed_bar_key or "-",
                 )
 
         if bool(sell_eval.get("hit_sub_wma_grad")):
@@ -2883,6 +2955,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                 closed_ha_bull=closed_bull,
                 qqq_vel_max=qqq_vel_max,
                 closed_ha_shaved_bull=closed_shaved_bull,
+                cur_bar_min_key=cur_bar_mk,
             )
             if ign_s:
                 just_ignited_any = True
@@ -2999,7 +3072,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     m_eff_fl = max(eff_m_lock, mkt_fl)
                 else:
                     mkt_fl = math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
-                    m_eff_fl = max(main_slot.arm_100_p, mkt_fl)
+                    m_eff_fl = max(eff_m_lock, mkt_fl)
                 sold_idx_set.add(0)
                 floor_cands.append(m_eff_fl)
                 fired_main_trail = True
@@ -3068,7 +3141,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
                     s_mkt_fl = (
                         math.floor((fresh_live_p + 1e-9) * 100.0) / 100.0
                     )
-                    s_eff_fl = max(sub_slot.arm_100_p, s_mkt_fl)
+                    s_eff_fl = max(eff_s_lock, s_mkt_fl)
                 sub_sold_idx_set.add(0)
                 floor_cands.append(s_eff_fl)
                 fired_sub_trail = True
