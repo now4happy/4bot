@@ -2385,6 +2385,12 @@ def handle_image(tg, data, sha, meta):
         head = "📋 <b>팬딩 가격표가 바뀌었어요 (새 숫자)</b>" if old else "📋 <b>팬딩 가격표 도착</b>"
         if sheet["status"] == "pending":
             send_sheet_alert(tg, sheet, head, st)
+    if agree:   # 수익금 분리 그림자 기록 (주문·계좌 조회 없음, 실패해도 매매에 영향 없음) — 두 번 판독이 일치한 표만
+        try:
+            import fanding_vault
+            fanding_vault.shadow_on_sheet(parsed, HOME)
+        except Exception as e:
+            print("vault 그림자 기록 실패(무시):", type(e).__name__, flush=True)
     return "sheet"
 
 
