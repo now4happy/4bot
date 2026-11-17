@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-17 12:38:07",
-  "as_of_et": "2026-11-16 22:38:07",
+  "as_of_kst": "2026-11-17 12:39:03",
+  "as_of_et": "2026-11-16 22:39:03",
   "market_open": true,
   "source": "toss",
   "prices": {
@@ -21,12 +21,12 @@
     "35": 188.62,
     "37": 28,
     "38": 29,
-    "41": 14577.57
+    "41": 14566.8
   },
   "totals": {
-    "api_sum": 50085.5,
+    "api_sum": 50074.74,
     "cash": 27547.16,
-    "total_assets": 68066.5
+    "total_assets": 68055.74
   },
   "market_open_us": false,
   "market_open_kr": true,
@@ -36,26 +36,26 @@
     "api_ex41": 35507.930467,
     "cash": 27547.160467,
     "manual": 17981.0,
-    "krx_total": 14577.5675
+    "krx_total": 14566.805
   },
   "krx": {
-    "as_of_kst": "2026-11-17 12:38:07",
+    "as_of_kst": "2026-11-17 12:39:03",
     "stocks": [
       {
         "code": "411060",
         "name": "ACE KRX금현물",
         "qty": 233,
         "avg_price": 29535,
-        "price": 23275,
-        "value_manw": 542.31
+        "price": 23280,
+        "value_manw": 542.42
       },
       {
         "code": "066570",
         "name": "LG전자",
         "qty": 31,
         "avg_price": 166722,
-        "price": 131000,
-        "value_manw": 406.1
+        "price": 131100,
+        "value_manw": 406.41
       },
       {
         "code": "035420",
@@ -70,32 +70,32 @@
         "name": "PI첨단소재",
         "qty": 281,
         "avg_price": 18940,
-        "price": 14040,
-        "value_manw": 394.52
+        "price": 14020,
+        "value_manw": 393.96
       },
       {
         "code": "449450",
         "name": "PLUS K방산",
         "qty": 136,
         "avg_price": 43823,
-        "price": 31460,
-        "value_manw": 427.86
+        "price": 31430,
+        "value_manw": 427.45
       },
       {
         "code": "005490",
         "name": "POSCO홀딩스",
         "qty": 12,
         "avg_price": 309197,
-        "price": 265000,
-        "value_manw": 318
+        "price": 264500,
+        "value_manw": 317.4
       },
       {
         "code": "148020",
         "name": "RISE 200",
         "qty": 57,
         "avg_price": 96933,
-        "price": 79645,
-        "value_manw": 453.98
+        "price": 79505,
+        "value_manw": 453.18
       },
       {
         "code": "475350",
@@ -110,8 +110,8 @@
         "name": "SK하이닉스",
         "qty": 4,
         "avg_price": 1393354,
-        "price": 1138000,
-        "value_manw": 455.2
+        "price": 1135000,
+        "value_manw": 454
       },
       {
         "code": "0080Y0",
@@ -126,16 +126,16 @@
         "name": "TIGER 2차전지소재Fn",
         "qty": 1372,
         "avg_price": 5023,
-        "price": 4050,
-        "value_manw": 555.66
+        "price": 4045,
+        "value_manw": 554.97
       },
       {
         "code": "360750",
         "name": "TIGER 미국S&P500",
         "qty": 251,
         "avg_price": 24271,
-        "price": 24640,
-        "value_manw": 618.46
+        "price": 24630,
+        "value_manw": 618.21
       },
       {
         "code": "371460",
@@ -158,8 +158,8 @@
         "name": "TIGER 코리아휴머노이드로봇산업",
         "qty": 398,
         "avg_price": 8561,
-        "price": 7080,
-        "value_manw": 281.78
+        "price": 7070,
+        "value_manw": 281.39
       },
       {
         "code": "0015G0",
@@ -174,16 +174,16 @@
         "name": "레이크머티리얼즈",
         "qty": 463,
         "avg_price": 13104,
-        "price": 10130,
-        "value_manw": 469.02
+        "price": 10120,
+        "value_manw": 468.56
       },
       {
         "code": "005930",
         "name": "삼성전자",
         "qty": 22,
         "avg_price": 220272,
-        "price": 193600,
-        "value_manw": 425.92
+        "price": 193400,
+        "value_manw": 425.48
       },
       {
         "code": "068270",
@@ -206,16 +206,16 @@
         "name": "에코프로비엠",
         "qty": 67,
         "avg_price": 124968,
-        "price": 87100,
-        "value_manw": 583.57
+        "price": 86900,
+        "value_manw": 582.23
       },
       {
         "code": "394280",
         "name": "오픈엣지테크놀로지",
         "qty": 674,
         "avg_price": 8685,
-        "price": 7950,
-        "value_manw": 535.83
+        "price": 7930,
+        "value_manw": 534.48
       },
       {
         "code": "032820",
@@ -230,24 +230,24 @@
         "name": "이수페타시스",
         "qty": 82,
         "avg_price": 84916,
-        "price": 86700,
-        "value_manw": 710.94
+        "price": 86500,
+        "value_manw": 709.3
       },
       {
         "code": "022100",
         "name": "포스코DX",
         "qty": 249,
         "avg_price": 24125,
-        "price": 21400,
-        "value_manw": 532.86
+        "price": 21450,
+        "value_manw": 534.11
       },
       {
         "code": "352820",
         "name": "하이브",
         "qty": 18,
         "avg_price": 158751,
-        "price": 155900,
-        "value_manw": 280.62
+        "price": 155700,
+        "value_manw": 280.26
       },
       {
         "code": "018880",
@@ -270,16 +270,16 @@
         "name": "한화시스템",
         "qty": 81,
         "avg_price": 62530,
-        "price": 50200,
-        "value_manw": 406.62
+        "price": 50100,
+        "value_manw": 405.81
       },
       {
         "code": "000720",
         "name": "현대건설",
         "qty": 56,
         "avg_price": 96085,
-        "price": 79000,
-        "value_manw": 442.4
+        "price": 78900,
+        "value_manw": 441.84
       },
       {
         "code": "005380",
@@ -294,11 +294,11 @@
         "name": "휴젤",
         "qty": 19,
         "avg_price": 217610,
-        "price": 192700,
-        "value_manw": 366.13
+        "price": 192400,
+        "value_manw": 365.56
       }
     ],
-    "total_manw": 14577.57,
+    "total_manw": 14566.8,
     "unavailable": []
   }
 }
