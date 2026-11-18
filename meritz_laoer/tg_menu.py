@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v1.0.3 — 새 파일)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.0.0)
+# v2.0.0 (2026-11-18): 적립봇 전환 — 표시 이름 '7번 메리츠 속쓸 적립봇', 상황판·계획·자금 표시를 새 계획(plan dict)에 맞춤,
+#   ➕ 직접 산 주식 반영에 세 번째 글자 '차감' 추가 (예: 63 61.50 차감 = --add-shares --credit). 주문·설정 변경 기능은 그대로 없음
 # 메리츠 무매 SOXL 텔레그램 메뉴: 📈 상황판 · ☰ 메뉴 · 🛠 도구 (맨밑 키보드만, 인라인 버튼 없음)
 # v1.0.4 (2026-11-14): 봇 번호 정리 — 표시 이름 '메리츠 무매 SOXL' → '7번 메리츠 무매' (머리글·도움말·상황판)
 # v1.0.3 (2026-11-14): 첫 버전.
@@ -9,7 +11,7 @@
 #   - 직렬화: main.idle() 안에서만 돎 = loop() 와 같은 스레드에서 순서대로. 별도 스레드·프로세스 없음.
 #     장부·설정 쓰기는 기존 함수(cmd_add_shares → ConfigManager.add_shares, cmd_inject_start → inject_start,
 #     clear_halt)만 부르며, 기존 GlobalThrottle.get_file_lock() 잠금을 그대로 씀
-#   - 메뉴 동작은 기존 함수만 부름: cmd_check · build_plan+fit_orders+fmt_orders+plan_head · t_and_target ·
+#   - 메뉴 동작은 기존 함수만 부름: cmd_check · build_plan+fmt_orders+plan_head · sell_target ·
 #     cmd_add_shares · ConfigManager.clear_halt · cmd_inject_start(= --inject-start) · key_fingerprint
 #   - 처음 시작 때 쌓여 있던 예전 업데이트는 건너뜀 (재시작으로 옛 버튼이 다시 실행되지 않게) · 2분 넘은 메시지 무시
 # ==========================================================
@@ -32,15 +34,15 @@ HALT_OK, INJECT_OK, INJECT_OVER = "⛔ 정지 해제 확인", "📥 장부 시�
 CONFIRM_SEC = 60            # 제안값: 확인 버튼 유효 시간
 WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
-HEAD = "🟦7번 메리츠 무매"
+HEAD = "🟦7번 메리츠 속쓸 적립봇"
 
 HELP = "\n".join([
-    "❓ [도움말 · 7번 메리츠 무매]",
+    "❓ [도움말 · 7번 메리츠 속쓸 적립봇]",
     "▫️ 맨밑 첫 줄: 📈 상황판 · ☰ 메뉴",
     "▫️ ☰ 메뉴: 📋 오늘 계획 · 📒 장부·체결 내역 · 💰 자금 · ⚙️ 전원·모드 · 🛠 도구 · ❓ 도움말 · 🏠 처음 화면",
-    "▫️ 🛠 도구: 🔍 점검(--check) · ➕ 직접 산 주식 반영(--add-shares) · ⛔ 정지 해제(--clear-halt) · "
+    "▫️ 🛠 도구: 🔍 점검(--check) · ➕ 직접 산 주식 반영(--add-shares, 끝에 '차감' = --credit) · ⛔ 정지 해제(--clear-halt) · "
     "📥 장부 시작(--inject-start, 장부 시작 전에만) · 🔑 키 지문 확인(--fingerprint) · 🔙 메뉴",
-    "▫️ 모두 조회·장부 반영만 하고 주문은 내지 않아요. 환전 기능은 없어요.",
+    "▫️ 모두 조회·장부 반영만 하고 주문은 내지 않아요. 환전은 메뉴에서 안 하고, 자동환전(설정에서 켠 경우)은 하루 주문 시간에만 해요.",
     "▫️ enabled·dry_run 은 메뉴에서 바꾸지 않아요 (설정 파일·기존 안전 절차 그대로).",
 ])
 
@@ -137,7 +139,7 @@ class MenuBot:
             cfg = o.ConfigManager(s)
             pos, halt = cfg.get_position(), cfg.get_halt()
             avg = cfg.avg_price(pos) if pos else 0.0
-            tv, tgt = o.t_and_target(s, cfg, pos) if pos else (None, None)
+            tv, tgt = o.sell_target(s, cfg, pos) if pos else (None, None)
         return pos, halt, avg, tv, tgt
 
     def _api_ok(self, s):
@@ -150,23 +152,22 @@ class MenuBot:
         """B1 상황판 값 (조회만 — 주문·장부·설정을 바꾸지 않음). cmd_check 와 같은 입력으로 오늘 계획 미리보기"""
         o = self.o
         d = {"pos": None, "halt": None, "avg": 0.0, "t": None, "target": None, "api_bad": [], "hold": None, "sellable": None,
-             "price": None, "prev": None, "ma5": None, "cash": None, "plan": None, "orders": [], "notes": [], "plan_err": None}
+             "price": None, "prev": None, "fx": None, "cash": None, "plan": None, "orders": [], "notes": [], "plan_err": None}
         d["pos"], d["halt"], d["avg"], d["t"], d["target"] = self._local(s)
         d["api_bad"] = self._api_ok(s)
         if d["api_bad"]:
             return d
         api = self._api(s)
         d["hold"], d["sellable"], _ = api.holding(s["symbol"])
-        d["price"], d["prev"], d["ma5"] = o.market_inputs(s, api)
+        d["price"], d["prev"], d["fx"] = o.market_inputs(s, api)
         d["cash"] = api.usd_cash()
         try:
             pos, st = d["pos"], s["start"]
             q = int(pos["qty"]) if pos else int(float(st["qty"]))
             principal = float(pos["principal"]) if pos else float(st["principal_usd"])
-            avg = round(principal / q, 4) if q else 0.0
-            with o.in_dir(o.sandbox_dir(s["state_dir"])):
-                d["plan"] = o.build_plan(s, o.ConfigManager(s), d["prev"], d["ma5"], d["cash"], q, avg, snapshot=True)
-            d["orders"], d["notes"] = o.fit_orders(d["plan"], d["cash"], d["sellable"], q)
+            with o.in_dir(s["state_dir"]):
+                d["plan"] = o.build_plan(s, o.ConfigManager(s), d["price"], d["fx"], d["cash"], q, principal, d["sellable"])
+            d["orders"], d["notes"] = d["plan"]["orders"], d["plan"]["notes"]
         except Exception as e:
             d["plan_err"] = type(e).__name__
         return d
@@ -186,9 +187,9 @@ class MenuBot:
     def board_text(self, s):
         d = self.board(s)
         pos = d["pos"]
-        lines = [f"📈 [7번 메리츠 무매 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
+        lines = [f"📈 [7번 메리츠 속쓸 적립봇 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
         if pos:
-            lines.append(f"▫️ 장부: {pos['qty']}주 · 평단 ${d['avg']:.4f} · T {d['t']:.2f} · 목표 ${d['target']:.2f}")
+            lines.append(f"▫️ 장부: {pos['qty']}주 · 평단 ${d['avg']:.4f} · 채운 회차 {d['t']} · 매도 목표 ${d['target']:.2f}")
         else:
             lines.append("▫️ 장부: 시작 전 (🛠 도구 → 📥 장부 시작)")
         if d["api_bad"]:
@@ -197,7 +198,7 @@ class MenuBot:
             lq = int(pos["qty"]) if pos else None
             lines.append(f"▫️ 메리츠 잔고: {d['hold']}주 (매도가능 {d['sellable']}) · 장부 {lq if lq is not None else '시작 전'}주"
                          + (" · ⚠️ 잔고 ≠ 장부" if lq is not None and d["hold"] != lq else ""))
-            lines.append(f"▫️ 현재가 ${d['price']:.2f} · 전일종가 ${d['prev']:.2f} · 5일선 ${d['ma5']:.2f}")
+            lines.append(f"▫️ 현재가 ${d['price']:.2f} · 전일종가 ${d['prev']:.2f} · 적용환율 {('%.2f' % d['fx']) if d['fx'] else '미확인'}")
             lines.append(f"▫️ USD 예수금 ${d['cash']:,.2f}")
         lines.append("─────────────────")
         lines += self.plan_lines(s, d)
@@ -234,14 +235,16 @@ class MenuBot:
 
     def funds_text(self, s):
         d = self.board(s)
-        lines = ["💰 [자금 — 조회만 · 이 봇에는 환전 기능이 없어요]"]
+        lines = ["💰 [자금 — 조회만 · 환전 신청은 메뉴에서 안 해요]"]
         if d["api_bad"]:
             return "\n".join(lines + ["▫️ 메리츠 조회: 미확인 (" + "; ".join(d["api_bad"][:3]) + ")"])
         buy = sum(int(x["qty"]) * float(x["price"]) for x in d["orders"] if x.get("side") == "BUY" and x.get("type") != "MOC")
         lq = int(d["pos"]["qty"]) if d["pos"] else None
         lines += [f"▫️ USD 예수금 ${d['cash']:,.2f}",
-                  (f"▫️ 오늘 계획 필요액 ${buy:,.2f} (fit_orders 로 정리한 매수 주문 합계 · MOC 제외 — fit_orders 와 같은 계산)"
+                  (f"▫️ 오늘 계획 필요액 ${buy:,.2f} (계획한 매수 주문 합계 — make_plan 이 달러·한도에 맞춘 값)"
                    if d["plan"] is not None else f"▫️ 오늘 계획 필요액: 미확인 ({d['plan_err']})"),
+                  (f"▫️ 필요 달러 ${d['plan']['info']['need_usd']:,.2f} · 부족 ${d['plan']['info']['shortfall_usd']:,.2f}"
+                   + (" · 자동환전 켜짐 (신청은 하루 주문 시간에만, 메뉴에서는 안 함)" if d["plan"]["info"].get("auto_fx") else " · 자동환전 꺼짐") if d["plan"] is not None else "▫️ 필요 달러: 미확인"),
                   f"▫️ 보유 주수: 메리츠 {d['hold']}주 · 장부 {lq if lq is not None else '시작 전'}"
                   + (" · ⚠️ 잔고 ≠ 장부" if lq is not None and d["hold"] != lq else "")]
         return "\n".join(lines)
@@ -283,7 +286,8 @@ class MenuBot:
                 avg = float(parts[1]) if len(parts) >= 2 else None
             except ValueError:
                 avg = None
-            rc, out = self._out(self.o.cmd_add_shares, s, qty, avg)
+            credit = len(parts) >= 3 and parts[2] in ("차감", "credit")
+            rc, out = self._out(self.o.cmd_add_shares, s, qty, avg, None, credit)
             return say(("✅ " if rc == 0 else "") + (out or "결과 없음"))
         if text in fixed:
             self.wait = None
@@ -312,6 +316,7 @@ class MenuBot:
         if text == T_ADD:
             self.wait = {"kind": "add", "ts": time.time()}
             return say("➕ 직접 산 주식 수량과 평단(달러)을 띄어 써서 보내 주세요. 예: 3 52.10\n"
+                       "• 1회차 매수 때 이 주식 원가를 한 번 차감하려면 끝에 '차감' 을 붙여요. 예: 63 61.50 차감\n"
                        "• 메리츠 잔고 == 장부 + 수량 일 때만 반영 · enabled=true·미국장 주문 시간(미 동부 "
                        f"{s.get('order_time_et')}~{s.get('order_deadline_et')})이면 거부 · 주문 없음", [[BACK]])
         if text == T_HALT:

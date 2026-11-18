@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v1.0.4)
-# 메리츠 SOXL 무한매수(V14) 새 봇 — 실행·안전장치
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.0-draft — 버전 번호는 Muse 가 정함)
+# 메리츠 속쓸 적립봇 (SOXL 분할매수·부분매도) — 실행·안전장치
+# v2.0.0 (2026-11-18): 무한매수(V14) → 적립봇 전환. 계획은 accum_strategy.make_plan (순수 계산), 체결 뒤 적립 상태(data/accum_state.json) 갱신.
+#   - 그대로: 키 지문·P/VR6 키·다른 봇 토큰 금지·입고/토스 정지 확인·장부=잔고·정지(halt)·하루 1회 표시 파일·텔레그램 메뉴·--inject-start
+#   - 바뀜: market_inputs(현재가·전일종가·메리츠 적용환율), build_plan·plan_head 인자 바뀜, fit_orders 없앰(달러·매도가능 검사는 make_plan 안),
+#     t_and_target → sell_target, run_order_day·run_sync·cmd_check·cmd_add_shares, --add-shares 에 --credit 추가
+#   - 자동환전 auto_fx(기본 꺼짐): 오늘 매수에 필요한 달러(필요달러)가 예수금보다 모자라면 부족분+여유%만큼 원→달러 환전 신청.
+#     실주문 모드에서만·하루 한 번·하루 상한·원화 예수금 확인·신청 전 표시 파일(중복 신청 방지). 모의는 계산만
+#   - --add-shares --qty N --avg X --credit: 직접 산(또는 입고된) N주를 평단 반영 + N×X 달러를 1회차 매수 때 한 번 차감
 # v1.0.4 (2026-11-14): BOT_VERSION만 (봇 번호 정리 — 표시 이름 '7번 메리츠 무매'는 tg_menu.py·notifier.py)
 # v1.0.3 (2026-11-14): 텔레그램 메뉴(tg_menu.py) — 상황판·맨밑 메뉴·도구. 기다리는 자리(time.sleep)에서 같은 스레드로 순서대로 처리
 #   - 주문·체결 반영·전략·안전장치는 그대로. --inject-start 본문은 cmd_inject_start() 로 옮김 (CLI·메뉴가 같은 함수)
 # v1.0.2 (2026-11-08): --add-shares --qty N --avg X 추가 (직접 산 주식을 지정 평단으로 장부 반영)
 #   - 메리츠 잔고 == 장부 + N 일 때만 · enabled=true·미국장 주문 시간이면 거부 · 주문 없음 · 전후 로그·텔레그램
 # v1.0.0 (2026-11-08): 첫 버전
-#   - 전략: hantu_laoer/strategy_v14.py 를 그대로 복사해 씀 (분할 매수 · 평단 익절 후 처음부터 다시 시작)
+#   - (v1.0.x 옛 설명) 전략: strategy_v14.py — v2.0.0 부터 main 이 안 부름(파일은 그대로 둠, 지울지는 Muse 결정)
 #   - 주문: 메리츠 즉시주문 (LOC·MOC·지정가). 미국 동부 order_time_et~order_deadline_et 에 하루 1번
 #   - 체결 반영: sync_time_et 이후 주문번호로 체결 내역을 읽어 봇 장부(원금·수량)를 갱신
 #   - 안전장치: 기본 enabled=false · dry_run(모의) · 입고 확인 · 토스 스나이퍼 정지 확인 · 키 지문 일치
@@ -18,7 +25,7 @@
 #   python3 main.py --check            주문 없이 점검 + 오늘 주문 계획 미리보기 (enabled 와 무관)
 #   python3 main.py --inject-start     입고 확인 뒤 장부 시작 (settings.start 로 원금·수량 덮어쓰기)
 #   python3 main.py --clear-halt       정지 표시 해제 (원인 확인 후)
-#   python3 main.py --add-shares --qty N --avg X   직접 산 N주를 평단 $X 로 장부에 더함 (주문 없음)
+#   python3 main.py --add-shares --qty N --avg X [--credit]   직접 산 N주를 평단 $X 로 장부에 더함 (주문 없음). --credit: 원가를 1회차 때 차감
 #   python3 main.py                    상시 실행 (서비스용)
 # ==========================================================
 import argparse
@@ -26,6 +33,7 @@ import contextlib
 import datetime
 import json
 import logging
+import math
 import os
 import shutil
 import sys
@@ -37,12 +45,13 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import config as cfgmod                      # noqa: E402
+from accum_strategy import make_plan, apply_fill_to_state, ceil2   # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
 from notifier import Notifier, _read_token, token_fp   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v1.0.4"
+BOT_VERSION = "v2.0.0-draft"
 EST = ZoneInfo("America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -135,38 +144,71 @@ def gate_problems(s, cfg, live):
 
 
 def market_inputs(s, api):
-    sym, mk = s["symbol"], s["price_market"]
-    p = api.price(sym, mk)
-    today = now_et().strftime("%Y%m%d")
-    closes = [c for d, c in api.daily_closes(sym, mk) if d < today][:5]    # 당일 미확정 봉 제외 (hantu get_5day_ma 와 같은 기준)
-    ma5 = sum(closes) / 5 if len(closes) == 5 else 0.0
-    return p["price"], p["prev_close"], ma5
+    """(현재가, 전일종가, 메리츠 적용환율[매수 기준, 못 읽으면 0.0]). 조회만"""
+    p = api.price(s["symbol"], s["price_market"])
+    try:
+        fx = api.fx_applied_rate()
+    except MeritzError as e:
+        logging.warning(f"적용환율 조회 실패: {e}")
+        fx = 0.0
+    return p["price"], p["prev_close"], fx
 
 
-def build_plan(s, cfg, prev_close, ma5, cash, qty, avg, snapshot):
-    from strategy_v14 import V14Strategy
-    st = V14Strategy(cfg)
-    # 현재가 자리에 전일 종가를 넣음: hantu 는 16:05 종가 시점에 다음 날 계획을 박제하므로 같은 입력이 됨
-    return st.get_plan(ticker=s["symbol"], current_price=prev_close, avg_price=avg, qty=qty, prev_close=prev_close,
-                       ma_5day=ma5, market_type="REG", available_cash=cash, is_snapshot_mode=snapshot)
+def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx=False):
+    """오늘 계획 (장부·상태를 바꾸지 않음) → {"orders", "notes", "info"}. info 에 필요달러(need_usd)·부족달러(shortfall_usd)"""
+    return make_plan(s, cfg.accum_or_start(), qty, principal, price, fx, cash, sellable, ignore_auto_fx)
 
 
-def fit_orders(plan, cash, sellable, ledger_qty):
-    """달러·매도가능 수량에 맞춰 주문 정리 → (주문 목록, 메모 목록)"""
-    core, bonus, notes = list(plan.get("core_orders") or []), list(plan.get("bonus_orders") or []), []
-    cost = lambda lst: sum(int(o["qty"]) * float(o["price"]) for o in lst if o.get("side") == "BUY" and o.get("type") != "MOC")
-    if cost(core) > cash:
-        core = [o for o in core if o.get("side") != "BUY"]
-        bonus = []
-        notes.append(f"달러 부족 ${cash:,.2f} — 오늘 매수 생략")
-    elif cost(core) + cost(bonus) > cash:
-        bonus = []
-        notes.append("달러가 줍줍까지는 부족 — 줍줍 생략")
-    orders = core + bonus
-    sell_q = sum(int(o["qty"]) for o in orders if o.get("side") == "SELL")
-    if sell_q > min(sellable, ledger_qty):
-        return [], notes + [f"매도 {sell_q}주 > 매도가능 {sellable}/장부 {ledger_qty} — 주문 안 함"]
-    return orders, notes
+def auto_fx(s, api, cfg, plan, live, d):
+    """부족 달러만큼 원→달러 환전. 부족 없거나 꺼져 있으면 None. live=False 면 신청 없이 계산만.
+    → {"short", "want", "capped", "rate", "krw_est", "status", "done"(bool), "error"(없으면 None)}"""
+    i = plan["info"]
+    short = float(i.get("shortfall_usd") or 0)
+    if not s.get("auto_fx_enabled") or short <= 0:
+        return None
+    raw = math.ceil(short * (1 + float(s["auto_fx_buffer_pct"]) / 100.0))
+    want = min(raw, int(float(s["auto_fx_max_usd_per_day"])))
+    r = {"short": round(short, 2), "want": want, "capped": want < raw, "rate": None, "krw_est": None,
+         "status": "", "done": False, "error": None}
+    try:
+        rate, tm = api.fx_applied()
+    except MeritzError as e:
+        r.update(status="환전 안 함", error=f"적용환율 조회 실패: {e}")
+        return r
+    r["rate"], r["krw_est"] = rate, int(round(want * rate))
+    if not live:
+        r["status"] = "모의 — 신청 안 함 (계산만)"
+        return r
+    marker = os.path.join(s["state_dir"], "data", f"fx_{d}.json")
+    if os.path.exists(marker):
+        r.update(status="오늘 이미 환전을 신청한 기록이 있어 다시 안 함 (확인 필요)")
+        return r
+    try:
+        krw = api.krw_cash()
+    except MeritzError as e:
+        r.update(status="환전 안 함", error=f"원화 예수금 조회 실패: {e}")
+        return r
+    if krw < r["krw_est"]:
+        r.update(status="환전 안 함", error=f"원화 예수금 부족 (필요 약 ₩{r['krw_est']:,} > 보유 ₩{int(krw):,})")
+        return r
+    cfg._save_json(marker, {"date": d, "usd": want, "rate": rate, "krw_est": r["krw_est"], "result": "신청 전 기록 (이 파일이 있으면 오늘 다시 신청하지 않음)"})
+    try:
+        api.fx_exchange(want, rate, tm)
+    except MeritzError as e:
+        cfg._save_json(marker, {"date": d, "usd": want, "rate": rate, "result": f"실패 또는 불확실: {str(e)[:120]}"})
+        r.update(status="환전 신청 실패 또는 불확실 — 오늘 다시 신청 안 함", error=str(e)[:160])
+        return r
+    cfg._save_json(marker, {"date": d, "usd": want, "rate": rate, "krw_est": r["krw_est"], "result": "신청 완료"})
+    r.update(status="환전 신청 완료", done=True)
+    return r
+
+
+def fx_lines(r):
+    if not r:
+        return ""
+    t = (f"💱 환전: 부족 ${r['short']:,.2f} → 신청 ${r['want']:,}" + (" (하루 상한 적용)" if r["capped"] else "")
+         + (f" · 약 ₩{r['krw_est']:,} (환율 {r['rate']:,.2f})" if r.get("rate") else "") + f" · {r['status']}")
+    return t + (f"\n⚠️ {r['error']}" if r.get("error") else "") + "\n"
 
 
 def fmt_orders(orders):
@@ -175,8 +217,14 @@ def fmt_orders(orders):
 
 
 def plan_head(plan, s):
-    return (f"분할 {int(float(s['split_count'] or 0))} · T {plan.get('t_val', 0):.2f} · 1회 ${plan.get('one_portion', 0):,.2f} · "
-            f"{plan.get('process_status', '')}\n별값 ${plan.get('star_price', 0):.2f} · 목표 ${plan.get('target_price', 0):.2f}")
+    i = plan["info"]
+    pl = f" ({i['profit_pct']:+.2f}%)" if i.get("profit_pct") is not None else ""
+    return (f"{'재매수' if i['mode'] == 'rebuy' else '사다리'} 모드 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 채운 회차 {len(i['filled'])}/{len(i['levels'])}\n"
+            f"매도 목표 ${i['sell_target']:.2f} · 회차 금액 ${i.get('unit_usd', 0):,.2f}"
+            + (f" · 1회차 차감 ${i['credit_usd']:,.2f}" if i.get("credit_usd") else "")
+            + (f" · 환율 {i['fx']:,.2f}" if i.get("fx") else "")
+            + (f"\n필요 달러 ${i['need_usd']:,.2f} · 예수금 ${i['usd_cash']:,.2f}" + (f" · 부족 ${i['shortfall_usd']:,.2f}" if i.get("shortfall_usd") else "")
+               if i.get("need_usd") is not None else ""))
 
 
 # ---------------------------------------------------------------- 하루 주문
@@ -222,17 +270,20 @@ def run_order_day(s, api, note, live):
         note.send("⛔ 거래소 번호 모름 (exch_id 설정 필요)")
         cfg._save_json(mark, {"skipped": "exch_id 없음"})
         return "거래소"
-    _, prev_close, ma5 = market_inputs(s, api)
+    price, prev_close, fx = market_inputs(s, api)
     cash = api.usd_cash()
-    if live:
-        cfg.increment_reverse_day(s["symbol"])
-        plan = build_plan(s, cfg, prev_close, ma5, cash, qty, avg, snapshot=True)
-    else:
-        with in_dir(sandbox_dir(state)):
-            c2 = ConfigManager(s)
-            c2.increment_reverse_day(s["symbol"])
-            plan = build_plan(s, c2, prev_close, ma5, cash, qty, avg, snapshot=True)
-    orders, notes = fit_orders(plan, cash, sellable if live else qty, qty)
+    if live:      # 맨 위 가격 이상을 본 적 있음 표시 (first_buy_mode=wait_top 용). 모의에서는 저장하지 않음
+        ast = cfg.accum_or_start()
+        if not ast.get("armed") and price >= float(s["ladder_top_usd"]):
+            ast["armed"] = True
+            cfg.save_accum(ast)
+    sell_q = sellable if live else qty
+    plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q)
+    fxres = auto_fx(s, api, cfg, plan, live, d)
+    if live and s.get("auto_fx_enabled"):
+        cash = api.usd_cash()          # 환전 뒤(또는 안 한 뒤) 실제 예수금으로 다시 계획 — 모자라면 그만큼 매수가 줄어듦
+        plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q, ignore_auto_fx=True)
+    orders, notes = plan["orders"], plan["notes"]
     placed, errors = [], []
     if live:
         for o in orders:
@@ -244,10 +295,13 @@ def run_order_day(s, api, note, live):
             except MeritzError as e:
                 errors.append(f"{o.get('desc')}: {e}")
             time.sleep(0.3)
-    cfg._save_json(mark, {"date": d, "is_reverse": bool(plan.get("is_reverse")), "prev_close": prev_close,
+    cfg._save_json(mark, {"date": d, "prev_close": prev_close, "price": price, "fx": fx, "auto_fx": fxres,
                           "qty": qty, "avg": avg, "cash": round(cash, 2), "orders": placed if live else orders,
                           "errors": errors, "synced": False if live else True})
+    reached = plan["info"].get("profit_reached")
     note.send(f"{d} 주문 {'접수' if live else '계획'} · 보유 {qty}주 평단 ${avg:.2f}\n{plan_head(plan, s)}\n"
+              + (f"🎯 평가 이익 +{float(s['sell_profit_pct']):g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${plan['info']['sell_target']:.2f})\n" if reached else "")
+              + fx_lines(fxres)
               + fmt_orders(placed if live else orders)
               + ("\n" + "\n".join("ℹ️ " + n for n in notes + warn) if notes or warn else "")
               + ("\n⚠️ 실패\n" + "\n".join("- " + e for e in errors) if errors else ""))
@@ -273,8 +327,14 @@ def run_sync(s, api, note, mark_path):
             continue
         side, q, amt = f
         px = amt / q if q else 0.0
-        pos, closed = cfg.apply_fill(side, q, px, d, m.get("is_reverse"), f"{d}_{o['no']}")
+        avg0 = cfg.avg_price(cfg.get_position())
+        pos, closed = cfg.apply_fill(side, q, px, d, False, f"{d}_{o['no']}")
+        ast = cfg.accum_or_start()
+        apply_fill_to_state(ast, o, avg0, bool(s.get("allow_consecutive_sell")))    # 같은 체결을 다시 반영해도 결과가 같음
+        cfg.save_accum(ast)
         lines.append(f"- {side} {q}주 @ ${px:.2f} ({o.get('desc', '')})")
+        if o.get("kind") == "sell":
+            lines.append(f"  🎯 매도 체결 → 재매수 모드 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
         done = closed or done
     hold, _, _ = api.holding(s["symbol"])
     pos = cfg.get_position()
@@ -282,7 +342,7 @@ def run_sync(s, api, note, mark_path):
     cfg._save_json(mark_path, m)
     msg = f"{d} 체결 반영\n" + ("\n".join(lines) if lines else "- 체결 없음") + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}"
     if done:
-        msg += f"\n🎉 사이클 종료: 이익 ${done['profit']:,.2f} ({done['yield']:.2f}%) · 시드 +${done['added_seed']:,} → 새출발"
+        msg += "\n⚠️ 보유 0주가 되어 사이클 종료 처리됨 — 이 봇의 매도 규칙으로는 생기지 않는 상황, 확인 필요"
     if hold != pos["qty"]:
         cfg.halt(f"체결 반영 뒤 잔고 {hold}주 ≠ 장부 {pos['qty']}주")
         msg += f"\n⛔ 정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인 후 --clear-halt)"
@@ -386,41 +446,39 @@ def cmd_check(s):
         return 1
     api = MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
     hold, sellable, exch = api.holding(s["symbol"])
-    price, prev_close, ma5 = market_inputs(s, api)
+    price, prev_close, fx = market_inputs(s, api)
     cash = api.usd_cash()
     print(f"- 메리츠 잔고 {s['symbol']} {hold}주 (매도가능 {sellable}) 거래소번호 {exch or '-'} · USD 예수금 ${cash:,.2f}")
-    print(f"- 현재가 ${price:.2f} 전일종가 ${prev_close:.2f} 5일선 ${ma5:.2f} · 장운영 {api.us_market_status()}")
+    print(f"- 현재가 ${price:.2f} 전일종가 ${prev_close:.2f} · 적용환율 {('%.2f 원/$' % fx) if fx else '미확인'} · 장운영 {api.us_market_status()}")
     st = s["start"]
     q = int(pos["qty"]) if pos else int(float(st["qty"]))
     principal = float(pos["principal"]) if pos else float(st["principal_usd"])
-    avg = round(principal / q, 4) if q else 0.0
-    with in_dir(sandbox_dir(state)):
-        plan = build_plan(s, ConfigManager(s), prev_close, ma5, cash, q, avg, snapshot=True)
-    orders, notes = fit_orders(plan, cash, sellable, q)
+    with in_dir(state):
+        plan = build_plan(s, ConfigManager(s), price, fx, cash, q, principal, sellable)
+    orders, notes = plan["orders"], plan["notes"]
     print("- 오늘 계획 (미리보기·주문 안 냄):\n  " + plan_head(plan, s).replace("\n", "\n  "))
     print("  " + fmt_orders(orders).replace("\n", "\n  "))
     for n in notes:
         print("  ℹ️", n)
+    with in_dir(state):
+        r = auto_fx(s, api, ConfigManager(s), plan, False, now_et().strftime("%Y-%m-%d"))
+    print("  " + (fx_lines(r).strip().replace("\n", "\n  ") if r else "💱 환전: 필요 없음 또는 자동환전 꺼짐 (auto_fx_enabled=%s)" % s.get("auto_fx_enabled")))
     if hold != q:
         print(f"  ⚠️ 잔고 {hold}주 ≠ 장부/시작 {q}주 → 입고 전이거나 다른 계좌")
     return 0
 
 
 # ---------------------------------------------------------------- 추가 투입 (주문 없음)
-def t_and_target(s, cfg, pos):
-    """표시용: strategy_v14 와 같은 식 (T = 수량×평단 ÷ (시드÷분할), 목표 = 평단×(1+익절%) 올림)"""
-    from strategy_v14 import V14Strategy
-    t = s["symbol"]
-    split, seed = cfg.get_split_count(t), cfg.get_seed(t)
+def sell_target(s, cfg, pos):
+    """표시용: (채운 회차 수, 매도 목표가 = 평단 × (1+매도%) 올림)"""
     avg = cfg.avg_price(pos)
-    portion = seed / split if split > 0 else 0.0
-    tv = round(int(pos["qty"]) * avg / portion, 4) if portion > 0 else 0.0
-    tgt = V14Strategy(cfg)._ceil(avg * (1 + cfg.get_target_profit(t) / 100.0)) if avg > 0 else 0.0
-    return tv, tgt
+    n = len(cfg.accum_or_start().get("filled_levels") or [])
+    return n, (ceil2(avg * (1 + float(s["sell_profit_pct"]) / 100.0)) if avg > 0 else 0.0)
 
 
-def cmd_add_shares(s, qty, avg, api=None):
-    """메리츠 잔고 == 장부 + qty 일 때만 장부 갱신 → 0(성공)/1(거부)"""
+def cmd_add_shares(s, qty, avg, api=None, credit=False):
+    """메리츠 잔고 == 장부 + qty 일 때만 장부 갱신 → 0(성공)/1(거부).
+    credit=True: qty×avg 달러를 1회차 매수 때 한 번 차감하도록 적립 상태에 더함 (1회차 전·사다리 모드일 때만)"""
     bad = []
     if qty is None or qty < 1:
         bad.append("--qty 는 1 이상 정수")
@@ -439,6 +497,10 @@ def cmd_add_shares(s, qty, avg, api=None):
         pos = cfg.get_position()
         if not pos:
             bad.append("장부 시작 전 (--inject-start 먼저)")
+        if credit:
+            ast0 = cfg.accum_or_start()
+            if ast0.get("mode") != "ladder" or ast0.get("filled_levels"):
+                bad.append("1회차 차감 불가: 이미 사다리 매수가 시작됐거나 재매수 모드")
         if bad:
             print("✗ 추가 투입 반영 안 함:\n" + "\n".join("- " + b for b in bad))
             return 1
@@ -452,15 +514,21 @@ def cmd_add_shares(s, qty, avg, api=None):
             logging.warning(msg)
             note.send("⛔ " + msg[2:])
             return 1
-        t0, g0 = t_and_target(s, cfg, pos)
+        t0, g0 = sell_target(s, cfg, pos)
         before, after = cfg.add_shares(qty, avg, n.strftime("%Y-%m-%d"))
-        t1, g1 = t_and_target(s, cfg, after)
+        t1, g1 = sell_target(s, cfg, after)
         a0, a1 = cfg.avg_price(before), cfg.avg_price(after)
+        cr_txt = ""
+        if credit:
+            ast = cfg.accum_or_start()
+            ast["credit_usd"] = round(float(ast.get("credit_usd") or 0) + qty * avg, 2)
+            cfg.save_accum(ast)
+            cr_txt = f"\n1회차 매수 때 차감: +${qty * avg:,.2f} (합계 ${ast['credit_usd']:,.2f})"
         msg = (f"➕ 추가 투입 반영 {qty}주 @ ${avg:.4f} (주문 없음)\n"
-               f"전: {before['qty']}주 · 원금 ${before['principal']:,.2f} · 평단 ${a0:.4f} · T {t0:.2f} · 목표 ${g0:.2f}\n"
-               f"후: {after['qty']}주 · 원금 ${after['principal']:,.2f} · 평단 ${a1:.4f} · T {t1:.2f} · 목표 ${g1:.2f}")
+               f"전: {before['qty']}주 · 원금 ${before['principal']:,.2f} · 평단 ${a0:.4f} · 회차 {t0} · 매도 목표 ${g0:.2f}\n"
+               f"후: {after['qty']}주 · 원금 ${after['principal']:,.2f} · 평단 ${a1:.4f} · 회차 {t1} · 매도 목표 ${g1:.2f}" + cr_txt)
         hist = cfg._load_json("data/add_shares_log.json", [])
-        hist.append({"at": n.isoformat(), "qty": qty, "avg": avg, "hold": hold,
+        hist.append({"at": n.isoformat(), "qty": qty, "avg": avg, "hold": hold, "credit": bool(credit),
                      "before": {"qty": before["qty"], "principal": before["principal"], "avg": a0},
                      "after": {"qty": after["qty"], "principal": after["principal"], "avg": a1}})
         cfg._save_json("data/add_shares_log.json", hist)
@@ -507,6 +575,7 @@ def main(argv=None):
     ap.add_argument("--overwrite", action="store_true", help="--inject-start 때 기존 장부 덮어쓰기")
     ap.add_argument("--qty", type=int, help="--add-shares: 추가한 주식 수 (1 이상)")
     ap.add_argument("--avg", type=float, help="--add-shares: 추가한 주식의 평단 (달러)")
+    ap.add_argument("--credit", action="store_true", help="--add-shares: 추가한 주식의 원가(수량×평단)를 1회차 매수 때 한 번 차감")
     a = ap.parse_args(argv)
     s = load_settings()
     if a.fingerprint:
@@ -515,7 +584,7 @@ def main(argv=None):
     if a.check:
         return cmd_check(s)
     if a.add_shares:
-        return cmd_add_shares(s, a.qty, a.avg)
+        return cmd_add_shares(s, a.qty, a.avg, credit=a.credit)
     state = s["state_dir"]
     os.makedirs(os.path.join(state, "data"), exist_ok=True)
     if a.clear_halt:

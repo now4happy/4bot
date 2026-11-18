@@ -1,6 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v1.0.0)
+# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.0.0)
 # 새 텔레그램 봇으로 알림만 보냄 (명령·버튼 없음). 토큰 파일: 설정 telegram_file {"token": "...", "chat_id": "..."}
+# v2.0.0 (2026-11-18): 표시 이름 '🟦7번 메리츠 무매' → '🟦7번 메리츠 속쓸 적립봇' (노션 질문 Q8 ① Muse 확인 전 제안값)
 # v1.0.4 (2026-11-14): 봇 번호 정리 — 알림 머리글 '🟦메리츠 무매 SOXL' → '🟦7번 메리츠 무매'
 # v1.0.0 (2026-11-08): 첫 버전. 다른 봇 토큰 재사용 검사 함수 포함. 토큰 원문은 출력하지 않음
 # ==========================================================
@@ -43,7 +44,7 @@ class Notifier:
             logging.warning(f"텔레그램 설정 없음/오류 → 로그로만 남김: {type(e).__name__}")
 
     def send(self, text):
-        msg = ("🧪[모의] " if self.dry_run else "") + "🟦7번 메리츠 무매\n" + str(text)
+        msg = ("🧪[모의] " if self.dry_run else "") + "🟦7번 메리츠 속쓸 적립봇\n" + str(text)
         logging.info(msg.replace("\n", " | "))
         if not self.ok:
             return False

@@ -1,6 +1,9 @@
 # ==========================================================
-# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v1.0.0)
+# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.0)
 # 메리츠증권 Open API — 무한매수 봇용 최소 연결 (해외주식 현재가·일봉·잔고·외화예수금·장운영·즉시주문·체결내역)
+# v2.0.0 (2026-11-18): 자동환전용 krw_cash(읽기)·fx_exchange(환전 신청 POST, main.auto_fx 에서만 호출) 추가 — 형식은 meritz_dca_bot 과 같음.
+#   fx_applied_rate 추가 (읽기 전용: GET /forex/v1/rates/applied, 매수=mnec_clcd '1' 의 tltr_aply_byrt).
+#   적립봇의 회차 금액(원→달러) 환산용. 형식은 meritz_dca_bot/meritz_api.py 와 같음. 환전 신청(POST)은 넣지 않음
 # v1.0.0 (2026-11-08): 첫 버전. 토큰·호출 부분은 bot_office/meritz_client.py(V1.5) 방식을 따르되 파일을 공유하지 않음
 #   - 키 파일 경로는 기본값 없음(설정 key_file 필수) → P·VR6 키(/etc/bot-office/...)를 실수로 읽지 않음
 #   - 토큰 캐시도 이 봇 전용 (state_dir/data/meritz_token.json)
@@ -154,6 +157,40 @@ class MeritzApi:
         if len(usd) != 1 or usd[0].get("frcr_amt") in (None, ""):
             raise MeritzError("USD 예수금 행 없음 또는 중복")
         return _num(usd[0]["frcr_amt"])
+
+    def fx_applied(self):
+        """메리츠 환전 적용환율 (원화→달러 매수 기준) → (원/달러, 기준시각 exrt_stnd_time). 읽기 전용. 못 읽으면 MeritzError"""
+        d = self._call("GET", "/forex/v1/rates/applied", {"crcd": "USD", "mnec_clcd": "1"})
+        data = d.get("data") or {}
+        rate = _num(data.get("tltr_aply_byrt"))
+        if rate <= 0:
+            raise MeritzError("적용환율 없음 또는 0 이하")
+        return rate, data.get("exrt_stnd_time")
+
+    def fx_applied_rate(self):
+        return self.fx_applied()[0]
+
+    def krw_cash(self):
+        """원화 예수금 (GET /accounts/v1/me/deposit 의 tfam) — 환전 가능 여부 확인용. 읽기 전용. meritz_dca_bot 과 같은 호출"""
+        d = self._call("GET", "/accounts/v1/me/deposit")
+        data = d.get("data")
+        if not isinstance(data, dict) or data.get("tfam") in (None, ""):
+            raise MeritzError("KRW 예수금 확인 필요")
+        v = _num(data["tfam"])
+        if v < 0:
+            raise MeritzError("KRW 예수금 숫자 확인 필요")
+        return v
+
+    def fx_exchange(self, frcr_amt, iqry_exrt, exrt_stnd_time):
+        """실시간 환전신청 원화→달러 (실제 돈 이동 — main.auto_fx 의 안전장치를 모두 통과했을 때만 호출).
+        POST /forex/v1/exchanges. 호출 형식·성공 코드는 meritz_dca_bot/meritz_api.py 와 같음(스펙상 frcr_amt 는 string —
+        서버 수용 여부는 실환전 전까지 미확인이며 실환전 테스트로 확인하지 않음)"""
+        body = {"mnec_clcd": "1", "crcd": "USD", "frcr_amt": str(frcr_amt),
+                "wncr_amt": 0, "exrt_stnd_time": exrt_stnd_time, "iqry_exrt": str(iqry_exrt)}
+        d = self._call("POST", "/forex/v1/exchanges", body=body)
+        if str(d.get("rsp_cd")) != "0000":
+            raise MeritzError("환전 성공 코드 불일치")
+        return d.get("data") or {}
 
     def us_market_status(self):
         """미국 장운영 상태 코드 ("004" = 정규장 개시)"""

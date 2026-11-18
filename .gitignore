@@ -40,6 +40,11 @@
 !/bithumb_laoeo_bot/*.py
 !/bithumb_laoeo_bot/README.md
 
+!/meritz_laoer/
+/meritz_laoer/*
+!/meritz_laoer/*.py
+!/meritz_laoer/README.md
+
 # 한국단타봇 수집기: 패키지 안 .py만 (테스트·서비스 파일은 올리지 않음)
 !/honginki_collector/
 /honginki_collector/*

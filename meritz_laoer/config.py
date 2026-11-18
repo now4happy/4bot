@@ -1,6 +1,10 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v1.0.2)
-# 메리츠 SOXL 무한매수(V14) 새 봇 — 설정·장부
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.0.0)
+# 메리츠 속쓸 적립봇(SOXL 분할매수·부분매도) — 설정·장부
+# v2.0.0 (2026-11-18): 적립봇 전환. 설정 키 추가(total_krw·ladder_*·sell_*·rebuy_drop_usd·unit_base·first_buy_mode·max_rounds_per_day·
+#   order_type·allow_consecutive_sell, start.mode·filled_levels·rebuy_anchor_usd·rebuy_k), validate_settings 새로 씀,
+#   적립 상태 파일 data/accum_state.json (get_accum/save_accum), inject_start 가 상태도 같이 시작.
+#   장부(position·ledger)·apply_fill·add_shares·halt 와 V14 용 함수들은 그대로(V14 함수는 이제 안 불림)
 # v1.0.2 (2026-11-08): add_shares 추가 — 사용자가 직접 산 주식을 지정 평단으로 장부에 더함 (기존 장부 형식 그대로)
 # v1.0.0 (2026-11-08): 첫 버전. hantu_laoer/config.py 에서 V14 가 쓰는 함수만 같은 이름·같은 동작으로 옮김
 #   - 옮긴 함수(동작 그대로): get_reverse_state, set_reverse_state, apply_reverse_daily_settlement,
@@ -18,6 +22,7 @@ import tempfile
 from zoneinfo import ZoneInfo
 
 from global_throttle import GlobalThrottle
+from accum_strategy import CHOICES, ladder_levels, state_from_start
 
 SETTINGS_PATH = os.environ.get("MERITZ_LAOER_SETTINGS", "/etc/meritz-laoer/settings.json")
 EST = ZoneInfo("America/New_York")
@@ -31,14 +36,32 @@ SAFE_DEFAULTS = {
     "symbol": "SOXL",
     "price_market": "AX",                  # 메리츠 시세 조회용 거래소 구분 (bot_office/fanding_trade.py 와 같음)
     "exch_id": "",                         # 주문용 거래소 번호. 비우면 잔고 행에서 찾음
-    "split_count": None,                   # 20/40/80 — 이체 후 결정. 비어 있으면 주문 안 함
-    "seed_usd": None,                      # 총 시드(USD). 실제 환전 USD 로 확정. 비어 있으면 주문 안 함
+    "split_count": None,                   # 적립봇: 10 (총 투자금을 10 등분). 비어 있으면 주문 안 함
+    "seed_usd": None,                      # (V14 용, 적립봇은 안 씀)
+    # ---- 적립봇 (노션 '메리츠 속쓸 적립봇' 2026-11-18)
+    "total_krw": None,                     # 총 투자금(원). 금액은 기본값 없음 — 설정 필수
+    "ladder_top_usd": 50,                  # 매수 시작가
+    "ladder_step_usd": 5,                  # 내려갈 때마다 1회차 ($50~$5 10회)
+    "sell_profit_pct": 10,                 # 평단 대비 평가 이익 이 % 에 매도
+    "sell_fraction_pct": 50,               # 보유의 이 % 매도 (정수 주 내림)
+    "rebuy_drop_usd": 5,                   # 매도 뒤 평단 대비 이만큼 내려갈 때마다 재매수
+    "unit_base": None,                     # 노션 Q2: total | cash — 비어 있으면 주문 안 함
+    "first_buy_mode": None,                # 노션 Q1: now | wait_top — 비어 있으면 주문 안 함
+    "max_rounds_per_day": None,            # 노션 Q4: 하루 최대 회차 수(정수 1 이상) — 비어 있으면 주문 안 함
+    "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
+    "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
+    # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
+    "auto_fx_enabled": False,              # true 면 오늘 매수에 달러가 모자랄 때 원화→달러 환전 신청 (실주문 모드에서만)
+    "auto_fx_buffer_pct": None,            # 부족 달러에 더할 여유 % (환율·체결가 변동 대비)
+    "auto_fx_max_usd_per_day": None,       # 하루 환전 상한 (달러, 정수)
     # 익절 %: hantu_laoer/config.py DEFAULT_TARGET["SOXL"] (main c53f8d4 기준). 서버 data/profit_config.json 값은 확인 필요
     "target_profit_pct": 12.0,
     # 복리 %: hantu_laoer/config.py DEFAULT_COMPOUND["SOXL"] (익절 이익 중 다음 시드에 더하는 비율)
     "compound_rate_pct": 70.0,
     "fee_pct": 0.07,                       # Super365 미국주식 0.07%
-    "start": {"qty": None, "principal_usd": None, "avg_usd": None},
+    "start": {"qty": None, "principal_usd": None, "avg_usd": None,
+              "mode": None, "filled_levels": None, "rebuy_anchor_usd": None, "rebuy_k": 0,
+              "first_round_credit_usd": None},   # 노션 Q3: 기존 보유를 사다리에 어떻게 칠지 (사람이 정함)
     "key_file": "/etc/meritz-laoer/meritz_keys.json",      # 새 메리츠 3번 계좌 키 (P·VR6 키 재사용 금지)
     "expected_key_fp": "",                 # main.py --fingerprint 로 확인한 지문. 다르면 정지
     "forbid_key_files": ["/etc/bot-office/meritz.json", "/etc/bot-office/meritz_vr6.json"],
@@ -79,22 +102,52 @@ def validate_settings(s):
     bad = []
     sc = s.get("split_count")
     if sc is None or _f(sc) < 2 or _f(sc) != int(_f(sc)):
-        bad.append("split_count 없음 또는 정수 아님 (20/40/80 중 결정 후 입력)")
-    if s.get("seed_usd") is None or _f(s.get("seed_usd")) <= 0:
-        bad.append("seed_usd 없음 (실제 환전 USD 로 확정 후 입력)")
+        bad.append("split_count 없음 또는 정수 아님 (적립봇은 10)")
+    if s.get("total_krw") is None or _f(s.get("total_krw")) <= 0:
+        bad.append("total_krw 없음 (총 투자금, 원)")
+    for k in ("ladder_top_usd", "ladder_step_usd", "rebuy_drop_usd", "sell_profit_pct"):
+        if _f(s.get(k)) <= 0:
+            bad.append(f"{k} 0 이하 또는 없음")
+    if not (0 < _f(s.get("sell_fraction_pct")) < 100):
+        bad.append("sell_fraction_pct 는 0 초과 100 미만")
+    if sc is not None and _f(sc) >= 2 and len(ladder_levels(s.get("ladder_top_usd"), s.get("ladder_step_usd"), _f(sc))) != int(_f(sc)):
+        bad.append("사다리 가격이 0 이하로 내려감 — ladder_top_usd·ladder_step_usd·split_count 확인")
+    for k, opts in CHOICES.items():
+        if s.get(k) not in opts:
+            bad.append(f"{k} 미정 ({' | '.join(opts)} 중 Muse 결정 필요 — 노션 질문)")
+    mr = s.get("max_rounds_per_day")
+    if mr is None or isinstance(mr, bool) or _f(mr) < 1 or _f(mr) != int(_f(mr)):
+        bad.append("max_rounds_per_day 미정 (1 이상 정수, Muse 결정 필요 — 노션 질문)")
+    if not isinstance(s.get("allow_consecutive_sell"), bool):
+        bad.append("allow_consecutive_sell 미정 (true | false, Muse 결정 필요 — 노션 질문)")
+    if not isinstance(s.get("auto_fx_enabled"), bool):
+        bad.append("auto_fx_enabled 는 true | false")
+    elif s.get("auto_fx_enabled"):
+        if s.get("auto_fx_buffer_pct") is None or _f(s.get("auto_fx_buffer_pct")) < 0:
+            bad.append("auto_fx_enabled=true 인데 auto_fx_buffer_pct 없음 (0 이상, 노션 질문 Q11)")
+        if s.get("auto_fx_max_usd_per_day") is None or _f(s.get("auto_fx_max_usd_per_day")) <= 0:
+            bad.append("auto_fx_enabled=true 인데 auto_fx_max_usd_per_day 없음 (0 초과, 노션 질문 Q11)")
     st = s.get("start") or {}
     q, pr, av = st.get("qty"), st.get("principal_usd"), st.get("avg_usd")
-    if q is None or int(_f(q)) <= 0 or _f(q) != int(_f(q)):
-        bad.append("start.qty 없음")
-    if pr is None or _f(pr) <= 0:
-        bad.append("start.principal_usd 없음")
+    if q is None or int(_f(q)) < 0 or _f(q) != int(_f(q)):
+        bad.append("start.qty 없음 (0 이상 정수)")
+    if pr is None or _f(pr) < 0:
+        bad.append("start.principal_usd 없음 (0 이상)")
+    if q is not None and int(_f(q)) > 0 and (pr is None or _f(pr) <= 0):
+        bad.append("start.qty > 0 인데 principal_usd 가 0 이하")
     if q and pr and av is not None and _f(av) > 0 and int(_f(q)) > 0:
         if abs(_f(pr) / int(_f(q)) - _f(av)) > 0.01:
             bad.append("start.avg_usd 가 principal_usd ÷ qty 와 0.01 넘게 다름 — 숫자 확인")
-    if _f(s.get("target_profit_pct")) <= 0:
-        bad.append("target_profit_pct 0 이하")
+    if not isinstance(st.get("filled_levels"), list):
+        bad.append("start.filled_levels 없음 (이미 산 걸로 칠 회차 목록, 없으면 [] — 노션 질문 Q3)")
+    if st.get("mode") not in ("ladder", "rebuy"):
+        bad.append("start.mode 미정 (ladder | rebuy — 노션 질문 Q3)")
+    elif st.get("mode") == "rebuy" and _f(st.get("rebuy_anchor_usd")) <= 0:
+        bad.append("start.mode=rebuy 인데 start.rebuy_anchor_usd 없음")
+    if st.get("first_round_credit_usd") is not None and _f(st.get("first_round_credit_usd")) < 0:
+        bad.append("start.first_round_credit_usd 는 0 이상 (1회차 매수 때 한 번 차감할 달러, 없으면 생략)")
     if str(s.get("symbol", "")).upper() != "SOXL":
-        bad.append("이 봇은 SOXL 전용 (TQQQ 는 나중에 별도)")
+        bad.append("이 봇은 SOXL 전용")
     return bad
 
 
@@ -110,6 +163,7 @@ class ConfigManager:
             "HISTORY": "data/manual_history.json",
             "POSITION": "data/position.json",
             "HALT": "data/halt.json",
+            "ACCUM": "data/accum_state.json",
         }
         os.makedirs("data", exist_ok=True)
 
@@ -288,7 +342,22 @@ class ConfigManager:
                    "cycle_buy_total": principal, "cycle_sell_total": 0.0, "cycle_start": datetime.datetime.now(EST).strftime('%Y-%m-%d'),
                    "source": "settings.start (입고 평단 미사용)"}
             self._save_json(self.FILES["POSITION"], pos)
+            self._save_json(self.FILES["ACCUM"], state_from_start(st))
             return pos, True
+
+    # ---------------- 적립 상태 (모드·채운 회차·재매수 기준). 장부와 별도 파일
+    def get_accum(self):
+        """저장된 적립 상태. 없으면 None"""
+        d = self._load_json(self.FILES["ACCUM"], None)
+        return d if isinstance(d, dict) else None
+
+    def save_accum(self, st):
+        with GlobalThrottle.get_file_lock(self.FILES["ACCUM"]):
+            self._save_json(self.FILES["ACCUM"], st)
+
+    def accum_or_start(self):
+        """저장된 상태, 없으면 설정 start 로 만든 값(저장하지 않음 — 모의·미리보기용)"""
+        return self.get_accum() or state_from_start(self.s.get("start"))
 
     def add_shares(self, qty, avg, date_et):
         """사용자가 직접 추가한 주식을 지정 평단으로 장부에 더함 → (변경 전, 변경 후).
