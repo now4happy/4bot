@@ -43,6 +43,7 @@
 - 사무실 v1.7.4 (2026-11-13): 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 — 바벨 모드(BARBELL_60_30_10)일 때만 need.json 토스 계좌에 '바벨 씨드' 줄을 넣는다. need = 기준시드 − SOXL평가액(보유 주수 × 현재가), holding = 토스 USD 매수가능금액, 부족액 = max(0, need − holding). 바벨 OFF·씨드 없음·SOXL 조회 실패면 줄 없음 (합산 제외). 일일 매수 필요액 계산은 그대로.
 - 사무실 v1.7.8 (2026-11-13): 메리츠 4번에 SGOV 다음 회차 줄 추가 — 매수 3거래일(미국장) 전부터 보여준다. need = 다음 회차 금액(1회차면 first_tranche_usd, 이후 tranche_usd), holding = 메리츠 USD 추정잔고, 부족액 = max(0, need − holding). SGOV OFF·회차 없음·예정일 없음·3거래일 밖이면 줄 없음. 4번 적립(NKE/QLD) need는 그대로.
 - 사무실 v1.8.9 (2026-11-16): 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX) — QLD가 나스닥(OQ)·뉴욕(NY)에 없어 0으로 읽혀 need가 null(확인 불가)이 되던 문제. 첫 번째 0보다 큰 시세를 쓴다 (봇 v1.2.5와 같은 방식). 전부 0이면 그대로 null.
+- 사무실 vNEXT (2026-11-19): 4번 메리츠 need에 당일 매수 불가 종목 표시 — 0주로 나온 종목(1주 값 > 오늘 쓸 돈)을 need.json 3번 줄에 skipped로 함께 내보낸다. 아침 브리핑 표 표시용. need 합계 계산은 그대로.
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid
@@ -1419,17 +1420,19 @@ def is_trading_day(d):
     return d.strftime("%m-%d") not in US_CLOSED.get(d.year, "").split()
 
 
-def _meritz_dca_need(now=None):
-    """Read-only 3번 need; None when price/state unavailable, never invent prices."""
+def _meritz_dca_need_detail(now=None):
+    """Read-only 3번 need + 당일 매수 불가 종목. (total, skipped) 반환.
+    skipped: 오늘 살 수량이 0주로 나온 종목 (1주 값 > 오늘 쓸 돈). need 합계 계산은 그대로.
+    None when price/state unavailable, never invent prices."""
     now = (now or datetime.now(KST)).astimezone(KST)
-    if not is_trading_day(now.date()): return 0.0
+    if not is_trading_day(now.date()): return 0.0, []
     s = load(R / "etc/meritz-accum/settings.json", {})
-    if not s.get("enabled",False): return 0.0
+    if not s.get("enabled",False): return 0.0, []
     state_dir = R / str(s.get("state_dir", "/var/lib/meritz-dca")).lstrip("/")
     state = load(state_dir / ("dca_config.dry.json" if s.get("dry_run",True) else "dca_config.json"), None)
     if not isinstance(state,dict):
         state = {"is_master_active":(s.get("start") or {}).get("master_active",False),"stocks":(s.get("start") or {}).get("stocks",{})}
-    if not state.get("is_master_active",False): return 0.0
+    if not state.get("is_master_active",False): return 0.0, []
     from math import floor
     try:
         import meritz_client
@@ -1437,6 +1440,7 @@ def _meritz_dca_need(now=None):
         token = _meritz_brief_token_cache("3번", R / "var/lib/meritz-dca/meritz_token.json", key)
         m = meritz_client.Meritz(key,token_cache=token)
         total = 0.0
+        skipped = []
         for sym,stock in (state.get("stocks") or {}).items():
             if not stock.get("enabled",True) or stock.get("s_mode","buy_1") not in ("buy_1","buy_2"): continue
             if stock.get("last_exec_date") == now.strftime("%Y-%m-%d"): continue
@@ -1455,7 +1459,7 @@ def _meritz_dca_need(now=None):
                 if _p > 0:
                     price = _p
                     break
-            if price <= 0: return None
+            if price <= 0: return None, []
             lg = stock.get("ledger") or {}
             qty = float(lg.get("qty",stock.get("qty",0)) or 0)
             principal = float(lg.get("principal",stock.get("principal_usd",0)) or 0)
@@ -1465,10 +1469,18 @@ def _meritz_dca_need(now=None):
             budget = float(stock.get("base_amount",40))*mult*(0.5 if half else 1.0)
             pool = budget+max(0,float(stock.get("buy_carry",0) or 0))
             q = max(1,int(pool//price)) if s.get("us_int_buy_mode","carry")=="min1" else int(pool//price)
+            if q <= 0:
+                skipped.append(sym)
             total += round(q*price*(1+float(s.get("buy_cash_buffer_pct",1))/100),2)
-        return round(total,2)
+        return round(total,2), skipped
     except Exception:
-        return None
+        return None, []
+
+def _meritz_dca_need(now=None):
+    """Read-only 3번 need; None when price/state unavailable, never invent prices."""
+    total, _skipped = _meritz_dca_need_detail(now)
+    return total
+
 
 def barbell_seed_line(toss, usd_cash):
     """바벨 모드일 때만: 씨드 부족액 줄 (읽기 전용). seed − SOXL 투입원가 = 필요 현금, 보유 = 토스 USD 매수가능금액.
@@ -1573,8 +1585,14 @@ def need_data(now=None):
         if label == "3번":
             est_4 = est
             auto_fx_4 = auto_fx
-        meritz.append(_need_line("USD", est, _meritz_dca_need(now) if label == "3번" else _fanding_need(label, now),
-                                 auto_fx, label=label))
+            dca_total, dca_skipped = _meritz_dca_need_detail(now)
+            line_3 = _need_line("USD", est, dca_total, auto_fx, label=label)
+            if dca_skipped:
+                line_3["skipped"] = dca_skipped
+            meritz.append(line_3)
+        else:
+            meritz.append(_need_line("USD", est, _fanding_need(label, now),
+                                     auto_fx, label=label))
     sgov_line = _sgov_need_line(now, est_4, auto_fx_4)
     if sgov_line is not None:
         meritz.append(sgov_line)
