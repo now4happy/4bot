@@ -1041,7 +1041,7 @@ def _extract_upstream_files_sync(
         shutil.rmtree(tmpd, ignore_errors=True)
 
 
-# [🔗토스 토큰 공유 HOOK · vNEXT] 원작 동기화가 toss_api.py 를 원작본으로 덮어쓰면 공유 토큰 훅이 사라진다.
+# [🔗토스 토큰 공유 HOOK · v1.2.8] 원작 동기화가 toss_api.py 를 원작본으로 덮어쓰면 공유 토큰 훅이 사라진다.
 # 동기화 직후 toss_hook_patch.py 에 저장된 패치를 다시 적용한다. 실패해도 동기화·스나이퍼 동작은 멈추지 않는다
 # (원작 파일 그대로 동작). 실패는 로그 + 텔레그램 알림 본문(HOOK_ALERT_PREFIX)으로 드러낸다.
 HOOK_ALERT_PREFIX = "⚠️ 토큰 공유 훅"

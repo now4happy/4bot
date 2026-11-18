@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-FILE: toss_sniper/toss_hook_patch.py  (vNEXT · 방: 2. 토스 스나이퍼 · 작업 toss-token-q5-auto-reapply)
+FILE: toss_sniper/toss_hook_patch.py  (v1.2.8 · 방: 2. 토스 스나이퍼 · 작업 toss-token-q5-auto-reapply)
 
 원작 자동 동기화(plugin_updater._extract_upstream_files_sync)는 원작 toss_api.py 를 바이트 그대로
 toss_sniper/ 에 덮어써서 '토스 토큰 공유 HOOK'(toss_token_share 로 3곳이 토큰 1개를 같이 씀)이 사라진다.
