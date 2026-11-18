@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.3)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.5)
+# v2.0.5 (2026-11-19): 정규장 외(장전 003·장후 005) 장중 매도는 '004 아니면 건너뜀' 유지 — 공식 openapi.json 에 연장 시간 주문·체결 근거가 없어 미확인(주석·테스트만 추가, 동작 변경 없음). BOT_VERSION v2.0.5. 체결 내역 심볼 필드 수정은 meritz_api.py
+# v2.0.4 (2026-11-19, 판 5 점검 보완 + 판 6): ① 현금 부분 매수(accum_strategy.make_plan) — 계획·--check·텔레그램에 부분 매수 수량 표시
+#   ② 주문 응답 유실 자동처리: 주문 전에 '시도' 기록(attempts)을 먼저 저장 → 응답을 못 받으면(시간 초과·연결 끊김·주문번호 없음) 멈추지 않고
+#      그 주문을 다시 내지 않은 채 체결 내역(fills_rows)에서 같은 방향·수량·가격 조건의 주문번호를 찾아 이어 붙임(주문 직후 3번, 마감 뒤 체결 반영 때 한 번 더).
+#      못 찾으면 '체결 안 된 것'으로 두고 마지막 잔고=장부 확인이 안전망(어긋나면 예전처럼 정지). 서버가 오류 코드로 분명히 거절한 주문은 '안 들어감'으로 처리
+#   ③ 텔레그램 chat_id 필수: 비어 있거나 숫자가 아니면 점검(--check·--add-shares·주문 전 확인)에서 막음 — 하루 기록은 안 써서 고치면 같은 날 다시 시도
+#   ④ 판 5 보완 포함: 거래소 번호·적용환율 일시 오류는 하루 기록 없이 5분 뒤 재시도, 자동환전 뒤 달러 반영 최대 90초 대기, 장중 매도는 장이 열려 있을 때만
 # 메리츠 속쓸 적립봇 (SOXL 분할매수·부분매도) — 실행·안전장치
 # v2.0.3 (2026-11-18): ① 당일 매도 — 오늘 산 주식이 평단(오늘 체결 반영) +목표% 에 닿으면 그날 바로 매도 비중만큼 매도.
 #     장중 intraday_sell_check_sec(기본 120초)마다 run_intraday_sell 이 확인 (실거래·LIMIT 주문일 때만). 매수는 하루 1회차 그대로(장중 재매수 없음),
@@ -59,10 +66,10 @@ import config as cfgmod                      # noqa: E402
 from accum_strategy import make_plan, apply_fill_to_state, ceil2   # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
-from notifier import Notifier, _read_token, token_fp, to_korean   # noqa: E402
+from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.0.3"
+BOT_VERSION = "v2.0.5"
 EST = ZoneInfo("America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -103,6 +110,9 @@ def sandbox_dir(state_dir):
 
 
 # ---------------------------------------------------------------- 점검 (주문 없음)
+CHAT_BAD = "텔레그램 방 번호"      # check_identity 문제 글자의 머리 (화면 글자라 영어 이름 없이 — notifier.to_korean 이 chat_id 를 '설정값' 으로 바꿔 버림). run_order_day 가 방 번호만 문제면 하루 기록 없이 다시 시도
+
+
 def check_identity(s):
     """키·토큰 점검 → (문제 목록, 키 지문)"""
     bad, fp = [], ""
@@ -136,6 +146,11 @@ def check_identity(s):
         for other in s.get("forbid_telegram_files") or []:
             if os.path.realpath(other) == os.path.realpath(tf) or token_fp(_read_token(other)) == token_fp(tok):
                 bad.append("텔레그램 토큰이 다른 봇과 같음 — 재사용 금지")
+        chat = _read_chat(tf)                  # v2.0.4: chat_id 가 없으면 알림도 메뉴도 안 됨 → 비지 않게 막음
+        if not chat:
+            bad.append(CHAT_BAD + "가 비어 있음 — 알림·메뉴가 안 돼요 (텔레그램 설정 파일에 방 번호가 있어야 해요)")
+        elif not re.fullmatch(r"-?\d+", chat):
+            bad.append(CHAT_BAD + "는 숫자여야 해요 — 메뉴가 등록된 방으로 못 알아봐요 (텔레그램 설정 파일의 방 번호 확인)")
     return bad, fp
 
 
@@ -349,6 +364,9 @@ def run_intraday_sell(s, api, note):
     if not exch:
         _warn_once(cfg, mark, m, "exch", note, "⛔ 거래소 번호를 알 수 없어 당일 매도를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
         return "거래소"
+    # v2.0.5: 정규장("004") 아니면 건너뜀을 유지. 003 프리마켓·005 애프터마켓에 지정가 매도가 접수·체결되는지는 공식 openapi.json 에 없음(주문 API 에 연장 시간 구분 필드 없음) → 미확인, 실거래 시험은 사용자 결정 필요
+    if str(api.us_market_status()) != "004":      # 조기폐장일(13:00 ET)·장 마감 뒤에는 장중 매도를 안 냄 (order_deadline_et 만으로는 못 거름)
+        return "장 닫힘"
     if any(str(r.get("seln_byov_clcd")) == "1" for r in api.open_orders_today(s["symbol"])):
         _warn_once(cfg, mark, m, "open_sell", note, "이 계좌에 SOXL 매도 미체결 주문이 이미 있어 당일 매도를 안 냄 (수동 확인)")
         return "매도 미체결 있음"
@@ -356,33 +374,134 @@ def run_intraday_sell(s, api, note):
     m["sell_attempt"] = {"at": now_et().isoformat(), "qty": o["qty"], "price": o["price"],
                          "status": "접수 시도 (이 기록이 있으면 오늘 다시 매도 주문을 내지 않음)"}
     cfg._save_json(mark, m)                          # 주문 전에 먼저 기록 → 응답이 불확실해도 중복 주문 없음
-    err = None
-    try:
-        r = api.order("SELL", s["symbol"], exch, o["type"], o["qty"], o["price"])
-        m["orders"].append(dict(o, no=r["no"], intraday=True))
-        m["sell_attempt"].update(status="접수 완료", no=r["no"])
-    except WarnNeeded as e:
-        err = f"증권사 경고(자동 확인 안 함) {e}"
-        m["sell_attempt"]["status"] = "증권사 경고로 안 나감: " + str(e)[:100]
-    except MeritzError as e:
-        err = str(e)[:160]
-        m["sell_attempt"]["status"] = "실패 또는 불확실 — 오늘 다시 안 냄: " + err[:100]
+    errs = []
+    res = send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True)     # v2.0.4: 응답을 못 받으면 attempts 에 남겨 마감 뒤 자동으로 찾음
+    err = (errs[0] if errs else None)
+    if res == "ok":
+        m["sell_attempt"].update(status="접수 완료", no=m["orders"][-1]["no"])
+    else:
+        m["sell_attempt"]["status"] = ("증권사가 거절 — 오늘 다시 안 냄: " if res == "rejected" else "응답 못 받음 — 오늘 다시 안 냄, 체결 내역에서 자동으로 찾음: ") + (err or "")[:100]
     cfg._save_json(mark, m)
-    head = (f"🎯 당일 매도 {'접수' if not err else '실패'}\n오늘 체결 반영 평단 ${info['avg']:.2f} (보유 {q}주) → 목표 ${info['sell_target']:.2f} · 현재가 ${px:.2f}\n")
+    head = (f"🎯 당일 매도 {'접수' if res == 'ok' else ('실패' if res == 'rejected' else '응답 못 받음')}\n오늘 체결 반영 평단 ${info['avg']:.2f} (보유 {q}주) → 목표 ${info['sell_target']:.2f} · 현재가 ${px:.2f}\n")
     note.send(head + fmt_orders([o]) + (f"\n⚠️ {err}\n오늘은 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if err else ""))
-    return "매도 접수" if not err else "매도 실패"
+    return {"ok": "매도 접수", "rejected": "매도 실패"}.get(res, "매도 응답 유실")
 
 
 # ---------------------------------------------------------------- 하루 주문
+# 판 5 점검 보완: '그날 주문 기록(표시 파일)을 써 버리면 같은 날 다시 못 낸다' 는 문제 — 설정·일시 오류로 못 낸 경우엔 기록을 안 쓰고 다시 시도
+_RETRY = {}                       # 이유별 {"day": 알린 날, "next": 다시 시도할 시각}
+FX_WAIT_TRIES, FX_WAIT_SEC = 9, 10   # 환전 신청 직후 예수금 반영을 기다리는 횟수·간격(초) — 최대 약 90초
+
+
+def _retry_later(note, d, key, text, sec=300):
+    """표시 파일을 안 쓰고 sec 초 뒤 다시 시도 (설정을 고치거나 일시 오류가 풀리면 같은 날 주문이 나감). 같은 이유의 알림은 하루 한 번"""
+    r = _RETRY.setdefault(key, {"day": "", "next": 0.0})
+    if r["day"] != d:
+        r["day"] = d
+        note.send(text)
+    r["next"] = time.time() + sec
+
+
+def _retry_wait(d):
+    return any(r["day"] == d and time.time() < r["next"] for r in _RETRY.values())
+
+
+# ---------------------------------------------------------------- v2.0.4 주문 응답 유실 자동처리
+RECON_TRIES, RECON_SEC = 3, 5      # 주문 직후 체결 내역에서 찾아보는 횟수·간격(초)
+
+
+def _known_nos(cfg, state):
+    """이 봇이 이미 장부 기록(표시 파일)에 올려 둔 주문번호 전부 — 다른 날 주문을 잘못 이어 붙이지 않게 제외"""
+    out = set()
+    for mp in pending_syncs(state):
+        m = cfg._load_json(mp, {})
+        if isinstance(m, dict):
+            out.update(str(o.get("no")) for o in (m.get("orders") or []) if isinstance(o, dict) and o.get("no"))
+    return out
+
+
+def reconcile_attempts(s, api, cfg, m, final):
+    """주문 응답을 못 받은 주문(m['attempts'])을 체결 내역에서 찾아 주문번호를 붙임 (다시 주문하지 않음). m 을 직접 바꿈 → (찾은 수, 남은 수).
+    조건: 심볼(응답에 있으면)·방향이 같고, 아직 어느 기록에도 없는 주문번호이며, 체결 평균가가 주문가 범위 안(매수 ≤ 주문가, 매도 ≥ 주문가).
+    final=False(주문 직후): 체결수량이 주문수량과 같은 것만. final=True(마감 뒤): 주문수량 이하(부분 체결 포함). 후보가 딱 1건일 때만 붙임 — 0건·2건 이상이면 그대로 둠"""
+    att = [a for a in (m.get("attempts") or []) if isinstance(a, dict)]
+    if not att:
+        return 0, 0
+    fr = getattr(api, "fills_rows", None)
+    if fr is None:
+        return 0, len(att)
+    dt = datetime.date.fromisoformat(m["date"])
+    rows = fr((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
+    known = _known_nos(cfg, s["state_dir"]) | {str(o.get("no")) for o in (m.get("orders") or []) if isinstance(o, dict) and o.get("no")}
+    sym = str(s["symbol"]).upper()
+    cands = [r for r in rows if r["no"] not in known and (not r.get("sym") or r["sym"] == sym)]
+    found, rest = 0, []
+    for a in att:
+        lim, q = float(a.get("price") or 0), int(a.get("qty") or 0)
+
+        def fit(r):
+            if r["side"] != a.get("side") or r["qty"] < 1 or r["qty"] > q or (not final and r["qty"] != q):
+                return False
+            if lim <= 0 or a.get("type") == "MOC":
+                return True
+            px = r["amt"] / r["qty"]
+            return px <= lim + 0.005 if a["side"] == "BUY" else px >= lim - 0.005
+        hit = [r for r in cands if fit(r)]
+        if len(hit) == 1:
+            cands.remove(hit[0])
+            m.setdefault("orders", []).append(dict({k: v for k, v in a.items() if k != "status"}, no=hit[0]["no"], recovered=True))
+            found += 1
+        else:
+            rest.append(a)
+    m["attempts"] = rest
+    return found, len(rest)
+
+
+def send_order(s, api, cfg, mark, m, o, exch, errors, intraday=False):
+    """주문 1건. 주문 전에 '시도'를 표시 파일에 먼저 저장하고(→ 응답이 안 와도 같은 날 다시 안 냄), 결과에 따라
+    성공: m['orders'] 에 번호와 함께 · 서버가 분명히 거절/경고: errors 에만 · 응답을 못 받음/번호 없음: m['attempts'] 에 남김(나중에 자동으로 찾음). → 'ok'|'rejected'|'unsure'"""
+    a = dict(o, status="접수 시도 (응답 확인 전)")
+    m.setdefault("attempts", []).append(a)
+    cfg._save_json(mark, m)
+    out, why = "unsure", ""
+    try:
+        r = api.order(o["side"], s["symbol"], exch, o["type"], o["qty"], o["price"])
+        if str(r.get("no") or "").strip():
+            m["attempts"].remove(a)
+            m.setdefault("orders", []).append(dict(o, no=str(r["no"]).strip(), **({"intraday": True} if intraday else {})))
+            out = "ok"
+        else:
+            why = "주문 응답에 주문번호가 없음"
+    except WarnNeeded as e:
+        out, why = "rejected", f"증권사 경고(자동 확인 안 함) {e}"
+    except MeritzError as e:
+        out, why = ("rejected" if e.definite else "unsure"), str(e)[:160]
+    except Exception as e:                      # 시간 초과 등 — 주문이 들어갔는지 모름
+        why = f"주문 응답을 못 받음 ({type(e).__name__})"
+    if out == "rejected":
+        m["attempts"].remove(a)
+        errors.append(f"{o.get('desc')}: {why}")
+    elif out == "unsure":
+        a["status"] = "응답 못 받음 — 다시 안 내고 체결 내역에서 찾음: " + why[:100]
+        errors.append(f"{o.get('desc')}: {why} (응답을 못 받았어요 — 다시 주문하지 않고 자동으로 확인해요)")
+    cfg._save_json(mark, m)
+    return out
+
+
 def run_order_day(s, api, note, live):
     state = s["state_dir"]
     d = now_et().strftime("%Y-%m-%d")
     mark = os.path.join(state, "data", f"{'orders' if live else 'dry_orders'}_{d}.json")
     if os.path.exists(mark):
         return "이미 함"
+    if live and _retry_wait(d):
+        return "대기"
     cfg = ConfigManager(s)
     if live:
         bad = gate_problems(s, cfg, live=True)
+        if bad and all(b.startswith(CHAT_BAD) for b in bad):      # chat_id 만 문제면 하루 기록을 안 써서, 고치면 같은 날 5분 안에 다시 시도 (알림은 chat_id 가 없어 로그로만 남음)
+            _retry_later(note, d, "chat", "⛔ 오늘 주문 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 오늘도 5분 안에 다시 시도해요)")
+            return "chat_id"
         if bad:
             note.send("⛔ 오늘 주문 안 함\n" + "\n".join("- " + b for b in bad))
             cfg._save_json(mark, {"skipped": bad})
@@ -412,11 +531,13 @@ def run_order_day(s, api, note, live):
         note.send("⛔ 이 계좌에 SOXL 미체결 주문이 이미 있음 — 오늘 주문 안 함 (수동 확인)")
         cfg._save_json(mark, {"skipped": "기존 미체결 있음"})
         return "미체결"
-    if live and not exch:
-        note.send("⛔ 거래소 번호를 알 수 없음 — 설정에 거래소 번호를 넣어 주세요")
-        cfg._save_json(mark, {"skipped": "거래소 번호 없음"})
+    if live and not exch:      # 보유 0주면 잔고에서 거래소 번호를 못 얻음 — 표시 파일을 안 써서, 설정을 고치면 같은 날 다시 시도
+        _retry_later(note, d, "exch", "⛔ 거래소 번호를 알 수 없음 — 설정에 거래소 번호를 넣어 주세요 (고치면 오늘도 5분 안에 다시 시도해요)")
         return "거래소"
     price, prev_close, fx = market_inputs(s, api)
+    if live and not (fx and fx > 0):      # 적용환율 일시 오류로 오늘 매수가 통째로 빠지지 않게 (market_inputs 는 실패를 0.0 으로 삼킴)
+        _retry_later(note, d, "fx", "⚠️ 적용환율을 못 읽어 오늘 매수 계획을 못 세웠어요 — 5분 뒤 다시 시도해요")
+        return "환율 실패"
     cash = api.usd_cash()
     if live:      # 맨 위 가격 이상을 본 적 있음 표시 (first_buy_mode=wait_top 용). 모의에서는 저장하지 않음
         ast = cfg.accum_or_start()
@@ -427,28 +548,45 @@ def run_order_day(s, api, note, live):
     plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q)
     fxres = auto_fx(s, api, cfg, plan, live, d)
     if live and s.get("auto_fx_enabled"):
+        if fxres and fxres.get("done"):      # 환전 신청 직후엔 예수금 반영이 늦을 수 있어 잠깐 기다림 (환전은 다시 신청하지 않음)
+            need = float(plan["info"].get("need_usd") or 0)
+            for _ in range(FX_WAIT_TRIES):
+                if api.usd_cash() >= need:
+                    break
+                time.sleep(FX_WAIT_SEC)
         cash = api.usd_cash()          # 환전 뒤(또는 안 한 뒤) 실제 예수금으로 다시 계획 — 모자라면 그만큼 매수가 줄어듦
         plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q, ignore_auto_fx=True)
     orders, notes = plan["orders"], plan["notes"]
-    placed, errors = [], []
+    errors, recovered = [], 0
+    m = {"date": d, "prev_close": prev_close, "price": price, "fx": fx, "auto_fx": fxres,
+         "qty": qty, "avg": avg, "cash": round(cash, 2), "orders": [] if live else orders, "attempts": [],
+         "errors": errors, "synced": False if live else True, "sell_deferred": bool(plan["info"].get("sell_deferred"))}
     if live:
+        cfg._save_json(mark, m)                      # 주문 전에 하루 기록부터 → 도중에 멈춰도 같은 날 다시 주문하지 않음 (v2.0.4)
         for o in orders:
-            try:
-                r = api.order(o["side"], s["symbol"], exch, o["type"], o["qty"], o["price"])
-                placed.append(dict(o, no=r["no"]))
-            except WarnNeeded as e:
-                errors.append(f"{o.get('desc')}: 증권사 경고(자동 확인 안 함) {e}")
-            except MeritzError as e:
-                errors.append(f"{o.get('desc')}: {e}")
+            send_order(s, api, cfg, mark, m, o, exch, errors)
             time.sleep(0.3)
-    cfg._save_json(mark, {"date": d, "prev_close": prev_close, "price": price, "fx": fx, "auto_fx": fxres,
-                          "qty": qty, "avg": avg, "cash": round(cash, 2), "orders": placed if live else orders,
-                          "errors": errors, "synced": False if live else True, "sell_deferred": bool(plan["info"].get("sell_deferred"))})
+        for i in range(RECON_TRIES if m["attempts"] else 0):      # 응답 못 받은 주문 자동 확인 (다시 주문하지 않음)
+            try:
+                f, _ = reconcile_attempts(s, api, cfg, m, final=False)
+                recovered += f
+            except Exception as e:
+                logging.warning(f"주문 응답 유실 자동 확인 실패: {type(e).__name__}")
+            if not m["attempts"]:
+                break
+            if i < RECON_TRIES - 1:
+                time.sleep(RECON_SEC)
+    placed = m["orders"] if live else orders
+    if m["attempts"]:
+        notes = notes + [f"주문 응답을 못 받은 주문 {len(m['attempts'])}건 — 다시 주문하지 않아요. 마감 뒤 체결 반영 때 체결 내역에서 한 번 더 찾아 이어 붙여요 (멈추지 않음)"]
+    if recovered:
+        notes = notes + [f"응답은 못 받았지만 체결 내역에서 주문번호를 찾아 이어 붙인 주문 {recovered}건"]
+    cfg._save_json(mark, m)
     reached = plan["info"].get("profit_reached")
     note.send(f"{d} 주문 {'접수' if live else '계획'} · 보유 {qty}주 평단 ${avg:.2f}\n{plan_head(plan, s)}\n"
               + (f"🎯 평가 이익 +{float(s['sell_profit_pct']):g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${plan['info']['sell_target']:.2f})\n" if reached else "")
               + fx_lines(fxres)
-              + fmt_orders(placed if live else orders)
+              + fmt_orders(placed)
               + ("\n" + "\n".join("ℹ️ " + n for n in notes + warn) if notes or warn else "")
               + ("\n⚠️ 실패\n" + "\n".join("- " + e for e in errors) if errors else ""))
     return "완료"
@@ -458,13 +596,21 @@ def run_order_day(s, api, note, live):
 def run_sync(s, api, note, mark_path):
     cfg = ConfigManager(s)
     m = cfg._load_json(mark_path, {})
-    if m.get("synced", True) or not m.get("orders"):
+    if m.get("synced", True) or not (m.get("orders") or m.get("attempts")):
         if m and not m.get("synced", True):
             m["synced"] = True
             cfg._save_json(mark_path, m)
         return "없음"
     d = m["date"]
     dt = datetime.date.fromisoformat(d)
+    lost = 0
+    if m.get("attempts"):                           # v2.0.4 응답 못 받은 주문: 마감 뒤 체결 내역에서 한 번 더 찾아 이어 붙임 (못 찾으면 체결 안 된 것으로 보고, 아래 잔고=장부 확인이 안전망)
+        try:
+            reconcile_attempts(s, api, cfg, m, final=True)
+        except Exception as e:
+            logging.warning(f"주문 응답 유실 자동 확인 실패: {type(e).__name__}")
+        lost = len(m.get("attempts") or [])
+        cfg._save_json(mark_path, m)
     fills = api.fills((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
     lines, done = [], None
     for o in m["orders"]:
@@ -487,6 +633,8 @@ def run_sync(s, api, note, mark_path):
     m["synced"] = True
     cfg._save_json(mark_path, m)
     msg = f"{d} 체결 반영\n" + ("\n".join(lines) if lines else "- 체결 없음") + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}"
+    if lost:
+        msg += f"\nℹ️ 주문 응답을 못 받은 주문 {lost}건은 체결 내역에서 못 찾았어요 (체결 안 된 것으로 봄 — 아래 잔고 확인이 맞는지 검사)"
     if done:
         msg += "\n⚠️ 보유 0주가 되어 사이클 종료 처리됨 — 이 봇의 매도 규칙으로는 생기지 않는 상황, 확인 필요"
     if hold != pos["qty"]:
@@ -519,7 +667,7 @@ def idle(seconds):
             _MENU["bot"] = tg_menu.MenuBot(sys.modules[__name__])
         _MENU["bot"].idle(load_settings(), t_end)
     except Exception as e:
-        logging.warning(f"텔레그램 메뉴 처리 오류: {type(e).__name__}")
+        logging.warning(f"텔레그램 메뉴 처리 오류: {type(e).__name__} {getattr(e, 'code', '')}".strip())     # HTTPError 면 번호(409 충돌·401 토큰·404 등)까지
     left = t_end - time.time()
     if left > 0:
         time.sleep(left)
@@ -566,7 +714,7 @@ def loop():
                     md = os.path.basename(mp)[7:17]
                     if md < today or n.time() >= _hm(s["sync_time_et"], datetime.time(16, 10)):
                         m = ConfigManager(s)._load_json(mp, {})
-                        if m.get("orders") and not m.get("synced", True):
+                        if (m.get("orders") or m.get("attempts")) and not m.get("synced", True):
                             api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                             run_sync(s, api, note, mp)
         except Exception as e:

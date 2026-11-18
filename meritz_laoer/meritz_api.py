@@ -1,5 +1,8 @@
 # ==========================================================
-# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.0)
+# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.5)
+# v2.0.5 (2026-11-19): fills_rows 가 체결 행 심볼을 ovrs_stck_symb_iscd 가 없으면 iscd 로도 읽음 (실제 체결 내역 응답에는 iscd 만 있음 — Muse 서버 확인). holding()·open_orders_today() 는 그대로
+# v2.0.4 (2026-11-19): MeritzError.definite(서버가 오류 코드로 분명히 거절 = True) 구분 · order() 가 네트워크 오류·시간 초과를 '응답 못 받음'(definite=False)으로 바꿔 던짐 ·
+#   fills_rows(체결 행 목록, 심볼 있으면 포함) 추가 — fills() 결과는 그대로. 주문 응답을 못 받았을 때 main 이 자동으로 확인하는 데 씀
 # 메리츠증권 Open API — 무한매수 봇용 최소 연결 (해외주식 현재가·일봉·잔고·외화예수금·장운영·즉시주문·체결내역)
 # v2.0.0 (2026-11-18): 자동환전용 krw_cash(읽기)·fx_exchange(환전 신청 POST, main.auto_fx 에서만 호출) 추가 — 형식은 meritz_dca_bot 과 같음.
 #   fx_applied_rate 추가 (읽기 전용: GET /forex/v1/rates/applied, 매수=mnec_clcd '1' 의 tltr_aply_byrt).
@@ -28,11 +31,12 @@ ORDER_TYPES = {"LOC": ("32", "7"), "MOC": ("34", "7"), "LIMIT": ("01", "0")}
 
 
 class MeritzError(RuntimeError):
-    pass
+    definite = False          # True: 서버가 오류 코드로 분명히 거절함(주문이 안 들어감). False: 응답을 못 받았거나 불확실(주문이 들어갔을 수도 있음)
 
 
 class WarnNeeded(MeritzError):
     """증권사 착오 방지 경고 → 사람이 확인해야 함 (자동으로 'Y' 재전송하지 않음)"""
+    definite = True           # 경고 응답을 받았으니 주문은 안 들어간 것
 
 
 def key_fingerprint(path):
@@ -110,7 +114,9 @@ class MeritzApi:
             return self._call(method, path, query, body, _retry=False)
         if code not in OK_CODES:
             msg = " — ".join(x for x in (d.get("rsp_msg"), d.get("rsp_sub_msg")) if x)
-            raise MeritzError(f"{code} {msg}".strip())
+            e = MeritzError(f"{code} {msg}".strip())
+            e.definite = True
+            raise e
         return d
 
     # ---------------- 조회 (읽기 전용)
@@ -206,8 +212,8 @@ class MeritzApi:
         return [r for r in (d.get("data") or []) if isinstance(r, dict)
                 and str(r.get("ovrs_stck_symb_iscd", "")).upper() == symbol.upper() and _num(r.get("ncnt_qty")) > 0]
 
-    def fills(self, date_from, date_to):
-        """기간 체결 내역 {주문번호: (매수/매도, 체결수량, 체결금액)}"""
+    def fills_rows(self, date_from, date_to):
+        """기간 체결 내역 [{"no", "side", "qty", "amt", "sym"}] (주문번호별 합산). sym 은 ovrs_stck_symb_iscd 가 있으면 그것, 없으면 iscd (체결 내역 응답은 iscd 만 있음). 둘 다 없으면 빈 문자열"""
         out, q = {}, {"oder_sta_date": date_from, "oder_fin_date": date_to, "cntg_cls_code": "1", "seln_byov_clcd": "0"}
         for _ in range(20):
             d = self._call("GET", "/trading/v1/overseas/orders/history", q)
@@ -219,12 +225,18 @@ class MeritzApi:
                 amt = _num(r.get("cntg_camt")) or qty * _num(r.get("cntg_crnc_prc"))
                 if no and qty > 0:
                     side = "SELL" if str(r.get("seln_byov_clcd")) == "1" else "BUY"
-                    s0, q0, a0 = out.get(no, (side, 0, 0.0))
-                    out[no] = (side, q0 + qty, a0 + amt)
+                    row = out.setdefault(no, {"no": no, "side": side, "qty": 0, "amt": 0.0,
+                                              "sym": str(r.get("ovrs_stck_symb_iscd") or r.get("iscd") or "").strip().upper()})
+                    row["qty"] += qty
+                    row["amt"] += amt
             if d.get("tr_cont") != "1" or not d.get("tr_cont_key"):
                 break
             q = dict(q, tr_cont="1", tr_cont_key=d["tr_cont_key"])
-        return out
+        return list(out.values())
+
+    def fills(self, date_from, date_to):
+        """기간 체결 내역 {주문번호: (매수/매도, 체결수량, 체결금액)}"""
+        return {r["no"]: (r["side"], r["qty"], r["amt"]) for r in self.fills_rows(date_from, date_to)}
 
     # ---------------- 주문 (실제 돈이 움직임 — main.py 의 안전장치를 모두 통과했을 때만 호출)
     def order(self, side, symbol, exch_id, otype, qty, price):
@@ -235,7 +247,12 @@ class MeritzApi:
         body = {"ovrs_stck_symb_iscd": symbol, "ovrs_exch_vndr_idno": exch_id, "oder_cls_code": cls,
                 "oder_cond_cls_code": cond, "odqt": int(qty), "ovrs_stck_oder_prc": px}
         path = f"/trading/v1/overseas/orders/{'buy' if side == 'BUY' else 'sell'}"
-        d = self._call("POST", path, body=body)
+        try:
+            d = self._call("POST", path, body=body)
+        except MeritzError:
+            raise
+        except Exception as e:      # 시간 초과·연결 끊김·알 수 없는 응답: 주문이 들어갔는지 모름 → 불확실로 표시 (main 이 자동 확인)
+            raise MeritzError(f"주문 응답을 못 받음 ({type(e).__name__}) — 주문이 들어갔는지 불확실")
         data = d.get("data") or {}
         warn = str(data.get("warn_cls_code", "0")).strip()
         if warn and warn != "0":
