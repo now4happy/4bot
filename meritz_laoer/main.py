@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.1)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.3)
 # 메리츠 속쓸 적립봇 (SOXL 분할매수·부분매도) — 실행·안전장치
+# v2.0.3 (2026-11-18): ① 당일 매도 — 오늘 산 주식이 평단(오늘 체결 반영) +목표% 에 닿으면 그날 바로 매도 비중만큼 매도.
+#     장중 intraday_sell_check_sec(기본 120초)마다 run_intraday_sell 이 확인 (실거래·LIMIT 주문일 때만). 매수는 하루 1회차 그대로(장중 재매수 없음),
+#     하루 매도 주문은 1건 (이미 오늘 매도 주문이 있으면 안 냄), 연속 매도 금지(sell_block)는 make_plan 규칙 그대로 (오늘 체결된 매수가 있으면 풀림).
+#     오늘 매수 주문이 있는 날은 아침 계획에서 매도 주문을 빼고 장중 확인으로 넘김(defer_sell) — 오늘 체결로 평단이 바뀌는데 메리츠 API 에 주문 취소가 없어 낡은 평단의 매도 주문이 남기 때문.
+#     장부·적립 상태는 장중에 안 바꿈 (체결 반영은 기존 run_sync). 0 으로 두면 예전 동작(아침 주문만).
+#   ② 화면 글자: 영어 변수 이름 제거(notifier.to_korean), 속쓸 가격(현재가·평단·매도 목표·사다리·체결 단가)만 소수점, 달러 금액·환율은 정수.
+#   v2.0.2(따로 적용 안 함)의 내용 포함. 주문 계산(accum_strategy.py)은 안 바뀜
+# v2.0.1 (2026-11-18): BOT_VERSION 만 (텔레그램 메뉴 개편은 tg_menu.py·config.py)
 # v2.0.1 (2026-11-18): BOT_VERSION 만 (텔레그램 메뉴 개편은 tg_menu.py·config.py)
 # v2.0.0 (2026-11-18): 무한매수(V14) → 적립봇 전환. 계획은 accum_strategy.make_plan (순수 계산), 체결 뒤 적립 상태(data/accum_state.json) 갱신.
 #   - 그대로: 키 지문·P/VR6 키·다른 봇 토큰 금지·입고/토스 정지 확인·장부=잔고·정지(halt)·하루 1회 표시 파일·텔레그램 메뉴·--inject-start
@@ -31,6 +39,8 @@
 # ==========================================================
 import argparse
 import contextlib
+import copy
+import re
 import datetime
 import json
 import logging
@@ -49,10 +59,10 @@ import config as cfgmod                      # noqa: E402
 from accum_strategy import make_plan, apply_fill_to_state, ceil2   # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
-from notifier import Notifier, _read_token, token_fp   # noqa: E402
+from notifier import Notifier, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.0.1"
+BOT_VERSION = "v2.0.3"
 EST = ZoneInfo("America/New_York")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -157,7 +167,7 @@ def market_inputs(s, api):
 
 def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx=False):
     """오늘 계획 (장부·상태를 바꾸지 않음) → {"orders", "notes", "info"}. info 에 필요달러(need_usd)·부족달러(shortfall_usd)"""
-    return make_plan(s, cfg.accum_or_start(), qty, principal, price, fx, cash, sellable, ignore_auto_fx)
+    return defer_sell(s, make_plan(s, cfg.accum_or_start(), qty, principal, price, fx, cash, sellable, ignore_auto_fx))
 
 
 def auto_fx(s, api, cfg, plan, live, d):
@@ -207,25 +217,160 @@ def auto_fx(s, api, cfg, plan, live, d):
 def fx_lines(r):
     if not r:
         return ""
-    t = (f"💱 환전: 부족 ${r['short']:,.2f} → 신청 ${r['want']:,}" + (" (하루 상한 적용)" if r["capped"] else "")
-         + (f" · 약 ₩{r['krw_est']:,} (환율 {r['rate']:,.2f})" if r.get("rate") else "") + f" · {r['status']}")
+    t = (f"💱 환전: 부족 ${math.ceil(r['short']):,} → 신청 ${r['want']:,}" + (" (하루 상한 적용)" if r["capped"] else "")
+         + (f" · 약 ₩{r['krw_est']:,} (환율 {r['rate']:,.0f})" if r.get("rate") else "") + f" · {r['status']}")
     return t + (f"\n⚠️ {r['error']}" if r.get("error") else "") + "\n"
 
 
+SIDE_KO = {"BUY": "매수", "SELL": "매도"}
+TYPE_KO = {"LIMIT": "지정가", "LOC": "종가 조건", "MOC": "종가 시장가"}
+
+
+_LVL_RE = re.compile(r"사다리 \$([\d.]+) (?=회차)")    # 사다리 가격은 속쓸 가격이라 소수 2자리
+
+
 def fmt_orders(orders):
-    return "\n".join(f"- {o['side']} {o['type']} {o['qty']}주 @ {'시장가' if o['type'] == 'MOC' else '$%.2f' % float(o['price'])} {o.get('desc', '')}"
+    return "\n".join(f"- {SIDE_KO.get(o['side'], o['side'])} {o['qty']}주 @ {'시장가' if o['type'] == 'MOC' else '$%.2f' % float(o['price'])} "
+                     f"({TYPE_KO.get(o['type'], o['type'])}) {_LVL_RE.sub(lambda m: '사다리 $%.2f ' % float(m.group(1)), o.get('desc', ''))}".rstrip()
                      for o in orders) or "- (주문 없음)"
 
 
 def plan_head(plan, s):
     i = plan["info"]
     pl = f" ({i['profit_pct']:+.2f}%)" if i.get("profit_pct") is not None else ""
-    return (f"{'재매수' if i['mode'] == 'rebuy' else '사다리'} 모드 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 채운 회차 {len(i['filled'])}/{len(i['levels'])}\n"
-            f"매도 목표 ${i['sell_target']:.2f} · 회차 금액 ${i.get('unit_usd', 0):,.2f}"
-            + (f" · 1회차 차감 ${i['credit_usd']:,.2f}" if i.get("credit_usd") else "")
-            + (f" · 환율 {i['fx']:,.2f}" if i.get("fx") else "")
-            + (f"\n필요 달러 ${i['need_usd']:,.2f} · 예수금 ${i['usd_cash']:,.2f}" + (f" · 부족 ${i['shortfall_usd']:,.2f}" if i.get("shortfall_usd") else "")
+    return (f"{'재매수' if i['mode'] == 'rebuy' else '사다리'} 단계 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 채운 회차 {len(i['filled'])}/{len(i['levels'])}\n"
+            f"매도 목표 ${i['sell_target']:.2f} · 회차 금액 ${i.get('unit_usd', 0):,.0f}"
+            + (f" · 1회차 차감 ${i['credit_usd']:,.0f}" if i.get("credit_usd") else "")
+            + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else "")
+            + (f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "")
                if i.get("need_usd") is not None else ""))
+
+
+# ---------------------------------------------------------------- v2.0.3 당일 매도
+_INTRA = {"last": 0.0, "err_day": ""}
+
+
+def intraday_on(s):
+    """당일 매도 확인을 쓰는지: 확인 간격 > 0 이고 주문 방식이 지정가(LIMIT)일 때만. (LOC 는 종가에만 체결돼서 장중 확인이 의미 없음 → 예전 동작)"""
+    try:
+        sec = float(s.get("intraday_sell_check_sec") or 0)
+    except (TypeError, ValueError):
+        return False
+    return sec > 0 and s.get("order_type") == "LIMIT"
+
+
+def defer_sell(s, plan):
+    """오늘 매수 주문이 있으면 아침 계획에서 매도 주문을 뺌 → 장중 확인(run_intraday_sell)이 오늘 체결을 반영한 평단으로 판단.
+    (오늘 매수가 체결되면 평단이 바뀌는데, 아침에 낸 매도 주문은 취소할 수 없어 낡은 평단 기준으로 남기 때문) 매수 주문이 없는 날은 그대로"""
+    if not intraday_on(s):
+        return plan
+    orders = plan["orders"]
+    if any(o.get("side") == "BUY" for o in orders) and any(o.get("kind") == "sell" for o in orders):
+        plan["orders"] = [o for o in orders if o.get("kind") != "sell"]
+        plan["notes"].append("매도는 장중에 확인해서 내요 (오늘 산 주식이 체결되면 평단이 바뀌어서)")
+        plan["info"]["sell_deferred"] = True
+    return plan
+
+
+def _warn_once(cfg, mark, m, key, note, text):
+    """같은 이유의 알림은 하루 한 번만 (주문 기록 파일에 남김)"""
+    w = m.setdefault("intraday_warn", [])
+    if key in w:
+        return
+    w.append(key)
+    cfg._save_json(mark, m)
+    note.send(text)
+
+
+def run_intraday_sell(s, api, note):
+    """당일 매도 확인 (실거래만, loop 가 주문 시간대에 부름). 오늘 주문 기록이 있고 체결 반영 전인 동안 intraday_sell_check_sec 마다:
+    오늘 체결된 매수까지 반영한 평단의 +목표% 에 현재가가 닿았는지 보고, 닿으면 보유의 매도 비중을 지정가로 한 번 매도.
+    매수는 안 함 · 하루 매도 주문 1건 · 장부·적립 상태는 안 바꿈 (체결 반영은 run_sync 가 그대로) → 상태 글자"""
+    if s.get("dry_run", True):
+        return "모의"
+    if not intraday_on(s):
+        return "꺼짐"
+    now_t = time.time()
+    if now_t - _INTRA["last"] < float(s["intraday_sell_check_sec"]):
+        return "대기"
+    _INTRA["last"] = now_t
+    d = now_et().strftime("%Y-%m-%d")
+    mark = os.path.join(s["state_dir"], "data", f"orders_{d}.json")
+    cfg = ConfigManager(s)
+    m = cfg._load_json(mark, None)
+    if not isinstance(m, dict) or m.get("skipped") or m.get("synced", True) or not isinstance(m.get("orders"), list):
+        return "해당 없음"
+    if m.get("sell_attempt") or any(o.get("kind") == "sell" for o in m["orders"]):
+        return "오늘 매도 주문 있음"              # 중복 매도 방지: 아침 주문이든 장중 주문이든 오늘 매도 주문이 있으면 더 안 냄
+    bad = gate_problems(s, cfg, live=True)
+    if bad:
+        logging.warning("당일 매도 확인 건너뜀: " + "; ".join(bad)[:200])
+        return "차단"
+    pos = cfg.get_position()
+    q0, pr0 = int(pos["qty"]), float(pos["principal"])
+    buys = [o for o in m["orders"] if o.get("side") == "BUY"]
+    pct = float(s["sell_profit_pct"])
+    # 시세 한 번만 보고 거를 수 있는 가장 낮은 목표가: 평균은 구성 값(기존 평단·오늘 낼 매수가) 중 가장 낮은 값보다 낮아질 수 없음
+    cands = ([cfg.avg_price(pos)] if q0 > 0 else []) + [float(o["price"]) for o in buys if float(o.get("price") or 0) > 0]
+    if not cands:
+        return "해당 없음"
+    try:
+        px = float(api.price(s["symbol"], s["price_market"])["price"])
+    except MeritzError as e:
+        logging.warning(f"당일 매도 확인: 시세 조회 실패 {e}")
+        return "시세 실패"
+    if px < ceil2(min(cands) * (1 + pct / 100.0)):
+        return "목표 아래"
+    dt = datetime.date.fromisoformat(d)
+    fills = api.fills((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
+    q, pr = q0, pr0
+    st = copy.deepcopy(cfg.accum_or_start())
+    for o in buys:                                   # 오늘 체결된 매수를 '메모리 안에서만' 반영 (장부 파일은 그대로)
+        f = fills.get(str(o.get("no")))
+        if not f or f[0] != "BUY" or int(f[1]) < 1:
+            continue
+        apply_fill_to_state(st, o, (pr / q) if q > 0 else 0.0, bool(s.get("allow_consecutive_sell")))
+        q += int(f[1])
+        pr += float(f[2])
+    hold, sellable, exch_vid = api.holding(s["symbol"])
+    if hold != q:
+        _warn_once(cfg, mark, m, "hold", note, f"오늘 체결 반영 뒤 예상 {q}주 ≠ 메리츠 잔고 {hold}주 — 당일 매도 확인을 보류하고 계속 확인해요 (체결 조회가 늦은 것일 수 있음)")
+        return "잔고 불일치"
+    plan = make_plan(s, st, q, round(pr, 4), px, 0.0, 0.0, sellable)       # 환율 0 → 매수 계산 없이 매도 규칙만 (make_plan 의 매도 규칙 그대로)
+    info = plan["info"]
+    if not info.get("profit_reached"):
+        return "목표 아래"                                                   # 오늘 체결로 평단이 올라 목표가 더 높아진 경우
+    sells = [o for o in plan["orders"] if o.get("kind") == "sell"]
+    if not sells:
+        why = "; ".join(n for n in plan["notes"] if n.startswith("매도")) or "매도 조건 미충족"
+        _warn_once(cfg, mark, m, "block", note, f"🎯 평가 이익 +{pct:g}% 에 닿았지만 매도 안 함: {why}")
+        return "매도 보류"
+    exch = str(s.get("exch_id") or exch_vid or "")
+    if not exch:
+        _warn_once(cfg, mark, m, "exch", note, "⛔ 거래소 번호를 알 수 없어 당일 매도를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
+        return "거래소"
+    if any(str(r.get("seln_byov_clcd")) == "1" for r in api.open_orders_today(s["symbol"])):
+        _warn_once(cfg, mark, m, "open_sell", note, "이 계좌에 SOXL 매도 미체결 주문이 이미 있어 당일 매도를 안 냄 (수동 확인)")
+        return "매도 미체결 있음"
+    o = dict(sells[0], desc="당일 매도 · " + sells[0].get("desc", ""))
+    m["sell_attempt"] = {"at": now_et().isoformat(), "qty": o["qty"], "price": o["price"],
+                         "status": "접수 시도 (이 기록이 있으면 오늘 다시 매도 주문을 내지 않음)"}
+    cfg._save_json(mark, m)                          # 주문 전에 먼저 기록 → 응답이 불확실해도 중복 주문 없음
+    err = None
+    try:
+        r = api.order("SELL", s["symbol"], exch, o["type"], o["qty"], o["price"])
+        m["orders"].append(dict(o, no=r["no"], intraday=True))
+        m["sell_attempt"].update(status="접수 완료", no=r["no"])
+    except WarnNeeded as e:
+        err = f"증권사 경고(자동 확인 안 함) {e}"
+        m["sell_attempt"]["status"] = "증권사 경고로 안 나감: " + str(e)[:100]
+    except MeritzError as e:
+        err = str(e)[:160]
+        m["sell_attempt"]["status"] = "실패 또는 불확실 — 오늘 다시 안 냄: " + err[:100]
+    cfg._save_json(mark, m)
+    head = (f"🎯 당일 매도 {'접수' if not err else '실패'}\n오늘 체결 반영 평단 ${info['avg']:.2f} (보유 {q}주) → 목표 ${info['sell_target']:.2f} · 현재가 ${px:.2f}\n")
+    note.send(head + fmt_orders([o]) + (f"\n⚠️ {err}\n오늘은 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if err else ""))
+    return "매도 접수" if not err else "매도 실패"
 
 
 # ---------------------------------------------------------------- 하루 주문
@@ -260,7 +405,7 @@ def run_order_day(s, api, note, live):
         warn.append(f"잔고 {hold}주 ≠ 장부 {qty}주")
         if live:
             cfg.halt(warn[-1])
-            note.send("⛔ 정지: " + warn[-1] + "\n확인 후 --clear-halt")
+            note.send("⛔ 정지: " + warn[-1] + "\n확인한 뒤 텔레그램 🛠 기타 → ⛔ 정지 해제")
             cfg._save_json(mark, {"skipped": warn})
             return "정지"
     if live and api.open_orders_today(s["symbol"]):
@@ -268,8 +413,8 @@ def run_order_day(s, api, note, live):
         cfg._save_json(mark, {"skipped": "기존 미체결 있음"})
         return "미체결"
     if live and not exch:
-        note.send("⛔ 거래소 번호 모름 (exch_id 설정 필요)")
-        cfg._save_json(mark, {"skipped": "exch_id 없음"})
+        note.send("⛔ 거래소 번호를 알 수 없음 — 설정에 거래소 번호를 넣어 주세요")
+        cfg._save_json(mark, {"skipped": "거래소 번호 없음"})
         return "거래소"
     price, prev_close, fx = market_inputs(s, api)
     cash = api.usd_cash()
@@ -298,7 +443,7 @@ def run_order_day(s, api, note, live):
             time.sleep(0.3)
     cfg._save_json(mark, {"date": d, "prev_close": prev_close, "price": price, "fx": fx, "auto_fx": fxres,
                           "qty": qty, "avg": avg, "cash": round(cash, 2), "orders": placed if live else orders,
-                          "errors": errors, "synced": False if live else True})
+                          "errors": errors, "synced": False if live else True, "sell_deferred": bool(plan["info"].get("sell_deferred"))})
     reached = plan["info"].get("profit_reached")
     note.send(f"{d} 주문 {'접수' if live else '계획'} · 보유 {qty}주 평단 ${avg:.2f}\n{plan_head(plan, s)}\n"
               + (f"🎯 평가 이익 +{float(s['sell_profit_pct']):g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${plan['info']['sell_target']:.2f})\n" if reached else "")
@@ -333,9 +478,9 @@ def run_sync(s, api, note, mark_path):
         ast = cfg.accum_or_start()
         apply_fill_to_state(ast, o, avg0, bool(s.get("allow_consecutive_sell")))    # 같은 체결을 다시 반영해도 결과가 같음
         cfg.save_accum(ast)
-        lines.append(f"- {side} {q}주 @ ${px:.2f} ({o.get('desc', '')})")
+        lines.append(f"- {SIDE_KO.get(side, side)} {q}주 @ ${px:.2f} ({o.get('desc', '')})")
         if o.get("kind") == "sell":
-            lines.append(f"  🎯 매도 체결 → 재매수 모드 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
+            lines.append(f"  🎯 매도 체결 → 재매수 단계 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
         done = closed or done
     hold, _, _ = api.holding(s["symbol"])
     pos = cfg.get_position()
@@ -346,7 +491,7 @@ def run_sync(s, api, note, mark_path):
         msg += "\n⚠️ 보유 0주가 되어 사이클 종료 처리됨 — 이 봇의 매도 규칙으로는 생기지 않는 상황, 확인 필요"
     if hold != pos["qty"]:
         cfg.halt(f"체결 반영 뒤 잔고 {hold}주 ≠ 장부 {pos['qty']}주")
-        msg += f"\n⛔ 정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인 후 --clear-halt)"
+        msg += f"\n⛔ 정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인한 뒤 ⛔ 정지 해제)"
     note.send(msg)
     return "완료"
 
@@ -407,6 +552,14 @@ def loop():
             if n.weekday() < 5 and _hm(s["order_time_et"], datetime.time(10, 5)) <= n.time() <= _hm(s["order_deadline_et"], datetime.time(15, 40)):
                 api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                 run_order_day(s, api, note, live)
+                if live:                                    # v2.0.3 당일 매도 확인 (실패해도 주문·체결 반영 흐름은 계속)
+                    try:
+                        run_intraday_sell(s, api, note)
+                    except Exception as e:
+                        logging.exception(f"당일 매도 확인 중 오류: {type(e).__name__}")
+                        if _INTRA["err_day"] != n.strftime("%Y-%m-%d"):
+                            _INTRA["err_day"] = n.strftime("%Y-%m-%d")
+                            note.send(f"⚠️ 당일 매도 확인 중 오류가 났어요 ({type(e).__name__}) — 이미 낸 주문은 그대로예요. 서버 로그를 확인해 주세요.")
             if live:
                 today = n.strftime("%Y-%m-%d")
                 for mp in pending_syncs(state):
@@ -419,7 +572,7 @@ def loop():
         except Exception as e:
             logging.exception(f"반복 중 오류: {type(e).__name__}")
             try:
-                Notifier(load_settings()["telegram_file"]).send(f"⚠️ 오류 {type(e).__name__}: {str(e)[:200]}")
+                Notifier(load_settings()["telegram_file"]).send(f"⚠️ 봇에 오류가 났어요 ({type(e).__name__}): {str(e)[:200]}")
             except Exception:
                 pass
             idle(120)
@@ -427,43 +580,43 @@ def loop():
 
 
 def cmd_check(s):
-    print(f"MERITZ_LAOER {BOT_VERSION} 점검 (주문 없음)")
+    print(f"속쓸 적립봇 {BOT_VERSION} 점검 (주문 없음)")
     bad = validate_settings(s)
     idb, fp = check_identity(s)
-    print(f"- enabled={s.get('enabled')} dry_run={s.get('dry_run')} transfer_confirmed={s.get('transfer_confirmed')} "
-          f"toss_sniper_stopped_confirmed={s.get('toss_sniper_stopped_confirmed')}")
+    print(f"- 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'} · "
+          f"입고 확인 {'됨' if s.get('transfer_confirmed') else '전'} · 토스 스나이퍼 정지 확인 {'됨' if s.get('toss_sniper_stopped_confirmed') else '전'}")
     print(f"- 키 지문: {fp or '-'} (기대값 {'있음' if s.get('expected_key_fp') else '없음'})")
     for b in bad + idb:
-        print("  ✗", b)
+        print("  ✗", to_korean(b))
     state = s["state_dir"]
     os.makedirs(os.path.join(state, "data"), exist_ok=True)
     with in_dir(state):
         cfg = ConfigManager(s)
         pos = cfg.get_position()
-        print(f"- 장부: {('%d주 원금 $%.2f 평단 $%.4f' % (pos['qty'], pos['principal'], cfg.avg_price(pos))) if pos else '시작 전'}")
-        print(f"- 정지 표시: {cfg.get_halt() or '없음'}")
+        print(f"- 장부: {('%d주 · 원금 $%s · 평단 $%.2f' % (pos['qty'], format(int(round(pos['principal'])), ','), cfg.avg_price(pos))) if pos else '시작 전'}")
+        print(f"- 정지 표시: {(cfg.get_halt() or {}).get('reason') or '없음'}")
     if bad or "새 메리츠 키 파일 없음 (key_file)" in idb or "키 파일 형식 오류 (app_key/app_secret)" in idb:
-        print("→ 설정을 채운 뒤 다시 --check")
+        print("→ 설정을 채운 뒤 다시 점검")
         return 1
     api = MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
     hold, sellable, exch = api.holding(s["symbol"])
     price, prev_close, fx = market_inputs(s, api)
     cash = api.usd_cash()
-    print(f"- 메리츠 잔고 {s['symbol']} {hold}주 (매도가능 {sellable}) 거래소번호 {exch or '-'} · USD 예수금 ${cash:,.2f}")
-    print(f"- 현재가 ${price:.2f} 전일종가 ${prev_close:.2f} · 적용환율 {('%.2f 원/$' % fx) if fx else '미확인'} · 장운영 {api.us_market_status()}")
+    print(f"- 메리츠 잔고 {s['symbol']} {hold}주 (매도가능 {sellable}) · 거래소 번호 {exch or '-'} · 달러 예수금 ${cash:,.0f}")
+    print(f"- 현재가 ${price:.2f} · 전일종가 ${prev_close:.2f} · 적용환율 {('{:,.0f}원/$'.format(fx)) if fx else '미확인'} · 장운영 코드 {api.us_market_status()}")
     st = s["start"]
     q = int(pos["qty"]) if pos else int(float(st["qty"]))
     principal = float(pos["principal"]) if pos else float(st["principal_usd"])
     with in_dir(state):
         plan = build_plan(s, ConfigManager(s), price, fx, cash, q, principal, sellable)
     orders, notes = plan["orders"], plan["notes"]
-    print("- 오늘 계획 (미리보기·주문 안 냄):\n  " + plan_head(plan, s).replace("\n", "\n  "))
-    print("  " + fmt_orders(orders).replace("\n", "\n  "))
+    print("- 오늘 계획 (미리보기·주문 안 냄):\n  " + to_korean(plan_head(plan, s)).replace("\n", "\n  "))
+    print("  " + to_korean(fmt_orders(orders)).replace("\n", "\n  "))
     for n in notes:
-        print("  ℹ️", n)
+        print("  ℹ️", to_korean(n))
     with in_dir(state):
         r = auto_fx(s, api, ConfigManager(s), plan, False, now_et().strftime("%Y-%m-%d"))
-    print("  " + (fx_lines(r).strip().replace("\n", "\n  ") if r else "💱 환전: 필요 없음 또는 자동환전 꺼짐 (auto_fx_enabled=%s)" % s.get("auto_fx_enabled")))
+    print("  " + (fx_lines(r).strip().replace("\n", "\n  ") if r else "💱 환전: 필요 없음 또는 자동환전 꺼짐"))
     if hold != q:
         print(f"  ⚠️ 잔고 {hold}주 ≠ 장부/시작 {q}주 → 입고 전이거나 다른 계좌")
     return 0
@@ -482,11 +635,11 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
     credit=True: qty×avg 달러를 1회차 매수 때 한 번 차감하도록 적립 상태에 더함 (1회차 전·사다리 모드일 때만)"""
     bad = []
     if qty is None or qty < 1:
-        bad.append("--qty 는 1 이상 정수")
+        bad.append("수량은 1 이상 정수")
     if avg is None or not (avg > 0) or avg != avg or avg == float("inf"):
-        bad.append("--avg 는 0 보다 큰 숫자")
+        bad.append("평단은 0 보다 큰 숫자")
     if s.get("enabled"):
-        bad.append("enabled=true — 봇을 끄고(enabled=false) 다시 실행")
+        bad.append("봇이 켜져 있음 — 봇을 끄고 다시 실행")
     n = now_et()
     if n.weekday() < 5 and _hm(s["order_time_et"], datetime.time(10, 5)) <= n.time() <= _hm(s["order_deadline_et"], datetime.time(15, 40)):
         bad.append(f"미국장 주문 시간 (미 동부 {s['order_time_et']}~{s['order_deadline_et']}) — 끝난 뒤 다시 실행")
@@ -497,13 +650,13 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
         cfg = ConfigManager(s)
         pos = cfg.get_position()
         if not pos:
-            bad.append("장부 시작 전 (--inject-start 먼저)")
+            bad.append("장부 시작 전 (먼저 🛠 기타 → 📥 장부 시작)")
         if credit:
             ast0 = cfg.accum_or_start()
             if ast0.get("mode") != "ladder" or ast0.get("filled_levels"):
                 bad.append("1회차 차감 불가: 이미 사다리 매수가 시작됐거나 재매수 모드")
         if bad:
-            print("✗ 추가 투입 반영 안 함:\n" + "\n".join("- " + b for b in bad))
+            print("✗ 추가 투입 반영 안 함:\n" + "\n".join("- " + to_korean(b) for b in bad))
             return 1
         api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
         hold, _, _ = api.holding(s["symbol"])
@@ -524,10 +677,10 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
             ast = cfg.accum_or_start()
             ast["credit_usd"] = round(float(ast.get("credit_usd") or 0) + qty * avg, 2)
             cfg.save_accum(ast)
-            cr_txt = f"\n1회차 매수 때 차감: +${qty * avg:,.2f} (합계 ${ast['credit_usd']:,.2f})"
-        msg = (f"➕ 추가 투입 반영 {qty}주 @ ${avg:.4f} (주문 없음)\n"
-               f"전: {before['qty']}주 · 원금 ${before['principal']:,.2f} · 평단 ${a0:.4f} · 회차 {t0} · 매도 목표 ${g0:.2f}\n"
-               f"후: {after['qty']}주 · 원금 ${after['principal']:,.2f} · 평단 ${a1:.4f} · 회차 {t1} · 매도 목표 ${g1:.2f}" + cr_txt)
+            cr_txt = f"\n1회차 매수 때 차감: +${qty * avg:,.0f} (합계 ${ast['credit_usd']:,.0f})"
+        msg = (f"➕ 추가 투입 반영 {qty}주 @ ${avg:.2f} (주문 없음)\n"
+               f"전: {before['qty']}주 · 원금 ${before['principal']:,.0f} · 평단 ${a0:.2f} · 회차 {t0} · 매도 목표 ${g0:.2f}\n"
+               f"후: {after['qty']}주 · 원금 ${after['principal']:,.0f} · 평단 ${a1:.2f} · 회차 {t1} · 매도 목표 ${g1:.2f}" + cr_txt)
         hist = cfg._load_json("data/add_shares_log.json", [])
         hist.append({"at": n.isoformat(), "qty": qty, "avg": avg, "hold": hold, "credit": bool(credit),
                      "before": {"qty": before["qty"], "principal": before["principal"], "avg": a0},
@@ -536,7 +689,7 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
         logging.info(msg.replace("\n", " | "))
         print(msg)
         if cfg.get_halt():
-            print(f"ℹ️ 정지 표시는 그대로 있음: {cfg.get_halt().get('reason')} (확인 후 --clear-halt)")
+            print(f"ℹ️ 정지 표시는 그대로 있음: {cfg.get_halt().get('reason')} (확인한 뒤 ⛔ 정지 해제)")
         note.send(msg)
     return 0
 
@@ -547,9 +700,9 @@ def cmd_inject_start(s, overwrite=False, api=None):
     os.makedirs(os.path.join(state, "data"), exist_ok=True)
     bad = validate_settings(s) + check_identity(s)[0]
     if not s.get("transfer_confirmed"):
-        bad.append("transfer_confirmed=false (입고 확인 먼저)")
+        bad.append("입고 확인 전 (먼저 입고를 확인해 주세요)")
     if bad:
-        print("✗ 주입 안 함:\n" + "\n".join("- " + b for b in bad))
+        print("✗ 장부 시작 안 함:\n" + "\n".join("- " + to_korean(b) for b in bad))
         return 1
     api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
     hold, _, _ = api.holding(s["symbol"])
@@ -560,13 +713,13 @@ def cmd_inject_start(s, overwrite=False, api=None):
     with in_dir(state):
         cfg = ConfigManager(s)
         pos, wrote = cfg.inject_start(overwrite=overwrite)
-        print(("장부 시작: " if wrote else "이미 장부 있음(덮어쓰려면 --overwrite): ")
-              + f"{pos['qty']}주 원금 ${pos['principal']:.2f} 평단 ${cfg.avg_price(pos):.4f}")
+        print(("장부 시작: " if wrote else "이미 장부 있음 (덮어쓰려면 덮어쓰기 확인): ")
+              + f"{pos['qty']}주 · 원금 ${pos['principal']:,.0f} · 평단 ${cfg.avg_price(pos):.2f}")
     return 0
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="메리츠 SOXL 무한매수 봇")
+    ap = argparse.ArgumentParser(description="메리츠 속쓸 적립봇")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--fingerprint", action="store_true")
     g.add_argument("--check", action="store_true")

@@ -1,5 +1,9 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.0.1)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.0.3)
+# v2.0.3 (2026-11-18): 지시 2026-11-18 — 자동환전 여유%·하루 상한은 사용자가 💱 안·⚙️ 설정 안에서 직접 입력(값은 클로드가 안 정함) → 그 뒤에 💱 켜기.
+#   값 없이 켜면 '여유%와 하루 상한을 먼저 입력해 주세요' 만 알림. 시드는 '2억'·당일 시드는 '2,000만원'만 표시. 속쓸 가격만 소수점, 달러 금액·환율은 정수.
+#   화면의 영어 변수 이름·옵션 이름·오류 문구는 한국말만(notifier.to_korean 이 보내기 직전에 정리). 글자를 짧고 쉽게, 버튼 이름 정리
+#   (💸 매도 목표 퍼센트 변경 → 💸 매도 비중 변경 · ⚙️ 봇 상태 → 🤖 봇 상태(⚙️ 설정과 아이콘이 같아 헷갈림)). 상황판에 당일 매도 확인 표시. 매매 로직은 이 파일에서 안 바뀜
 # v2.0.1 (2026-11-18): 메뉴 개편 — 맨밑 4개(💰 자금·📋 전술·📈 현상태·🛠 기타)가 메인, ☰ 메뉴·🏠·❓ 없앰. 이름 변경(거래 내역·봇 상태·주식 넣기·키 확인).
 #   ⚙️ 설정(시드·회차·목표 이익률·매도 비중·사다리 시작가/간격·재매수 하락폭·하루 최대 회차·봇 켜기/끄기)과 💱 자동환전(켜기/끄기·여유%·하루 상한)은
 #   설정 파일(config.update_settings) 값만 바꿈 — 입력 → 이전→새 값 확인 → [✅ 변경 확인]. 끄기(봇·자동환전)는 바로. 🛑 매매 정지 추가(정지 표시 켬). 상황판에 설정값 표시. 매매 로직 그대로
@@ -22,6 +26,7 @@ import contextlib
 import io
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -29,7 +34,7 @@ import urllib.request
 
 from config import update_settings
 from global_throttle import GlobalThrottle
-from notifier import Notifier
+from notifier import Notifier, to_korean
 
 # ---- v2.0.1 메뉴: 맨밑 4개가 곧 메인 (2x2). 카테고리 안 버튼은 카테고리마다 따로 보임
 M_FUND, M_TACT, M_STAT, M_ETC = "💰 자금", "📋 전술", "📈 현상태", "🛠 기타"
@@ -37,39 +42,41 @@ MAIN_ROWS = [[M_FUND, M_TACT], [M_STAT, M_ETC]]
 BACK = "🔙 뒤로"
 I_FUNDS, I_FX = "💰 자금 현황", "💱 자동환전"
 I_PLAN, I_SET = "📋 오늘 계획", "⚙️ 설정"
-I_BOARD, I_LEDGER, I_POWER = "📈 상황판", "📒 거래 내역", "⚙️ 봇 상태"
+I_BOARD, I_LEDGER, I_POWER = "📈 상황판", "📒 거래 내역", "🤖 봇 상태"
 T_CHECK, T_ADD, T_HALT, T_INJECT, T_FP = "🔍 점검", "➕ 주식 넣기", "⛔ 정지 해제", "📥 장부 시작", "🔑 키 확인"
 T_STOP = "🛑 매매 정지"                               # v2.0.1 추가: 정지 표시를 켬 (⛔ 정지 해제의 짝)
 FUND_ROWS = [[I_FUNDS, I_FX], [BACK]]
 TACT_ROWS = [[I_PLAN, I_SET], [BACK]]
 STAT_ROWS = [[I_BOARD, I_LEDGER], [I_POWER, BACK]]
-HALT_OK, INJECT_OK, INJECT_OVER = "⛔ 정지 해제 확인", "📥 장부 시작 확인", "📥 장부 덮어쓰기 확인 (--overwrite)"
+HALT_OK, INJECT_OK, INJECT_OVER = "⛔ 정지 해제 확인", "📥 장부 시작 확인", "📥 장부 덮어쓰기 확인"
 CHG_OK = "✅ 변경 확인"
 BOT_ON, BOT_OFF = "⏻ 봇 켜기", "⏻ 봇 끄기"
 FX_ON, FX_OFF = "💱 자동환전 켜기", "💱 자동환전 끄기"
 
 # 설정 변경 버튼 → 설정 키·이름·단위·종류. kind: krw(원, 억·만 가능) | int | num(소수 가능). lo/hi: 허용 범위 (lo_incl/hi_incl 로 경계 포함 여부)
 SET_ITEMS = {
-    "🌱 시드 변경": dict(key="total_krw", name="시드(총 투자금)", unit="원", kind="krw", lo=0, lo_incl=False, ex="예: 2억, 20000000, 1억5000만"),
-    "🔢 회차 변경": dict(key="split_count", name="회차(분할 횟수)", unit="회", kind="int", lo=2, hi=100, ex="예: 10"),
-    "🎯 목표 이익률 변경": dict(key="sell_profit_pct", name="목표 이익률(매도하는 이익률)", unit="%", kind="num", lo=0, lo_incl=False, hi=500, ex="예: 10"),
-    "💸 매도 목표 퍼센트 변경": dict(key="sell_fraction_pct", name="매도 비중(이익률에 닿았을 때 파는 비중)", unit="%", kind="num", lo=0, lo_incl=False, hi=100, hi_incl=False, ex="예: 50"),
+    "🌱 시드 변경": dict(key="total_krw", name="시드", unit="원", kind="krw", lo=0, lo_incl=False, ex="예: 2억, 20000000, 1억5000만"),
+    "🔢 회차 변경": dict(key="split_count", name="회차 수", unit="회", kind="int", lo=2, hi=100, ex="예: 10"),
+    "🎯 목표 이익률 변경": dict(key="sell_profit_pct", name="목표 이익률", unit="%", kind="num", lo=0, lo_incl=False, hi=500, ex="예: 10 (평단보다 10% 오르면 매도)"),
+    "💸 매도 비중 변경": dict(key="sell_fraction_pct", name="매도 비중", unit="%", kind="num", lo=0, lo_incl=False, hi=100, hi_incl=False, ex="예: 50 (보유의 절반을 매도)"),
     "📈 사다리 시작가 변경": dict(key="ladder_top_usd", name="사다리 시작가", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 50"),
     "📏 사다리 간격 변경": dict(key="ladder_step_usd", name="사다리 간격", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 5"),
     "🔄 재매수 하락폭 변경": dict(key="rebuy_drop_usd", name="재매수 하락폭", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 5"),
-    "📆 하루 최대 회차 변경": dict(key="max_rounds_per_day", name="하루 최대 회차", unit="회", kind="int", lo=1, hi=100, ex="예: 1"),   # v2.0.1 추가
-    "🧮 환전 여유% 변경": dict(key="auto_fx_buffer_pct", name="자동환전 여유%", unit="%", kind="num", lo=0, hi=100, ex="예: 3"),
-    "💵 환전 하루 상한 변경": dict(key="auto_fx_max_usd_per_day", name="자동환전 하루 상한", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 5000 (정수 달러)"),
+    "📆 하루 최대 회차 변경": dict(key="max_rounds_per_day", name="하루 최대 회차", unit="회", kind="int", lo=1, hi=100, ex="예: 1"),
+    "🧮 환전 여유% 변경": dict(key="auto_fx_buffer_pct", name="환전 여유%", unit="%", kind="num", lo=0, hi=100, ex="예: 3 (모자란 달러보다 3% 더 환전)"),
+    "💵 환전 하루 상한 변경": dict(key="auto_fx_max_usd_per_day", name="환전 하루 상한", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 5000 (달러, 정수)"),
 }
 KEY_ITEM = {i["key"]: i for i in SET_ITEMS.values()}
 BOOL_NAME = {"enabled": "봇", "auto_fx_enabled": "자동환전"}
+FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # 값 없이 💱 켜기를 눌렀을 때 이 글자만
 SET_POWER = "⏻ 봇 켜기/끄기"
-SET_ROWS = [["🌱 시드 변경", "🔢 회차 변경"], ["🎯 목표 이익률 변경", "💸 매도 목표 퍼센트 변경"],
-            ["📈 사다리 시작가 변경", "📏 사다리 간격 변경"], ["🔄 재매수 하락폭 변경", "📆 하루 최대 회차 변경"], [SET_POWER, BACK]]
+SET_ROWS = [["🌱 시드 변경", "🔢 회차 변경"], ["🎯 목표 이익률 변경", "💸 매도 비중 변경"],
+            ["📈 사다리 시작가 변경", "📏 사다리 간격 변경"], ["🔄 재매수 하락폭 변경", "📆 하루 최대 회차 변경"],
+            ["🧮 환전 여유% 변경", "💵 환전 하루 상한 변경"], [SET_POWER, BACK]]
 LADDER_KEYS = ("total_krw", "split_count", "ladder_top_usd", "ladder_step_usd")   # 이미 채운 회차가 있으면 경고
 PARENT = {"fund": "main", "tact": "main", "stat": "main", "etc": "main", "settings": "tact", "fx": "fund", "power": "settings"}
 HEADS = {"main": "아래 버튼을 눌러 주세요", "fund": "💰 자금", "tact": "📋 전술", "stat": "📈 현상태", "etc": "🛠 기타 · 가끔 쓰는 기능이에요",
-         "settings": "⚙️ 설정 · 바꿀 값을 눌러 주세요 (설정 파일 값만 바뀌고 주문은 안 나가요)"}
+         "settings": "⚙️ 설정 · 바꿀 값을 눌러 주세요 (값만 바뀌고 주문은 안 나가요)"}
 CONFIRM_SEC = 60            # 제안값: 확인 버튼 유효 시간
 WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
@@ -79,18 +86,37 @@ ALL_LABELS = ({M_FUND, M_TACT, M_STAT, M_ETC, BACK, I_FUNDS, I_FX, I_PLAN, I_SET
 
 
 def fmt_krw(n):
+    """원 금액을 짧게: 200000000 → '2억' · 20000000 → '2,000만원' · 150000000 → '1억 5,000만원' · 9500 → '9,500원' (앞에 긴 숫자 안 붙임)"""
     n = int(round(float(n)))
-    e, m = n // 10**8, (n % 10**8) // 10**4
-    h = (f"{e}억" if e else "") + (f"{m}만" if m else "")
-    return f"{n:,}원" + (f" ({h})" if h and n >= 10**4 else "")
+    if n < 10**4:
+        return f"{n:,}원"
+    e, m = divmod(int(round(n / 10**4)), 10**4)
+    if e and not m:
+        return f"{e:,}억"
+    return (f"{e:,}억 " if e else "") + f"{m:,}만원"
 
 
-def fmt_val(item, v):
+def fmt_val(item, v, none="미정"):
     if v is None:
-        return "미정"
+        return none
     if item["kind"] == "krw":
         return fmt_krw(v)
-    return f"${v:g}" if item["unit"] == "$" else f"{v:g}{item['unit']}"
+    if item["unit"] == "$":
+        return f"${v:,}" if item["kind"] == "int" else f"${float(v):,.2f}"    # 달러 설정은 전부 속쓸 가격(사다리·재매수 하락폭) → 소수 2자리
+    return f"{v:g}{item['unit']}"
+
+
+def _num(v):
+    try:
+        return None if v is None or isinstance(v, bool) else float(str(v).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def fx_values_ready(s):
+    """자동환전 여유%(0 이상)·하루 상한(0 초과)을 사용자가 입력했는지 (config.validate_settings 와 같은 조건)"""
+    b, m = _num(s.get("auto_fx_buffer_pct")), _num(s.get("auto_fx_max_usd_per_day"))
+    return b is not None and b >= 0 and m is not None and m > 0
 
 
 def parse_value(item, text):
@@ -157,7 +183,7 @@ class MenuBot:
 
     def send(self, c, text, rows=None, dry=True):
         tok, chat = c
-        msg = (("🧪[모의] " if dry else "") + HEAD + "\n" + str(text)).replace(tok, "***")[:3900]
+        msg = (("🧪[모의] " if dry else "") + HEAD + "\n" + to_korean(text)).replace(tok, "***")[:3900]
         try:
             self._call(tok, "sendMessage", {"chat_id": chat, "text": msg, "reply_markup": kb(rows or MAIN_ROWS)}, 15)
         except Exception as e:
@@ -199,7 +225,7 @@ class MenuBot:
                     self.handle(s, c, (m.get("text") or "").strip())
                 except Exception as e:
                     logging.warning(f"텔레그램 메뉴 처리 실패: {type(e).__name__}")
-                    self.send(c, f"⚠️ 처리 오류: {type(e).__name__}", dry=s.get("dry_run", True))
+                    self.send(c, "⚠️ 처리 중 오류가 났어요. 다시 눌러 주세요.", dry=s.get("dry_run", True))
 
     # ---------------------------------------------------------- 기존 함수 부르기
     def _out(self, fn, *a, **k):
@@ -262,28 +288,36 @@ class MenuBot:
                ["ℹ️ " + n for n in d["notes"]]
 
     def mode_line(self, s, halt):
-        return (f"▫️ 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'} "
-                f"(enabled={s.get('enabled')} · dry_run={s.get('dry_run')})\n"
+        return (f"▫️ 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'}\n"
                 f"▫️ 정지 표시: {(halt or {}).get('reason') if halt else '없음'}")
+
+    def intraday_text(self, s):
+        """당일 매도 확인 상태 글자"""
+        sec = _num(s.get("intraday_sell_check_sec")) or 0
+        if sec <= 0:
+            return "꺼짐"
+        if s.get("order_type") != "LIMIT":
+            return "꺼짐 (지정가 주문일 때만 켜져요)"
+        return f"{int(sec // 60)}분마다" if sec % 60 == 0 else f"{int(sec)}초마다"
 
     def settings_lines(self, s):
         """v2.0.1 상황판에 보이는 현재 설정값 (설정 파일 값 그대로 표시)"""
-        v = lambda k: fmt_val(next(i for i in SET_ITEMS.values() if i["key"] == k), s.get(k))
+        v = lambda k: fmt_val(KEY_ITEM[k], s.get(k), "입력 전")
         fx = "켜짐" if s.get("auto_fx_enabled") else "꺼짐"
-        if s.get("auto_fx_enabled"):
-            fx += f" (여유 {v('auto_fx_buffer_pct')} · 하루 상한 {v('auto_fx_max_usd_per_day')})"
+        fx += f" (여유 {v('auto_fx_buffer_pct')} · 하루 상한 {v('auto_fx_max_usd_per_day')})" if fx_values_ready(s) else " (여유%·하루 상한 입력 전)"
         return ["⚙️ 설정값",
                 f"▫️ 시드 {v('total_krw')} · 회차 {v('split_count')}",
                 f"▫️ 목표 이익률 {v('sell_profit_pct')} · 매도 비중 {v('sell_fraction_pct')}",
                 f"▫️ 사다리 시작가 {v('ladder_top_usd')} · 간격 {v('ladder_step_usd')} · 재매수 하락폭 {v('rebuy_drop_usd')}",
-                f"▫️ 하루 최대 회차 {v('max_rounds_per_day')} · 자동환전 {fx}"]
+                f"▫️ 하루 최대 회차 {v('max_rounds_per_day')} · 당일 매도 확인 {self.intraday_text(s)}",
+                f"▫️ 자동환전 {fx}"]
 
     def board_text(self, s):
         d = self.board(s)
         pos = d["pos"]
         lines = [f"📈 [7번 메리츠 속쓸 적립봇 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
         if pos:
-            lines.append(f"▫️ 장부: {pos['qty']}주 · 평단 ${d['avg']:.4f} · 채운 회차 {d['t']} · 매도 목표 ${d['target']:.2f}")
+            lines.append(f"▫️ 장부: {pos['qty']}주 · 평단 ${d['avg']:.2f} · 채운 회차 {d['t']} · 매도 목표 ${d['target']:.2f}")
         else:
             lines.append("▫️ 장부: 시작 전 (🛠 기타 → 📥 장부 시작)")
         if d["api_bad"]:
@@ -292,8 +326,11 @@ class MenuBot:
             lq = int(pos["qty"]) if pos else None
             lines.append(f"▫️ 메리츠 잔고: {d['hold']}주 (매도가능 {d['sellable']}) · 장부 {lq if lq is not None else '시작 전'}주"
                          + (" · ⚠️ 잔고 ≠ 장부" if lq is not None and d["hold"] != lq else ""))
-            lines.append(f"▫️ 현재가 ${d['price']:.2f} · 전일종가 ${d['prev']:.2f} · 적용환율 {('%.2f' % d['fx']) if d['fx'] else '미확인'}")
-            lines.append(f"▫️ USD 예수금 ${d['cash']:,.2f}")
+            lines.append(f"▫️ 현재가 ${d['price']:.2f} · 전일종가 ${d['prev']:.2f} · 적용환율 {('{:,.0f}'.format(d['fx'])) if d['fx'] else '미확인'}")
+            lines.append(f"▫️ 달러 예수금 ${d['cash']:,.0f}")
+            pi = (d["plan"] or {}).get("info") or {}
+            lines.append(f"▫️ 시드 {fmt_krw(s['total_krw']) if s.get('total_krw') else '미정'} · 당일 시드 "
+                         + (fmt_krw(pi["unit_usd"] * pi["fx"]) if pi.get("fx") and pi.get("unit_usd") is not None else "미확인"))
         lines += self.settings_lines(s)
         lines.append("─────────────────")
         lines += self.plan_lines(s, d)
@@ -303,7 +340,7 @@ class MenuBot:
         o = self.o
         pos, halt, avg, _, _ = self._local(s)
         lines = ["📒 [거래 내역 — 조회만]"]
-        lines.append(f"▫️ 장부: {pos['qty']}주 · 원금 ${float(pos['principal']):,.2f} · 평단 ${avg:.4f}" if pos else "▫️ 장부: 시작 전")
+        lines.append(f"▫️ 장부: {pos['qty']}주 · 원금 ${float(pos['principal']):,.0f} · 평단 ${avg:.2f}" if pos else "▫️ 장부: 시작 전")
         lines.append(f"▫️ 정지 표시: {halt.get('reason') if halt else '없음'}")
         with o.in_dir(s["state_dir"]):
             cfg = o.ConfigManager(s)
@@ -312,34 +349,44 @@ class MenuBot:
             marks = [(n, cfg._load_json(f"data/{n}_{d}.json", None)) for n in ("orders", "dry_orders")]
         if isinstance(hist, list) and hist:
             h = hist[-1]
-            lines.append(f"▫️ 직접 산 주식 반영 기록: {len(hist)}건 · 최근 {str(h.get('at', ''))[:16]} {h.get('qty')}주 @ ${float(h.get('avg') or 0):.4f}"
+            lines.append(f"▫️ 직접 산 주식 반영 기록: {len(hist)}건 · 최근 {str(h.get('at', ''))[:16]} {h.get('qty')}주 @ ${float(h.get('avg') or 0):.2f}"
                          f" ({(h.get('before') or {}).get('qty')}→{(h.get('after') or {}).get('qty')}주)")
         else:
             lines.append("▫️ 직접 산 주식 반영 기록: 없음")
-        for n, m in marks:
-            name = f"{n}_{d}.json"
-            if m is None:
-                lines.append(f"▫️ 오늘 주문 기록 {name}: 없음")
-            elif m.get("skipped"):
-                lines.append(f"▫️ 오늘 주문 기록 {name}: 주문 안 함 — {str(m.get('skipped'))[:160]}")
-            else:
-                lines.append(f"▫️ 오늘 주문 기록 {name}: 주문 {len(m.get('orders') or [])}건 · 오류 {len(m.get('errors') or [])}건 · "
-                             f"체결 반영 {'됨' if m.get('synced') else '전'}")
-                lines += ["   " + x for x in self.o.fmt_orders(m.get("orders") or []).split("\n")]
+        shown = [(n, m) for n, m in marks if m is not None]
+        if not shown:
+            lines.append("▫️ 오늘 주문 기록: 없음")
+        for n, m in shown:
+            label = "주문" if n == "orders" else "모의 주문"
+            if m.get("skipped"):
+                lines.append(f"▫️ 오늘 {label}: 안 냄 — {str(m.get('skipped'))[:160]}")
+                continue
+            lines.append(f"▫️ 오늘 {label}: {len(m.get('orders') or [])}건 · 오류 {len(m.get('errors') or [])}건 · 체결 반영 {'됨' if m.get('synced') else '전'}")
+            lines += ["   " + x for x in self.o.fmt_orders(m.get("orders") or []).split("\n")]
+            if m.get("sell_deferred"):
+                lines.append("   ℹ️ 오늘 산 주식이 체결되면 평단이 바뀌어서, 매도는 장중에 확인해서 내요")
+            if m.get("sell_attempt"):
+                lines.append("   🎯 당일 매도: " + str(m["sell_attempt"].get("status")))
         return "\n".join(lines)
 
     def funds_text(self, s):
         d = self.board(s)
+        seed = fmt_krw(s["total_krw"]) if s.get("total_krw") else "미정"
         lines = ["💰 [자금 현황 — 조회만 · 환전 신청은 메뉴에서 안 해요]"]
         if d["api_bad"]:
-            return "\n".join(lines + ["▫️ 메리츠 조회: 미확인 (" + "; ".join(d["api_bad"][:3]) + ")"])
-        buy = sum(int(x["qty"]) * float(x["price"]) for x in d["orders"] if x.get("side") == "BUY" and x.get("type") != "MOC")
+            return "\n".join(lines + [f"▫️ 시드 {seed}", "▫️ 메리츠 조회: 미확인 (" + "; ".join(d["api_bad"][:3]) + ")"])
         lq = int(d["pos"]["qty"]) if d["pos"] else None
-        lines += [f"▫️ USD 예수금 ${d['cash']:,.2f}",
-                  (f"▫️ 오늘 계획 필요액 ${buy:,.2f} (계획한 매수 주문 합계 — make_plan 이 달러·한도에 맞춘 값)"
-                   if d["plan"] is not None else f"▫️ 오늘 계획 필요액: 미확인 ({d['plan_err']})"),
-                  (f"▫️ 필요 달러 ${d['plan']['info']['need_usd']:,.2f} · 부족 ${d['plan']['info']['shortfall_usd']:,.2f}"
-                   + (" · 자동환전 켜짐 (신청은 하루 주문 시간에만, 메뉴에서는 안 함)" if d["plan"]["info"].get("auto_fx") else " · 자동환전 꺼짐") if d["plan"] is not None else "▫️ 필요 달러: 미확인"),
+        plan = d["plan"]
+        if plan is not None:
+            i = plan["info"]
+            today = fmt_krw(i["unit_usd"] * i["fx"]) if i.get("fx") else "미확인"
+            need = (f"▫️ 오늘 필요 달러 ${i['need_usd']:,.0f} · " + (f"부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "부족 없음")
+                    + f" · 자동환전 {'켜짐 (신청은 주문 시간에만)' if i.get('auto_fx') else '꺼짐'}")
+        else:
+            today, need = "미확인", f"▫️ 오늘 필요 달러: 미확인 ({d['plan_err']})"
+        lines += [f"▫️ 시드 {seed} · 당일 시드 {today}",
+                  f"▫️ 달러 예수금 ${d['cash']:,.0f}",
+                  need,
                   f"▫️ 보유 주수: 메리츠 {d['hold']}주 · 장부 {lq if lq is not None else '시작 전'}"
                   + (" · ⚠️ 잔고 ≠ 장부" if lq is not None and d["hold"] != lq else "")]
         return "\n".join(lines)
@@ -349,12 +396,12 @@ class MenuBot:
         exp = str(s.get("expected_key_fp") or "").strip()
         _, halt, _, _, _ = self._local(s)
         fp_txt = ("없음" if not fp else "있음 · " + ("기대값과 일치" if exp and fp == exp else ("기대값 없음" if not exp else "기대값과 다름")))
-        return "\n".join(["⚙️ [봇 상태 — 표시만]",
-                          f"▫️ enabled={s.get('enabled')} · dry_run={s.get('dry_run')}",
-                          f"▫️ transfer_confirmed={s.get('transfer_confirmed')} · toss_sniper_stopped_confirmed={s.get('toss_sniper_stopped_confirmed')}",
+        return "\n".join(["🤖 [봇 상태 — 표시만]",
+                          f"▫️ 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'}",
+                          f"▫️ 입고 확인 {'됨' if s.get('transfer_confirmed') else '전'} · 토스 스나이퍼 정지 확인 {'됨' if s.get('toss_sniper_stopped_confirmed') else '전'}",
                           f"▫️ 키 지문: {fp_txt}",
                           f"▫️ 정지 표시: {halt.get('reason') if halt else '없음'}",
-                          "▫️ enabled 는 📋 전술 → ⚙️ 설정 → ⏻ 봇 켜기/끄기, 🛑 매매 정지 는 🛠 기타. dry_run 은 메뉴에서 안 바꿔요 (설정 파일·기존 안전 절차 그대로)."])
+                          "▫️ 봇 켜기/끄기: 📋 전술 → ⚙️ 설정 → ⏻ 봇 켜기/끄기 · 🛑 매매 정지: 🛠 기타. 모의/실거래 전환은 메뉴에서 안 바꿔요 (서버 설정·기존 안전 절차 그대로)."])
 
 
     # ---------------------------------------------------------- v2.0.1 화면 (카테고리별 버튼줄)
@@ -373,18 +420,20 @@ class MenuBot:
              [[BOT_OFF if s.get("enabled") else BOT_ON], [BACK]] if n == "power" else MAIN_ROWS)
 
     def fx_text(self, s):
-        k = lambda key: fmt_val(KEY_ITEM[key], s.get(key))
+        k = lambda key: fmt_val(KEY_ITEM[key], s.get(key), "입력 전")
         on = bool(s.get("auto_fx_enabled"))
         return "\n".join(["💱 [자동환전]", f"▫️ 지금: {'켜짐' if on else '꺼짐'}",
-                          f"▫️ 여유 {k('auto_fx_buffer_pct')} · 하루 상한 {k('auto_fx_max_usd_per_day')} (켜려면 두 값이 있어야 해요)",
-                          "▫️ 켜면: 실주문 모드(dry_run=false)에서만, 하루 한 번, 오늘 매수에 모자란 달러 + 여유%를 상한 안에서 환전 신청해요.",
+                          f"▫️ 여유 {k('auto_fx_buffer_pct')} · 하루 상한 {k('auto_fx_max_usd_per_day')}",
+                          "▫️ 켜기 전에 여유%와 하루 상한을 직접 입력해 주세요 (아래 두 버튼, ⚙️ 설정에도 있어요)."
+                          if not fx_values_ready(s) else "▫️ 값이 입력돼 있어요. 켤 수 있어요.",
+                          "▫️ 켜면: 실거래 모드에서 하루 한 번, 오늘 매수에 모자란 달러 + 여유%를 하루 상한 안에서 환전 신청해요.",
                           "▫️ 이 메뉴에서는 환전 신청을 하지 않아요 (설정 값만 바뀜)."]
                          + (["▫️ 지금은 모의 모드라 켜 둬도 환전 신청은 안 나가요."] if s.get("dry_run", True) else []))
 
     def power_bot_text(self, s):
         on = bool(s.get("enabled"))
         return (f"⏻ [봇 켜기/끄기]\n▫️ 지금: {'켜짐' if on else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'}\n"
-                "▫️ 끄면 바로 적용, 켜면 확인 버튼이 한 번 더 나와요. dry_run(모의/실거래)은 여기서 안 바꿔요.")
+                "▫️ 끄면 바로 적용, 켜면 확인 버튼이 한 번 더 나와요. 모의/실거래 전환은 여기서 안 바꿔요.")
 
     def show(self, name, s, say, text=None):
         self.nav, self.in_prompt = name, False
@@ -421,12 +470,12 @@ class MenuBot:
             return say(f"⚠️ 바꿀 수 없어요: {e}")
         except OSError as e:
             self.in_prompt = False
-            return say(f"⚠️ 설정 파일을 읽지 못했어요 ({type(e).__name__})")
+            return say("⚠️ 설정 파일을 읽지 못했어요. 서버 파일 권한을 확인해 주세요.")
         self.pending = {"changes": changes}
         self.confirm[CHG_OK] = time.time() + CONFIRM_SEC
         self.in_prompt = True
         return say(self._desc(changes, res) + self.fill_warn(s, changes) + (("\n" + extra) if extra else "")
-                   + f"\n{CONFIRM_SEC}초 안에 [{CHG_OK}] 를 눌러 주세요. 주문은 안 나가고 설정 파일 값만 바뀌어요.", [[CHG_OK, BACK]])
+                   + f"\n{CONFIRM_SEC}초 안에 [{CHG_OK}] 를 눌러 주세요. 주문은 안 나가고 값만 바뀌어요.", [[CHG_OK, BACK]])
 
     def apply(self, s, say, changes):
         try:
@@ -434,13 +483,17 @@ class MenuBot:
         except ValueError as e:
             return say(f"⚠️ 바꾸지 못했어요: {e}")
         except OSError as e:
-            return say(f"⚠️ 설정 파일을 쓰지 못했어요 ({type(e).__name__}) — 바뀐 것 없음. 서비스 계정의 쓰기 권한을 확인해 주세요.")
+            return say("⚠️ 설정 파일을 쓰지 못했어요 — 바뀐 것 없음. 서버 파일 쓰기 권한을 확인해 주세요.")
         try:
             self._s = self.o.load_settings()
         except Exception:
             pass
         self.in_prompt = False
-        return say("✅ 변경됨 (설정 파일에 저장 · 다음 주문 시간부터 적용)\n" + self._desc(changes, res))
+        hint = ""
+        if any(k in ("auto_fx_buffer_pct", "auto_fx_max_usd_per_day") for k in changes) and not (self._s or {}).get("auto_fx_enabled"):
+            hint = ("\n▫️ 이제 💰 자금 → 💱 자동환전 에서 [💱 자동환전 켜기] 를 눌러 주세요." if fx_values_ready(self._s)
+                    else "\n▫️ 아직 " + ("하루 상한" if _num(self._s.get("auto_fx_buffer_pct")) is not None else "여유%") + "을 입력하지 않았어요.")
+        return say("✅ 변경됨 (다음 주문 시간부터 적용)\n" + self._desc(changes, res) + hint)
 
     # ---------------------------------------------------------- 글자 처리
     def _ok_confirm(self, label):
@@ -493,8 +546,10 @@ class MenuBot:
         if text in (FX_ON, FX_OFF):
             self.nav = "fx"
         if text == FX_ON:
+            if not fx_values_ready(s):
+                return say(FX_NEED)
             return self.propose(s, say, {"auto_fx_enabled": True},
-                                "켜면 실주문 모드에서만, 하루 한 번, 상한 안에서 환전을 신청해요 (환전 API 서버 수용은 실환전 전까지 미확인).")
+                                "켜면 실거래 모드에서만, 하루 한 번, 하루 상한 안에서 환전을 신청해요. 실제 환전은 아직 시험 전이라 첫 환전은 꼭 확인해 주세요.")
         if text == FX_OFF:
             return self.apply(s, say, {"auto_fx_enabled": False})
         # ---- 📋 전술
@@ -512,11 +567,11 @@ class MenuBot:
             self.nav = "power"
             bad = self.o.validate_settings(s)
             return self.propose(s, say, {"enabled": True},
-                                f"켜면 다음 주문 시간부터 동작해요. 지금 {'모의' if dry else '실거래'} 모드예요. 입고 확인·토스 정지 확인·키 지문 등 기존 안전 조건은 그대로 먼저 통과해야 해요."
+                                f"켜면 다음 주문 시간부터 동작해요. 지금 {'모의' if dry else '실거래'}예요. 입고 확인·토스 정지 확인·키 지문 등 기존 안전 조건은 그대로 먼저 통과해야 해요."
                                 + (f"\n⚠️ 설정 문제 {len(bad)}건 (켜도 주문은 막혀요): " + "; ".join(bad[:3]) if bad else ""))
         if text in SET_ITEMS:
             it = SET_ITEMS[text]
-            self.nav = "fx" if it["key"].startswith("auto_fx") else "settings"
+            self.nav = self.nav if self.nav in ("settings", "fx") else ("fx" if it["key"].startswith("auto_fx") else "settings")
             self.wait, self.in_prompt = {"kind": "set", "label": text, "ts": time.time()}, True
             return say(f"{text}\n▫️ 지금: {fmt_val(it, s.get(it['key']))}\n▫️ 새 값을 숫자로 보내 주세요. {it['ex']}"
                        + self.fill_warn(s, {it["key"]: None}), [[BACK]])
@@ -538,8 +593,8 @@ class MenuBot:
             self.wait, self.in_prompt = {"kind": "add", "ts": time.time()}, True
             return say("➕ 직접 산 주식 수량과 평단(달러)을 띄어 써서 보내 주세요. 예: 3 52.10\n"
                        "• 1회차 매수 때 이 주식 원가를 한 번 차감하려면 끝에 '차감' 을 붙여요. 예: 63 61.50 차감\n"
-                       "• 메리츠 잔고 == 장부 + 수량 일 때만 반영 · enabled=true·미국장 주문 시간(미 동부 "
-                       f"{s.get('order_time_et')}~{s.get('order_deadline_et')})이면 거부 · 주문 없음", [[BACK]])
+                       "• 메리츠 잔고가 (장부 + 수량)과 같을 때만 반영돼요 · 봇이 켜져 있거나 미국장 주문 시간(미 동부 "
+                       f"{s.get('order_time_et')}~{s.get('order_deadline_et')})이면 거부 · 주문은 안 나가요", [[BACK]])
         if text == T_STOP:
             with self.o.in_dir(s["state_dir"]):
                 cfg = self.o.ConfigManager(s)
@@ -556,7 +611,7 @@ class MenuBot:
             if not halt:
                 return say("⛔ 정지 표시가 없어요. 해제할 것이 없습니다.")
             self.confirm[HALT_OK], self.in_prompt = time.time() + CONFIRM_SEC, True
-            return say(f"⛔ 정지 표시: {halt.get('reason')}\n원인을 확인한 뒤에 쓰는 기능이에요 (--clear-halt 와 같음).\n"
+            return say(f"⛔ 정지 표시: {halt.get('reason')}\n원인을 확인한 뒤에 쓰는 기능이에요.\n"
                        f"확인했으면 {CONFIRM_SEC}초 안에 [{HALT_OK}] 를 눌러 주세요.", [[HALT_OK, BACK]])
         if text == HALT_OK:
             if not self._ok_confirm(HALT_OK):
@@ -571,10 +626,10 @@ class MenuBot:
             label = INJECT_OVER if pos else INJECT_OK
             self.confirm[label], self.in_prompt = time.time() + CONFIRM_SEC, True
             if pos:
-                return say(f"📥 이미 장부가 있어요 ({pos['qty']}주). 덮어쓰려면 --overwrite 와 같은 확인이 필요해요.\n"
-                           f"{CONFIRM_SEC}초 안에 [{INJECT_OVER}] 를 누르면 같은 검사(설정·키·입고 확인·잔고 == 시작 수량) 뒤 덮어써요.",
+                return say(f"📥 이미 장부가 있어요 ({pos['qty']}주). 덮어쓰려면 한 번 더 확인이 필요해요.\n"
+                           f"{CONFIRM_SEC}초 안에 [{INJECT_OVER}] 를 누르면 같은 검사(설정·키·입고 확인·잔고가 시작 수량과 같은지) 뒤 덮어써요.",
                            [[INJECT_OVER, BACK]])
-            return say("📥 장부 시작 (--inject-start 와 같음): 설정·키 점검 · transfer_confirmed · 메리츠 잔고 == 시작 수량 일 때만.\n"
+            return say("📥 장부 시작: 설정·키 점검 · 입고 확인 · 메리츠 잔고가 시작 수량과 같을 때만 시작해요.\n"
                        f"{CONFIRM_SEC}초 안에 [{INJECT_OK}] 를 눌러 주세요.", [[INJECT_OK, BACK]])
         if text in (INJECT_OK, INJECT_OVER):
             if not self._ok_confirm(text):
@@ -585,8 +640,8 @@ class MenuBot:
             try:
                 fp = self.o.key_fingerprint(s["key_file"])
             except Exception as e:
-                return say(f"🔑 키 지문: 읽지 못함 ({type(e).__name__})")
+                return say("🔑 키 지문: 읽지 못함 (키 파일을 확인해 주세요)")
             exp = str(s.get("expected_key_fp") or "").strip()
-            return say(f"🔑 키 지문 (sha256 앞 12자리, 키 원문 아님): {fp}\n기대값(expected_key_fp): "
+            return say(f"🔑 키 지문 (앞 12자리, 키 원문 아님): {fp}\n기대값: "
                        + ("일치" if exp and exp == fp else ("없음" if not exp else "다름")))
-        return say("아래 버튼 메뉴로 써 주세요.")
+        return say("아래 버튼으로 써 주세요.")
