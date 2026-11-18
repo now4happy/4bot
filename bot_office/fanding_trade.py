@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_vNEXT)
+# v1.5.9 (2026-11-18, 방 fanding-autoorder-read30): 자동주문 모드 A '판독후 30분뒤' 시각을 이름대로 — max(알림일 09:30, 실제 알림 발송 시각+30분)
+#        · 평소 표(알림 09:00 발송) 09:30 그대로, 늦게 읽힌 표(10:11 발송)는 10:41 자동주문 (발송 시각은 분 단위 내림)
+#        · late 는 안전망으로 유지: 계산된 시각 자체가 지난 경우(봇 꺼짐 등)·모드를 그 시각 뒤에 켠 경우·발송 기록 없음 · 한 번 late 면 알림 재발송으로 시각이 밀려도 계속 late
+#        · 알림 문구의 자동주문 시각이 이번 발송 시각 기준으로 나오게 발송 시각을 문구 만들기 전에 잡음(전송 실패 시 되돌림)
+#        · 모드 B(마감 1시간전)·legacy(마감 10분 전)·주문·검산·버튼 로직 불변
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 1.1.0: 글 안의 이미지 여러 장 중 가격표만 Gemini 로 골라냄 (순서 바뀌어도 OK) · 가격표 없으면 알림
 #        · 이 파일이 바뀌면 상시 프로그램·비서가 스스로 새 코드로 다시 불러옴 (업데이트 비서 적용 후 재시작 불필요)
@@ -159,7 +164,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.5.8"
+VERSION = "v1.5.9"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -2122,6 +2127,11 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>", st=N
             sheet["auto_fx_lines"] = lines          # 알림 전송이 실패해 다시 보낼 때도 같은 줄
     clear_sheet_buttons(tg, sheet)          # 예전 알림 버튼만 지우고, 아래 새 알림에 버튼을 붙임
     img = IMAGES / (sheet.get("img") or "_none_")
+    # 1.5.9: 알림 문구의 자동주문 시각(모드 A = 발송 시각 + 30분)이 이번 발송 시각 기준으로 나오도록 발송 시각을 먼저 잡아 둠
+    #        (전송 실패 시 아래에서 원래 값으로 되돌림)
+    sent_at = now_kst().isoformat()
+    prev_sent = sheet.get("notice_sent_at")
+    sheet["notice_sent_at"] = sent_at
     text = sheet_text(sheet, head)
     if sheet.get("auto_fx_lines"):
         text += "\n\n" + "\n".join(sheet["auto_fx_lines"])
@@ -2136,8 +2146,12 @@ def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>", st=N
     sheet["msg_id"] = (res or {}).get("message_id")
     sheet["notice_pending"] = not bool(sheet["msg_id"])
     if not sheet["notice_pending"]:
-        sheet["notice_sent_at"] = now_kst().isoformat()
+        sheet["notice_sent_at"] = sent_at
         _hub_alert('4번 팬딩 가격표','info',text)
+    elif prev_sent is None:
+        sheet.pop("notice_sent_at", None)   # 전송 실패 → 발송 기록 없음 그대로
+    else:
+        sheet["notice_sent_at"] = prev_sent
     return not sheet["notice_pending"]
 
 
@@ -2769,7 +2783,7 @@ def main_menu_text():
     return "📋 <b>팬딩 봇</b>\n\n" + p_status_line() + "\n\n" + vr6 + "\n\n아래 버튼에서 골라 주세요."
 
 
-# ---------- 자동주문 시간 선택 (1.14.0): 켤 때 판독후 1시간뒤(A) / 마감 1시간전(B) 중 고름. 모드 없는 ON(legacy)은 마감 10분 전
+# ---------- 자동주문 시간 선택 (1.14.0): 켤 때 판독후 30분뒤(A) / 마감 1시간전(B) 중 고름. 모드 없는 ON(legacy)은 마감 10분 전
 AUTO_MODES = {"A": "판독후 30분뒤", "B": "마감 1시간전"}
 
 
@@ -2783,7 +2797,15 @@ def auto_mode(c=None):
 def auto_mode_time(sheet, mode):
     """자동주문 시각 (KST). A = 알림일 09:00 + 30분, B = 예약 마감 − 1시간, 모드 없음 = 기존 마감 10분 전"""
     if mode == "A":
-        return sheet_notice_time(sheet) + timedelta(minutes=30)
+        # 1.5.9: 판독후 30분뒤 = max(알림일 09:30, 실제 알림 발송 시각 + 30분). 발송 시각은 분 단위로 내림(09:00:03 발송 → 09:30)
+        base = sheet_notice_time(sheet) + timedelta(minutes=30)
+        try:
+            sent = datetime.fromisoformat(str(sheet.get("notice_sent_at")))
+        except (TypeError, ValueError):
+            return base                     # 아직 알림 발송 기록 없음 → 예전처럼 09:30
+        if sent.tzinfo is None:
+            sent = sent.replace(tzinfo=KST)
+        return max(base, sent.replace(second=0, microsecond=0) + timedelta(minutes=30))
     if mode == "B":
         return deadlines(sheet)[2] - timedelta(hours=1)
     return deadlines(sheet)[1]
@@ -2797,6 +2819,8 @@ def auto_due(sh, c, now):
         return "wait"
     if not mode:
         return "fire"                       # legacy: 기존 그대로
+    if sh.get("auto_late"):
+        return "late"                       # 1.5.9: 한 번 late 로 정해진 표는 알림을 다시 보내 발송 시각이 밀려도 소급 자동주문 안 함
     def after(x):
         try:
             return datetime.fromisoformat(str(x)) > at
