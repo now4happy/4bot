@@ -1041,6 +1041,41 @@ def _extract_upstream_files_sync(
         shutil.rmtree(tmpd, ignore_errors=True)
 
 
+# [🔗토스 토큰 공유 HOOK · vNEXT] 원작 동기화가 toss_api.py 를 원작본으로 덮어쓰면 공유 토큰 훅이 사라진다.
+# 동기화 직후 toss_hook_patch.py 에 저장된 패치를 다시 적용한다. 실패해도 동기화·스나이퍼 동작은 멈추지 않는다
+# (원작 파일 그대로 동작). 실패는 로그 + 텔레그램 알림 본문(HOOK_ALERT_PREFIX)으로 드러낸다.
+HOOK_ALERT_PREFIX = "⚠️ 토큰 공유 훅"
+
+
+def _load_toss_hook_patch(target_dir: str) -> Any:
+    import importlib.util
+
+    mod_fp = os.path.join(target_dir, "toss_hook_patch.py")
+    spec = importlib.util.spec_from_file_location("toss_hook_patch", mod_fp)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"불러올 수 없음: {mod_fp}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _reapply_toss_hook_sync(
+    target_dir: str, synced_files: Optional[Tuple[str, ...]] = None
+) -> Tuple[str, str]:
+    """반환 (상태, 알림용 한 줄). 상태: applied|already|skip|failed. 예외는 던지지 않는다."""
+    try:
+        thp = _load_toss_hook_patch(target_dir)
+        status, note = thp.reapply_after_sync(target_dir, synced_files)
+    except Exception as exc:
+        status, note = "failed", f"toss_hook_patch.py 불러오기/실행 실패: {exc!r} · 원작 파일 그대로 둠"
+        logger.error("🚨 [토큰 공유 훅] %s", note)
+    if status == "failed":
+        return status, f"{HOOK_ALERT_PREFIX} 재적용 실패(원작 그대로 동작 · 3곳 토큰 공유 끊김): {note}"
+    if status == "applied":
+        return status, f"🔗 {note}"
+    return status, note
+
+
 def _execute_git_pull_and_preflight_sync(
     base_dir: Optional[str] = None,
 ) -> Tuple[bool, str, bool]:
@@ -1126,9 +1161,20 @@ def _execute_git_pull_and_preflight_sync(
                     f"🚨 로컬 프리플라이트 검증 실패:\n{msg_local}",
                     False,
                 )
+            hook_chk_note = ""
+            try:  # [🔗토스 토큰 공유 HOOK] 동기화가 없어도 훅이 살아 있는지 점검 (읽기만, 파일 안 바꿈)
+                ok_hook, msg_hook = _load_toss_hook_patch(
+                    target_dir
+                ).check_hook_installed(target_dir)
+                if not ok_hook:
+                    hook_chk_note = f" · {HOOK_ALERT_PREFIX} 없음: {msg_hook}"
+                    logger.warning("[토큰 공유 훅] %s", msg_hook)
+            except Exception as exc:
+                hook_chk_note = f" · {HOOK_ALERT_PREFIX} 점검 불가: {exc!r}"
+                logger.warning("[토큰 공유 훅] 점검 불가: %r", exc)
             return (
                 True,
-                f"현재 버전({short_hash}) 유지 · 원장 100% 보존 · {msg_local}{purge_note}",
+                f"현재 버전({short_hash}) 유지 · 원장 100% 보존 · {msg_local}{purge_note}{hook_chk_note}",
                 False,
             )
 
@@ -1159,6 +1205,11 @@ def _execute_git_pull_and_preflight_sync(
             return False, f"원작 파일 동기화 실패: {sync_err}", False
 
         _restore_protected_local_files_sync(target_dir, protected_snapshots)
+
+        # [🔗토스 토큰 공유 HOOK] 원작 파일을 덮어쓴 직후 훅 재적용 (실패해도 동기화는 계속)
+        hook_status, hook_note = _reapply_toss_hook_sync(
+            target_dir, UPSTREAM_SYNC_MODULES
+        )
 
         for ledger_ignore_name in (
             "soxl_stratum_ledger.json",
@@ -1244,6 +1295,8 @@ def _execute_git_pull_and_preflight_sync(
             f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
         )
         summary_msg = f"{status_note} · {verify_note}{purge_note} · {commit_note}"
+        if hook_status != "skip":
+            summary_msg += f" · {hook_note}"
         return True, summary_msg, True
 
     except Exception as exc:
@@ -1356,7 +1409,11 @@ async def run_auto_update_loop(
                     try:
                         await asyncio.wait_for(
                             context.send_slim_alert(
-                                title="🚀 [장외 자동 업데이트 완료]",
+                                title=(
+                                    "⚠️ [장외 자동 업데이트 완료 · 토큰 공유 훅 확인 필요]"
+                                    if HOOK_ALERT_PREFIX in msg
+                                    else "🚀 [장외 자동 업데이트 완료]"
+                                ),
                                 body=f"{msg} · 최신 엔진으로 무중단 자가 재기동합니다.",
                             ),
                             timeout=5.0,
