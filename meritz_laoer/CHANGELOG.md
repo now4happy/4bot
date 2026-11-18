@@ -1,4 +1,9 @@
-# 메리츠 SOXL 무매 변경 기록
+# 7번 메리츠 무매 변경 기록
+
+## v1.0.5 · 2026-11-18 16:53 (KST)
+- 파일: accum_strategy.py, config.py, main.py, meritz_api.py, notifier.py, tg_menu.py
+- 내용: meritz: SOXL 적립봇 v2.0.0 — 사다리·부분매도·재매수·자동환전 (방 meritz-soxl-dca-bot)
+- 브랜치: staging
 
 ## v1.0.4 · 2026-11-14 13:57 (KST)
 - 파일: main.py, notifier.py, tg_menu.py
