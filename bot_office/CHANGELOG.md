@@ -1,5 +1,10 @@
 # 사무실 파일(bot_office) 변경 기록
 
+## v1.9.1 · 2026-11-18 10:44 (KST)
+- 파일: fanding_trade.py
+- 내용: fanding_trade v1.5.9: 자동주문 모드 A 판독후 30분 (방 fanding-autoorder-read30)
+- 브랜치: staging
+
 ## v1.9.0 · 2026-11-17 16:18 (KST)
 - 파일: bot_updater.py, fanding_trade.py, fanding_vault.py
 - 내용: fanding_vault v0.1.1-shadow: 매수 현금 한도 + 8,000 한도 기록 (방: P매매 SOXL 수익금 분리 백테스트)

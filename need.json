@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-17 16:30:06",
+  "as_of_kst": "2026-11-18 10:27:45",
   "accounts": [
     {
       "name": "토스",
@@ -35,8 +35,8 @@
         {
           "label": "P",
           "currency": "USD",
-          "holding": 477.74,
-          "need": 469.7,
+          "holding": 11.16,
+          "need": 0.0,
           "sufficient": true,
           "auto_fx": "on"
         },
@@ -51,8 +51,8 @@
         {
           "label": "3번",
           "currency": "USD",
-          "holding": 433.52,
-          "need": 114.47,
+          "holding": 319.48,
+          "need": 36.21,
           "sufficient": true,
           "auto_fx": "on"
         }
@@ -63,8 +63,8 @@
       "lines": [
         {
           "currency": "USD",
-          "holding": 293.78,
-          "need": 1303.125,
+          "holding": 90.03,
+          "need": 1455.025,
           "sufficient": false,
           "auto_fx": "unavailable"
         },
@@ -82,7 +82,7 @@
       "lines": [
         {
           "currency": "KRW",
-          "holding": 910806.803477,
+          "holding": 850657.641477,
           "need": 60000.0,
           "sufficient": true,
           "auto_fx": "na"
@@ -90,6 +90,6 @@
       ]
     }
   ],
-  "total_need_usd": 15106.015,
+  "total_need_usd": 14709.954999999998,
   "total_need_krw": 60000.0
 }

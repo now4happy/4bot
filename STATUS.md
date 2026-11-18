@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-18 06:10 (KST) · 계기: 매일 점검
+- 갱신: 2026-11-18 10:44 (KST) · 계기: 업데이트 적용 (staging: fanding_trade v1.5.9: 자동주문 모드 A 판독후 30분 (방 fanding-autoorder-read30))
 
 ## 봇별 현재 상태
 
@@ -14,18 +14,19 @@
 | 6번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-17 09:44 KST부터) | v1.2.9 | 2026-11-17 09:44 | meritz_dca_bot v1.2.9: SGOV 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10% + |
 | 3번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-15 14:21 KST부터) | v4.3.6 | 2026-11-14 14:48 | bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황 |
 | 7번 메리츠 무매 | `meritz_laoer` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.0.4 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
-| 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 📁 파일 묶음 | v1.9.0 | 2026-11-17 16:18 | fanding_vault v0.1.1-shadow: 매수 현금 한도 + 8,000 한도 기록 (방: P매매  |
+| 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 📁 파일 묶음 | v1.9.1 | 2026-11-18 10:44 | fanding_trade v1.5.9: 자동주문 모드 A 판독후 30분 (방 fanding-autoorder |
 
 ## 사무실 상시 서비스
 
 - 8번 비서(SGOV) `bot-office-secretary`: 🟢 실행 중 (11-15 14:21 KST부터)
-- 4번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-17 16:18 KST부터)
+- 4번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-18 10:44 KST부터)
 - 9번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-17 16:19 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
-- 디스크 사용: 76% (남은 4.9GB)
+- 디스크 사용: 90% (남은 2.1GB)
 
 ## 최근 적용 10건
 
+- 2026-11-18 10:44 · 사무실 파일(bot_office) v1.9.1 · fanding_trade.py · fanding_trade v1.5.9: 자동주문 모드 A 판독후 30분 (방 fanding-autoorder
 - 2026-11-17 16:18 · 사무실 파일(bot_office) v1.9.0 · bot_updater.py, fanding_trade.py, fanding_vault.py · fanding_vault v0.1.1-shadow: 매수 현금 한도 + 8,000 한도 기록 (방: P매매 
 - 2026-11-17 09:44 · 6번 메리츠 적립 v1.2.9 · sgov.py, t_core.py · meritz_dca_bot v1.2.9: SGOV 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10% +
 - 2026-11-16 11:14 · 사무실 파일(bot_office) v1.8.9 · office_briefing.py · 사무실 vNEXT: 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX)
@@ -35,7 +36,6 @@
 - 2026-11-14 14:12 · 3번 빗썸 적립 v4.3.5 · b_core.py, b_ui.py, main.py · bithumb-menu: 처음 화면을 BTC·ETH 설정 중심으로 (v4.3.5)
 - 2026-11-14 13:57 · 사무실 파일(bot_office) v1.8.6 · bot_updater.py, fanding_trade.py, office_briefing.py, office · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
 - 2026-11-14 13:57 · 7번 메리츠 무매 v1.0.4 · main.py, notifier.py, tg_menu.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
-- 2026-11-14 13:57 · 6번 메리츠 적립 v1.2.8 · t_core.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
