@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.0.1)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.0.3)
+# v2.0.3 (2026-11-18): 설정 intraday_sell_check_sec 추가(당일 매도 확인 간격 초, 기본 120, 0 이면 끔) + validate_settings 에 그 값 검사 한 줄. 나머지 검증·장부 함수는 그대로
 # 메리츠 속쓸 적립봇(SOXL 분할매수·부분매도) — 설정·장부
 # v2.0.1 (2026-11-18): update_settings 추가 (텔레그램 설정 메뉴용 — 설정 파일 일부 키만 바꿔 저장), _merge 분리. 검증·장부·기존 함수는 그대로
 # v2.0.0 (2026-11-18): 적립봇 전환. 설정 키 추가(total_krw·ladder_*·sell_*·rebuy_drop_usd·unit_base·first_buy_mode·max_rounds_per_day·
@@ -51,6 +52,7 @@ SAFE_DEFAULTS = {
     "max_rounds_per_day": None,            # 노션 Q4: 하루 최대 회차 수(정수 1 이상) — 비어 있으면 주문 안 함
     "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
     "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
+    "intraday_sell_check_sec": 120,        # v2.0.3 당일 매도: 장중 이 간격(초)마다 매도 조건 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
     "auto_fx_enabled": False,              # true 면 오늘 매수에 달러가 모자랄 때 원화→달러 환전 신청 (실주문 모드에서만)
     "auto_fx_buffer_pct": None,            # 부족 달러에 더할 여유 % (환율·체결가 변동 대비)
@@ -198,6 +200,9 @@ def validate_settings(s):
         bad.append("max_rounds_per_day 미정 (1 이상 정수, Muse 결정 필요 — 노션 질문)")
     if not isinstance(s.get("allow_consecutive_sell"), bool):
         bad.append("allow_consecutive_sell 미정 (true | false, Muse 결정 필요 — 노션 질문)")
+    isec = s.get("intraday_sell_check_sec")
+    if isinstance(isec, bool) or not isinstance(isec, (int, float)) or not (isec == 0 or 30 <= isec <= 3600):
+        bad.append("intraday_sell_check_sec 는 0(끔) 또는 30~3600 (초)")
     if not isinstance(s.get("auto_fx_enabled"), bool):
         bad.append("auto_fx_enabled 는 true | false")
     elif s.get("auto_fx_enabled"):
