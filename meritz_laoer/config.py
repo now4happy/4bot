@@ -1,6 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.0.0)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.0.1)
 # 메리츠 속쓸 적립봇(SOXL 분할매수·부분매도) — 설정·장부
+# v2.0.1 (2026-11-18): update_settings 추가 (텔레그램 설정 메뉴용 — 설정 파일 일부 키만 바꿔 저장), _merge 분리. 검증·장부·기존 함수는 그대로
 # v2.0.0 (2026-11-18): 적립봇 전환. 설정 키 추가(total_krw·ladder_*·sell_*·rebuy_drop_usd·unit_base·first_buy_mode·max_rounds_per_day·
 #   order_type·allow_consecutive_sell, start.mode·filled_levels·rebuy_anchor_usd·rebuy_k), validate_settings 새로 씀,
 #   적립 상태 파일 data/accum_state.json (get_accum/save_accum), inject_start 가 상태도 같이 시작.
@@ -74,12 +75,8 @@ SAFE_DEFAULTS = {
 }
 
 
-def load_settings(path=None):
-    p = path or SETTINGS_PATH
-    with open(p, "r", encoding="utf-8") as f:
-        user = json.load(f)
-    if not isinstance(user, dict):
-        raise ValueError("설정 파일 형식 오류 (JSON 객체 아님)")
+def _merge(user):
+    """설정 파일 내용(user) 위에 기본값을 깐 전체 설정"""
     s = json.loads(json.dumps(SAFE_DEFAULTS))
     for k, v in user.items():
         if k == "start" and isinstance(v, dict):
@@ -89,12 +86,93 @@ def load_settings(path=None):
     return s
 
 
+def load_settings(path=None):
+    p = path or SETTINGS_PATH
+    with open(p, "r", encoding="utf-8") as f:
+        user = json.load(f)
+    if not isinstance(user, dict):
+        raise ValueError("설정 파일 형식 오류 (JSON 객체 아님)")
+    return _merge(user)
+
+
 def _f(v):
     try:
         x = float(str(v if v is not None else 0).replace(",", ""))
         return x if math.isfinite(x) else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def update_settings(changes, path=None, dry=False):
+    """v2.0.1 텔레그램 메뉴용: 설정 파일(JSON)에서 changes 의 키만 바꿔 저장 → {키: (이전 값, 새 값)}.
+    - 파일에 적힌 키만 건드림 (기본값을 섞어 쓰지 않음). 바꾼 뒤 validate_settings 에 '새로 생기는' 문제가 있으면 ValueError (저장 안 함)
+    - dry=True 면 검사만 하고 쓰지 않음
+    - 원자적 저장(같은 폴더 임시 파일 → replace, 권한 유지). 폴더 쓰기 권한이 없으면 파일 자체에 덮어씀. 둘 다 안 되면 OSError
+    - 저장 전 원본을 state_dir/data/settings_before_change.json 에 복사, 바꾼 내용을 data/settings_change_log.json 에 기록 (실패해도 무시)"""
+    p = path or SETTINGS_PATH
+    with GlobalThrottle.get_file_lock(p):
+        with open(p, "r", encoding="utf-8") as f:
+            text = f.read()
+        raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError("설정 파일 형식 오류 (JSON 객체 아님)")
+        before = _merge(raw)
+        new_raw = dict(raw)
+        new_raw.update(changes)
+        after = _merge(new_raw)
+        old_bad = validate_settings(before)
+        new_bad = [b for b in validate_settings(after) if b not in old_bad]
+        if new_bad:
+            raise ValueError("; ".join(new_bad))
+        result = {k: (before.get(k), after.get(k)) for k in changes}
+        if dry:
+            return result
+        data = json.dumps(new_raw, ensure_ascii=False, indent=2) + "\n"
+        sd = str(after.get("state_dir") or "")
+        try:
+            os.makedirs(os.path.join(sd, "data"), exist_ok=True)
+            with open(os.path.join(sd, "data", "settings_before_change.json"), "w", encoding="utf-8") as f:
+                f.write(text)
+            lp = os.path.join(sd, "data", "settings_change_log.json")
+            try:
+                with open(lp, "r", encoding="utf-8") as f:
+                    log = json.load(f)
+                if not isinstance(log, list):
+                    log = []
+            except (OSError, ValueError):
+                log = []
+            log.append({"at": datetime.datetime.now(EST).isoformat(), "changes": {k: {"old": o, "new": n} for k, (o, n) in result.items()}})
+            with open(lp, "w", encoding="utf-8") as f:
+                json.dump(log[-200:], f, ensure_ascii=False, indent=2)
+        except (OSError, ValueError):
+            pass
+        try:
+            d = os.path.dirname(os.path.abspath(p))
+            fd, tmp = tempfile.mkstemp(dir=d, text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                st = os.stat(p)
+                os.chmod(tmp, st.st_mode & 0o7777)
+                try:
+                    os.chown(tmp, st.st_uid, st.st_gid)
+                except OSError:
+                    pass
+                os.replace(tmp, p)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+        except PermissionError:
+            with open(p, "w", encoding="utf-8") as f:     # 폴더는 못 써도 파일은 쓸 수 있는 경우
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        return result
 
 
 def validate_settings(s):

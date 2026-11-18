@@ -1,4 +1,4 @@
-# 메리츠 속쓸 적립봇 (meritz_laoer · 서비스 meritz_laoer.service) — v2.0.0 초안
+# 메리츠 속쓸 적립봇 (meritz_laoer · 서비스 meritz_laoer.service) — v2.0.1
 
 메리츠 3번 계좌(Super365)에서 **SOXL 분할매수·부분매도**를 하는 봇. 기존 무한매수(V14) 봇 `meritz_laoer`를 고쳐 만들었다
 (계좌 키 지문·텔레그램·장부·정지 장치·텔레그램 메뉴 재사용). 버전 번호·표시 이름은 Muse 가 정한다. `strategy_v14.py` 는 이제 안 불리지만 지우지 않았다.
@@ -43,3 +43,11 @@
 ## 켜는 순서 (Muse·사용자)
 1. 서버 `/etc/meritz-laoer/settings.json` 에 위 값을 채운다 (권한 600). 7번 무매(V14)의 미체결·진행 사이클이 없는지 먼저 확인 (노션 Q8).
 2. `python3 main.py --check` → 3. 입고 확인 뒤 `transfer_confirmed=true` → `--inject-start` → 4. `enabled=true`(dry_run=true) 모의 → 승인 뒤 `dry_run=false`.
+
+## 텔레그램 메뉴 (v2.0.1)
+맨밑 4개가 메인: **💰 자금 · 📋 전술 · 📈 현상태 · 🛠 기타**. 카테고리 안 `🔙 뒤로` = 메인(설정 안은 전술, 봇 켜기/끄기는 설정, 자동환전은 자금).
+- 💰 자금: 💰 자금 현황 · 💱 자동환전(켜짐/꺼짐 표시 + 바로 켜고 끔 + 🧮 여유% · 💵 하루 상한 입력)
+- 📋 전술: 📋 오늘 계획 · ⚙️ 설정(🌱 시드 `total_krw` · 🔢 회차 `split_count` · 🎯 목표 이익률 `sell_profit_pct` · 💸 매도 비중 `sell_fraction_pct` · 📈 사다리 시작가 `ladder_top_usd` · 📏 간격 `ladder_step_usd` · 🔄 재매수 하락폭 `rebuy_drop_usd` · 📆 하루 최대 회차 `max_rounds_per_day` · ⏻ 봇 켜기/끄기 `enabled`)
+- 📈 현상태: 📈 상황판(설정값 포함) · 📒 거래 내역 · ⚙️ 봇 상태
+- 🛠 기타: 🔍 점검 · ➕ 주식 넣기 · 🛑 매매 정지 · ⛔ 정지 해제 · 📥 장부 시작 · 🔑 키 확인
+설정 변경은 **설정 파일 값만** 바꾼다(주문 없음): 새 값 입력 → `이전 → 새` 표시 → `✅ 변경 확인`(60초). 봇·자동환전 *끄기*는 바로, *켜기*는 확인. 바꾸기 전 원본은 `data/settings_before_change.json`, 변경 기록은 `data/settings_change_log.json`. `dry_run` 은 메뉴에서 안 바꾼다. 🛑 매매 정지 = 정지 표시(halt)를 켬(실거래 모드에서 새 주문 차단, ⛔ 정지 해제로 풂).
