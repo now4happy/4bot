@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.6)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.7)
+# v2.0.7 (2026-11-19, 판 9): 자동환전 시간을 한국시간 오전 9시로 옮김 (수수료 때문). run_fx_morning 추가 — 평일 한국시간 09:00~09:30 사이 하루 한 번,
+#   '다음 한 회차분'(사다리·재매수 기존 로직, 가격 기준 전일 종가·그 시점 적용환율) 필요 달러 − 달러 예수금 = 부족분만 환전. 부족 없거나 매수 계획 없으면 안 함.
+#   안전장치는 auto_fx 그대로(적용환율 실패·원화 부족이면 안 함·신청 전 fx_<한국시간 날짜>.json 먼저 기록). 환전 뒤 90초 대기 없음.
+#   주문 시간(run_order_day)의 기존 auto_fx 호출은 그대로 — 오전 9시 기록(fx_<날짜>.json)이 있으면 건너뜀(= 다시 환전 안 함), 기록이 없을 때만 예전처럼 환전(대비용)
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.5 (2026-11-19): 정규장 외(장전 003·장후 005) 장중 매도는 '004 아니면 건너뜀' 유지 — 공식 openapi.json 에 연장 시간 주문·체결 근거가 없어 미확인(주석·테스트만 추가, 동작 변경 없음). BOT_VERSION v2.0.5. 체결 내역 심볼 필드 수정은 meritz_api.py
 # v2.0.4 (2026-11-19, 판 5 점검 보완 + 판 6): ① 현금 부분 매수(accum_strategy.make_plan) — 계획·--check·텔레그램에 부분 매수 수량 표시
@@ -70,13 +74,20 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.0.6"
+BOT_VERSION = "v2.0.7"
 EST = ZoneInfo("America/New_York")
+KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
+FX_KST_TIME = datetime.time(9, 0)     # v2.0.7 자동환전 시각 (한국시간)
+FX_WINDOW_MIN = 30                    # v2.0.7 09:00 부터 이 분 안에서만 시도 (봇이 늦게 켜져도 늦은 시간에 환전하지 않게. 값은 미확인 — 노션 질문)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 
 def now_et():
     return datetime.datetime.now(EST)
+
+
+def now_kst():
+    return datetime.datetime.now(KST)
 
 
 def _hm(s, default):
@@ -593,6 +604,99 @@ def run_order_day(s, api, note, live):
     return "완료"
 
 
+# ---------------------------------------------------------------- v2.0.7 오전 9시(한국시간) 자동환전
+_FXM = {"day": "", "done": False, "next": 0.0, "warned": []}    # 오늘 이미 판단했는지·다시 시도할 시각·알린 이유 (메모리 — 재시작하면 다시 확인하지만 환전 중복은 fx_<날짜>.json 이 막음)
+
+
+def fx_morning_due(n):
+    """n 이 평일 한국시간 09:00 ~ 09:00+FX_WINDOW_MIN 분 안인가. 한국시간 날짜 = 그날 주문하는 미국 동부 날짜
+    (예: 한국 11/19 09:00 = 미국 동부 11/18 19:00 EST → 11/19 주문. 서머타임엔 20:00 EDT — KST 기준이라 코드가 따로 계산하지 않음). 주말은 그날 주문이 없어 안 함"""
+    n = n.astimezone(KST)
+    if n.weekday() >= 5:
+        return False
+    t0 = datetime.datetime.combine(n.date(), FX_KST_TIME, tzinfo=KST)
+    return t0 <= n < t0 + datetime.timedelta(minutes=FX_WINDOW_MIN)
+
+
+def _fxm_later(note, d, key, text, sec=300):
+    """오전 환전을 못 한 이유 알림(같은 이유는 하루 한 번)을 보내고 sec 초 뒤 다시 시도. (주문용 _RETRY 와 따로 — 주문 시간 대기에 영향 없음)"""
+    if key not in _FXM["warned"]:
+        _FXM["warned"].append(key)
+        note.send(text)
+    _FXM["next"] = time.time() + sec
+
+
+def run_fx_morning(s, api, note, live):
+    """한국시간 오전 9시 자동환전 → 상태 글자. loop 가 시간대 안에서만 부름. 주문은 안 냄.
+    '다음 한 회차분'(기존 사다리·재매수 계산, max_rounds_per_day 를 1로 둔 계획) 필요 달러 − 달러 예수금 = 부족분만 환전 (여유%·하루 상한은 auto_fx 그대로).
+    가격 기준은 전일 종가(prev_close), 환율은 그 시점 적용환율. 매수 계획이 없거나 부족이 없으면 안 함. 환전 뒤 달러 반영을 기다리지 않음 (주문까지 시간이 많음)"""
+    if not s.get("auto_fx_enabled"):
+        return "꺼짐"
+    n = now_kst()
+    if not fx_morning_due(n):
+        return "시간 아님"
+    d = n.strftime("%Y-%m-%d")                                 # 환전 기록 날짜 = 한국시간 날짜 (= 그날 주문하는 미국 동부 날짜와 같아 주문 시간 auto_fx 가 같은 파일을 봄)
+    if _FXM["day"] != d:
+        _FXM.update(day=d, done=False, next=0.0, warned=[])
+    state = s["state_dir"]
+    marker = os.path.join(state, "data", f"{'fx' if live else 'dry_fx'}_{d}.json")
+    if os.path.exists(marker):
+        return "이미 함"
+    if _FXM["done"]:
+        return "확인 끝"
+    if time.time() < _FXM["next"]:
+        return "대기"
+    cfg = ConfigManager(s)
+    if live:
+        bad = gate_problems(s, cfg, live=True)
+        if bad:
+            _fxm_later(note, d, "gate", "⛔ 오전 환전 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 오전 9시 반 전까지 5분마다 다시 확인해요. 못 하면 주문 시간에 예전처럼 환전해요)")
+            return "차단"
+        for mp in pending_syncs(state):                        # 어제 체결 반영 전이면 사다리 상태가 낡아 '다음 회차'가 틀릴 수 있음 → 환전 안 함
+            m = cfg._load_json(mp, {})
+            if isinstance(m, dict) and (m.get("orders") or m.get("attempts")) and not m.get("synced", True):
+                _fxm_later(note, d, "sync", f"⚠️ 오전 환전 안 함 — 체결 반영 전인 주문 기록이 있어요 ({os.path.basename(mp)}). 사다리 상태가 최신이 아니에요")
+                return "체결 반영 전"
+    pos = cfg.get_position()
+    if not pos:                                                # 모의: 장부 시작 전이면 설정 start 로 가정 (run_order_day 와 같음)
+        st = s["start"]
+        pos = {"qty": int(float(st.get("qty") or 0)), "principal": float(st.get("principal_usd") or 0)}
+    try:
+        p = api.price(s["symbol"], s["price_market"])
+        rate, _tm = api.fx_applied()
+        cash = api.usd_cash()
+    except MeritzError as e:
+        _fxm_later(note, d, "read", f"⚠️ 오전 환전 안 함 — 시세·적용환율·달러 예수금 조회 실패: {str(e)[:100]} (5분 뒤 다시 시도해요)")
+        return "조회 실패"
+    prev_close = float(p.get("prev_close") or 0)
+    if not prev_close > 0:
+        _fxm_later(note, d, "close", "⚠️ 오전 환전 안 함 — 전일 종가를 못 읽었어요 (5분 뒤 다시 시도해요)")
+        return "전일종가 없음"
+    q = int(pos["qty"])
+    plan = build_plan(dict(s, max_rounds_per_day=1), cfg, prev_close, rate, cash, q, float(pos["principal"]), q)
+    buys = [o for o in plan["orders"] if o.get("side") == "BUY"]
+    if not buys:                                               # 다음 회차 없음(사다리 전부 채움·시작 대기 등)·한도 부족 → 환전 안 함
+        _FXM["done"] = True
+        logging.info("오전 환전: 다음 회차 매수 계획 없음 — 환전 안 함")
+        return "매수 계획 없음"
+    fxres = auto_fx(s, api, cfg, plan, live, d)
+    if fxres is None:                                          # 부족 달러 없음
+        _FXM["done"] = True
+        logging.info("오전 환전: 부족 달러 없음 — 환전 안 함")
+        return "필요 없음"
+    i = plan["info"]
+    text = (f"{d} 오전 환전 (한국시간 09시) · 다음 한 회차분 · 전일 종가 ${prev_close:.2f}\n{fmt_orders(buys)}\n"
+            f"필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}\n" + fx_lines(fxres))
+    if live and not fxres.get("done") and not os.path.exists(marker):      # 환율·원화 예수금 문제로 신청 전에 멈춤 (기록 안 씀) → 같은 시간대 안에서 다시 시도
+        _fxm_later(note, d, "fx", text + "(5분 뒤 다시 시도해요)")
+        return "환전 안 함"
+    if not live:
+        cfg._save_json(marker, {"date": d, "usd": fxres["want"], "result": "모의 — 신청 안 함 (계산만)"})
+    _FXM["done"] = True
+    note.send(text)
+    return "완료" if fxres.get("done") else "환전 안 함(기록 있음)"
+
+
 # ---------------------------------------------------------------- 체결 반영
 def run_sync(s, api, note, mark_path):
     cfg = ConfigManager(s)
@@ -698,6 +802,16 @@ def loop():
             note = Notifier(s["telegram_file"], dry_run=not live)
             n = now_et()
             api = None
+            if s.get("auto_fx_enabled") and fx_morning_due(now_kst()):      # v2.0.7 한국시간 오전 9시 자동환전 (실패해도 주문·체결 반영 흐름은 계속)
+                try:
+                    api = MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
+                    run_fx_morning(s, api, note, live)
+                except Exception as e:
+                    logging.exception(f"오전 환전 중 오류: {type(e).__name__}")
+                    ek = "err_" + now_kst().strftime("%Y-%m-%d")        # 하루 한 번만 알림
+                    if ek not in _FXM["warned"]:
+                        _FXM["warned"].append(ek)
+                        note.send(f"⚠️ 오전 환전 중 오류가 났어요 ({type(e).__name__}) — 환전은 안 했거나 기록을 확인해 주세요. 못 했으면 주문 시간에 예전처럼 환전해요.")
             if n.weekday() < 5 and _hm(s["order_time_et"], datetime.time(10, 5)) <= n.time() <= _hm(s["order_deadline_et"], datetime.time(15, 40)):
                 api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                 run_order_day(s, api, note, live)
