@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.4)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.5)
+# v2.2.5 (2026-11-20, 판 16 1층 채우기 매수): apply_fill 매수 체결 때, 계획한 새 층이 아직 없는데 위에 미완성 층이 있고 그 층의 안 산 칸에 이 체결 가격이 있으면 그 층(1층 탑업)에 넣음. 아침에 1층 완성 상태로 2층을 계획했는데 장중 매도로 1층이 미완성이 된 경우(버그 2) — 매수가 2층이 아니라 1층 빈곳을 채움. 이월(carry)은 주문의 계획 금액 기준으로 계산 (마지막 칸이 남은 부족분을 전부 가져가서 스스로 바로잡힘)
 # v2.2.4 (2026-11-19, 1층 시작가 메뉴): _topup_setup·apply_fill·apply_fill_to_state·normalize·reconcile 에 start_usd 전달 — 1층 시작가가 정해졌으면 1층 칸이 시작가 기준
 # v2.2.3 (2026-11-19, 판 14 색상 고침): 층 칸을 층별 색상 네모로 바꿈 (1층 🟩 시작). 흰색 █ 한 가지라 층 구분이 안 된다는 사용자 지적. 완성/쌓는 중 구분은 상세 줄 글자로만.
 # v2.2.2 (2026-11-19, 판 14): 표시용 view_lines · floor_status 추가 (층 상태를 글자 줄로 바꾸는 순수 계산 — 상태·주문 계산은 안 건드림). 텔레그램 현상태(상황판)에서 tg_menu.py 가 부름
@@ -314,10 +315,21 @@ def apply_fill(st, order, fill_qty, fill_amount, gap=GAP_USD, start_usd=0.0):
         f = _by_id(st, order.get("floor_id"))
         nf = order.get("new_floor")
         if f is None and isinstance(nf, dict):                       # 새 층의 첫 체결 때 층을 만듦 (같은 층의 다음 체결은 같은 id 로 찾음)
-            f = _floor(nf["id"], 0, 0.0, nf["target"], "build")
-            f["levels"], f["base_usd"] = list(nf["levels"]), float(nf["base_usd"])
-            st["floors"].append(f)
-            st["next_id"] = max(int(_f(st.get("next_id"))), int(nf["id"]) + 1)
+            # v2.2.5 1층 채우기: 새 층 계획이었는데, 위에 미완성 층이 있고 그 층의 안 산 칸에 이 체결 가격이 있으면 그 층에 넣음
+            # (아침에 1층 완성 상태로 2층을 계획했는데, 장중 매도로 1층이 미완성이 된 경우 — 2층이 아니라 1층 빈곳을 채움)
+            lv0 = round(_f(order.get("level")), 2)
+            for cand in top_down(st):
+                if int(_f(cand.get("qty"))) <= 0 or is_complete(cand) or cand.get("closed"):
+                    continue
+                unset = [p for p in cand.get("levels") or [] if p not in set(cand.get("settled") or [])]
+                if lv0 in unset:
+                    f = cand
+                    break
+            if f is None:
+                f = _floor(nf["id"], 0, 0.0, nf["target"], "build")
+                f["levels"], f["base_usd"] = list(nf["levels"]), float(nf["base_usd"])
+                st["floors"].append(f)
+                st["next_id"] = max(int(_f(st.get("next_id"))), int(nf["id"]) + 1)
         if f is None:
             return st
         f["qty"] = int(f["qty"]) + q

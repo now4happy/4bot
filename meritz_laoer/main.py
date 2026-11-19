@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.4)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.5)
+# v2.2.5 (2026-11-20, 판 16 1층 채우기 매수): BOT_VERSION 만 (1층 채우기 매수 로직은 tower_strategy.py apply_fill — 새 층 계획 매수 체결이 1층 빈칸 가격이면 1층에 넣음). 동작 변경은 tower_strategy.py에만 있음
 # v2.2.4 (2026-11-19, 1층 시작가 메뉴): 1층 시작가 설정(tower_floor1_start_usd) 추가 — 정하면 1층 칸이 시작가 기준, 안 정하면 평단 기준(지금 그대로). 동작 변경 없음
 # v2.2.3 (2026-11-19, 판 14 색상 고침 + 다음 회차 가격별 배정): 층 칸 색상(tower_strategy.py) + plan_head 에 다음 회차 칸별 배정 표시. 동작 변경 없음
 # v2.2.2 (2026-11-19, 판 14): BOT_VERSION 만 (현상태 탑쌓기 층 시각화는 tg_menu.py·tower_strategy.py). 동작 변경 없음
@@ -92,7 +93,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.4"
+BOT_VERSION = "v2.2.5"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
