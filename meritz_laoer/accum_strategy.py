@@ -1,5 +1,7 @@
 # ==========================================================
 # FILE: meritz_laoer/accum_strategy.py   (MERITZ_LAOER v2.0.6)
+# v2.2.1 (2026-11-19, audit-fix 7-2): 부분 매수 이월 — 현금 부족으로 일부만 산 회차의 못 산 금액((원래 주수−산 주수)×회차 가격)을 상태 carry_usd 에 남겨
+#   다음 매수 계획 첫 회차 금액에 더함 (체결 때 carry_usd 를 그 주문의 못 산 금액으로 '설정' → 같은 체결을 다시 반영해도 결과가 같음). 사다리(accum_strategy)만 — tower_strategy 는 건드리지 않음.
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.4 (2026-11-19): 현금 부분 매수 — 달러 예수금이 한 회차에 모자라면 그 회차를 통째로 건너뛰지 않고 현금으로 살 수 있는 만큼만(정수 주 내림, 0주면 안 삼) 매수.
 #   총 투자금 한도가 막는 경우는 예전대로 건너뜀. 부분 매수한 회차는 체결되면 '채운 회차'로 침(남은 주수는 이월·재시도 없음).
@@ -56,7 +58,8 @@ def state_from_start(start):
             "rebuy_anchor": (round(_f(st.get("rebuy_anchor_usd")), 4) if _f(st.get("rebuy_anchor_usd")) > 0 else None),
             "rebuy_k": int(_f(st.get("rebuy_k"))),
             "sell_block": False,
-            "credit_usd": round(max(0.0, _f(st.get("first_round_credit_usd"))), 2)}
+            "credit_usd": round(max(0.0, _f(st.get("first_round_credit_usd"))), 2),
+            "carry_usd": 0.0}                       # v2.2.1: 부분 매수 때 못 산 금액 — 다음 매수 계획 첫 회차 금액에 더함
 
 
 def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_fx=False):
@@ -127,11 +130,18 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     else:
         unit = (_f(s.get("total_krw")) / rounds) / fx
     credit = max(0.0, _f(st.get("credit_usd"))) if mode == "ladder" else 0.0
-    info.update({"unit_usd": round(unit, 2), "cap_usd": round(cap_usd, 2), "pool_usd": round(pool, 2), "credit_usd": round(credit, 2)})
+    carry = max(0.0, _f(st.get("carry_usd")))                       # v2.2.1: 전에 부분 매수로 못 산 금액 (이월)
+    info.update({"unit_usd": round(unit, 2), "cap_usd": round(cap_usd, 2), "pool_usd": round(pool, 2), "credit_usd": round(credit, 2),
+                 "carry_usd": round(carry, 2)})
+    if credit > 0 and credit >= unit - 1e-9 and cand:               # v2.2.1 (audit-fix 7-1): 차감액 ≥ 단위액이면 1회차가 0주로 반복됨
+        info["credit_config_error"] = True
+        notes.append(f"설정 오류: 1회차 차감 ${credit:,.2f} ≥ 1회차 단위액 ${unit:,.2f} — 1회차 매수가 0주가 되어 매일 생략돼요. first_round_credit_usd 를 단위액보다 작게 고쳐 주세요")
     spent = 0.0
     for n, (p, j) in enumerate(cand):
         use_credit = credit if (n == 0 and credit > 0) else 0.0     # 1회차(첫 사다리 매수) 한 번만 차감
-        amount = unit - use_credit
+        use_carry = carry if (n == 0 and carry > 0) else 0.0        # v2.2.1: 이월 금액은 첫 회차에만 더함
+        amount = unit - use_credit + use_carry
+        if use_carry: notes.append(f"전에 부분 매수로 못 산 ${use_carry:,.2f} 를 이번 첫 회차 금액에 더함")
         q = int(math.floor(amount / p + 1e-9)) if amount > 0 else 0
         if q < 1:
             notes.append(f"회차 금액 ${unit:,.2f}" + (f" − 기존 보유 차감 ${use_credit:,.2f}" if use_credit else "")
@@ -146,13 +156,14 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
                     orders.append({"side": "BUY", "type": otype, "qty": pq, "price": p, "kind": "buy_rebuy" if mode == "rebuy" else "buy_ladder",
                                    "level": p if mode == "ladder" else None, "idx": j, "credit": round(use_credit, 2),
                                    "partial": True, "full_qty": q,
+                                   "carry_in": round(use_carry, 2), "carry_out": round((q - pq) * p, 2),
                                    "desc": (f"재매수 {j}번째 (평단 ${_f(st.get('rebuy_anchor')):.2f} −${drop * j:g})" if mode == "rebuy"
                                             else f"사다리 ${p:g} 회차" + (f" (기존 보유 −${use_credit:,.2f} 차감)" if use_credit else ""))
                                    + f" · 현금만큼 부분 매수 (원래 {q}주)"})
                     spent += pq * p
                     info["partial"] = {"price": p, "qty": pq, "full_qty": q}
                     notes.append(f"현금 부족 — ${p:.2f} 회차 {q}주 중 {pq}주만 부분 매수 (필요 ${cost:,.2f} > 가용 ${room:,.2f}, "
-                                 f"나머지 {q - pq}주는 이월·재시도 없음)")
+                                 f"못 산 {q - pq}주 ${(q - pq) * p:,.2f} 는 다음 매수 계획에 이월)")
                 else:
                     notes.append(f"현금 부족 — 가용 ${max(room, 0):,.2f} < 1주(${p:.2f}) — 이 회차 안 삼")
             else:
@@ -161,6 +172,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
         spent += cost
         orders.append({"side": "BUY", "type": otype, "qty": q, "price": p, "kind": "buy_rebuy" if mode == "rebuy" else "buy_ladder",
                        "level": p if mode == "ladder" else None, "idx": j, "credit": round(use_credit, 2),
+                       "carry_in": round(use_carry, 2), "carry_out": 0.0,
                        "desc": (f"재매수 {j}번째 (평단 ${_f(st.get('rebuy_anchor')):.2f} −${drop * j:g})" if mode == "rebuy"
                                 else f"사다리 ${p:g} 회차" + (f" (기존 보유 −${use_credit:,.2f} 차감)" if use_credit else ""))})
     info["need_usd"] = round(spent, 2)                              # 오늘 매수 주문이 다 체결될 때 드는 달러 (한도가 아니라 주문가 기준 최대치)
@@ -185,6 +197,9 @@ def apply_fill_to_state(st, order, avg_before, allow_consecutive_sell=False):
     elif kind == "buy_rebuy":
         st["rebuy_k"] = max(int(_f(st.get("rebuy_k"))), int(_f(order.get("idx"))))
         st["sell_block"] = False
+    if kind in ("buy_ladder", "buy_rebuy") and (_f(order.get("carry_in")) > 0 or _f(order.get("carry_out")) > 0):
+        # v2.2.1 (audit-fix 7-2): 이 주문이 이월분을 썼거나 못 산 금액을 남겼으면 carry_usd 를 그 주문의 '못 산 금액'으로 설정 (더하지 않음 → 같은 체결 재반영해도 같음)
+        st["carry_usd"] = round(max(0.0, _f(order.get("carry_out"))), 2)
     elif kind == "sell":
         st["mode"] = "rebuy"
         st["rebuy_anchor"] = round(_f(avg_before), 4)

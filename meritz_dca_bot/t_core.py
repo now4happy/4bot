@@ -24,6 +24,7 @@
 # v1.2.6 (2026-11-14): 모든 메뉴·화면 버튼을 맨밑 키보드로 (첫 줄 [📈 상황판, ☰ 메뉴]) · 인라인 버튼 안 보냄 · SGOV 메뉴는 비서봇으로.
 # v1.2.7 (2026-11-14): BOT_VERSION만 (SGOV 알림을 4번 방 대신 bridge 알림 파일로 — 내용은 sgov.py·bridge.py, send_panel 은 그대로)
 # v1.2.9 (2026-11-17): BOT_VERSION만 (SGOV 환율 재시도 창 캐시 폴백·시장가 주문 여유 10%·오래된 FRED 자료로 캐시 덮지 않기 — 내용은 sgov.py)
+# v1.3.2 (2026-11-19): audit-fix 6-7 int_sell_qty — 보유 전량이 되는 익절 매도(1주 보유 등)는 하지 않음 (0 반환). 그 외 BOT_VERSION.
 # v1.2.8 (2026-11-14): 봇 번호 정리 — 알림 허브 이름 HUB_NAME '메리츠 적립' → '6번 메리츠 적립' (매매 동작 변경 없음)
 # =====================================================================
 import os, sys, time, json, math, asyncio, requests
@@ -32,7 +33,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.3.1"
+BOT_VERSION = "v1.3.2"
 BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -244,10 +245,12 @@ def int_buy_qty(budget: float, carry: float, price: float, mode: str = "carry"):
 
 
 def int_sell_qty(qty: float, ratio_pct: float) -> int:
-    """3번 한국주식 익절 수량과 같음: 정수 보유의 ratio% 반올림, 최소 1주, 보유 이내"""
+    """3번 한국주식 익절 수량과 비슷: 정수 보유의 ratio% 반올림, 최소 1주.
+    v1.3.2 (audit-fix 6-7): 매도 수량이 보유 전량이 되면(보유 1주 등) 0 을 돌려줌 = 매도 안 함. 최소 2주 보유일 때만 익절 매도."""
     iq = int(math.floor(float(qty) + 1e-9))
-    if iq <= 0: return 0
-    return min(iq, max(1, int(round(iq * (float(ratio_pct) / 100.0)))))
+    if iq <= 1: return 0
+    sq = max(1, int(round(iq * (float(ratio_pct) / 100.0))))
+    return 0 if sq >= iq else sq
 
 
 def int_split_sell_qty(qty: float, rem_days: int) -> int:

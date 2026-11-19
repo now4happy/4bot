@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.0.3)
+# v2.2.1 (2026-11-19, audit-fix 7-1): credit_problems 추가 + validate_settings(s, fx=None) — 환율을 알면 start.first_round_credit_usd < 1회차 단위액(total_krw÷split_count÷환율) 검사. 그 외 검증은 그대로
 # v2.0.3 (2026-11-18): 설정 intraday_sell_check_sec 추가(당일 매도 확인 간격 초, 기본 120, 0 이면 끔) + validate_settings 에 그 값 검사 한 줄. 나머지 검증·장부 함수는 그대로
 # 메리츠 속쓸 적립봇(SOXL 분할매수·부분매도) — 설정·장부
 # v2.0.1 (2026-11-18): update_settings 추가 (텔레그램 설정 메뉴용 — 설정 파일 일부 키만 바꿔 저장), _merge 분리. 검증·장부·기존 함수는 그대로
@@ -177,8 +178,22 @@ def update_settings(changes, path=None, dry=False):
         return result
 
 
-def validate_settings(s):
-    """주문 전에 꼭 있어야 하는 값 검사 → 문제 목록 (빈 목록이면 통과)"""
+def credit_problems(s, fx):
+    """v2.2.1 (audit-fix 7-1): start.first_round_credit_usd 가 1회차 단위액(= total_krw ÷ split_count ÷ 환율, 달러) 이상이면 문제.
+    크레딧이 단위액 이상이면 1회차가 0주가 되고 크레딧이 남아 다음 날도 생략이 반복됨. 환율(fx)을 모르면(None·0 이하) 비교할 수 없어 검사하지 않음."""
+    st = s.get("start") or {}
+    credit = _f(st.get("first_round_credit_usd"))
+    rounds, total = _f(s.get("split_count")), _f(s.get("total_krw"))
+    if credit <= 0 or rounds < 2 or total <= 0 or fx is None or _f(fx) <= 0:
+        return []
+    unit = (total / rounds) / _f(fx)
+    if credit >= unit - 1e-9:
+        return [f"start.first_round_credit_usd ${credit:,.2f} 가 1회차 단위액 ${unit:,.2f} 이상 — 1회차가 0주가 되어 매일 생략됨 (단위액보다 작게 고쳐 주세요)"]
+    return []
+
+
+def validate_settings(s, fx=None):
+    """주문 전에 꼭 있어야 하는 값 검사 → 문제 목록 (빈 목록이면 통과). fx(원/달러, 선택)를 주면 1회차 크레딧 상한도 검사 (v2.2.1)"""
     bad = []
     sc = s.get("split_count")
     if sc is None or _f(sc) < 2 or _f(sc) != int(_f(sc)):
@@ -229,6 +244,7 @@ def validate_settings(s):
         bad.append("start.mode=rebuy 인데 start.rebuy_anchor_usd 없음")
     if st.get("first_round_credit_usd") is not None and _f(st.get("first_round_credit_usd")) < 0:
         bad.append("start.first_round_credit_usd 는 0 이상 (1회차 매수 때 한 번 차감할 달러, 없으면 생략)")
+    bad += credit_problems(s, fx)      # v2.2.1 audit-fix 7-1: 환율을 알 때만 비교
     if str(s.get("symbol", "")).upper() != "SOXL":
         bad.append("이 봇은 SOXL 전용")
     return bad

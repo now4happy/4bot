@@ -1,5 +1,6 @@
 # =====================================================================
 # FILE: meritz_dca_bot/dca_engine.py   (MERITZ_DCA v1.0.0)
+# v1.3.2 (2026-11-19, audit-fix 6-1): buy_cash_buffer_pct 기본값 1.0 → 10.0 (메리츠 시장가 매수 실측 요구 약 10%). 서버 settings.json 에 값이 적혀 있으면 그 값이 우선
 # 목적: 설정 파일(서버 /etc/meritz-accum/settings.json) 읽기 + 종목 상태 저장(DcaConfigManager)
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - DcaConfigManager.load/save 는 3번 toss_dca_bot/dca_engine.py 와 같은 동작 (원자적 os.replace 저장)
@@ -32,7 +33,7 @@ SAFE_DEFAULTS = {
     "order_deadline_et": "15:40",
     "missed_alert_et": "10:20",          # 이 시각 뒤에도 안 된 종목이 있으면 미진행 알림 (하루 1번)
     "sync_time_et": "16:10",             # 이 시각까지 체결이 안 보이면 체결 없음으로 정리
-    "buy_cash_buffer_pct": 1.0,          # 시장가 매수 달러 검사 여유 (현재가 × 수량 × (1+여유%))
+    "buy_cash_buffer_pct": 10.0,         # 시장가 매수 달러 검사 여유 (현재가 × 수량 × (1+여유%)). v1.3.2: 1.0 → 10.0 (메리츠 실측 요구 약 10%)
     "us_int_buy_mode": "carry",          # 정수 주문: carry=남은 금액 다음 날로 이월 / min1=3번 한국주식처럼 최소 1주
     "exclude_symbols": ["SOXL", "SOXS", "TQQQ", "SQQQ"],       # 잔고 자동 등록에서 뺄 심볼
     "markets": {},                       # {"NKE": {"mrkt": "NY", "exch_id": "0321"}} 비우면 자동으로 찾음

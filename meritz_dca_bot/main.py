@@ -22,6 +22,9 @@
 # v1.2.3 (2026-11-13): 관제탑 버튼 정리 — 익절/매도비율·지수 배수를 주식 패널로 이동 (바꾼 뒤에도 주식 패널로 돌아감).
 # v1.2.4 (2026-11-13): 관제탑 지금/완성 시 예상 토글 제거 (내용은 t_ui.py에).
 # v1.2.6 (2026-11-14): 4번은 주식 적립만 (SGOV 메뉴 → 비서봇) · 맨밑 메뉴 [📈 상황판, ☰ 메뉴] · 비서봇 요청 파일 처리(bridge.py, 자동환전은 같은 합산 경로 1개)
+# v1.3.2 (2026-11-19): audit-fix 6-2 익절 매도 응답 없음/주문번호 없음이면 sold_stage 를 올리지 않고 '확인 필요'(tp_check) 기록 후 다음 사이클에 잔고로 재확인 ·
+#   6-3 진행일 보정은 s_mode 를 건드리지 않음 · 6-5 fx_auto_amount 단조 증가 max(100, ceil(gap/10)*10) · 6-1 매수 여유 기본 10% ·
+#   6-6 주문 검사·SGOV·자동환전·브리핑 달러 잔고 소스 통일(usd_estimated) · 6-4(t_ui)·6-7(t_core)
 # 사용:
 #   python3 main.py --fingerprint     키 지문만 출력 (expected_key_fp 에 넣을 값)
 #   python3 main.py --check           주문 없이 점검 + 종목별 오늘 판단 미리보기
@@ -71,7 +74,7 @@ def ask_confirm(title, before, after, apply_coro, extra=""):
                f"{CONFIRM_SEC}초 안에 [변경 확인]을 눌러 주세요. 주문·환전은 나가지 않고 설정 값만 바뀌어요.",
                [[{"text": "변경 확인", "callback_data": "cfm_yes"}, {"text": "취소", "callback_data": "cfm_no"}]])
 
-STEP_KEYS = ("s_day", "s_mode", "s_target_days", "last_exec_date", "sold_stage", "has_held", "tp_alert_date", "ledger", "buy_carry")
+STEP_KEYS = ("s_day", "s_mode", "s_target_days", "last_exec_date", "sold_stage", "has_held", "tp_alert_date", "ledger", "buy_carry", "tp_check")
 _HOLD_WATCH_DAY = {}   # 정지·결정 중 보유 점검을 종목별 하루 1번만 (메모리)
 _MKT = {"ts": 0.0, "code": ""}
 _POLL = {"ts": 0.0, "blocked": False}
@@ -457,6 +460,18 @@ async def execute_us_step(client):
             except Exception as pe: cur_p, price_err = 0.0, str(pe)[:120]
             hold = await client.get_symbol_holdings(sym)
             broker_q, sellable = float(hold.get("qty") or 0.0), float(hold.get("sellable") or 0.0)
+            chk = s.get("tp_check")
+            if isinstance(chk, dict) and chk:
+                # v1.3.2 (audit-fix 6-2): 지난번 익절 매도가 '응답 없음/주문번호 없음'이었음 → 메리츠 잔고로 나갔는지 재확인
+                pre_q = float(chk.get("broker_qty") or 0.0); chk_stage = int(chk.get("stage") or 0)
+                if broker_q < pre_q - 1e-6:
+                    s["sold_stage"] = max(int(s.get("sold_stage", 0)), chk_stage); s["tp_check"] = {}
+                    await save_merged(cfg, sym)
+                    RL.ev("state_change", "tp_check_resolved", "ok", "sold_detected", actor="scheduler", sym_ref=RL.ref(sym), stage=chk_stage, broker_before=pre_q, broker_now=broker_q)
+                    send_panel(f"[{sym} {chk_stage}차 익절 확인 필요 → 매도됨으로 확인]\n• 메리츠 잔고가 {pre_q:g}주 → {broker_q:g}주로 줄었습니다. 같은 단계를 다시 팔지 않도록 익절 단계만 올렸습니다.\n• 봇 장부 수량이 잔고와 달라져 이 종목은 주문을 쉽니다. 장부 보정은 Muse 확인이 필요합니다.", [[{"text": "관제탑", "callback_data": "panel"}]])
+                else:
+                    s["tp_check"] = {}; await save_merged(cfg, sym)
+                    RL.ev("state_change", "tp_check_resolved", "ok", "not_sold", actor="scheduler", sym_ref=RL.ref(sym), stage=chk_stage, broker_before=pre_q, broker_now=broker_q)
             qty, avg_p = ledger_of(s)[0], ledger_avg(s)
             if abs(broker_q - qty) > 1e-6:
                 # 봇 장부와 메리츠 잔고가 다름 → 실주문이면 이 종목은 오늘 주문 안 함 (입고 전·수동 매매·체결 누락)
@@ -506,7 +521,22 @@ async def execute_us_step(client):
                     aref = _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, stage=target_stg, sell_qty=sell_q)
                     _decide(sym, "take_profit", "ok", None, s, aref, stage=target_stg)
                     oid = f"tp{target_stg}_{today_str}_{sym}"
-                    await _order("take_profit", sym, "sell", sell_q, oid, client, cur_p)
+                    # v1.3.2 (audit-fix 6-2): _order 결과를 확인. 응답이 끊겼거나 주문번호가 없으면 단계를 올리지 않고 '확인 필요' 기록
+                    tp_unknown = None
+                    try:
+                        sres = await _order("take_profit", sym, "sell", sell_q, oid, client, cur_p)
+                        if not isinstance(sres, dict) or not str(sres.get("no") or "").strip():
+                            tp_unknown = "주문 접수 응답에 주문번호 없음"
+                    except Exception as oe:
+                        if _rejected(oe): raise    # 증권사가 거절한 주문(체결 안 됨) → 기존처럼 실패 처리
+                        tp_unknown = f"응답 없음: {str(oe)[:120]}"
+                    if tp_unknown:
+                        s["tp_check"] = {"stage": target_stg, "qty": sell_q, "broker_qty": broker_q, "date": today_str, "why": tp_unknown[:120]}
+                        s["last_exec_date"] = today_str; fail_reasons.pop(sym, None); await save_merged(cfg, sym)
+                        RL.ev("state_change", "tp_check_pending", "ok", "order_no_response", actor="scheduler", sym_ref=RL.ref(sym), stage=target_stg, sold_stage_unchanged=sold_stg)
+                        send_panel(f"[{sym} {target_stg}차 익절 매도 응답 없음 — 확인 필요]\n• 매도가 나갔는지 알 수 없어 익절 단계를 올리지 않았습니다. 오늘은 다시 주문하지 않습니다.\n• 다음 사이클에 메리츠 잔고로 다시 확인합니다. 메리츠 앱에서 체결 여부도 확인해 주세요.\n• 사유: {tp_unknown}", [[{"text": "관제탑", "callback_data": "panel"}]])
+                        _hub_alert(HUB_NAME, "critical", f"{sym} {target_stg}차 익절 매도 응답 없음 — 확인 필요")
+                        continue
                     s["sold_stage"] = target_stg; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
                     logs.append(f"{sym}: {target_stg}차 익절 ({prof_pct:+.2f}% / {sell_q}주 시장가)"); await save_merged(cfg, sym); continue
                 _decide(sym, "take_profit", "skipped", "no_sellable_qty", s, daily=True)
@@ -519,7 +549,7 @@ async def execute_us_step(client):
                     # 달러 부족 검사는 익절 판단 뒤에 함 (달러가 없어도 익절 매도는 진행되도록)
                     usd_bal = float(await client.get_buying_power("USD") or 0.0)
                     if sgov_reserve > 0: usd_bal = usd_bal - sgov_reserve        # (ii) SGOV 몫을 먼저 떼고 남은 달러만
-                    need_amt = round(buy_q * cur_p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 1.0)) / 100.0), 2)
+                    need_amt = round(buy_q * cur_p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 10.0)) / 100.0), 2)
                     if usd_bal < need_amt:
                         fail_reasons[sym] = f"달러 부족 (필요 ${need_amt:.2f} / 보유 ${usd_bal:.2f}" + (f" · SGOV 몫 ${sgov_reserve:.2f} 제외" if sgov_reserve > 0 else "") + ")"
                         if RL.once(f"{sym}|buy|usd_insufficient"):
@@ -1043,7 +1073,7 @@ async def handle_message(msg: dict, client):
             if sym not in stocks: return
             RL.ev("state_change", "step_day_manual", "ok", None, actor="user", sym_ref=RL.ref(sym), day_before=stocks[sym].get("s_day"), day_after=d)
             stocks[sym]["s_day"] = d; stocks[sym]["day_set"] = True
-            stocks[sym]["s_mode"] = "decision" if d >= int(stocks[sym].get("s_target_days", 100)) else "buy_1"
+            # v1.3.2 (audit-fix 6-3): 진행일(s_day, day_set)만 바꾸고 s_mode 는 건드리지 않음 (매도·정지 모드 보존)
             if d == 0 and int(stocks[sym].get("sold_stage", 0)) != 0:
                 # 3번 R1 리셋 ②: 진행일수 0 입력 = 새 1차 매수를 명시적으로 시작 → 익절 단계 초기화
                 RL.ev("state_change", "sold_stage_reset", "ok", None, actor="user", sym_ref=RL.ref(sym), why="new_cycle_day0", stage_before=stocks[sym].get("sold_stage"))
@@ -1165,14 +1195,14 @@ FX_KST = ZoneInfo("Asia/Seoul")
 def fx_auto_amount(gap):
     g = Decimal(str(gap))
     if not g.is_finite() or g <= 0: return None
-    if g < 10: return Decimal(100)
-    return (g / 10).quantize(Decimal(1), rounding=ROUND_CEILING) * 10
+    # v1.3.2 (audit-fix 6-5): 단조 증가 — max(100, ceil(gap/10)*10). gap 5 → 100, 15 → 100, 105 → 110
+    return max(Decimal(100), (g / 10).quantize(Decimal(1), rounding=ROUND_CEILING) * 10)
 
 class FxNoPrice(Exception):
     """낮 환전 계획: 라이브 시세·전일 종가 모두 없음 → 그날 환전 안 함 (no_price 기록). 2026-11-13 추가"""
 
 async def dca_fx_plan(client, cfg):
-    """Same buy-quantity and 1% cash buffer as execute_us_step; no orders.
+    """Same buy-quantity and cash buffer (buy_cash_buffer_pct, default 10%) as execute_us_step; no orders.
     참고가: 라이브 시세 > 0 이면 그대로, 아니면 전일 종가 (get_reference_price, 낮 환전 규모 계산 전용)."""
     stocks = cfg.get("stocks") or {}
     pending = {p.get("sym") for p in (cfg.get("pending_orders") or [])}
@@ -1191,7 +1221,7 @@ async def dca_fx_plan(client, cfg):
         mult = float(n7.get(n7_index_of(s), 1.0))
         budget = calc_buy_amount(float(s.get("base_amount", 40)), mult, half)
         q, _ = int_buy_qty(budget, float(s.get("buy_carry") or 0), p, SETTINGS.get("us_int_buy_mode", "carry"))
-        total += round(q * p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 1.0))/100), 2)
+        total += round(q * p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 10.0))/100), 2)
     # v1.1.0: 오늘 밤 SGOV 회차(관문 통과 시) 몫도 아침 환전에 포함 (실패하면 0 → 적립 몫 환전은 그대로)
     total += await SG.sgov_fx_need(client, cfg, datetime.now(FX_KST).strftime("%Y-%m-%d"))
     return round(total, 2)
@@ -1502,7 +1532,7 @@ async def cmd_check():
         pp = (cur / avg - 1) * 100 if avg > 0 else 0.0
         stg = tp_sell_stage(pp, tp1, int(st.get("sold_stage", 0)))
         bq, _c = int_buy_qty(calc_buy_amount(float(st.get("base_amount", 40)), 1.0, q > 0 and pp >= 1.0), float(st.get("buy_carry") or 0), cur, s.get("us_int_buy_mode", "carry"))
-        plan = f"{stg}차 익절 {int_sell_qty(q, sr)}주 매도" if (q > 0 and stg) else (f"매수 {bq}주 (이월 ${_c:.2f})" if st.get("s_mode") in ("buy_1", "buy_2") else st.get("s_mode"))
+        plan = (f"{stg}차 익절 {int_sell_qty(q, sr)}주 매도" if int_sell_qty(q, sr) > 0 else f"{stg}차 구간이나 매도 안 함 (전량 매도가 되는 수량)") if (q > 0 and stg) else (f"매수 {bq}주 (이월 ${_c:.2f})" if st.get("s_mode") in ("buy_1", "buy_2") else st.get("s_mode"))
         print(f"  {sym}: 거래소 {m}/{ex} · 현재가 ${cur:.2f} · 장부 {q:g}주 평단 ${avg:.4f} ({pp:+.2f}%) · 메리츠 {float(h.get('qty') or 0):g}주"
               f" · {st.get('s_mode')} {st.get('s_day')}/{st.get('s_target_days')} · 익절단계 {st.get('sold_stage')} → 오늘 계획: {plan} (N7 배수 미반영)")
     try:

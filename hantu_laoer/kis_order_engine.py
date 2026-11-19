@@ -11,6 +11,7 @@
 # 🚨 VERIFIED: [Case 36 절대 방어망 결속] MOC(시장가 매도) 주문 리젝 시 현재가 -5% 최유리 지정가(LIMIT) 덤핑 자동 폴백 100% 팩트 가동
 # 🚨 MODIFIED: [주문가능금액 역산 팩트 복구] KIS API가 특정 시간대에 예수금을 0.0으로 반환하는 고질적 결함을 우회하기 위해, 오리지널 수리적 역산(Reverse Calc) 공식(외화예수금+매도정산-매수정산)을 100% 롤백 완료.
 # 🚨 MODIFIED: [Case 36 절대 방어망 팩트 교정] 단순 -5% 하향 로직 소각 및 매수 1호가 팩트 스윕 요격망 결속 완료.
+# 🚨 v1.0.4 (2026-11-19): [audit-fix 1-1] get_account_balance: 보유 조회(거래소별)가 하나라도 실패하면 (cash, None) 반환 — 빈 {}(보유 없음)와 실패를 구분. [audit-fix 1-2] get_execution_history/get_reservation_orders 에 strict=True 옵션 추가(조회 실패 시 None, 기본 동작 불변).
 # ==========================================================
 
 import time
@@ -27,6 +28,7 @@ class KisOrderEngine(MarketDataProvider):
         cash = 0.0
         holdings = {}
         api_success = False 
+        holdings_failed = False  # audit-fix 1-1: 보유 조회 실패 플래그 (빈 {} 와 구분)
   
         params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840", "TR_MKET_CD": "00", "INQR_DVSN_CD": "00"}
        
@@ -99,8 +101,14 @@ class KisOrderEngine(MarketDataProvider):
                     if tr_cont in ['M', 'F'] and nk200:
                         continue
                     else: break
-                else: break
+                else:
+                    # audit-fix 1-1: 보유 조회 실패 — 조용히 넘기면 {} 가 '보유 없음'으로 오인된다.
+                    holdings_failed = True
+                    logging.warning(f"🚨 [보유 조회 실패] {excg} inquire-balance 응답 실패 — 보유를 알 수 없어 실패로 처리")
+                    break
         
+        # audit-fix 1-1: 보유 조회가 하나라도 실패했으면 holdings=None (호출부가 실패로 처리). 빈 {} 는 '실제로 보유 없음'일 때만.
+        if holdings_failed: return cash, None
         if api_success: return cash, holdings
         else: return cash, None
 
@@ -139,7 +147,8 @@ class KisOrderEngine(MarketDataProvider):
         return valid_orders
 
     # 🚨 MODIFIED: [Case 18] 로컬 예약 스냅샷 폐기 및 KIS 원장 직접 연동
-    def get_reservation_orders(self, ticker, start_date, end_date):
+    def get_reservation_orders(self, ticker, start_date, end_date, strict=False):
+        # audit-fix 1-2: strict=True 이면 조회 실패 시 [] 대신 None 반환. 기본(False)은 기존 동작 그대로.
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         valid_orders = []
   
@@ -184,6 +193,7 @@ class KisOrderEngine(MarketDataProvider):
                 else:
                     break
             else:
+                if strict: return None
                 break
            
         return valid_orders
@@ -391,7 +401,8 @@ class KisOrderEngine(MarketDataProvider):
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "RSVN_ORD_RCIT_DT": order_date, "OVRS_RSVN_ODNO": order_id}
         return self._call_api("TTTT3017U", "/uapi/overseas-stock/v1/trading/order-resv-ccnl", "POST", body=body)
 
-    def get_execution_history(self, ticker, start_date, end_date):
+    def get_execution_history(self, ticker, start_date, end_date, strict=False):
+        # audit-fix 1-2: strict=True 이면 조회 실패 시 [] 대신 None 반환 (빈 결과와 실패 구분). 기본(False)은 기존 동작 그대로.
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         odno_map = {}
         
@@ -439,7 +450,9 @@ class KisOrderEngine(MarketDataProvider):
                     time.sleep(0.3)
                     continue
                 else: break
-            else: break
+            else:
+                if strict: return None
+                break
         # 🚨 MODIFIED: [치명적 논리 결함 수술] 딕셔너리 언패킹 오버라이드 맹점 교정 (원본 데이터 우선 배치)
         return [{**d["item"], "ft_ccld_qty": str(d["total_qty"]), "ft_ccld_unpr3": str(d["total_amt"]/d["total_qty"] if d["total_qty"]>0 else 0)} for d in odno_map.values()]
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.0)
+# v2.2.1 (2026-11-19, audit-fix 7-1·7-2): cmd_check 가 적용환율을 읽은 뒤 1회차 크레딧 상한(credit_problems)도 검사. 부분 매수 이월·크레딧 상한은 accum_strategy.py·config.py (tower_strategy 는 건드리지 않음).
 # v2.2.0 (2026-11-19, 판 13): 탑쌓기(동적 층 시스템) 전환 지점 추가 — 계산은 새 파일 tower_strategy.py. settings["strategy"] 가 "tower" 일 때만 탑쌓기, 그 외(없음 포함)는 예전 사다리 그대로 (기본 "ladder").
 #   바뀐 곳: strategy_of · tower_state_for · build_plan(전략 선택) · plan_head(탑쌓기 문구) · run_intraday_sell(탑쌓기 상태로 매도 판단) · run_order_day(탑쌓기면 사다리 armed 건너뜀, 매일 층 상태를 장부에 맞춤·첫날 1층 만들기) ·
 #   run_sync(탑쌓기면 실제 체결 수량·금액으로 층 상태 갱신 → 장부에 맞춤) · cmd_check(전략 표시). 사다리 경로(strategy=ladder)는 동작 변경 없음. 탑쌓기 상태 파일: data/tower_state.json (사다리 상태 data/accum_state.json 은 안 건드림)
@@ -83,12 +84,12 @@ if HERE not in sys.path:
 import config as cfgmod                      # noqa: E402
 from accum_strategy import make_plan, apply_fill_to_state, ceil2   # noqa: E402
 import tower_strategy as TW               # noqa: E402  v2.2.0 탑쌓기 (strategy=tower 일 때만 씀)
-from config import ConfigManager, load_settings, validate_settings   # noqa: E402
+from config import ConfigManager, load_settings, validate_settings, credit_problems   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.0"
+BOT_VERSION = "v2.2.1"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -1168,6 +1169,8 @@ def cmd_check(s):
     hold, sellable, exch = api.holding(s["symbol"])
     price, prev_close, fx = market_inputs(s, api)
     cash = api.usd_cash()
+    for b in credit_problems(s, fx):      # v2.2.1 audit-fix 7-1: 환율을 읽은 뒤에야 비교 가능
+        print("  -", to_korean(b))
     print(f"- 메리츠 잔고 {s['symbol']} {hold}주 (매도가능 {sellable}) · 거래소 번호 {exch or '-'} · 달러 예수금 ${cash:,.0f}")
     print(f"- 현재가 ${price:.2f} · 전일종가 ${prev_close:.2f} · 적용환율 {('{:,.0f}원/$'.format(fx)) if fx else '미확인'} · 장운영 코드 {api.us_market_status()}")
     st = s["start"]

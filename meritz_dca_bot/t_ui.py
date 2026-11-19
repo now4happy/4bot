@@ -1,5 +1,6 @@
 # =====================================================================
 # FILE: meritz_dca_bot/t_ui.py   (MERITZ_DCA v1.1.0)
+# v1.3.2 (2026-11-19, audit-fix 6-4): build_panel_view 는 읽기 전용 — cycle_mode 를 buy_1 로 덮지 않고 낡은 설정을 저장하지 않음
 # 텔레그램 조작판 화면. 3번 toss_dca_bot/t_ui.py(v4.3.8)에서 옮김.
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로: 관제탑·종목 목록(시장/상태 필터·검색·5개씩 페이지)·종목 상세·버튼 이름과 callback_data
@@ -130,10 +131,10 @@ async def build_funds_view(client, notice=""):
 
 async def build_panel_view(client):
     cfg = await sync_holdings_from_meritz(client)
-    cfg["cycle_mode"] = "buy_1"
+    # v1.3.2 (audit-fix 6-4): 읽기 전용 표시 — cycle_mode 를 buy_1 로 덮지 않고, 낡은 cfg 를 통째로 저장하지 않음.
+    # (sync_holdings_from_meritz 는 새 보유 종목을 찾았을 때만, 최신 설정을 다시 읽어 그 종목만 추가 저장함)
     stocks = cfg.get("stocks", {})
-    for sym, s in stocks.items(): ensure_stock_cycle(s)
-    await DcaConfigManager.save(cfg)
+    for sym, s in stocks.items(): ensure_stock_cycle(s)   # 화면 표시용 기본값 채우기만 (저장 안 함)
     total_cnt = len(stocks)
     is_master = cfg.get("is_master_active", False)
     is_hol, hol_reason = check_holiday()

@@ -1,5 +1,6 @@
 # =====================================================================
 # FILE: meritz_dca_bot/sgov.py   (MERITZ_DCA v1.1.0)
+# v1.3.2 (2026-11-19, audit-fix 6-1): buy_cash_buffer_pct 값이 없을 때의 대체값 1.0 → 10.0 (설정 기본값과 맞춤). SGOV 매수 수량 계산(ORDER_BUFFER_PCT 10%)은 그대로
 # SGOV(미국 초단기 국채 ETF) 회차 적립 — NKE/QLD 적립과 같은 봇·같은 4번 계좌, 판단 공식은 완전히 따로.
 # v1.2.9 (2026-11-17): 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10%(ORDER_BUFFER_PCT)·수량 0 구분 + 오래된 FRED 자료로 캐시 덮지 않기(cache_newer)
 # v1.2.7 (2026-11-14): sgov_step 의 SGOV 알림 7곳을 4번 방(send_panel) 대신 bridge 알림 파일(bridge.write_alert)로 — 비서봇이 자기 방으로 보냄 (문구 그대로)
@@ -415,7 +416,7 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
             _alert("skip", today_str, msg)
             return out
         # ---- 관문 통과 → (ii) 이 회차 달러를 먼저 예약
-        buf = float(SETTINGS.get("buy_cash_buffer_pct", 1.0))
+        buf = float(SETTINGS.get("buy_cash_buffer_pct", 10.0))
         try: price = float(await client.get_current_price(sym) or 0.0)
         except Exception as pe: price = 0.0; RL.err("sgov_price", pe, event_type="external_call")
         out["reserve"] = round(tranche_amount(sg) + max(0.0, _f(sg.get("wait_usd"))) + tranche_amount(sg) * buf / 100.0, 2)
@@ -593,7 +594,7 @@ async def sgov_preview_lines(client, cfg: dict, today_et: str) -> list:
         return out
     try:
         p = float(await client.get_current_price(sym) or 0)
-        plan = buy_plan(sg, p, float(SETTINGS.get("buy_cash_buffer_pct", 1.0)))
+        plan = buy_plan(sg, p, float(SETTINGS.get("buy_cash_buffer_pct", 10.0)))
         out.append(f"  → 오늘 계획: {sym} {plan['qty']}주 매수 (회차 ${plan['budget']:.2f}, 필요 ${plan['need']:.2f}, 남은 ${plan['left']:.2f} 대기)"
                    + (" · 7일 상승 기준 무시(3회째)" if dec["override_b"] else ""))
     except Exception as e:
