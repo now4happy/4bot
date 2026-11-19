@@ -1,5 +1,10 @@
 # 7번 메리츠 속쓸 적립봇 변경 기록
 
+## v1.1.1 · 2026-11-19 17:08 (KST)
+- 파일: main.py
+- 내용: meritz_laoer v2.1.0: merge pan 12 intraday sell gate fix onto menu 3rd v3
+- 브랜치: staging
+
 ## v1.1.0 · 2026-11-19 16:49 (KST)
 - 파일: main.py, notifier.py, tg_menu.py
 - 내용: 텔레그램 매매봇 메뉴 정리 3차 v3: 7번 v2.0.9 기준 재적용 + 6번 문구 정리
