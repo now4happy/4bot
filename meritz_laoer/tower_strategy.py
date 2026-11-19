@@ -191,7 +191,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     fu, nfl, gap = params(s)
     avg = round(principal / qty, 4) if qty > 0 else 0.0
     pct, frac = _f(s.get("sell_profit_pct")), _f(s.get("sell_fraction_pct"))
-    otype, per_day = s.get("order_type"), int(_f(s.get("max_rounds_per_day")))
+    otype = s.get("order_type")   # v2.2.8: 탑쌓기는 하루에 한 층(안 산 칸 전부)을 삼 — max_rounds_per_day(사다리 회차)는 탑쌓기 매수 칸 수에 안 씀
     st = ensure_state(copy.deepcopy(st))                              # 상태·장부를 바꾸지 않음 (사본으로 계산)
     notes, orders = [], []
     profit_pct = round((price / avg - 1) * 100, 2) if avg > 0 and price > 0 else None
@@ -287,7 +287,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     tgt_active = _f((active or {}).get("target") or fu)
     if active is not None:
         info["tower"]["cells"] = next_layer_cells(active, tgt_active)   # v2.2.3: 다음 회차 가격별 배정 미리보기
-    for n, p in enumerate(cand[:per_day]):
+    for n, p in enumerate(cand):   # v2.2.8: 안 산 칸 전부 (하루에 한 층)
         is_last = (p == cand[-1])
         carry = _f(active.get("carry_usd")) if n == 0 else 0.0
         if is_last:                                                  # 마지막 칸 = 층에 모자란 만큼 전부 (그날 앞 칸 계획분 제외)
