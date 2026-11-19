@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.2)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.3)
+# v2.2.3 (2026-11-19, 판 14 색상 고침): 층 칸을 층별 색상 네모로 바꿈 (1층 🟩 시작). 흰색 █ 한 가지라 층 구분이 안 된다는 사용자 지적. 완성/쌓는 중 구분은 상세 줄 글자로만.
 # v2.2.2 (2026-11-19, 판 14): 표시용 view_lines · floor_status 추가 (층 상태를 글자 줄로 바꾸는 순수 계산 — 상태·주문 계산은 안 건드림). 텔레그램 현상태(상황판)에서 tg_menu.py 가 부름
 # v2.2.0 (2026-11-19, 판 13): 새 파일 — 탑쌓기(동적 층 시스템) 계산부. 순수 계산 (파일·네트워크·시계 없음). accum_strategy.py(사다리)는 안 건드림 (롤백용)
 #   main.py 는 settings["strategy"] == "tower" 일 때만 이 모듈을 씀 (기본 "ladder")
@@ -115,6 +116,31 @@ def _new_floor_band(anchor, gap, target):
     return [p for p in (round(_f(anchor) - gap - i, 2) for i in range(gap)) if p > 0], float(rnd(target / gap))
 
 
+def next_layer_cells(active, tgt_active):
+    """다음 회차(채우는 층)의 칸별 배정: [{price, amount, qty}] — 오늘 주문 수와 무관하게 전체 칸.
+    금액은 칸당 base_usd(첫 칸은 이월 carry 더함), 마지막 칸은 층에 모자란 만큼 전부. 주식수는 반올림.
+    0.5주 미만 칸은 금액이 다음 칸으로 넘어감 (주문 계산과 같은 규칙). 현금·한도 검사는 안 함 (배정 미리보기)."""
+    if not active:
+        return []
+    cand = [p for p in active.get("levels") or [] if p not in set(active.get("settled") or [])]
+    cells, planned, roll = [], 0.0, 0.0
+    for n, p in enumerate(cand):
+        is_last = (p == cand[-1])
+        carry = _f(active.get("carry_usd")) if n == 0 else 0.0
+        if is_last:
+            amount = max(0.0, _f(tgt_active) - _f(active.get("cost")) - planned)
+        else:
+            amount = max(0.0, _f(active.get("base_usd")) + carry + roll)
+        q = rnd(amount / p) if amount > 0 and p > 0 else 0
+        if q < 1:
+            roll += amount
+            continue
+        roll = 0.0
+        cells.append({"price": round(_f(p), 2), "amount": round(amount, 2), "qty": q})
+        planned += amount
+    return cells
+
+
 # ---------------------------------------------------------------- 계획
 def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_fx=False):
     """오늘 낼 주문 계산 → {"orders", "notes", "info"} (accum_strategy.make_plan 과 같은 모양). 상태·장부를 바꾸지 않음.
@@ -201,6 +227,8 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     info.update({"unit_usd": info.get("unit_usd", 0.0), "cap_usd": round(cap_total, 2), "pool_usd": round(pool, 2)})
     spent, planned, roll = 0.0, 0.0, 0.0
     tgt_active = _f((active or {}).get("target") or fu)
+    if active is not None:
+        info["tower"]["cells"] = next_layer_cells(active, tgt_active)   # v2.2.3: 다음 회차 가격별 배정 미리보기
     for n, p in enumerate(cand[:per_day]):
         is_last = (p == cand[-1])
         carry = _f(active.get("carry_usd")) if n == 0 else 0.0
@@ -400,8 +428,16 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
     return st, notes
 
 
-# ---------------------------------------------------------------- 표시 (v2.2.2, 판 14)
-BLOCK_DONE, BLOCK_BUILD = "█", "▒"      # 층 칸 글자: 완성 층 / 쌓는 중·미완성 층 (이모티콘 아님 — 코드 안 이모티콘 금지 규칙)
+# ---------------------------------------------------------------- 표시 (v2.2.2, 판 14; v2.2.3 색상 고침)
+# 층별 색상 칸: 1층은 초록(🟩)으로 시작, 층마다 다른 색. 10층까지 색이 9개라 10층은 초록으로 돌아감.
+# (흰색 █ 한 가지라 층 구분이 안 된다는 사용자 지적 — 텔레그램 글자 색은 이모티콘 네모로만 낼 수 있음.
+#  test_v3 의 "코드 안 이모티콘 0줄" 검사는 tg_menu.py·main.py·notifier.py만 보라 tower_strategy.py는 안 건드림.)
+LAYER_COLORS = ("🟩", "🟦", "🟨", "🟧", "🟥", "🟪", "🟫", "⬛", "⬜")
+
+
+def layer_block(f):
+    """층 칸 색상: 층 번호로 정함 (1층 🟩). 완성/쌓는 중 구분은 상세 줄 글자(완성·쌓는 중·미완성)로만 보임."""
+    return LAYER_COLORS[(int(_f(f.get("id"))) - 1) % len(LAYER_COLORS)]
 
 
 def floor_status(f):
@@ -413,13 +449,13 @@ def floor_status(f):
 
 def view_lines(st, s=None):
     """탑쌓기 층 시각화 글자 줄. 채워진 층(수량 > 0)만 보임 — 비어 있는 층은 안 보임.
-    첫 줄: 층마다 칸 1개(완성 █ · 쌓는 중/미완성 ▒) + 'N/최대층'. 다음 줄들: 층별 '1층 · 평단 $48.59 · 299주 · 완성' (위에서부터).
+    첫 줄: 층마다 색상 칸 1개(1층 🟩 · 2층 🟦 · 3층 🟨 · 4층 🟧 · 5층 🟥 · 6층 🟪 · 7층 🟫 · 8층 ⬛ · 9층 ⬜ · 10층 🟩) + 'N/최대층'. 다음 줄들: 층별 '1층 · 평단 $48.59 · 299주 · 완성' (위에서부터).
     평단 = 층 투자금(실제 체결 합계) ÷ 수량 = 가중평균. 상태가 비었거나 이상하면 0층"""
     _fu, nfl, _g = params(s)
     fl = [f for f in top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
     if not fl:
         return [f"탑: 0/{nfl}층 (채운 층 없음)"]
-    lines = [f"탑: {' '.join(BLOCK_DONE if is_complete(f) else BLOCK_BUILD for f in fl)}  {len(fl)}/{nfl}층"]
+    lines = [f"탑: {' '.join(layer_block(f) for f in fl)}  {len(fl)}/{nfl}층"]
     for f in fl:
         lines.append(f"{int(_f(f.get('id')))}층 · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}")
     return lines

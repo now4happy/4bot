@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.2)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.3)
+# v2.2.3 (2026-11-19, 판 14 색상 고침 + 다음 회차 가격별 배정): 층 칸 색상(tower_strategy.py) + plan_head 에 다음 회차 칸별 배정 표시. 동작 변경 없음
 # v2.2.2 (2026-11-19, 판 14): BOT_VERSION 만 (현상태 탑쌓기 층 시각화는 tg_menu.py·tower_strategy.py). 동작 변경 없음
 # v2.2.1 (2026-11-19, audit-fix 7-1·7-2): cmd_check 가 적용환율을 읽은 뒤 1회차 크레딧 상한(credit_problems)도 검사. 부분 매수 이월·크레딧 상한은 accum_strategy.py·config.py (tower_strategy 는 건드리지 않음).
 # v2.2.0 (2026-11-19, 판 13): 탑쌓기(동적 층 시스템) 전환 지점 추가 — 계산은 새 파일 tower_strategy.py. settings["strategy"] 가 "tower" 일 때만 탑쌓기, 그 외(없음 포함)는 예전 사다리 그대로 (기본 "ladder").
@@ -90,7 +91,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.2"
+BOT_VERSION = "v2.2.3"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -315,12 +316,18 @@ def plan_head(plan, s):
     if i.get("mode") == "tower":
         tw = i.get("tower") or {}
         fl = tw.get("floors") or []
-        return (f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 층 "
+        head = (f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 층 "
                 + (f"{tw['active']}층{' (새 층)' if tw.get('new_floor') else ''}" if tw.get("active") else "없음") + "\n"
                 f"매도 목표 ${i['sell_target']:.2f} · 칸당 ${i.get('unit_usd', 0):,.0f} · 간격 ${tw.get('gap', 0)}"
-                + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else "")
-                + (f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "")
-                   if i.get("need_usd") is not None else ""))
+                + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else ""))
+        cells = tw.get("cells") or []   # v2.2.3: 다음 회차 가격별 배정
+        if cells:
+            head += "\n다음 회차" + (f" {tw['active']}층" if tw.get("active") else "") + " 가격별 배정:"
+            for c in cells:
+                head += f"\n${c['price']:.2f} → ${c['amount']:,.0f} ({c['qty']}주)"
+        head += (f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "")
+                   if i.get("need_usd") is not None else "")
+        return head
     return (f"{'재매수' if i['mode'] == 'rebuy' else '사다리'} 단계 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 채운 회차 {len(i['filled'])}/{len(i['levels'])}\n"
             f"매도 목표 ${i['sell_target']:.2f} · 회차 금액 ${i.get('unit_usd', 0):,.0f}"
             + (f" · 1회차 차감 ${i['credit_usd']:,.0f}" if i.get("credit_usd") else "")
