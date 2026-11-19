@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.1.0)
-# v2.1.0 (2026-11-19, 방 telegram-bot-menu-review 3차 v3): 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경(헤더 v2.0.9 문구·cmd_diag_cash 의 estm_frcr_amt 문구)은 그대로 둠, 매매 동작 변경 없음
+# v2.1.0 (2026-11-19, 판 12 + 방 telegram-bot-menu-review 3차 v3 합침): ① 판 12 당일 매도 가격 게이트 고침 (run_intraday_sell) — 게이트가 매수 주문의 '지정가'로 최소 목표가를 계산해서, 지정가보다 낮게 체결된 날 진짜 목표(체결 평단 +목표%)에 닿아도 '목표 아래'로 넘기던 문제 (2026-11-18 사례). 이제 체결 조회(fills)를 시세 게이트보다 먼저 하고, 게이트는 '기존 평단 · 오늘 실제 체결된 매수의 체결 단가' 중 가장 낮은 값으로 계산함 (체결 안 된 매수의 지정가는 안 씀). 게이트 목적(시세가 명백히 낮을 때 불필요한 조회 생략)은 유지. 체결 조회 실패는 알림 없이 로그만 남기고 다음 확인 때 다시 시도 ('체결 조회 실패'). 시험: test_intraday_sell_gate.py 추가. ② 3차 v3 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경(헤더 v2.0.9 문구·cmd_diag_cash 의 estm_frcr_amt 문구)은 그대로 둠, 매매 동작 변경 없음
 # v2.0.9 (2026-11-19, 판 11): Q27 원인 고침 — usd_cash()가 estm_frcr_amt를 읽게 함 (meritz_api.py). frcr_amt는 주식 가치를 포함해 앱 값과 달라서 바꿈 (서버 진단 2026-11-19 확인). --diag-cash 문구도 estm_frcr_amt로 고침. 그 외 변경 없음.
 # v2.0.8 (2026-11-19, 판 10): ① 자동환전 창 — 판 9 의 '09:00~09:30 고정 30분'을 없애고, 메리츠 실시간 환전 시간 안에서
 #   '한국시간 09:00 ~ 주문 시간(order_time_et 를 한국시간으로 바꾼 시각)' 까지로 바꿈. 수수료 무료(스프레드 0%)는 실시간 환전 때만이라 시간외(02:00~08:50)·
@@ -355,21 +355,20 @@ def run_intraday_sell(s, api, note):
     q0, pr0 = int(pos["qty"]), float(pos["principal"])
     buys = [o for o in m["orders"] if o.get("side") == "BUY"]
     pct = float(s["sell_profit_pct"])
-    # 시세 한 번만 보고 거를 수 있는 가장 낮은 목표가: 평균은 구성 값(기존 평단·오늘 낼 매수가) 중 가장 낮은 값보다 낮아질 수 없음
-    cands = ([cfg.avg_price(pos)] if q0 > 0 else []) + [float(o["price"]) for o in buys if float(o.get("price") or 0) > 0]
-    if not cands:
-        return "해당 없음"
-    try:
-        px = float(api.price(s["symbol"], s["price_market"])["price"])
-    except MeritzError as e:
-        logging.warning(f"당일 매도 확인: 시세 조회 실패 {e}")
-        return "시세 실패"
-    if px < ceil2(min(cands) * (1 + pct / 100.0)):
-        return "목표 아래"
-    dt = datetime.date.fromisoformat(d)
-    fills = api.fills((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
+    if q0 <= 0 and not buys:
+        return "해당 없음"                            # 기존 보유도 오늘 낼 매수도 없음 → 조회할 것 없음
+    # v2.1.0: 체결 조회를 시세 게이트보다 먼저. 지정가 매수는 지정가보다 낮게 체결될 수 있어서, 지정가로 목표를 잡으면 진짜 목표(체결 평단 +목표%)보다 높게 잡힘 (2026-11-18 사례)
+    fills = {}
+    if buys:
+        dt = datetime.date.fromisoformat(d)
+        try:
+            fills = api.fills((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
+        except MeritzError as e:
+            logging.warning(f"당일 매도 확인: 체결 조회 실패 {e}")
+            return "체결 조회 실패"
     q, pr = q0, pr0
     st = copy.deepcopy(cfg.accum_or_start())
+    cands = [cfg.avg_price(pos)] if q0 > 0 else []     # 시세 게이트용: 평균은 구성 값(기존 평단·오늘 실제 체결 단가) 중 가장 낮은 값보다 낮아질 수 없음 → 안 맞게 막는 일 없음
     for o in buys:                                   # 오늘 체결된 매수를 '메모리 안에서만' 반영 (장부 파일은 그대로)
         f = fills.get(str(o.get("no")))
         if not f or f[0] != "BUY" or int(f[1]) < 1:
@@ -377,6 +376,17 @@ def run_intraday_sell(s, api, note):
         apply_fill_to_state(st, o, (pr / q) if q > 0 else 0.0, bool(s.get("allow_consecutive_sell")))
         q += int(f[1])
         pr += float(f[2])
+        if float(f[2]) > 0:
+            cands.append(float(f[2]) / int(f[1]))      # 실제 체결 단가 (지정가 아님)
+    if not cands:
+        return "해당 없음"                            # 보유 없고 오늘 체결된 매수도 아직 없음 (체결 조회가 늦은 것일 수 있음 → 다음 확인 때 다시)
+    try:
+        px = float(api.price(s["symbol"], s["price_market"])["price"])
+    except MeritzError as e:
+        logging.warning(f"당일 매도 확인: 시세 조회 실패 {e}")
+        return "시세 실패"
+    if px < ceil2(min(cands) * (1 + pct / 100.0)):
+        return "목표 아래"
     hold, sellable, exch_vid = api.holding(s["symbol"])
     if hold != q:
         _warn_once(cfg, mark, m, "hold", note, f"오늘 체결 반영 뒤 예상 {q}주 ≠ 메리츠 잔고 {hold}주 — 당일 매도 확인을 보류하고 계속 확인해요 (체결 조회가 늦은 것일 수 있음)")
