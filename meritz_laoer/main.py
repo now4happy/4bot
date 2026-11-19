@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.9)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.1.0)
+# v2.1.0 (2026-11-19, 방 telegram-bot-menu-review 3차 v3): 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경(헤더 v2.0.9 문구·cmd_diag_cash 의 estm_frcr_amt 문구)은 그대로 둠, 매매 동작 변경 없음
 # v2.0.9 (2026-11-19, 판 11): Q27 원인 고침 — usd_cash()가 estm_frcr_amt를 읽게 함 (meritz_api.py). frcr_amt는 주식 가치를 포함해 앱 값과 달라서 바꿈 (서버 진단 2026-11-19 확인). --diag-cash 문구도 estm_frcr_amt로 고침. 그 외 변경 없음.
 # v2.0.8 (2026-11-19, 판 10): ① 자동환전 창 — 판 9 의 '09:00~09:30 고정 30분'을 없애고, 메리츠 실시간 환전 시간 안에서
 #   '한국시간 09:00 ~ 주문 시간(order_time_et 를 한국시간으로 바꾼 시각)' 까지로 바꿈. 수수료 무료(스프레드 0%)는 실시간 환전 때만이라 시간외(02:00~08:50)·
@@ -83,7 +84,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.0.9"
+BOT_VERSION = "v2.1.0"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -261,9 +262,9 @@ def auto_fx(s, api, cfg, plan, live, d, fx_now=None):
 def fx_lines(r):
     if not r:
         return ""
-    t = (f"💱 환전: 부족 ${math.ceil(r['short']):,} → 신청 ${r['want']:,}" + (" (하루 상한 적용)" if r["capped"] else "")
+    t = (f"환전: 부족 ${math.ceil(r['short']):,} → 신청 ${r['want']:,}" + (" (하루 상한 적용)" if r["capped"] else "")
          + (f" · 약 ₩{r['krw_est']:,} (환율 {r['rate']:,.0f})" if r.get("rate") else "") + f" · {r['status']}")
-    return t + (f"\n⚠️ {r['error']}" if r.get("error") else "") + "\n"
+    return t + (f"\n{r['error']}" if r.get("error") else "") + "\n"
 
 
 SIDE_KO = {"BUY": "매수", "SELL": "매도"}
@@ -387,11 +388,11 @@ def run_intraday_sell(s, api, note):
     sells = [o for o in plan["orders"] if o.get("kind") == "sell"]
     if not sells:
         why = "; ".join(n for n in plan["notes"] if n.startswith("매도")) or "매도 조건 미충족"
-        _warn_once(cfg, mark, m, "block", note, f"🎯 평가 이익 +{pct:g}% 에 닿았지만 매도 안 함: {why}")
+        _warn_once(cfg, mark, m, "block", note, f"평가 이익 +{pct:g}% 에 닿았지만 매도 안 함: {why}")
         return "매도 보류"
     exch = str(s.get("exch_id") or exch_vid or "")
     if not exch:
-        _warn_once(cfg, mark, m, "exch", note, "⛔ 거래소 번호를 알 수 없어 당일 매도를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
+        _warn_once(cfg, mark, m, "exch", note, "거래소 번호를 알 수 없어 당일 매도를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
         return "거래소"
     # v2.0.5: 정규장("004") 아니면 건너뜀을 유지. 003 프리마켓·005 애프터마켓에 지정가 매도가 접수·체결되는지는 공식 openapi.json 에 없음(주문 API 에 연장 시간 구분 필드 없음) → 미확인, 실거래 시험은 사용자 결정 필요
     if str(api.us_market_status()) != "004":      # 조기폐장일(13:00 ET)·장 마감 뒤에는 장중 매도를 안 냄 (order_deadline_et 만으로는 못 거름)
@@ -411,8 +412,8 @@ def run_intraday_sell(s, api, note):
     else:
         m["sell_attempt"]["status"] = ("증권사가 거절 — 오늘 다시 안 냄: " if res == "rejected" else "응답 못 받음 — 오늘 다시 안 냄, 체결 내역에서 자동으로 찾음: ") + (err or "")[:100]
     cfg._save_json(mark, m)
-    head = (f"🎯 당일 매도 {'접수' if res == 'ok' else ('실패' if res == 'rejected' else '응답 못 받음')}\n오늘 체결 반영 평단 ${info['avg']:.2f} (보유 {q}주) → 목표 ${info['sell_target']:.2f} · 현재가 ${px:.2f}\n")
-    note.send(head + fmt_orders([o]) + (f"\n⚠️ {err}\n오늘은 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if err else ""))
+    head = (f"당일 매도 {'접수' if res == 'ok' else ('실패' if res == 'rejected' else '응답 못 받음')}\n오늘 체결 반영 평단 ${info['avg']:.2f} (보유 {q}주) → 목표 ${info['sell_target']:.2f} · 현재가 ${px:.2f}\n")
+    note.send(head + fmt_orders([o]) + (f"\n{err}\n오늘은 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if err else ""))
     return {"ok": "매도 접수", "rejected": "매도 실패"}.get(res, "매도 응답 유실")
 
 
@@ -529,10 +530,10 @@ def run_order_day(s, api, note, live):
     if live:
         bad = gate_problems(s, cfg, live=True)
         if bad and all(b.startswith(CHAT_BAD) for b in bad):      # chat_id 만 문제면 하루 기록을 안 써서, 고치면 같은 날 5분 안에 다시 시도 (알림은 chat_id 가 없어 로그로만 남음)
-            _retry_later(note, d, "chat", "⛔ 오늘 주문 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 오늘도 5분 안에 다시 시도해요)")
+            _retry_later(note, d, "chat", "오늘 주문 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 오늘도 5분 안에 다시 시도해요)")
             return "chat_id"
         if bad:
-            note.send("⛔ 오늘 주문 안 함\n" + "\n".join("- " + b for b in bad))
+            note.send("오늘 주문 안 함\n" + "\n".join("- " + b for b in bad))
             cfg._save_json(mark, {"skipped": bad})
             return "차단"
     status = api.us_market_status()
@@ -553,19 +554,19 @@ def run_order_day(s, api, note, live):
         warn.append(f"잔고 {hold}주 ≠ 장부 {qty}주")
         if live:
             cfg.halt(warn[-1])
-            note.send("⛔ 정지: " + warn[-1] + "\n확인한 뒤 텔레그램 🛠 기타 → ⛔ 정지 해제")
+            note.send("정지: " + warn[-1] + "\n확인한 뒤 텔레그램 기타 → 정지 해제")
             cfg._save_json(mark, {"skipped": warn})
             return "정지"
     if live and api.open_orders_today(s["symbol"]):
-        note.send("⛔ 이 계좌에 SOXL 미체결 주문이 이미 있음 — 오늘 주문 안 함 (수동 확인)")
+        note.send("이 계좌에 SOXL 미체결 주문이 이미 있음 — 오늘 주문 안 함 (수동 확인)")
         cfg._save_json(mark, {"skipped": "기존 미체결 있음"})
         return "미체결"
     if live and not exch:      # 보유 0주면 잔고에서 거래소 번호를 못 얻음 — 표시 파일을 안 써서, 설정을 고치면 같은 날 다시 시도
-        _retry_later(note, d, "exch", "⛔ 거래소 번호를 알 수 없음 — 설정에 거래소 번호를 넣어 주세요 (고치면 오늘도 5분 안에 다시 시도해요)")
+        _retry_later(note, d, "exch", "거래소 번호를 알 수 없음 — 설정에 거래소 번호를 넣어 주세요 (고치면 오늘도 5분 안에 다시 시도해요)")
         return "거래소"
     price, prev_close, fx = market_inputs(s, api)
     if live and not (fx and fx > 0):      # 적용환율 일시 오류로 오늘 매수가 통째로 빠지지 않게 (market_inputs 는 실패를 0.0 으로 삼킴)
-        _retry_later(note, d, "fx", "⚠️ 적용환율을 못 읽어 오늘 매수 계획을 못 세웠어요 — 5분 뒤 다시 시도해요")
+        _retry_later(note, d, "fx", "적용환율을 못 읽어 오늘 매수 계획을 못 세웠어요 — 5분 뒤 다시 시도해요")
         return "환율 실패"
     cash = api.usd_cash()
     if live:      # 맨 위 가격 이상을 본 적 있음 표시 (first_buy_mode=wait_top 용). 모의에서는 저장하지 않음
@@ -613,11 +614,11 @@ def run_order_day(s, api, note, live):
     cfg._save_json(mark, m)
     reached = plan["info"].get("profit_reached")
     note.send(f"{d} 주문 {'접수' if live else '계획'} · 보유 {qty}주 평단 ${avg:.2f}\n{plan_head(plan, s)}\n"
-              + (f"🎯 평가 이익 +{float(s['sell_profit_pct']):g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${plan['info']['sell_target']:.2f})\n" if reached else "")
+              + (f"평가 이익 +{float(s['sell_profit_pct']):g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${plan['info']['sell_target']:.2f})\n" if reached else "")
               + fx_lines(fxres)
               + fmt_orders(placed)
-              + ("\n" + "\n".join("ℹ️ " + n for n in notes + warn) if notes or warn else "")
-              + ("\n⚠️ 실패\n" + "\n".join("- " + e for e in errors) if errors else ""))
+              + ("\n" + "\n".join("· " + n for n in notes + warn) if notes or warn else "")
+              + ("\n실패\n" + "\n".join("- " + e for e in errors) if errors else ""))
     return "완료"
 
 
@@ -790,22 +791,22 @@ def run_fx_morning(s, api, note, live):
     if live:
         bad = gate_problems(s, cfg, live=True)
         if bad:
-            _fxm_later(note, d, "gate", "⛔ 자동환전 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 주문 시간 전까지 5분마다 다시 확인해요. 못 하면 마감 60분 전에 달러부족 알림을 보내요)")
+            _fxm_later(note, d, "gate", "자동환전 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 주문 시간 전까지 5분마다 다시 확인해요. 못 하면 마감 60분 전에 달러부족 알림을 보내요)")
             return "차단"
         for mp in pending_syncs(state):                        # 어제 체결 반영 전이면 사다리 상태가 낡아 '다음 회차'가 틀릴 수 있음 → 환전 안 함
             m = cfg._load_json(mp, {})
             if isinstance(m, dict) and (m.get("orders") or m.get("attempts")) and not m.get("synced", True):
-                _fxm_later(note, d, "sync", f"⚠️ 자동환전 안 함 — 체결 반영 전인 주문 기록이 있어요 ({os.path.basename(mp)}). 사다리 상태가 최신이 아니에요")
+                _fxm_later(note, d, "sync", f"자동환전 안 함 — 체결 반영 전인 주문 기록이 있어요 ({os.path.basename(mp)}). 사다리 상태가 최신이 아니에요")
                 return "체결 반영 전"
     ca = closure_ahead(w["day"], s)
     rounds = 1 + (ca["extra"] if ca else 0)
     try:
         plan, prev_close, rate, cash = _next_rounds_inputs(s, api, cfg, rounds)
     except MeritzError as e:
-        _fxm_later(note, d, "read", f"⚠️ 자동환전 안 함 — 시세·적용환율·달러 예수금 조회 실패: {str(e)[:100]} (5분 뒤 다시 시도해요)")
+        _fxm_later(note, d, "read", f"자동환전 안 함 — 시세·적용환율·달러 예수금 조회 실패: {str(e)[:100]} (5분 뒤 다시 시도해요)")
         return "조회 실패"
     except ValueError:
-        _fxm_later(note, d, "close", "⚠️ 자동환전 안 함 — 전일 종가를 못 읽었어요 (5분 뒤 다시 시도해요)")
+        _fxm_later(note, d, "close", "자동환전 안 함 — 전일 종가를 못 읽었어요 (5분 뒤 다시 시도해요)")
         return "전일종가 없음"
     buys = [o for o in plan["orders"] if o.get("side") == "BUY"]
     if not buys:                                               # 다음 회차 없음(사다리 전부 채움·시작 대기 등)·한도 부족 → 환전 안 함
@@ -850,10 +851,10 @@ def run_closure_alert(s, note, live):
         return "이미 알림"
     nb = ca["day"]
     why = " · ".join(x for x, f in (("한국증시 휴장(환전 불가)", ca["kr"]), ("미국증시 휴장", ca["us"])) if f)
-    text = (f"📅 휴장 전날 알림 — 다음 영업일 {nb.month}/{nb.day}({WD_KO[nb.weekday()]})은 {why} 예정이에요.\n"
+    text = (f"휴장 전날 알림 — 다음 영업일 {nb.month}/{nb.day}({WD_KO[nb.weekday()]})은 {why} 예정이에요.\n"
             f"환전은 오늘 한국시간 09:00 ~ 주문 시간({_hm_text(w['deadline'], w['day'])}) 안에 미리 해야 해요 (23:50~00:20 점검 시간은 환전 불가).\n"
             + (f"자동환전이 켜져 있어요 — 오늘 몫 + 휴장 중 주문일 {ca['extra']}회차분을 함께 환전해요 (하루 상한 안에서)."
-               if s.get("auto_fx_enabled") else "자동환전이 꺼져 있어요 — 직접 환전해 주세요 (필요 달러는 💰 자금 현황에서 확인)."))
+               if s.get("auto_fx_enabled") else "자동환전이 꺼져 있어요 — 직접 환전해 주세요 (필요 달러는 자금 현황에서 확인)."))
     if note.send(text) is not False:                           # 보내기 실패(False)면 기록 안 써서 다음 확인 때 다시 시도
         ConfigManager(s)._save_json(mk, {"date": d, "next_business_day": nb.isoformat(), "kr": ca["kr"], "us": ca["us"], "extra": ca["extra"]})
     return "알림"
@@ -902,7 +903,7 @@ def run_fx_shortage_alert(s, api, note, live):
         return "부족 없음"                                     # 기록 안 씀 (Q24)
     dl = order_time_kst(day, s)
     left = max(0, int((dl - n).total_seconds() // 60))
-    text = (f"⚠️ 달러부족 — 마감(주문 시간 {_hm_text(dl, day)}) 약 {left}분 전이에요.\n"
+    text = (f"달러부족 — 마감(주문 시간 {_hm_text(dl, day)}) 약 {left}분 전이에요.\n"
             f"다음 {rounds}회차에 필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f} · 부족 ${math.ceil(short):,}\n"
             + ("자동환전이 켜져 있어요 — 환전 시간 안이면 계속 시도해요. 그래도 안 되면(원화 부족·환율 조회 실패 등) 직접 환전해 주세요."
                if s.get("auto_fx_enabled") else "자동환전이 꺼져 있어요 — 직접 환전해 주세요."))
@@ -933,7 +934,7 @@ def run_fx_tasks(s, note, live):
         ek = "err_" + kst.strftime("%Y-%m-%d")
         if ek not in _FXM["warned"]:
             _FXM["warned"].append(ek)
-            note.send(f"⚠️ 자동환전·알림 중 오류가 났어요 ({type(e).__name__}) — 환전은 안 했거나 기록을 확인해 주세요. 마감 60분 전에 달러부족 알림을 보내요.")
+            note.send(f"자동환전·알림 중 오류가 났어요 ({type(e).__name__}) — 환전은 안 했거나 기록을 확인해 주세요. 마감 60분 전에 달러부족 알림을 보내요.")
     return api
 
 
@@ -971,7 +972,7 @@ def run_sync(s, api, note, mark_path):
         cfg.save_accum(ast)
         lines.append(f"- {SIDE_KO.get(side, side)} {q}주 @ ${px:.2f} ({o.get('desc', '')})")
         if o.get("kind") == "sell":
-            lines.append(f"  🎯 매도 체결 → 재매수 단계 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
+            lines.append(f"  매도 체결 → 재매수 단계 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
         done = closed or done
     hold, _, _ = api.holding(s["symbol"])
     pos = cfg.get_position()
@@ -979,12 +980,12 @@ def run_sync(s, api, note, mark_path):
     cfg._save_json(mark_path, m)
     msg = f"{d} 체결 반영\n" + ("\n".join(lines) if lines else "- 체결 없음") + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}"
     if lost:
-        msg += f"\nℹ️ 주문 응답을 못 받은 주문 {lost}건은 체결 내역에서 못 찾았어요 (체결 안 된 것으로 봄 — 아래 잔고 확인이 맞는지 검사)"
+        msg += f"\n주문 응답을 못 받은 주문 {lost}건은 체결 내역에서 못 찾았어요 (체결 안 된 것으로 봄 — 아래 잔고 확인이 맞는지 검사)"
     if done:
-        msg += "\n⚠️ 보유 0주가 되어 사이클 종료 처리됨 — 이 봇의 매도 규칙으로는 생기지 않는 상황, 확인 필요"
+        msg += "\n보유 0주가 되어 사이클 종료 처리됨 — 이 봇의 매도 규칙으로는 생기지 않는 상황, 확인 필요"
     if hold != pos["qty"]:
         cfg.halt(f"체결 반영 뒤 잔고 {hold}주 ≠ 장부 {pos['qty']}주")
-        msg += f"\n⛔ 정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인한 뒤 ⛔ 정지 해제)"
+        msg += f"\n정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인한 뒤 정지 해제)"
     note.send(msg)
     return "완료"
 
@@ -1052,7 +1053,7 @@ def loop():
                         logging.exception(f"당일 매도 확인 중 오류: {type(e).__name__}")
                         if _INTRA["err_day"] != n.strftime("%Y-%m-%d"):
                             _INTRA["err_day"] = n.strftime("%Y-%m-%d")
-                            note.send(f"⚠️ 당일 매도 확인 중 오류가 났어요 ({type(e).__name__}) — 이미 낸 주문은 그대로예요. 서버 로그를 확인해 주세요.")
+                            note.send(f"당일 매도 확인 중 오류가 났어요 ({type(e).__name__}) — 이미 낸 주문은 그대로예요. 서버 로그를 확인해 주세요.")
             if live:
                 today = n.strftime("%Y-%m-%d")
                 for mp in pending_syncs(state):
@@ -1065,7 +1066,7 @@ def loop():
         except Exception as e:
             logging.exception(f"반복 중 오류: {type(e).__name__}")
             try:
-                Notifier(load_settings()["telegram_file"]).send(f"⚠️ 봇에 오류가 났어요 ({type(e).__name__}): {str(e)[:200]}")
+                Notifier(load_settings()["telegram_file"]).send(f"봇에 오류가 났어요 ({type(e).__name__}): {str(e)[:200]}")
             except Exception:
                 pass
             idle(120)
@@ -1080,7 +1081,7 @@ def cmd_check(s):
           f"입고 확인 {'됨' if s.get('transfer_confirmed') else '전'} · 토스 스나이퍼 정지 확인 {'됨' if s.get('toss_sniper_stopped_confirmed') else '전'}")
     print(f"- 키 지문: {fp or '-'} (기대값 {'있음' if s.get('expected_key_fp') else '없음'})")
     for b in bad + idb:
-        print("  ✗", to_korean(b))
+        print("  -", to_korean(b))
     state = s["state_dir"]
     os.makedirs(os.path.join(state, "data"), exist_ok=True)
     with in_dir(state):
@@ -1106,12 +1107,12 @@ def cmd_check(s):
     print("- 오늘 계획 (미리보기·주문 안 냄):\n  " + to_korean(plan_head(plan, s)).replace("\n", "\n  "))
     print("  " + to_korean(fmt_orders(orders)).replace("\n", "\n  "))
     for n in notes:
-        print("  ℹ️", to_korean(n))
+        print("  ·", to_korean(n))
     with in_dir(state):
         r = auto_fx(s, api, ConfigManager(s), plan, False, now_et().strftime("%Y-%m-%d"))
-    print("  " + (fx_lines(r).strip().replace("\n", "\n  ") if r else "💱 환전: 필요 없음 또는 자동환전 꺼짐"))
+    print("  " + (fx_lines(r).strip().replace("\n", "\n  ") if r else "환전: 필요 없음 또는 자동환전 꺼짐"))
     if hold != q:
-        print(f"  ⚠️ 잔고 {hold}주 ≠ 장부/시작 {q}주 → 입고 전이거나 다른 계좌")
+        print(f"  잔고 {hold}주 ≠ 장부/시작 {q}주 → 입고 전이거나 다른 계좌")
     return 0
 
 
@@ -1143,23 +1144,23 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
         cfg = ConfigManager(s)
         pos = cfg.get_position()
         if not pos:
-            bad.append("장부 시작 전 (먼저 🛠 기타 → 📥 장부 시작)")
+            bad.append("장부 시작 전 (먼저 기타 → 장부 시작)")
         if credit:
             ast0 = cfg.accum_or_start()
             if ast0.get("mode") != "ladder" or ast0.get("filled_levels"):
                 bad.append("1회차 차감 불가: 이미 사다리 매수가 시작됐거나 재매수 모드")
         if bad:
-            print("✗ 추가 투입 반영 안 함:\n" + "\n".join("- " + to_korean(b) for b in bad))
+            print("추가 투입 반영 안 함:\n" + "\n".join("- " + to_korean(b) for b in bad))
             return 1
         api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
         hold, _, _ = api.holding(s["symbol"])
         want = int(pos["qty"]) + qty
         note = Notifier(s["telegram_file"], dry_run=s.get("dry_run", True))
         if hold != want:
-            msg = f"✗ 추가 투입 반영 안 함: 메리츠 잔고 {hold}주 ≠ 장부 {pos['qty']}주 + {qty}주 = {want}주 (주문 없음)"
+            msg = f"추가 투입 반영 안 함: 메리츠 잔고 {hold}주 ≠ 장부 {pos['qty']}주 + {qty}주 = {want}주 (주문 없음)"
             print(msg)
             logging.warning(msg)
-            note.send("⛔ " + msg[2:])
+            note.send(msg)
             return 1
         t0, g0 = sell_target(s, cfg, pos)
         before, after = cfg.add_shares(qty, avg, n.strftime("%Y-%m-%d"))
@@ -1171,7 +1172,7 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
             ast["credit_usd"] = round(float(ast.get("credit_usd") or 0) + qty * avg, 2)
             cfg.save_accum(ast)
             cr_txt = f"\n1회차 매수 때 차감: +${qty * avg:,.0f} (합계 ${ast['credit_usd']:,.0f})"
-        msg = (f"➕ 추가 투입 반영 {qty}주 @ ${avg:.2f} (주문 없음)\n"
+        msg = (f"추가 투입 반영 {qty}주 @ ${avg:.2f} (주문 없음)\n"
                f"전: {before['qty']}주 · 원금 ${before['principal']:,.0f} · 평단 ${a0:.2f} · 회차 {t0} · 매도 목표 ${g0:.2f}\n"
                f"후: {after['qty']}주 · 원금 ${after['principal']:,.0f} · 평단 ${a1:.2f} · 회차 {t1} · 매도 목표 ${g1:.2f}" + cr_txt)
         hist = cfg._load_json("data/add_shares_log.json", [])
@@ -1182,7 +1183,7 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
         logging.info(msg.replace("\n", " | "))
         print(msg)
         if cfg.get_halt():
-            print(f"ℹ️ 정지 표시는 그대로 있음: {cfg.get_halt().get('reason')} (확인한 뒤 ⛔ 정지 해제)")
+            print(f"정지 표시는 그대로 있음: {cfg.get_halt().get('reason')} (확인한 뒤 정지 해제)")
         note.send(msg)
     return 0
 
@@ -1195,13 +1196,13 @@ def cmd_inject_start(s, overwrite=False, api=None):
     if not s.get("transfer_confirmed"):
         bad.append("입고 확인 전 (먼저 입고를 확인해 주세요)")
     if bad:
-        print("✗ 장부 시작 안 함:\n" + "\n".join("- " + to_korean(b) for b in bad))
+        print("장부 시작 안 함:\n" + "\n".join("- " + to_korean(b) for b in bad))
         return 1
     api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
     hold, _, _ = api.holding(s["symbol"])
     want = int(float(s["start"]["qty"]))
     if hold != want:
-        print(f"✗ 메리츠 잔고 {hold}주 ≠ 시작 수량 {want}주 — 입고 미완료 또는 다른 계좌")
+        print(f"메리츠 잔고 {hold}주 ≠ 시작 수량 {want}주 — 입고 미완료 또는 다른 계좌")
         return 1
     with in_dir(state):
         cfg = ConfigManager(s)

@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.0.6)
+# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.1.0)
+# v2.1.0 (2026-11-19, 방 telegram-bot-menu-review 3차 v3): 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경은 그대로 둠, 매매 동작 변경 없음
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.4 (2026-11-19): _read_chat 추가 (main.check_identity 가 chat_id 가 비었거나 숫자가 아니면 막는 데 씀). 알림 보내기·문구는 그대로
 # v2.0.3 (2026-11-18): to_korean() 추가 — 화면에 나가는 글자에서 영어 변수 이름·옵션 이름을 한국말로 바꾸고, 속쓸 가격이 아닌 달러 금액은 소수점을 없앰.
@@ -119,7 +120,7 @@ class Notifier:
             logging.warning(f"텔레그램 설정 없음/오류 → 로그로만 남김: {type(e).__name__}")
 
     def send(self, text):
-        msg = ("🧪[모의] " if self.dry_run else "") + "🟦7번 메리츠 속쓸 적립봇\n" + to_korean(text)
+        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 속쓸 적립봇\n" + to_korean(text)
         logging.info(msg.replace("\n", " | "))
         if not self.ok:
             return False

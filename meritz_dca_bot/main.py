@@ -884,7 +884,7 @@ async def dispatch_action(data: str, msg_id, client):
                            "그 종목을 한 번 살 때 쓰는 기준 금액이에요.", "다음 적립부터 이 금액이 기준이 돼요", "40"), [[{"text": "취소", "callback_data": f"detail_{sym}"}]], msg_id)
     elif data.startswith("next_pause_"):
         sym = data.split("_", 2)[-1]; wait_state["mode"], wait_state["sym"] = "next_pause", sym
-        send_panel(explain(f"{sym} 정지 기간", "새로 정함", "1일 이상 정수 (예: 30. 100은 예시일 뿐, 상한 없음)",
+        send_panel(explain(f"{sym} 정지 기간", "새로 정함", "1일 이상 정수 (예: 30. 상한 없음)",
                            "정지 대기 기간이에요. 이 기간 동안 사지도 팔지도 않고 기다려요.", "진행일수가 0일부터 새로 시작해요", "30"), [[{"text": "취소", "callback_data": f"detail_{sym}"}]], msg_id)
     elif data.startswith("next_sell_"):
         sym = data.split("_", 2)[-1]; wait_state["mode"], wait_state["sym"] = "next_sell", sym
@@ -1074,7 +1074,7 @@ async def handle_message(msg: dict, client):
         try:
             days = max(1, int("".join(ch for ch in text if ch.isdigit())))   # Q2: 하한 1일, 상한 없음
         except ValueError:
-            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode=m); send_panel("1일 이상 정수로 입력해 주세요. (예: 30. 100은 예시일 뿐)", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
+            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode=m); send_panel("1일 이상 정수로 입력해 주세요. (예: 30. 상한 없음)", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
         wait_state["mode"] = None
         _kind = {"next_pause": "정지", "next_sell": "분할매도", "next_buy2": "2차 매수"}[m]
         async def _apply_next(sym=sym, m=m, days=days):
