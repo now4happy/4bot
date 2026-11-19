@@ -1,5 +1,10 @@
 # 7번 메리츠 속쓸 적립봇 변경 기록
 
+## v1.1.3 · 2026-11-19 20:54 (KST)
+- 파일: accum_strategy.py, config.py, main.py
+- 내용: fix(audit): 1번 보유 조회 실패 구분·타임아웃 중복 방지, 6번 v1.3.2, 7번 v2.2.1
+- 브랜치: staging
+
 ## v1.1.2 · 2026-11-19 20:42 (KST)
 - 파일: main.py, tg_menu.py, tower_strategy.py
 - 내용: meritz_laoer v2.2.0: tower stacking (pan 13) - new tower_strategy.py module, strategy switch (default ladder), migration from holdings, slippage handling
