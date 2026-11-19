@@ -2102,4 +2102,98 @@ class SoxlStratumLedger:
             "initial_seed_usd": clean_seed,
             "seed_explicitly_set_100": bool(abs(clean_seed - 100.0) < 1e-6),
         }
-      
+        if reset_realized_profit:
+            kw["cumulative_realized_net_usd"] = 0.0
+            kw["cumulative_realized_gross_usd"] = 0.0
+            kw["cumulative_realized_fee_usd"] = 0.0
+            kw["vaulted_profit_locked_usd"] = 0.0
+            kw["cycle_vaulted_locked_usd"] = 0.0
+            kw["cycle_realized_gross_usd"] = 0.0
+            kw["cycle_realized_fee_usd"] = 0.0
+            kw["cycle_realized_net_usd"] = 0.0
+            kw["cycle_sub_realized_net_usd"] = 0.0
+            kw["cycle_sell_events"] = 0
+            kw["cycle_leftover_saved_usd"] = 0.0
+            kw["last_cycle_realized_net_usd"] = 0.0
+            kw["last_cycle_sell_events"] = 0
+            kw["completed_main_cycles"] = 0
+        return await self.update_state(TARGET_SYMBOL, **kw)
+
+    async def toggle_bot_active(
+        self, active: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        st = self.get_state(TARGET_SYMBOL)
+        next_active = (
+            bool(active)
+            if active is not None
+            else (not bool(st.get("is_active", True)))
+        )
+        return await self.update_state(TARGET_SYMBOL, is_active=next_active)
+
+    async def toggle_portion_mode(
+        self, target_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        # MODIFIED [Case 91 + 바벨 확장 : 📈 복리(COMP_08PCT) ➔ 💵 단리(SIMPLE_08PCT) ➔ ⚖️ 바벨(BARBELL_60_30_10) 3단 순환 모드 전환기]:
+        """
+        st = self.get_state(TARGET_SYMBOL)
+        cur_mode = (
+            str(st.get("portion_mode") or PORTION_MODE_COMPOUND)
+            .upper()
+            .strip()
+        )
+        if target_mode is not None and str(target_mode).strip():
+            if is_barbell_mode(target_mode):
+                next_mode = PORTION_MODE_BARBELL
+            elif is_simple_income_mode(target_mode):
+                next_mode = PORTION_MODE_SIMPLE
+            else:
+                next_mode = PORTION_MODE_COMPOUND
+        else:
+            next_mode = next_cycled_portion_mode(cur_mode)
+        return await self.update_state(TARGET_SYMBOL, portion_mode=next_mode)
+
+    async def rollover_daily_counters_if_needed(
+        self, logical_date: str
+    ) -> Dict[str, Any]:
+        st = self.get_state(TARGET_SYMBOL)
+        target_d = str(logical_date or "").strip()
+        cur_date = str(st.get("logical_date") or "").strip()
+        if not target_d or (cur_date and cur_date >= target_d):
+            return st
+        cal_today = datetime.now(EST_TZ).strftime("%Y-%m-%d")
+        upd_kw: Dict[str, Any] = {
+            "logical_date": target_d,
+            "daily_buy_events": 0,
+            "daily_unlock_buy_events": 0,
+            "daily_sub_buy_cnt": 0,
+            "daily_sub_buy_events": 0,
+            "daily_sub_sell_cnt": 0,
+            "daily_sub_sell_events": 0,
+            "daily_sub_unlock_events": 0,
+            "daily_sub_realized_net_usd": 0.0,
+            "daily_main_buy_cnt": 0,
+            "daily_main_sell_cnt": 0,
+            "daily_reserve_injected_cnt": 0,
+            "daily_dust_guard_blocked_cnt": 0,
+            "daily_sell_events": 0,
+            "daily_indiv_grid_sell_cnt": 0,
+            "daily_wma_grad_sell_cnt": 0,
+            "daily_seed_protect_pass_cnt": 0,
+            "daily_reanchor_cnt": 0,
+            "daily_leftover_saved_usd": 0.0,
+            "daily_realized_net_usd": 0.0,
+            "last_reentry_eval_ts": 0.0,
+            "last_sub_reentry_eval_ts": 0.0,
+        }
+        if cal_today >= target_d:
+            upd_kw["last_evaluated_buy_bucket_id"] = -1
+            upd_kw["last_evaluated_date"] = cal_today
+            upd_kw["sub_last_evaluated_buy_bucket_id"] = -1
+            upd_kw["sub_last_evaluated_date"] = cal_today
+        return await self.update_state(TARGET_SYMBOL, **upd_kw)
+
+
+# 하위 호환 별칭 (타 모듈 임포트 호환 100% 보장)
+StratumLedger = SoxlStratumLedger
+AssassinLedger = SoxlStratumLedger
