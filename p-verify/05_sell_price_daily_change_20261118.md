@@ -9,6 +9,14 @@ Base dataset: p_data_v12.json (385 rows, sha256 bcedc40142bac16ad71cb1ccf01e92fc
 The three sell lines kept the same quantities for three days (11-16 → 11-17 → 11-18),
 but their prices moved differently. One line went UP while the other two went DOWN.
 
+11-17 and 11-18 were BOTH no-trade days (no buy, no sell filled). That is the
+important part: on a no-trade day the sell prices on the table are the DEFAULT
+standing order prices, recalculated fresh by the author with no trade in between.
+So the change from one no-trade day to the next is a PURE default-to-default
+movement — the cleanest possible signal of the underlying rule, with no fill or
+trade interference. (11-16 had a buy but no sell filled, so the 11-16 → 11-17
+step is also a no-sell-filled step.)
+
 | Date | Close | Sell line qty 8 | Sell line qty 11 | Sell line qty 6 |
 |---|---|---|---|---|
 | 2026-11-16 | 48.76 | 58.10 | 73.59 | 50.17 |
@@ -46,13 +54,15 @@ No buy on 11-17 or 11-18, so P stays at the 11-16 value (46.97) for those days.
 
 ## The question
 
-What rule makes the qty 6 sell line move UP (+0.42, +0.19) while the other two
-lines move DOWN? In particular:
+What rule moves the DEFAULT sell prices from one no-trade day to the next?
+Focus on the no-trade → no-trade step (11-17 → 11-18), because there the
+movement is pure default-to-default. In particular:
 - Is the qty 6 line an S4 X line whose X moves with the close (close + 1.52)?
 - If so, why was the offset 1.41 on 11-16 and 1.52 on 11-17/11-18? What changed it?
 - Or is it an S1 line, or a different rule entirely?
-- Does the same movement pattern appear in earlier data (e.g. other qty 6 lines,
-  or the 57.90×6 line on 11-09)?
+- Does the same movement pattern appear in earlier no-trade stretches?
+  (Find other stretches where two or more consecutive days had no buy and no
+  sell filled, and check whether the default sell prices moved the same way.)
 
 ## What is already settled (do not redo)
 
@@ -67,9 +77,10 @@ lines move DOWN? In particular:
 
 ## What to deliver
 
+- A list of all no-trade stretches in the dataset (consecutive days with no buy
+  and no sell filled), and how the default sell prices moved across each stretch.
 - A classification of the qty 8 / qty 11 / qty 6 lines on 11-16, 11-17, 11-18
   (which are S1 / S2 / S3 / S4, and why).
-- A hypothesis for the qty 6 line movement, tested against the full dataset
-  (does the same rule explain earlier qty 6 lines and other increasing lines?).
-- If a rule is found, state its exact form, how many lines it fits, and how many
-  it fails. If no rule is found, say what was tested and what would be needed.
+- A hypothesis for the qty 6 line movement, tested against the no-trade
+  stretches (does the same rule explain the default movement on other
+  no-trade days?).
