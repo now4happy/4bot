@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-19, 방 updater-redesign-sniper-separate 판 2): 업데이트 봇 재설계 1단계 — ① 2번 스나이퍼를 적용 대상에서 제외(classify 무시·두 전체 검사에서 경로 제외·병합 때 스나이퍼 파일 그대로 둠 · NAMES·원작 알림·매일 STATUS·sniper_tiers는 유지)
+#                       ② A: 저장 안 된 변경 검사를 이번에 바뀌는 봇 폴더 + 공용 파일로 한정 ③ B: 서버에만 있는 수정과 겹치는 봇만 '앞섬, 사람 승인 필요'로 보류
+#                       ④ D: 매매 중·일시중지 대기·앞섬인 봇만 보류하고 나머지는 적용 (보류 목록·경과일은 STATUS, 사유가 풀리면 자동 재시도)
+#                       ⑤ 원작자 새 커밋 알림 때 2번 자동 업뎃(원작 직접 동기화만 · 재시작 항상 · 건강 확인 실패 시 자동 되돌림) — 본체는 sniper_upstream.py
+#                       · 판 2 v2 고침: 전부 보류일 때도 보류 목록에 기록(적용은 안 함) · 2번 동기화 명령은 스나이퍼 자체 CLI(plugin_updater.py --base-dir) 기본값
+#                       · 스위치 U_SCOPED_CHECKS=0 이면 ①~④ 전부 예전 동작(저장소 전체 검사·전체 중단)으로 복귀 · 9번 첫 화면(메뉴 3차)은 그대로
 # 사무실 v1.9.1 (2026-11-19, 방 telegram-bot-menu-review 3차): 9번 첫 화면 4칸 [업데이트 확인 | 거래 상태 | 유지보수 | 도움말] — 충돌 정리·상태 기록·원작 확인은 유지보수 안 · 단순 이모티콘 제거(예전 키보드 글자도 같은 버튼으로 읽음) · 업데이트 적용·일시중지·재개 동작 불변
 # 사무실 v1.9.0 (2026-11-17): live-board 브랜치를 업데이트 알림 대상에서 제외 — 보드용 고아 브랜치가 1분마다 커밋을 올려 매번 새 업데이트 알림이 뜨던 폭주 수정 (음수 refspec 가드와 별개로 코드에서도 제외)
 # 사무실 v1.8.8 (2026-11-15): 한 달 무인 운영 대비 — ① 매일 06:10 STATUS 기록 때 대상 서비스·상시 서비스의 실행(is-active)·부팅 자동시작(is-enabled)을 확인해
@@ -126,6 +132,11 @@ NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service":
          "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립",
          "meritz_laoer.service": "7번 메리츠 속쓸 적립봇"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
+# --- 사무실 vNEXT: 스나이퍼 제외 + 봇별 검사·보류 ---
+SNIPER_UNIT, SNIPER_DIR = "toss_sniper.service", "toss_sniper"
+SCOPED = os.environ.get("U_SCOPED_CHECKS", "1") != "0"   # 스위치 1개: 0 이면 스나이퍼 제외·A·B·D 전부 끄고 예전 동작(저장소 전체 검사·전체 중단)
+HOLDS = os.environ.get("U_HOLDS", "/var/lib/bot-updater/holds.json")   # 보류 목록 (D)
+HOLD_RETRY_MAX = 3   # 보류가 풀려 다시 적용했는데 연속 3번 실패하면 자동 재시도를 멈추고 사람 확인으로
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
 HUB_DIR = os.path.join(REPO, "alert-hub")
 HUB_VENV = os.path.join(HUB_DIR, ".venv")
@@ -170,10 +181,49 @@ def git_raw(*a):
     return r.returncode, r.stdout
  
  
-def _dirty_code_files(include_staged=False):
+def _sniper_prefixes():
+    """저장소 안 2번 스나이퍼 폴더 경로 접두사(끝에 /). 기본 toss_sniper/ + 서버 targets.json 에 적힌 스나이퍼 root (그 파일은 서버에만 있음)"""
+    pre = {SNIPER_DIR}
+    try:
+        root = targets().get(SNIPER_UNIT)
+        if root:
+            rel = os.path.relpath(root, os.path.realpath(REPO))
+            if rel not in (".", "") and not rel.startswith(".."):
+                pre.add(rel)
+    except Exception:
+        pass
+    return tuple(sorted(p.strip("/") + "/" for p in pre))
+
+
+def _unit_roots_rel():
+    """봇 폴더(저장소 상대 경로, 끝에 /) → 봇 키 (스나이퍼는 뺌). 사무실 폴더 bot_office/ 는 OFFICE_KEY"""
+    base, out = os.path.realpath(REPO), {}
+    for u, r in targets().items():
+        if u == SNIPER_UNIT:
+            continue
+        rel = os.path.relpath(r, base)
+        if rel in (".", "") or rel.startswith(".."):
+            continue
+        out[rel.strip("/") + "/"] = u
+    return out
+
+
+def _owner_unit(path, rel_roots):
+    """이 파일이 속한 봇 (가장 깊은 폴더 기준). 어느 봇 폴더도 아니면 None = 공용 파일"""
+    best = None
+    for rel, u in rel_roots.items():
+        if path.startswith(rel) and (best is None or len(rel) > len(best[0])):
+            best = (rel, u)
+    return best[1] if best else None
+
+
+def _dirty_code_files(include_staged=False, scope=None):
     """저장 안 된 변경 중 실제 코드 변경만 반환한다.
     브리핑이 매번 다시 쓰는 생성 상태 파일(need.json·sniper_tiers.json)은 제외한다.
-    include_staged=True면 스테이징된 변경도 포함한다."""
+    include_staged=True면 스테이징된 변경도 포함한다.
+    사무실 vNEXT (U_SCOPED_CHECKS 켜짐): ① 2번 스나이퍼 폴더(toss_sniper/) 변경은 제외한다 (임시 수정이 있어도 다른 봇 적용을 막지 않음)
+      ② scope=(봇 목록, 이번에 바뀌는 파일들)을 주면 그 봇 폴더 + 공용 파일(어느 봇 폴더도 아닌 곳) + 이번에 바뀌는 파일에 겹치는 변경만 본다 (A)
+      scope 없으면 저장소 전체(스나이퍼 제외). 스위치를 끄면 예전처럼 저장소 전체를 본다."""
     state = {NEED_FILE, SNIPER_TIERS_FILE}
     files = []
     out = git("status", "--porcelain", "--untracked-files=no")[1]
@@ -187,6 +237,14 @@ def _dirty_code_files(include_staged=False):
             name = line.strip()
             if name and name not in state:
                 files.append(name)
+    if not SCOPED:
+        return files
+    pre = _sniper_prefixes()
+    files = [f for f in files if not f.startswith(pre)]
+    if scope is not None:
+        units, touched = set(scope[0]), set(scope[1])
+        rel_roots = _unit_roots_rel()
+        files = [f for f in files if f in touched or _owner_unit(f, rel_roots) in units or _owner_unit(f, rel_roots) is None]
     return files
 
 
@@ -252,7 +310,12 @@ def classify(files):
     배포 규칙에 안 맞는 파일(테스트·점파일·폴더 안 파일·저장소 루트 파일·alert-hub·.gitignore·.example.json)은
     거부하지 않고 skipped 로 넘긴다 — 같이 묶인 다른 봇 업데이트가 막히지 않게."""
     roots, units, skipped = targets(), {}, []
+    sniper_pre = _sniper_prefixes() if SCOPED else ()
     for f in files:
+        if sniper_pre and f.startswith(sniper_pre):
+            # 사무실 vNEXT: 2번 스나이퍼 폴더는 업데이트 비서가 건드리지 않는다 (가져오기·덮어쓰기·삭제 전부 안 함 — 원작 직접 동기화로 따로 관리)
+            skipped.append(f)
+            continue
         if f == "alert-hub" or f.startswith("alert-hub/"):
             # alert-hub는 업데이터 적용 대상이 아님 (보관만, 서버 직접 설치).
             skipped.append(f)
@@ -276,21 +339,49 @@ def classify(files):
  
  
 # ---------------------------------------------------------------- 매매 중인지 확인
+def sniper_orders_open():
+    """2번 스나이퍼 장부에 매수·매도 주문이 걸려 있으면 보류 사유 문장, 없으면 ''.
+    현 장부(인피니트 스노우볼 soxl_stratum_ledger*.json, {"SOXL": {...}}): 매수·매도 주문이 걸려 있으면 보류.
+    (스노우볼은 원래 보유를 다음 날로 넘기는 전략이라 '보유 중'만으로는 막지 않음 · 재시작하면 장부·잔고로 이어서 관리)
+    사무실 vNEXT: busy_reason 에서 떼어 냄 — 스나이퍼는 이제 다른 봇 적용 판단에서 빠지고, 이 확인은 2번 자동 업뎃 조건에서 쓴다."""
+    import glob
+    root = targets().get(SNIPER_UNIT, "")
+    for p in glob.glob(os.path.join(root, "soxl_stratum_ledger*.json")):
+        d = load(p, {})
+        L = d.get("SOXL", d) if isinstance(d, dict) else {}
+        if isinstance(L, dict) and (str(L.get("buy_order_id") or "").strip() or str(L.get("sell_order_id") or "").strip()):
+            return "스나이퍼(SOXL) 주문이 걸려 있음 (체결·취소 뒤 다시 눌러 주세요)"
+    return ""
+
+
+def sniper_pause_phase():
+    """2번 스나이퍼의 업데이트용 일시중지 상태 값('running'·'waiting'·'paused'). 상태 파일이 없거나 읽을 수 없으면 ''"""
+    root = targets().get(SNIPER_UNIT)
+    try:
+        if root and SNIPER_UNIT in DC.UNITS.values() and DC.state_path(root).exists():
+            return str(DC.read(DC.state_path(root)).get("phase") or "")
+    except Exception:
+        return "unreadable"
+    return ""
+
+
+def sniper_dirty_files():
+    """서버 스나이퍼 폴더의 저장 안 된 코드 변경 (장부 soxl_stratum_ledger* 와 생성 상태 파일은 제외) — 임시 수정이 남아 있는지 보는 용도"""
+    pre = [p.rstrip("/") for p in _sniper_prefixes()]
+    out = git("status", "--porcelain", "--untracked-files=no", "--", *pre)[1]
+    names = [line.split()[-1] for line in out.splitlines() if line.split()]
+    return [n for n in names if not os.path.basename(n).startswith("soxl_stratum_ledger") and n not in (NEED_FILE, SNIPER_TIERS_FILE)]
+
+
 def busy_reason(unit, pause_verified=False):
     if pause_verified:
         return ""
     now_k, now_e = datetime.now(KST), datetime.now(ET)
     k, e = now_k.hour * 100 + now_k.minute, now_e.hour * 100 + now_e.minute
-    if unit == "toss_sniper.service":
-        # 현 장부(인피니트 스노우볼 soxl_stratum_ledger*.json, {"SOXL": {...}}): 매수·매도 주문이 걸려 있으면 보류.
-        # (스노우볼은 원래 보유를 다음 날로 넘기는 전략이라 '보유 중'만으로는 막지 않음 · 재시작하면 장부·잔고로 이어서 관리)
-        import glob
-        root = targets().get(unit, "")
-        for p in glob.glob(os.path.join(root, "soxl_stratum_ledger*.json")):
-            d = load(p, {})
-            L = d.get("SOXL", d) if isinstance(d, dict) else {}
-            if isinstance(L, dict) and (str(L.get("buy_order_id") or "").strip() or str(L.get("sell_order_id") or "").strip()):
-                return "스나이퍼(SOXL) 주문이 걸려 있음 (체결·취소 뒤 다시 눌러 주세요)"
+    if unit == SNIPER_UNIT:
+        r = sniper_orders_open()
+        if r:
+            return r
     if unit == "bithumb_bot.service" and 1850 <= k <= 1925:
         return "4번 봇 19:00 정기 매수 시간"
     if unit == "han4384tubot.service" and 925 <= e <= 1605 and now_e.weekday() < 5:
@@ -575,8 +666,11 @@ def offer(st, br, sha, live=None):
     bots = ", ".join(uname(u) for u, fs in units.items() if fs) or "봇 코드 없음(문서만)"
     warn = ("\n<b>배포에서 빠진 파일</b>: " + esc(", ".join(skipped[:5])) + (" 외 " + str(len(skipped) - 5) + "개" if len(skipped) > 5 else "")
             + " (서버에 적용하지 않고 넘김 · 업데이트는 그대로 진행 가능)") if skipped else ""
+    if SCOPED and any(f.startswith(_sniper_prefixes()) for f in skipped):
+        warn += "\n2번 스나이퍼 폴더 파일은 이 업데이트로 적용되지 않아요 (원작 직접 동기화로 따로 관리)"
     try:
-        reverts = revert_check(sha, files)
+        pre = _sniper_prefixes() if SCOPED else ()
+        reverts = revert_check(sha, [f for f in files if not f.startswith(pre)] if pre else files)   # 스나이퍼 파일은 적용 대상이 아니라 되돌림 감지도 안 함
     except Exception as e:
         print("되돌림 감지 실패:", type(e).__name__, e, flush=True); reverts = []
     if reverts:
@@ -661,6 +755,46 @@ def _cell(s):
     return str(s).replace("|", "/").replace("\n", " ").strip()
 
 
+def hold_status_lines():
+    """STATUS 에 쓸 보류 목록 한 줄씩 (보류 경과일 포함)"""
+    out = []
+    try:
+        items = load(HOLDS, {}).get("items", {})
+        now = time.time()
+        for key, e in sorted(items.items(), key=lambda kv: kv[1].get("since", 0)):
+            days = int((now - e.get("since", now)) // 86400)
+            since = datetime.fromtimestamp(e.get("since", now), KST).strftime("%m-%d %H:%M")
+            for u, r in (e.get("units") or {}).items():
+                tail = "사람 확인 필요" if e.get("stuck") or (e.get("kinds") or {}).get(u) == "ahead" else f"자동 재시도 {e.get('tries', 0)}회"
+                out.append(f"- {_cell(uname(u))}: {_cell(r)[:90]} · 브랜치 `{_cell(e.get('branch', '-'))}` ({_cell(e.get('sha', '')[:7])}) · {since} KST부터 {days}일째 · {tail}")
+    except Exception as ex:
+        out.append("- 보류 목록을 읽지 못했습니다: " + type(ex).__name__)
+    return out
+
+
+def sniper_observe_lines():
+    """STATUS 의 2번 스나이퍼 관찰 줄: 서버 스나이퍼 커밋 · 원작 기준 커밋 · 자동 업뎃 상태 (읽기만)"""
+    out = []
+    try:
+        pre = _sniper_prefixes()
+        rc, c = git("log", "-1", "--format=%h %s", "--", *[p.rstrip("/") for p in pre])
+        out.append(f"- 서버 스나이퍼 최신 커밋: {_cell(c)[:100] if rc == 0 and c else '확인 불가'}")
+        sl = load(STATE, {}).get("sniper_up", {}) if SU else {}
+        base = (sl.get("base") or getattr(SU, "BASE_DEFAULT", "")) if SU else ""
+        out.append(f"- 원작 기준 커밋: {base[:7] if base else '확인 불가'}")
+        last = sl.get("auto_last") or {}
+        if last:
+            out.append("- 자동 업뎃: 마지막 " + _cell(last.get("result", "-")) + f" · 원작 {_cell(str(last.get('head', ''))[:7])} · {_cell(last.get('when', ''))}")
+        else:
+            out.append("- 자동 업뎃: 기록 없음")
+        failed = sl.get("auto_failed") or {}
+        if failed:
+            out.append("- 자동 업뎃 중단(사람이 풀 때까지): " + ", ".join(_cell(h[:7]) for h in failed))
+    except Exception as ex:
+        out.append("- 관찰 줄을 만들지 못했습니다: " + type(ex).__name__)
+    return out
+
+
 def build_status(reason):
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
     roots = targets()
@@ -707,6 +841,11 @@ def build_status(reason):
         fs = [x for x in fs.splitlines() if x.strip()]
         pend.append(f"- `{br}`: {', '.join(fs[:6])}{' 외' if len(fs) > 6 else ''}")
     L += pend or ["- 없음"]
+    if SCOPED:   # 사무실 vNEXT: 보류 목록(D) · 2번 스나이퍼 관찰 줄
+        L += ["", "## 보류 중인 봇 업데이트 (매매 중·일시중지 대기는 풀리면 자동 재시도 · 앞섬은 사람 승인 필요)", ""]
+        L += hold_status_lines() or ["- 없음"]
+        L += ["", "## 2번 스나이퍼 (관찰 전용 — 업데이트 비서가 적용하지 않음)", ""]
+        L += sniper_observe_lines()
     L += ["", "## AI·사람 작업 순서 (요약)", "",
           "1. 이 파일과 START.md 를 먼저 읽는다. 위 표가 서버의 실제 상태다 (다른 문서의 '현재 상태'보다 우선).",
           "2. 고칠 파일은 **main 의 최신본**을 받아서 고친다 (기억·예전 대화의 파일로 고치지 않는다).",
@@ -851,6 +990,18 @@ def _only_sync_ahead(main, head):
     return rc == 0 and bool(lines) and all(SYNC_SUBJ_RE.match(x.strip()) for x in lines)
 
 
+def _sniper_only_ahead(main, head):
+    """사무실 vNEXT: 서버 HEAD 가 origin/main 의 빨리감기이고 앞선 커밋이 전부 2번 스나이퍼 폴더만 건드리면 True (서버 앞섬 검사에서 스나이퍼 제외).
+    올릴 내용에 비밀키로 보이는 값이 있으면 False. 스위치가 꺼져 있으면 항상 False(예전 동작)."""
+    if not SCOPED or not main or main == head or git("merge-base", "--is-ancestor", main, head)[0] != 0:
+        return False
+    rc, out = git("rev-list", f"{main}..{head}", "--", ".", *[":(exclude)" + p for p in _sniper_prefixes()])
+    if rc != 0 or out.strip():
+        return False
+    rc, d = git("diff", f"{main}..{head}")
+    return rc == 0 and not SECRET_RE.search("\n".join(l for l in d.splitlines() if l.startswith("+")))
+
+
 def status_skip_watch(st, today, result):
     """STATUS 기록을 건너뛴 이유가 이틀 연속 같으면 하루 1번 긴급 알림 (무인 기간에 STATUS 가 조용히 멈추지 않게)"""
     if not (isinstance(result, str) and result.endswith("건너뜀")):
@@ -899,8 +1050,8 @@ def _status_daily_write(st, force=False):
     _, head = git("rev-parse", "HEAD")
     rc_m, main = git("rev-parse", "origin/main")
     rc_s, stg = git("rev-parse", "origin/staging")
-    if rc_m == 0 and main != head and (rc_s != 0 or stg == main) and _only_sync_ahead(main, head):
-        # 2번 원작 자동 동기화 커밋만 앞서 있음 → 빨리감기로 main·staging 에 올림 (강제 없음 · 실패하면 아래에서 건너뜀으로 끝남)
+    if rc_m == 0 and main != head and (rc_s != 0 or stg == main) and (_only_sync_ahead(main, head) or _sniper_only_ahead(main, head)):
+        # 2번 원작 자동 동기화 커밋만(또는 2번 스나이퍼 폴더만 바꾼 커밋만) 앞서 있음 → 빨리감기로 main·staging 에 올림 (강제 없음 · 실패하면 아래에서 건너뜀으로 끝남)
         rc_p, out_p = git("push", "-q", "origin", "HEAD:main", "HEAD:staging")
         if rc_p == 0:
             git("fetch", "-q", "origin")
@@ -1109,15 +1260,245 @@ def restart_service(unit, active=None):
     return active
 
 
+# ---------------------------------------------------------------- 사무실 vNEXT: 봇별 보류(D) · 병합에서 파일 빼기 · 보류 재시도
+def git_env(extra, *a, timeout=120):
+    """git() 과 같되 환경변수를 더 줌 (임시 인덱스 파일 등)"""
+    cmd = ["env", f"HOME={OWNER.pw_dir}", "GIT_TERMINAL_PROMPT=0", *[f"{k}={v}" for k, v in extra.items()],
+           "git", "-c", "core.quotepath=false", "-C", REPO, *a]
+    if os.geteuid() == 0 and OWNER.pw_uid != 0:
+        cmd = ["runuser", "-u", OWNER.pw_name, "--"] + cmd
+    return sh(*cmd, timeout=timeout)
+
+
+def _unit_dir_files(unit, files):
+    """바뀐 파일 중 이 봇 폴더 바로 아래 파일 (classify 가 봇 파일로 보는 것과 같은 기준 · .md 포함)"""
+    root = targets().get(unit, "")
+    return [f for f in files if root and os.path.dirname(os.path.realpath(os.path.join(REPO, f))) == root]
+
+
+def _blob(ref, f):
+    rc, b = git("rev-parse", "-q", "--verify", f"{ref}:{f}")
+    return b if rc == 0 else ""
+
+
+def _ahead_reason(unit, sha, unit_files):
+    """B: 서버에만 있는 커밋(origin/main 에도, 이 브랜치에도 없음)이 이번에 바뀌는 이 봇 파일을 이미 고쳐 놓았으면 사유 문장.
+    그 파일을 브랜치 것으로 덮으면 서버 로컬 수정이 사라지므로 이 봇만 보류한다. 스위치 꺼짐·스나이퍼는 ''."""
+    if not SCOPED or unit == SNIPER_UNIT or not unit_files:
+        return ""
+    root = targets().get(unit, "")
+    if not root or git("rev-parse", "-q", "--verify", "origin/main")[0]:
+        return ""
+    rel = os.path.relpath(root, os.path.realpath(REPO))
+    rc, out = git("log", "--format=", "--name-only", "HEAD", "^origin/main", "^" + sha, "--", rel)
+    if rc:
+        return ""
+    both = sorted({x.strip() for x in out.splitlines() if x.strip()} & set(unit_files))
+    if both:
+        return "서버에만 있는 수정과 겹침 — 앞섬, 사람 승인 필요 (" + ", ".join(os.path.basename(x) for x in both[:4]) + ")"
+    return ""
+
+
+def _unit_hold_reason(unit, sha, unit_files, verified=None):
+    """봇 하나를 지금 적용하면 안 되는 이유 → (종류, 문장). 종류: 'ahead' 사람 승인 필요 · 'busy' 풀리면 자동 재시도 · '' 적용 가능.
+    verified: 일시중지(DC) 확인이 끝난 봇이면 True/False 로 넘김(apply 안). None 이면 여기서 확인."""
+    r = _ahead_reason(unit, sha, unit_files)
+    if r:
+        return "ahead", r
+    if verified is None:
+        verified = False
+        root = targets().get(unit)
+        if unit in DC.UNITS.values() and root and DC.state_path(root).exists():
+            try:
+                state = DC.read(DC.state_path(root))
+            except Exception:
+                return "busy", "중지 상태 파일을 확인할 수 없음"
+            if state.get("phase") in ("waiting", "paused"):
+                if not DC.ready(sys.modules[__name__], unit):
+                    return "busy", uname(unit) + " 보유/미체결 또는 실행 차단 확인 대기 중"
+                verified = True
+    r = busy_reason(unit, verified)
+    if not r and unit == OFFICE_KEY and {os.path.basename(f) for f in unit_files} & set(OFFICE_EXTRA[FANDING_UNIT]):
+        r = busy_reason(FANDING_UNIT)
+        r = ("4번 팬딩: " + r) if r else ""
+    return ("busy", r) if r else ("", "")
+
+
+def _restore_paths(old_head, files):
+    """files 를 old_head 때 모습으로 되돌림 (그때 있던 파일은 복원, 병합이 새로 만든 파일은 삭제)"""
+    keep, drop = [], []
+    for f in files:
+        (keep if git("cat-file", "-e", f"{old_head}:{f}")[0] == 0 else drop).append(f)
+    if keep:
+        git("checkout", old_head, "--", *keep)
+    if drop:
+        git("rm", "-f", "-q", "--ignore-unmatch", "--", *drop)
+
+
+def _merge_excluding(br, sha, old_head, excluded):
+    """병합하되 excluded 파일(스나이퍼 파일·보류한 봇 파일)은 병합 전 모습 그대로 둔다 — 가져오기·덮어쓰기·삭제 전부 안 함.
+    충돌이 excluded 파일에서만 나면 그 파일은 서버 것으로 정리하고 계속, 다른 파일 충돌이면 병합을 취소. → (성공 여부, git 출력)"""
+    ex = set(excluded)
+    rc, out = git("merge", "--no-ff", "--no-commit", sha)
+    merging = git("rev-parse", "-q", "--verify", "MERGE_HEAD")[0] == 0
+    if rc:
+        if not merging:
+            return False, out   # 시작도 못 함 (서버 저장 안 된 변경과 겹침 등)
+        bad = [f for f in git("diff", "--name-only", "--diff-filter=U")[1].splitlines() if f.strip() and f not in ex]
+        if bad:
+            git("merge", "--abort")
+            return False, out
+    if merging:
+        _restore_paths(old_head, sorted(ex))
+        if git("diff", "--name-only", "--diff-filter=U")[1].strip():
+            git("merge", "--abort")
+            return False, out
+        rc2, out2 = git("commit", "-q", "-m", f"update: {br}")
+        if rc2:
+            git("merge", "--abort")
+            return False, out2
+    return True, out
+
+
+def _record_holds(br, sha, old_head, held, kinds, files):
+    """보류한 봇을 보류 목록에 적음 (같은 커밋이면 갱신). 재시도 때 서버가 그 파일을 그사이 안 바꿨는지 보려고 보류 시점 파일 해시도 적어 둠"""
+    data = load(HOLDS, {})
+    items = data.setdefault("items", {})
+    key = sha[:12]
+    unit_files, blobs = {}, {}
+    for u in held:
+        fs = _unit_dir_files(u, files)
+        unit_files[u] = fs
+        for f in fs:
+            blobs[f] = _blob(old_head, f)
+    _, subj = git("log", "-1", "--format=%s", sha)
+    e = items.get(key) or {"since": time.time(), "tries": 0}
+    e.update({"branch": br, "sha": sha, "subject": subj, "units": dict(held), "kinds": dict(kinds), "files": unit_files, "blobs": blobs,
+              "stuck": all(k == "ahead" for k in kinds.values())})
+    items[key] = e
+    save(HOLDS, data)
+
+
+def _hold_commit(sha, files, subject):
+    """지금 HEAD 위에, files 만 sha(원래 브랜치) 모습으로 바꾼 커밋을 만들어 sha 반환 (HEAD·작업 폴더는 안 건드림). 실패하면 None"""
+    fd, idx = tempfile.mkstemp(prefix="updater_idx_")
+    os.close(fd)
+    os.unlink(idx)
+    env = {"GIT_INDEX_FILE": idx}
+    try:
+        if git_env(env, "read-tree", "HEAD")[0]:
+            return None
+        for f in files:
+            rc, ls = git("ls-tree", sha, "--", f)
+            if rc:
+                return None
+            if ls.strip():
+                meta, _, _path = ls.partition("\t")
+                mode, _typ, h = meta.split()
+                if git_env(env, "update-index", "--add", "--cacheinfo", f"{mode},{h},{f}")[0]:
+                    return None
+            else:
+                git_env(env, "update-index", "--force-remove", "--", f)
+        rc, tree = git_env(env, "write-tree")
+        if rc:
+            return None
+        rc, commit = git_env(env, "commit-tree", tree, "-p", "HEAD", "-m", subject)
+        return commit if rc == 0 and re.fullmatch(r"[0-9a-f]{40,64}", commit or "") else None
+    finally:
+        try:
+            os.unlink(idx)
+        except OSError:
+            pass
+
+
+def retry_holds(st):
+    """보류 목록 재시도 (확인 주기마다 호출). 매매 중·일시중지 대기가 풀린 봇만 다시 적용하고, 아직이면 조용히 기다린다.
+    앞섬 보류는 자동으로 적용하지 않는다 (서버 로컬 수정을 덮어쓸 수 있음) — 사람이 서버와 브랜치를 맞추면(파일이 같아지면) 목록에서 빠진다.
+    보류 시점 이후 서버가 그 파일을 바꿨거나 연속 HOLD_RETRY_MAX 번 실패하면 멈추고 사람 확인으로 알린다."""
+    if not SCOPED:
+        return
+    data = load(HOLDS, {})
+    items = data.get("items", {})
+    if not items:
+        return
+    dirty_flag = False
+    for key, e in list(items.items()):
+        sha, ufiles = e.get("sha", ""), e.get("files") or {}
+        for u in list(e.get("units", {})):   # 사람이 이미 서버를 브랜치와 같게 맞춘 봇은 목록에서 뺌
+            fs = ufiles.get(u, [])
+            if fs and all(_blob("HEAD", f) == _blob(sha, f) for f in fs):
+                e["units"].pop(u, None); e.get("kinds", {}).pop(u, None); dirty_flag = True
+        if not e.get("units"):
+            items.pop(key, None); dirty_flag = True
+            continue
+        ready = []
+        for u in list(e["units"]):
+            if e.get("kinds", {}).get(u) == "ahead":
+                continue
+            kind, why = _unit_hold_reason(u, sha, ufiles.get(u, []))
+            if kind == "ahead":   # 보류 뒤 서버에 겹치는 수정이 생김 → 사람 승인으로
+                e.setdefault("kinds", {})[u] = "ahead"; e["units"][u] = why; e["stuck"] = True; dirty_flag = True
+            elif kind == "busy":
+                if e["units"].get(u) != why:
+                    e["units"][u] = why; dirty_flag = True
+            else:
+                ready.append(u)
+        if e.get("stuck") or not ready:
+            continue
+        files = [f for u in ready for f in ufiles.get(u, [])]
+        moved = [f for f in files if _blob("HEAD", f) != e.get("blobs", {}).get(f, "")]
+        if moved:   # 보류 뒤 서버에서 그 파일이 바뀜 → 자동으로 덮어쓰지 않음
+            e["stuck"] = True; dirty_flag = True
+            say("<b>[업데이트 비서] 보류한 업데이트를 자동으로 적용하지 않았습니다</b>\n· 대상: " + esc(", ".join(uname(u) for u in ready))
+                + "\n· 보류한 뒤 서버에서 같은 파일이 바뀌었어요: " + esc(", ".join(os.path.basename(f) for f in moved[:4]))
+                + "\n→ 사람이 서버와 브랜치 <code>" + esc(e.get("branch", "-")) + "</code> 를 확인해 주세요.")
+            continue
+        if _dirty_code_files(include_staged=True, scope=(ready, files)):
+            continue   # 서버에 저장 안 된 변경이 있으면 풀릴 때까지 조용히 기다림
+        commit = _hold_commit(sha, files, (e.get("subject") or e.get("branch", "update")) + " (보류 반영)")
+        e["tries"] = e.get("tries", 0) + 1; dirty_flag = True
+        applied = False
+        if commit:
+            hk = "hold" + key[:8]
+            st.setdefault("offers", {})[hk] = {"branch": "hold/" + key, "sha": commit, "at": time.time(), "local": True}
+            say("보류했던 업데이트를 다시 적용합니다… (" + esc(", ".join(uname(u) for u in ready)) + ")")
+            try:
+                apply(st, hk)
+            finally:
+                st["offers"].pop(hk, None)
+            applied = git("merge-base", "--is-ancestor", commit, "HEAD")[0] == 0
+        if applied:
+            for u in ready:
+                e["units"].pop(u, None); e.get("kinds", {}).pop(u, None)
+            e["tries"] = 0
+            if not e["units"]:
+                items.pop(key, None)
+                br = e.get("branch", "")
+                if br and br != "staging" and not br.startswith("hold/") and _blob_ref_sha(br) == sha:
+                    git("push", "-q", "origin", "--delete", br)   # 보류가 다 풀려 끝났으니 옛 브랜치 정리 (그사이 바뀌었으면 안 지움)
+        elif e["tries"] >= HOLD_RETRY_MAX:
+            e["stuck"] = True
+            say("<b>[업데이트 비서] 보류한 업데이트를 " + str(HOLD_RETRY_MAX) + "번 다시 적용했지만 실패했습니다</b>\n· 대상: "
+                + esc(", ".join(uname(u) for u in ready)) + "\n→ 자동 재시도를 멈췄습니다. 사람이 확인해 주세요.")
+    if dirty_flag:
+        save(HOLDS, data)
+
+
+def _blob_ref_sha(br):
+    rc, s = git("rev-parse", "-q", "--verify", f"origin/{br}")
+    return s if rc == 0 else ""
+
+
 def apply(st, key):
     o = st.get("offers", {}).get(key)
     if not o:
         return say("이 업데이트 정보를 찾지 못했습니다. GitHub에 다시 올리면 새로 알려 드려요.")
     br, sha = o["branch"], o["sha"]
-    git("fetch", "-q", "origin")
-    rc, now_sha = git("rev-parse", f"origin/{br}")
-    if rc or now_sha != sha:
-        return say("그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림의 버튼을 눌러 주세요.")
+    if not o.get("local"):   # local: 보류 재시도용 서버 안 커밋 (GitHub 브랜치가 아님)
+        git("fetch", "-q", "origin")
+        rc, now_sha = git("rev-parse", f"origin/{br}")
+        if rc or now_sha != sha:
+            return say("그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림의 버튼을 눌러 주세요.")
     _, files = git("diff", "--name-only", f"HEAD...{sha}")
     files = [f for f in files.splitlines() if f.strip()]
     units, skipped = classify(files)
@@ -1128,6 +1509,7 @@ def apply(st, key):
     if SECRET_RE.search("\n".join(l for l in added.splitlines() if l.startswith("+"))):
         return say("바뀐 내용에 비밀키로 보이는 값이 있어 적용하지 않았습니다. GitHub에서 그 내용을 지우고 키는 새로 발급해 주세요.")
     pause_verified = set()
+    held, held_kind, dc_rows = {}, {}, []   # 사무실 vNEXT(D): 이번에 적용하지 않고 보류할 봇 → 사유 · 종류('busy' 자동 재시도 / 'ahead' 사람 승인) · 재개 버튼
     for unit in units:
         root = targets().get(unit)
         if unit in DC.UNITS.values() and DC.state_path(root).exists():
@@ -1147,37 +1529,86 @@ def apply(st, key):
                 return say('일시중지 상태 값이 잘못돼 적용하지 않았습니다.')
             if state.get('phase') in ('waiting','paused'):
                 if not DC.ready(sys.modules[__name__],unit):
+                    if SCOPED:   # D: 이 봇만 보류, 나머지는 계속
+                        held[unit], held_kind[unit] = NAMES.get(unit, unit) + " 보유/미체결 또는 실행 차단 확인 대기 중", "busy"
+                        dc_rows.extend(DC.resume_rows(unit))
+                        continue
                     return say("" + NAMES[unit] + " 보유/미체결 또는 실행 차단 확인 대기 중입니다. 적용하지 않았습니다.", DC.resume_rows(unit))
                 pause_verified.add(unit)
-    busy = [f"{uname(u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
-    if {os.path.basename(f) for f in units.get(OFFICE_KEY, [])} & set(OFFICE_EXTRA[FANDING_UNIT]) and (r := busy_reason(FANDING_UNIT)):
-        busy.append("4번 팬딩: " + r)
-    if busy:
-        return say("<b>지금은 적용하지 않았습니다</b>\n· " + "\n· ".join(esc(b) for b in busy) + "\n· 나중에 같은 알림의 업데이트 버튼을 다시 눌러 주세요.",
-                   [[{"text": "다시 시도", "callback_data": f"up:{key}"}]] +
-                   [[{"text": "" + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
-    if _dirty_code_files(include_staged=True):
-        return say("서버에 저장 안 된 변경이 있어 멈췄습니다.")
+    all_files = list(files)   # 보류·스나이퍼 때문에 병합에서 뺄 파일을 정하기 전의 전체 목록
+    if SCOPED:
+        # D(봇별 보류) + B(서버 앞섬): 지금 적용하면 안 되는 봇만 보류하고 나머지는 진행한다
+        for u in units:
+            if u in held:
+                continue
+            kind, why = _unit_hold_reason(u, sha, _unit_dir_files(u, all_files), verified=(u in pause_verified))
+            if kind:
+                held[u], held_kind[u] = why, kind
+        if held and set(held) >= set(units):   # 전부 보류면 아무것도 적용하지 않음 (예전 안내와 같은 모양) — 보류 목록에는 기록함 (v2: 쌓인 보류가 잊히지 않게)
+            if not o.get("local"):   # 보류 재시도(retry_holds)가 부른 apply 는 이미 목록에 있는 항목이므로 새로 적지 않음
+                try:
+                    _record_holds(br, sha, git("rev-parse", "HEAD")[1], held, held_kind, all_files)
+                except Exception as e:
+                    print("보류 목록 기록 실패:", type(e).__name__, e, flush=True)
+            return say("<b>지금은 적용하지 않았습니다</b>\n· " + "\n· ".join(esc(uname(u) + ": " + r) for u, r in held.items())
+                       + ("\n· 앞섬은 사람 승인이 필요합니다 (서버 수정을 브랜치에 합쳐 다시 올려 주세요)." if "ahead" in held_kind.values() else "\n· 나중에 같은 알림의 업데이트 버튼을 다시 눌러 주세요."),
+                       [[{"text": "다시 시도", "callback_data": f"up:{key}"}]] + dc_rows +
+                       [[{"text": "" + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
+    else:
+        busy = [f"{uname(u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
+        if {os.path.basename(f) for f in units.get(OFFICE_KEY, [])} & set(OFFICE_EXTRA[FANDING_UNIT]) and (r := busy_reason(FANDING_UNIT)):
+            busy.append("4번 팬딩: " + r)
+        if busy:
+            return say("<b>지금은 적용하지 않았습니다</b>\n· " + "\n· ".join(esc(b) for b in busy) + "\n· 나중에 같은 알림의 업데이트 버튼을 다시 눌러 주세요.",
+                       [[{"text": "다시 시도", "callback_data": f"up:{key}"}]] +
+                       [[{"text": "" + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
+    # A: 저장 안 된 변경 검사 — 이번에 적용할 봇 폴더 + 공용 파일 + 이번에 바뀌는 파일에 겹치는 것만 (스나이퍼 폴더는 제외). 스위치를 끄면 저장소 전체
+    dirty = _dirty_code_files(include_staged=True, scope=([u for u in units if u not in held], all_files) if SCOPED else None)
+    if dirty:
+        return say("서버에 저장 안 된 변경이 있어 멈췄습니다." + ("\n· " + esc(", ".join(dirty[:6]) + (" 외" if len(dirty) > 6 else "")) if SCOPED else ""))
     rc_m, main_sha = git("rev-parse", "origin/main")
-    if rc_m == 0 and git("merge-base", "--is-ancestor", main_sha, "HEAD")[0] and git("merge-base", "--is-ancestor", main_sha, sha)[0]:
+    if SCOPED and rc_m == 0:   # 서버 앞섬 검사에서 스나이퍼 폴더만 바꾼 main 수정은 제외 (main 에만 있고 서버·이 브랜치에 없는 수정이 있는지)
+        main_only = git("rev-list", main_sha, "^HEAD", "^" + sha, "--", ".", *[":(exclude)" + p for p in _sniper_prefixes()])[1].strip()
+        main_blocked = bool(main_only)
+    else:
+        main_blocked = rc_m == 0 and git("merge-base", "--is-ancestor", main_sha, "HEAD")[0] and git("merge-base", "--is-ancestor", main_sha, sha)[0]
+    if main_blocked:
         return say("GitHub main 에 서버를 거치지 않은 수정이 있고, 이 브랜치는 그 수정을 포함하지 않아 적용하지 않았습니다.\n"
                    "· 그대로 적용하면 main 업로드가 실패하고 서버·main 이 더 어긋납니다.\n"
                    "→ main 기준 새 브랜치로 먼저 승인하거나, 이 브랜치를 최신 main 기준으로 다시 올려 주세요.")
     _, old_head = git("rev-parse", "HEAD")
-    say(f"업데이트 적용 중… ({esc(', '.join(uname(u) for u in units) or '문서')})")
-    rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
+    units = {u: fs for u, fs in units.items() if u not in held}   # 보류한 봇은 이번에 적용하지 않음 (재시작·버전 기록도 안 함)
+    held_note = ""
+    if held:
+        held_note = "\n· 보류: " + "; ".join(uname(u) + " — " + r for u, r in held.items())
+    say(f"업데이트 적용 중… ({esc(', '.join(uname(u) for u in units) or '문서')})" + esc(held_note))
+    # 병합에서 뺄 파일: 2번 스나이퍼 폴더(가져오기·덮어쓰기·삭제 안 함) + 보류한 봇 폴더 파일
+    excluded = []
+    if SCOPED:
+        sniper_pre = _sniper_prefixes()
+        excluded = sorted({f for f in all_files if f.startswith(sniper_pre)} | {f for u in held for f in _unit_dir_files(u, all_files)})
+    if excluded:
+        ok_merge, out = _merge_excluding(br, sha, old_head, excluded)
+        rc = 0 if ok_merge else 1
+    else:
+        rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
+        if rc:
+            git("merge", "--abort")
     if rc:
-        git("merge", "--abort")
         try:   # v1.8.1: 옛(리베이스 전) 브랜치면 충돌 정리가 아니라 지우기를 안내 (안내만 · 병합 중단은 위와 같음)
             sup = superseded(sha, live_branches())
         except Exception:
             sup = None
         rows = ([_drop_row(key)] if sup else []) + ([[{"text": "이전 변경·충돌 정리", "callback_data": "cp:" + key}]] if UC else [])
         return say("서버 코드와 업데이트 브랜치가 충돌해 적용하지 않았습니다. 이미 처리한 이전 변경만 선택해 정리한 뒤 새 알림으로 승인하세요."
+                   + ("\n\n· 서버에 저장 안 된 변경과 겹쳐 병합을 시작하지 못했습니다 — 겹치는 파일을 브랜치에서 빼거나 서버 변경을 정리해 주세요." if SCOPED and "overwritten" in (out or "") else "")
                    + ("\n\n" + _superseded_text(sup) if sup else ""), rows or None)
+    # 되돌릴 때 --hard 는 서버에 저장 안 된 변경(예: 스나이퍼 임시 수정)까지 지우므로, 스위치가 켜져 있으면 --keep (그 변경은 그대로 두고 병합 결과만 되돌림)
+    reset_mode = "--keep" if SCOPED else "--hard"
+    foreign_staged = set(git("diff", "--cached", "--name-only")[1].split()) if SCOPED else set()   # 병합 직후 이미 스테이징돼 있던 남의 변경 (이번 버전 기록 커밋에 섞지 않음)
     bad_py = [f for fs in units.values() for f in fs if f.endswith(".py") and os.path.exists(os.path.join(REPO, f)) and sh(sys.executable, "-m", "py_compile", os.path.join(REPO, f))[0]]
     if bad_py:
-        git("reset", "-q", "--hard", old_head)
+        git("reset", "-q", reset_mode, old_head)
         return say("문법 오류가 있어 원래대로 되돌렸습니다: " + esc(", ".join(bad_py)))
     vers = bump_versions([u for u in units if u != OFFICE_KEY], old_head)
     office_files = units.get(OFFICE_KEY, [])
@@ -1197,7 +1628,7 @@ def apply(st, key):
         if not healthy(u):
             failed.append(u)
     if failed:
-        git("reset", "-q", "--hard", old_head)
+        git("reset", "-q", reset_mode, old_head)
         office_restore(saved)
         for u in restart:
             restart_service(u, was_active[u])
@@ -1234,19 +1665,35 @@ def apply(st, key):
             git("add", "-f", "--", NEED_FILE)
     except Exception as e:
         print("STATUS.md 작성 실패:", type(e).__name__, e, flush=True)
-    if git("diff", "--cached", "--name-only")[1].strip():
-        git("commit", "-qm", ("버전 기록: " + ", ".join(tags)) if tags else "상태 기록: STATUS.md")
+    staged_now = git("diff", "--cached", "--name-only")[1].split()
+    if staged_now:
+        msg_c = ("버전 기록: " + ", ".join(tags)) if tags else "상태 기록: STATUS.md"
+        mine = [n for n in staged_now if n not in foreign_staged]
+        if foreign_staged and mine:
+            git("commit", "-qm", msg_c, "--", *mine)   # 남이 스테이징해 둔 변경(예: 스나이퍼 임시 수정)은 이 기록에 안 섞음
+        elif not foreign_staged:
+            git("commit", "-qm", msg_c)
     for t in tags:
         git("tag", t)
     rc, out = git("push", "-q", "origin", "HEAD:main", *tags)
-    if rc == 0 and br != "staging":
+    if rc == 0 and br != "staging" and not o.get("local") and not held:   # 보류한 봇이 남아 있으면 브랜치를 지우지 않음 (보류가 다 풀리면 정리)
         git("push", "-q", "origin", "--delete", br)
     git("push", "-q", "-f", "origin", "HEAD:staging")   # 다음 수정은 항상 최신 main 기준 staging 에서
     st.setdefault("seen", {}).pop(br, None)
+    if held:   # D: 적용하지 않은 봇을 보류 목록에 적음 (staging 을 main 으로 맞춰도 내용은 서버에 남음)
+        try:
+            _record_holds(br, sha, old_head, held, held_kind, all_files)
+        except Exception as e:
+            print("보류 목록 기록 실패:", type(e).__name__, e, flush=True)
     done = ", ".join(uname(u) + " " + t.rsplit("-", 1)[-1] for u, t in zip(units, tags)) or "문서만 반영"
+    held_msg = ""
+    if held:
+        held_msg = ("\n· <b>보류</b>: " + esc("; ".join(uname(u) + " — " + r for u, r in held.items()))
+                    + "\n· 매매 중·일시중지 대기는 풀리면 자동으로 다시 적용하고, 앞섬은 사람 승인이 필요합니다 (보류 목록은 STATUS.md)")
     say(f"<b>업데이트 완료</b>\n· {esc(done)}\n"
         + (f"· 사무실 파일 읽기 권한 고침: {esc(', '.join(perm_fixed))}\n" if perm_fixed else "")
         + f"· 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
+        + held_msg
         + ("\n· 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
     for unit in units:
         root = targets().get(unit)
@@ -1366,8 +1813,8 @@ def handle(st, upd):
             show_diff(st, key)
         elif act == "ig":
             st.get("offers", {}).pop(key, None); say("이 업데이트는 무시했습니다. (봇 그대로)")
-        elif act in ("um", "ud", "ui") and SU:   # 2번 스나이퍼 원작 새 버전 (합치기 / 보기 / 무시)
-            {"um": SU.merge, "ud": SU.show, "ui": SU.ignore}[act](sys.modules[__name__], st, key)
+        elif act in ("um", "ud", "ui", "ub", "ur") and SU:   # 2번 스나이퍼 원작 새 버전 (합치기 / 보기 / 무시 / 자동 업뎃 되돌리기 / 자동 업뎃 다시 켜기)
+            {"um": SU.merge, "ud": SU.show, "ui": SU.ignore, "ub": SU.rollback, "ur": SU.release}[act](sys.modules[__name__], st, key)
     elif msg and str(msg.get("chat", {}).get("id")) == str(CFG.get("chat_id")):
         txt = _plain(msg.get("text") or "")
         txt = MENU_ALIAS.get(txt, txt)   # 하단 버튼 글자 → 같은 명령
@@ -1399,6 +1846,8 @@ def handle(st, upd):
         elif txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
             say("원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
+        elif txt in ("원작 자동 재개", "/upstream_resume") and SU:   # 사무실 vNEXT: 자동 업뎃 실패로 멈춘 원작 커밋을 사람이 풀어 줌
+            SU.release(sys.modules[__name__], st, "all")
         elif txt in ("거래 상태", "일시중지 상태", "/pause_status"):
             found = False
             for unit, root in targets().items():
@@ -1569,6 +2018,10 @@ def main():
                 scan(st)
             except Exception as e:
                 print("확인 오류:", e, flush=True)
+            try:   # 사무실 vNEXT(D): 보류한 봇 재시도 — 사유가 풀린 것만 (아직이면 조용히 기다림)
+                retry_holds(st)
+            except Exception as e:
+                print("보류 재시도 오류:", type(e).__name__, e, flush=True)
             try:
                 r = status_daily(st)
                 if r:
