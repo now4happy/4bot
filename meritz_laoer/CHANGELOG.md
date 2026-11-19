@@ -1,5 +1,10 @@
 # 7번 메리츠 속쓸 적립봇 변경 기록
 
+## v1.1.5 · 2026-11-19 21:37 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.3: 층 칸 색상 + 다음 회차 가격별 배정
+- 브랜치: staging
+
 ## v1.1.4 · 2026-11-19 21:23 (KST)
 - 파일: main.py, tg_menu.py, tower_strategy.py
 - 내용: meritz_laoer v2.2.2: tower layer visualization (pan 14) - tower_lines in status board, view_lines in tower_strategy, filled layers only
