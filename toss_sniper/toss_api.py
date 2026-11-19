@@ -54,7 +54,6 @@ except Exception:
 
 from toss_api_core import (
     ALLOWED_SYMBOLS,
-    AssassinLedger,
     BARBELL_ALLOWED_SYMBOLS,
     BARBELL_CASH_WEIGHT,
     BARBELL_SAFE_SYMBOL,
@@ -104,7 +103,6 @@ from toss_api_core import (
     SUB_UNLOCK_DROP_FROM_L1_PCT,
     SUB_UNLOCK_FROZEN_DAYS_10,
     SoxlStratumLedger,
-    StratumLedger,
     TARGET_SYMBOL,
     TOSS_OPENAPI_BASE_URL,
     VALID_PORTION_MODES,
