@@ -44,6 +44,7 @@ SAFE_DEFAULTS = {
     # ---- 적립봇 (노션 '메리츠 속쓸 적립봇' 2026-11-18)
     "total_krw": None,                     # 총 투자금(원). 금액은 기본값 없음 — 설정 필수
     "ladder_top_usd": 50,                  # 매수 시작가
+    "tower_floor1_start_usd": 0,           # 탑쌓기 1층 시작가 (v2.2.4). 0 = 안 정함 — 평단 기준. 정하면 1층 칸이 시작가 기준
     "ladder_step_usd": 5,                  # 내려갈 때마다 1회차 ($50~$5 10회)
     "sell_profit_pct": 10,                 # 평단 대비 평가 이익 이 % 에 매도
     "sell_fraction_pct": 50,               # 보유의 이 % 매도 (정수 주 내림)
@@ -200,6 +201,8 @@ def validate_settings(s, fx=None):
         bad.append("split_count 없음 또는 정수 아님 (적립봇은 10)")
     if s.get("total_krw") is None or _f(s.get("total_krw")) <= 0:
         bad.append("total_krw 없음 (총 투자금, 원)")
+    if _f(s.get("tower_floor1_start_usd")) < 0:
+        bad.append("tower_floor1_start_usd 는 0 이상 (0 = 안 정함)")
     for k in ("ladder_top_usd", "ladder_step_usd", "rebuy_drop_usd", "sell_profit_pct"):
         if _f(s.get(k)) <= 0:
             bad.append(f"{k} 0 이하 또는 없음")

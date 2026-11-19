@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.3)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.4)
+# v2.2.4 (2026-11-19, 1층 시작가 메뉴): 설정 메뉴에 "1층 시작가 변경" 추가 (기본값 0 = 안 정함, 평단 기준)
 # v2.2.3 (2026-11-19, 판 14 색상 고침): 버전 표기만 올림 (층 색상은 tower_strategy.py)
 # v2.2.2 (2026-11-19, 판 14): 현상태(상황판)에 탑쌓기 층 시각화 추가 — tower_lines (채워진 층 칸 + N/10층 + 층별 상세 줄). 층 상태 파일(tower_state.json)을 읽기만 함. 전략이 사다리면 안 보임. 기존 상황판 줄은 그대로
 # v2.2.0 (2026-11-19, 판 13): 상황판·자금 현황에 현재 전략(사다리/탑쌓기) 표시 추가 — 탑쌓기면 상황판에 '채운 회차' 대신 층 수. 전략 이름은 한글로만 보임 (영어 변수 이름 금지 규칙). 메뉴 토글 버튼은 이번 판에 안 만듦. 매매 동작 변경 없음
@@ -69,6 +70,7 @@ SET_ITEMS = {
     "목표 이익률 변경": dict(key="sell_profit_pct", name="목표 이익률", unit="%", kind="num", lo=0, lo_incl=False, hi=500, ex="예: 10 (평단보다 10% 오르면 매도)"),
     "매도 비중 변경": dict(key="sell_fraction_pct", name="매도 비중", unit="%", kind="num", lo=0, lo_incl=False, hi=100, hi_incl=False, ex="예: 50 (보유의 절반을 매도)"),
     "사다리 시작가 변경": dict(key="ladder_top_usd", name="사다리 시작가", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 50"),
+    "1층 시작가 변경": dict(key="tower_floor1_start_usd", name="1층 시작가", unit="$", kind="num", lo=0, lo_incl=True, ex="예: 50 (0이면 안 정함 — 평단 기준)"),
     "사다리 간격 변경": dict(key="ladder_step_usd", name="사다리 간격", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 5"),
     "재매수 하락폭 변경": dict(key="rebuy_drop_usd", name="재매수 하락폭", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 5"),
     "하루 최대 회차 변경": dict(key="max_rounds_per_day", name="하루 최대 회차", unit="회", kind="int", lo=1, hi=100, ex="예: 1"),
@@ -83,6 +85,7 @@ MEANS = {
     "sell_profit_pct": ("이익률이 이 %에 닿으면 파는 기준이에요.", "다음 판단부터 파는 시점이 달라져요"),
     "sell_fraction_pct": ("목표 이익률에 닿았을 때 가진 수량 중 파는 비중(분할매도)이에요.", "다음 매도부터 파는 양이 달라져요"),
     "ladder_top_usd": ("사다리(가격대별 매수 칸)의 맨 위 매수 가격이에요.", "사다리 칸 가격이 모두 달라져요"),
+    "tower_floor1_start_usd": ("탑쌓기 1층의 칸 기준 가격이에요. 0이면 안 정한 거라 평단 기준으로 칸을 정해요.", "1층 칸 가격이 달라져요 (2층 이상은 평단 기준 그대로)"),
     "ladder_step_usd": ("사다리 칸과 칸 사이 가격 간격이에요.", "사다리 칸 가격이 달라져요"),
     "rebuy_drop_usd": ("판 뒤 다시 사려면 가격이 이만큼 내려와야 해요.", "다시 사는 시점이 달라져요"),
     "max_rounds_per_day": ("하루에 최대 몇 회차까지 살지 정해요.", "하루에 사는 횟수 상한이 달라져요"),
@@ -379,6 +382,7 @@ class MenuBot:
                 f"· 시드 {v('total_krw')} · 회차 {v('split_count')}",
                 f"· 목표 이익률 {v('sell_profit_pct')} · 매도 비중 {v('sell_fraction_pct')}",
                 f"· 사다리 시작가 {v('ladder_top_usd')} · 간격 {v('ladder_step_usd')} · 재매수 하락폭 {v('rebuy_drop_usd')}",
+                f"· 1층 시작가 {v('tower_floor1_start_usd') if s.get('tower_floor1_start_usd') else '안 정함 (평단 기준)'}",
                 f"· 하루 최대 회차 {v('max_rounds_per_day')} · 당일 매도 확인 {self.intraday_text(s)}",
                 f"· 자동환전 {fx}"]
 

@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.3)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.4)
+# v2.2.4 (2026-11-19, 1층 시작가 메뉴): _topup_setup·apply_fill·apply_fill_to_state·normalize·reconcile 에 start_usd 전달 — 1층 시작가가 정해졌으면 1층 칸이 시작가 기준
 # v2.2.3 (2026-11-19, 판 14 색상 고침): 층 칸을 층별 색상 네모로 바꿈 (1층 🟩 시작). 흰색 █ 한 가지라 층 구분이 안 된다는 사용자 지적. 완성/쌓는 중 구분은 상세 줄 글자로만.
 # v2.2.2 (2026-11-19, 판 14): 표시용 view_lines · floor_status 추가 (층 상태를 글자 줄로 바꾸는 순수 계산 — 상태·주문 계산은 안 건드림). 텔레그램 현상태(상황판)에서 tg_menu.py 가 부름
 # v2.2.0 (2026-11-19, 판 13): 새 파일 — 탑쌓기(동적 층 시스템) 계산부. 순수 계산 (파일·네트워크·시계 없음). accum_strategy.py(사다리)는 안 건드림 (롤백용)
@@ -97,16 +98,18 @@ def top_down(st):
     return sorted(st.get("floors") or [], key=lambda f: int(_f(f.get("id"))))
 
 
-def _topup_setup(f, gap):
-    """매도·합병 뒤: 부족분(층 금액 − 남은 투자금)을 그 층 평단 −1 ~ −간격 달러 칸에 나눠 사도록 준비. 부족분이 tol 이하면 완성"""
+def _topup_setup(f, gap, start_usd=0.0):
+    """매도·합병 뒤: 부족분(층 금액 − 남은 투자금)을 그 층 평단 −1 ~ −간격 달러 칸에 나눠 사도록 준비. 부족분이 tol 이하면 완성.
+    v2.2.4: 1층 시작가가 정해졌으면(start_usd > 0) 1층은 평단 대신 시작가를 기준으로 칸을 정함 (보유 주식이 있어도 1층 가격 배정을 직접 정할 수 있게). 2층 이상은 평단 기준 그대로."""
     need = _f(f.get("target") or FLOOR_USD) - _f(f.get("cost"))
     f["settled"], f["carry_usd"], f["closed"] = [], 0.0, False
     avg = floor_avg(f)
-    if need <= TOL_USD + 1e-9 or avg <= 0:
+    anchor = _f(start_usd) if int(_f(f.get("id"))) == 1 and _f(start_usd) > 0 else avg
+    if need <= TOL_USD + 1e-9 or anchor <= 0:
         f["done"], f["levels"], f["base_usd"] = True, [], 0.0
         return f
     f["done"] = False
-    f["levels"] = [p for p in (round(avg - j, 2) for j in range(1, gap + 1)) if p > 0]
+    f["levels"] = [p for p in (round(anchor - j, 2) for j in range(1, gap + 1)) if p > 0]
     f["base_usd"] = float(rnd(need / gap))
     return f
 
@@ -301,7 +304,7 @@ def _largest_remainder(total, weights):
     return out
 
 
-def apply_fill(st, order, fill_qty, fill_amount, gap=GAP_USD):
+def apply_fill(st, order, fill_qty, fill_amount, gap=GAP_USD, start_usd=0.0):
     """체결 1건 반영 (st 를 직접 바꿔 돌려줌). fill_qty = 실제 체결 수량, fill_amount = 실제 체결 금액(수량×체결가 합계). 계획 금액이 아니라 이 값만 씀"""
     q, amt = int(_f(fill_qty)), _f(fill_amount)
     kind = order.get("kind")
@@ -352,25 +355,25 @@ def apply_fill(st, order, fill_qty, fill_amount, gap=GAP_USD):
             live[-1]["cost"] = round(_f(live[-1]["cost"]) + (want - sum(_f(f["cost"]) for f in live)), 4)   # 반올림 차이는 가장 최근 층이 흡수
         st["floors"] = live
         for f in live:
-            _topup_setup(f, gap)
+            _topup_setup(f, gap, start_usd)
         st["sell_block"] = True
     return st
 
 
-def apply_fill_to_state(st, order, avg_before=0.0, allow_consecutive_sell=False, fill=None, gap=GAP_USD):
+def apply_fill_to_state(st, order, avg_before=0.0, allow_consecutive_sell=False, fill=None, gap=GAP_USD, start_usd=0.0):
     """accum_strategy.apply_fill_to_state 와 같은 모양의 입구. fill = (체결 수량, 체결 금액). fill 이 없으면 반영 안 함 (탑쌓기는 실제 체결로만 계산)"""
     if fill is None:
         return st
-    return apply_fill(st, order, fill[0], fill[1], gap)
+    return apply_fill(st, order, fill[0], fill[1], gap, start_usd)
 
 
 # ---------------------------------------------------------------- 동기화 · 정리
-def _merge(a, b, gap):
+def _merge(a, b, gap, start_usd=0.0):
     m = _floor(min(int(a["id"]), int(b["id"])), int(a["qty"]) + int(b["qty"]), _f(a["cost"]) + _f(b["cost"]), max(_f(a["target"]), _f(b["target"])), "merged")
-    return _topup_setup(m, gap)
+    return _topup_setup(m, gap, start_usd)
 
 
-def normalize(st, gap=GAP_USD):
+def normalize(st, gap=GAP_USD, start_usd=0.0):
     """수량 0 인 층 정리 → 꼬인 층 합병(위 층보다 평단이 같거나 높으면 가중평균으로 합침) → 평단 오름차순 재배치(id 는 위에서부터 다시 붙임). → 알림 글자 목록"""
     notes = []
     fl = [f for f in top_down(st) if int(_f(f.get("qty"))) > 0]
@@ -380,7 +383,7 @@ def normalize(st, gap=GAP_USD):
         while out and floor_avg(cur) >= floor_avg(out[-1]) - 1e-9:
             top = out.pop()
             notes.append(f"층 합병: {top['id']}층(평단 ${floor_avg(top):.2f}) + {cur['id']}층(평단 ${floor_avg(cur):.2f}) → 수량 {int(top['qty']) + int(cur['qty'])}주")
-            cur = _merge(top, cur, gap)
+            cur = _merge(top, cur, gap, start_usd)
         out.append(cur)
     out.sort(key=lambda f: -floor_avg(f))                            # 위(평단 높은 층)부터 번호를 다시 붙임
     for i, f in enumerate(out, 1):
@@ -391,6 +394,8 @@ def normalize(st, gap=GAP_USD):
 
 
 def reconcile(st, qty, principal, gap=GAP_USD, s=None):
+    """v2.2.4: 1층 시작가(tower_floor1_start_usd)가 정해졌으면 normalize(합병)에도 넘김"""
+    start_usd = _f((s or {}).get("tower_floor1_start_usd"))
     """매일 동기화: 층 합계가 장부(실제 보유분)와 다르면 장부에 맞춤 — 차이는 가장 최근 층(가장 아래 층)이 흡수. 그 뒤 꼬인 층 정리.
     → (st, 알림 글자 목록). 장부가 0주면 층을 비움"""
     fu, _fl, _g = params(s)
@@ -424,7 +429,7 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
             fl[0]["qty"] = int(fl[0]["qty"]) + rest_q
         if rest_c > 0.01 and fl:
             fl[0]["cost"] = round(_f(fl[0]["cost"]) + rest_c, 4)
-    notes += normalize(st, gap)
+    notes += normalize(st, gap, start_usd)
     return st, notes
 
 
