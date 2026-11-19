@@ -1,5 +1,10 @@
 # 7번 메리츠 무매 변경 기록
 
+## v1.0.9 · 2026-11-19 14:44 (KST)
+- 파일: main.py, meritz_api.py, tg_menu.py
+- 내용: meritz_laoer v2.0.9: usd_cash reads estm_frcr_amt (pan 11, Q27 fix)
+- 브랜치: staging
+
 ## v1.0.8 · 2026-11-19 14:24 (KST)
 - 파일: main.py, tg_menu.py
 - 내용: meritz_laoer v2.0.8: auto FX in realtime window, shortage alert, holiday pre-FX, --diag-cash (pan 10)
