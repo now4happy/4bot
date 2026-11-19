@@ -1,28 +1,28 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-18 10:27:45",
+  "as_of_kst": "2026-11-19 16:30:00",
   "accounts": [
     {
       "name": "토스",
       "lines": [
         {
           "currency": "USD",
-          "holding": null,
-          "need": 1258.98,
-          "sufficient": null,
+          "holding": 14064.7,
+          "need": 1558.31,
+          "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
           "label": "바벨 씨드",
           "currency": "USD",
-          "holding": null,
-          "need": 11959.74,
-          "sufficient": null,
+          "holding": 14064.7,
+          "need": 20000.0,
+          "sufficient": false,
           "auto_fx": "unavailable"
         },
         {
           "currency": "KRW",
-          "holding": 1.0,
+          "holding": 0.0,
           "need": null,
           "sufficient": null,
           "auto_fx": "unavailable"
@@ -51,8 +51,8 @@
         {
           "label": "3번",
           "currency": "USD",
-          "holding": 319.48,
-          "need": 36.21,
+          "holding": 783.42,
+          "need": 111.93,
           "sufficient": true,
           "auto_fx": "on"
         }
@@ -63,8 +63,8 @@
       "lines": [
         {
           "currency": "USD",
-          "holding": 90.03,
-          "need": 1455.025,
+          "holding": 38.18,
+          "need": 1506.875,
           "sufficient": false,
           "auto_fx": "unavailable"
         },
@@ -82,7 +82,7 @@
       "lines": [
         {
           "currency": "KRW",
-          "holding": 850657.641477,
+          "holding": 790508.077937,
           "need": 60000.0,
           "sufficient": true,
           "auto_fx": "na"
@@ -90,6 +90,6 @@
       ]
     }
   ],
-  "total_need_usd": 14709.954999999998,
+  "total_need_usd": 23177.115,
   "total_need_krw": 60000.0
 }

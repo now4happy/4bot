@@ -32,7 +32,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.3.0"
+BOT_VERSION = "v1.3.1"
 BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
