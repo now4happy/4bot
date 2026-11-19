@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.1.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.0)
+# v2.2.0 (2026-11-19, 판 13): 탑쌓기(동적 층 시스템) 전환 지점 추가 — 계산은 새 파일 tower_strategy.py. settings["strategy"] 가 "tower" 일 때만 탑쌓기, 그 외(없음 포함)는 예전 사다리 그대로 (기본 "ladder").
+#   바뀐 곳: strategy_of · tower_state_for · build_plan(전략 선택) · plan_head(탑쌓기 문구) · run_intraday_sell(탑쌓기 상태로 매도 판단) · run_order_day(탑쌓기면 사다리 armed 건너뜀, 매일 층 상태를 장부에 맞춤·첫날 1층 만들기) ·
+#   run_sync(탑쌓기면 실제 체결 수량·금액으로 층 상태 갱신 → 장부에 맞춤) · cmd_check(전략 표시). 사다리 경로(strategy=ladder)는 동작 변경 없음. 탑쌓기 상태 파일: data/tower_state.json (사다리 상태 data/accum_state.json 은 안 건드림)
 # v2.1.0 (2026-11-19, 판 12 + 방 telegram-bot-menu-review 3차 v3 합침): ① 판 12 당일 매도 가격 게이트 고침 (run_intraday_sell) — 게이트가 매수 주문의 '지정가'로 최소 목표가를 계산해서, 지정가보다 낮게 체결된 날 진짜 목표(체결 평단 +목표%)에 닿아도 '목표 아래'로 넘기던 문제 (2026-11-18 사례). 이제 체결 조회(fills)를 시세 게이트보다 먼저 하고, 게이트는 '기존 평단 · 오늘 실제 체결된 매수의 체결 단가' 중 가장 낮은 값으로 계산함 (체결 안 된 매수의 지정가는 안 씀). 게이트 목적(시세가 명백히 낮을 때 불필요한 조회 생략)은 유지. 체결 조회 실패는 알림 없이 로그만 남기고 다음 확인 때 다시 시도 ('체결 조회 실패'). 시험: test_intraday_sell_gate.py 추가. ② 3차 v3 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경(헤더 v2.0.9 문구·cmd_diag_cash 의 estm_frcr_amt 문구)은 그대로 둠, 매매 동작 변경 없음
 # v2.0.9 (2026-11-19, 판 11): Q27 원인 고침 — usd_cash()가 estm_frcr_amt를 읽게 함 (meritz_api.py). frcr_amt는 주식 가치를 포함해 앱 값과 달라서 바꿈 (서버 진단 2026-11-19 확인). --diag-cash 문구도 estm_frcr_amt로 고침. 그 외 변경 없음.
 # v2.0.8 (2026-11-19, 판 10): ① 자동환전 창 — 판 9 의 '09:00~09:30 고정 30분'을 없애고, 메리츠 실시간 환전 시간 안에서
@@ -79,12 +82,13 @@ if HERE not in sys.path:
 
 import config as cfgmod                      # noqa: E402
 from accum_strategy import make_plan, apply_fill_to_state, ceil2   # noqa: E402
+import tower_strategy as TW               # noqa: E402  v2.2.0 탑쌓기 (strategy=tower 일 때만 씀)
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.1.0"
+BOT_VERSION = "v2.2.0"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -204,8 +208,31 @@ def market_inputs(s, api):
     return p["price"], p["prev_close"], fx
 
 
+TOWER_FILE = "data/tower_state.json"      # v2.2.0 탑쌓기 층 상태 (state_dir 기준. 사다리 상태 data/accum_state.json 과 따로)
+
+
+def strategy_of(s):
+    """v2.2.0: 'tower' 일 때만 탑쌓기. 없거나 다른 값이면 'ladder' (기본·롤백 경로)"""
+    return "tower" if str((s or {}).get("strategy") or "").strip().lower() == "tower" else "ladder"
+
+
+def strategy_ko(s):
+    return "탑쌓기" if strategy_of(s) == "tower" else "사다리"
+
+
+def tower_state_for(cfg, qty, principal, s=None):
+    """탑쌓기 층 상태 → (상태, 파일에 있었는지). 파일이 없으면 지금 보유분(장부의 주식수·원금, 실행 시 읽은 값)을 1층으로 만든 상태를 돌려줌 (저장은 안 함)"""
+    d = cfg._load_json(TOWER_FILE, None)
+    if isinstance(d, dict) and isinstance(d.get("floors"), list):
+        return d, True
+    return TW.migrate_from_holdings(qty, principal, s), False
+
+
 def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx=False):
     """오늘 계획 (장부·상태를 바꾸지 않음) → {"orders", "notes", "info"}. info 에 필요달러(need_usd)·부족달러(shortfall_usd)"""
+    if strategy_of(s) == "tower":
+        tst, _ = tower_state_for(cfg, qty, principal, s)
+        return defer_sell(s, TW.make_plan(s, tst, qty, principal, price, fx, cash, sellable, ignore_auto_fx))
     return defer_sell(s, make_plan(s, cfg.accum_or_start(), qty, principal, price, fx, cash, sellable, ignore_auto_fx))
 
 
@@ -283,6 +310,15 @@ def fmt_orders(orders):
 def plan_head(plan, s):
     i = plan["info"]
     pl = f" ({i['profit_pct']:+.2f}%)" if i.get("profit_pct") is not None else ""
+    if i.get("mode") == "tower":
+        tw = i.get("tower") or {}
+        fl = tw.get("floors") or []
+        return (f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 층 "
+                + (f"{tw['active']}층{' (새 층)' if tw.get('new_floor') else ''}" if tw.get("active") else "없음") + "\n"
+                f"매도 목표 ${i['sell_target']:.2f} · 칸당 ${i.get('unit_usd', 0):,.0f} · 간격 ${tw.get('gap', 0)}"
+                + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else "")
+                + (f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "")
+                   if i.get("need_usd") is not None else ""))
     return (f"{'재매수' if i['mode'] == 'rebuy' else '사다리'} 단계 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 채운 회차 {len(i['filled'])}/{len(i['levels'])}\n"
             f"매도 목표 ${i['sell_target']:.2f} · 회차 금액 ${i.get('unit_usd', 0):,.0f}"
             + (f" · 1회차 차감 ${i['credit_usd']:,.0f}" if i.get("credit_usd") else "")
@@ -367,13 +403,17 @@ def run_intraday_sell(s, api, note):
             logging.warning(f"당일 매도 확인: 체결 조회 실패 {e}")
             return "체결 조회 실패"
     q, pr = q0, pr0
-    st = copy.deepcopy(cfg.accum_or_start())
+    tower = strategy_of(s) == "tower"
+    st = copy.deepcopy(tower_state_for(cfg, q0, pr0, s)[0] if tower else cfg.accum_or_start())
     cands = [cfg.avg_price(pos)] if q0 > 0 else []     # 시세 게이트용: 평균은 구성 값(기존 평단·오늘 실제 체결 단가) 중 가장 낮은 값보다 낮아질 수 없음 → 안 맞게 막는 일 없음
     for o in buys:                                   # 오늘 체결된 매수를 '메모리 안에서만' 반영 (장부 파일은 그대로)
         f = fills.get(str(o.get("no")))
         if not f or f[0] != "BUY" or int(f[1]) < 1:
             continue
-        apply_fill_to_state(st, o, (pr / q) if q > 0 else 0.0, bool(s.get("allow_consecutive_sell")))
+        if tower:                                      # v2.2.0 탑쌓기: 실제 체결 수량·금액으로 (메모리 안에서만)
+            TW.apply_fill_to_state(st, o, 0.0, False, fill=(int(f[1]), float(f[2])))
+        else:
+            apply_fill_to_state(st, o, (pr / q) if q > 0 else 0.0, bool(s.get("allow_consecutive_sell")))
         q += int(f[1])
         pr += float(f[2])
         if float(f[2]) > 0:
@@ -391,7 +431,7 @@ def run_intraday_sell(s, api, note):
     if hold != q:
         _warn_once(cfg, mark, m, "hold", note, f"오늘 체결 반영 뒤 예상 {q}주 ≠ 메리츠 잔고 {hold}주 — 당일 매도 확인을 보류하고 계속 확인해요 (체결 조회가 늦은 것일 수 있음)")
         return "잔고 불일치"
-    plan = make_plan(s, st, q, round(pr, 4), px, 0.0, 0.0, sellable)       # 환율 0 → 매수 계산 없이 매도 규칙만 (make_plan 의 매도 규칙 그대로)
+    plan = (TW.make_plan if tower else make_plan)(s, st, q, round(pr, 4), px, 0.0, 0.0, sellable)       # 환율 0 → 매수 계산 없이 매도 규칙만 (make_plan 의 매도 규칙 그대로)
     info = plan["info"]
     if not info.get("profit_reached"):
         return "목표 아래"                                                   # 오늘 체결로 평단이 올라 목표가 더 높아진 경우
@@ -579,7 +619,12 @@ def run_order_day(s, api, note, live):
         _retry_later(note, d, "fx", "적용환율을 못 읽어 오늘 매수 계획을 못 세웠어요 — 5분 뒤 다시 시도해요")
         return "환율 실패"
     cash = api.usd_cash()
-    if live:      # 맨 위 가격 이상을 본 적 있음 표시 (first_buy_mode=wait_top 용). 모의에서는 저장하지 않음
+    tower_notes = []
+    if live and strategy_of(s) == "tower":      # v2.2.0 매일 동기화: 층 상태를 장부(실제 보유분)에 맞춤. 상태 파일이 없으면 지금 보유분을 1층으로 만들어 저장
+        tst, had = tower_state_for(cfg, qty, float(pos["principal"]), s)
+        tst, tower_notes = TW.reconcile(tst, qty, float(pos["principal"]), TW.params(s)[2], s) if had else (tst, [f"탑쌓기 시작: 현재 보유분 {qty}주 · 평단 ${avg:.2f} 를 1층으로 만듦"])
+        cfg._save_json(TOWER_FILE, tst)
+    if live and strategy_of(s) == "ladder":      # 맨 위 가격 이상을 본 적 있음 표시 (first_buy_mode=wait_top 용). 모의에서는 저장하지 않음
         ast = cfg.accum_or_start()
         if not ast.get("armed") and price >= float(s["ladder_top_usd"]):
             ast["armed"] = True
@@ -596,7 +641,7 @@ def run_order_day(s, api, note, live):
                 time.sleep(FX_WAIT_SEC)
         cash = api.usd_cash()          # 환전 뒤(또는 안 한 뒤) 실제 예수금으로 다시 계획 — 모자라면 그만큼 매수가 줄어듦
         plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q, ignore_auto_fx=True)
-    orders, notes = plan["orders"], plan["notes"]
+    orders, notes = plan["orders"], plan["notes"] + tower_notes
     errors, recovered = [], 0
     m = {"date": d, "prev_close": prev_close, "price": price, "fx": fx, "auto_fx": fxres,
          "qty": qty, "avg": avg, "cash": round(cash, 2), "orders": [] if live else orders, "attempts": [],
@@ -969,23 +1014,39 @@ def run_sync(s, api, note, mark_path):
         cfg._save_json(mark_path, m)
     fills = api.fills((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
     lines, done = [], None
+    tower = strategy_of(s) == "tower"
+    tst = None
+    if tower:                                       # v2.2.0 탑쌓기: 층 상태 (파일이 없으면 이 체결들을 넣기 전 장부로 1층)
+        _p0 = cfg.get_position() or {"qty": 0, "principal": 0.0}
+        tst = tower_state_for(cfg, int(_p0["qty"]), float(_p0["principal"]), s)[0]
     for o in m["orders"]:
         f = fills.get(str(o.get("no")))
         if not f:
             continue
         side, q, amt = f
         px = amt / q if q else 0.0
+        pos0 = cfg.get_position() or {"qty": 0}
         avg0 = cfg.avg_price(cfg.get_position())
         pos, closed = cfg.apply_fill(side, q, px, d, False, f"{d}_{o['no']}")
-        ast = cfg.accum_or_start()
-        apply_fill_to_state(ast, o, avg0, bool(s.get("allow_consecutive_sell")))    # 같은 체결을 다시 반영해도 결과가 같음
-        cfg.save_accum(ast)
+        if tower:                                   # 실제 체결 수량·금액으로만 층을 갱신 (계획 금액 아님)
+            if int(pos["qty"]) != int(pos0["qty"]):      # 장부가 실제로 바뀐 체결만 (같은 체결을 다시 반영하면 장부가 안 바뀌어 층도 그대로)
+                TW.apply_fill_to_state(tst, o, avg0, False, fill=(int(q), float(amt)), gap=TW.params(s)[2])
+            cfg._save_json(TOWER_FILE, tst)
+        else:
+            ast = cfg.accum_or_start()
+            apply_fill_to_state(ast, o, avg0, bool(s.get("allow_consecutive_sell")))    # 같은 체결을 다시 반영해도 결과가 같음
+            cfg.save_accum(ast)
         lines.append(f"- {SIDE_KO.get(side, side)} {q}주 @ ${px:.2f} ({o.get('desc', '')})")
         if o.get("kind") == "sell":
-            lines.append(f"  매도 체결 → 재매수 단계 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
+            lines.append(f"  매도 체결 → 층별로 나눠 줄이고 탑업 단계 시작 (전체 평단 ${avg0:.2f})" if tower
+                         else f"  매도 체결 → 재매수 단계 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
         done = closed or done
     hold, _, _ = api.holding(s["symbol"])
     pos = cfg.get_position()
+    if tower and tst is not None:                   # 매일 동기화: 층 상태를 장부(실제 보유분)에 맞추고, 꼬인 층은 합침
+        tst, tnotes = TW.reconcile(tst, int(pos["qty"]), float(pos["principal"]), TW.params(s)[2], s)
+        cfg._save_json(TOWER_FILE, tst)
+        lines += [f"  {n}" for n in tnotes]
     m["synced"] = True
     cfg._save_json(mark_path, m)
     msg = f"{d} 체결 반영\n" + ("\n".join(lines) if lines else "- 체결 없음") + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}"
@@ -1090,6 +1151,7 @@ def cmd_check(s):
     print(f"- 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'} · "
           f"입고 확인 {'됨' if s.get('transfer_confirmed') else '전'} · 토스 스나이퍼 정지 확인 {'됨' if s.get('toss_sniper_stopped_confirmed') else '전'}")
     print(f"- 키 지문: {fp or '-'} (기대값 {'있음' if s.get('expected_key_fp') else '없음'})")
+    print(f"- 전략: {strategy_ko(s)}" + (f" (strategy 값 '{s.get('strategy')}' 을 못 알아봐서 사다리로 둠)" if s.get("strategy") not in (None, "", "ladder", "tower") else ""))
     for b in bad + idb:
         print("  -", to_korean(b))
     state = s["state_dir"]
