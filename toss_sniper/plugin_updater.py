@@ -1,0 +1,1501 @@
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: plugin_updater.py (Part 1/2 — REQUIRED_CORE_MODULES 내 barbell_plugin.py 및 assassin_plugin.py 15대 코어 모듈 등록 ·
+# 스나이퍼/바벨[별도수익금고]/암살자 3중 원장 스냅샷 철벽 보호 · Case 81 os.execv 자가 교체 및 Case 85 자동 치유)
+인피니트 스노우볼 (Infinite Snowball) v3.0 — 15대 코어 모듈 무디스크 인메모리 프리플라이트 컴파일 ·
+AST 심볼 교차 검증 · 폴더별 원장(본 그리드 + 서브 그리드 + 바벨 원장/별도수익금고 + 암살자 원장)/환경변수/오프셋 스냅샷 보존 ·
+무인 Git 업데이트 및 Case 81 커널 레벨 인플레이스 프로세스 자가 교체(os.execv + 3.5초 하드 워치독) 코어 모듈
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import asyncio
+import errno
+import glob
+import json
+import logging
+import os
+import io
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from toss_api import (
+    EST_TZ,
+    GlobalThrottle,
+    SoxlStratumLedger,
+    emergency_free_disk_space_sync,
+    get_bot_base_dir,
+    get_folder_slug,
+    resolve_folder_isolated_ledger_paths,
+    safe_int,
+)
+
+logger = logging.getLogger("toss_sniper.plugin_updater")
+
+# ---------------------------------------------------------------------------
+# [핵심 상수] 15대 코어 모듈(barbell_plugin.py · assassin_plugin.py 포함) 및 영구 폐기 레거시 파일 목록 (제3헌법)
+# ---------------------------------------------------------------------------
+REQUIRED_CORE_MODULES: Tuple[str, ...] = (
+    "toss_api_core.py",
+    "toss_api.py",
+    "quant_indicators_plugin.py",
+    "quant_engine_core.py",
+    "quant_engine.py",
+    "sniper_plugin_core.py",
+    "sniper_plugin.py",
+    "sniper_exit_plugin.py",
+    "defense_plugin.py",
+    "barbell_plugin.py",
+    "assassin_plugin.py",
+    "tg_ui_plugin.py",
+    "plugin_updater.py",
+    "main_runtime.py",
+    "main.py",
+)
+
+DEPRECATED_LEGACY_FILES: Tuple[str, ...] = (
+    "daymarket_sim_plugin.py",
+    "whipsaw_plugin.py",
+    "candle_recorder.py",
+    "tg_router.py",
+    "state_SOXS.json",
+    "soxs_stratum_ledger.json",
+)
+
+# ---------------------------------------------------------------------------
+# [Muse 수정 · 원작 직접 동기화] 원작 저장소(pipiosToss_bot)를 직접 fetch해
+# 스나이퍼 코어 모듈을 가져온다. 서버의 git 저장소는 4bot(우리 깃)이라
+# 기존 origin/main + git reset --hard 방식으로는 원작 새 버전을 찾을 수 없고,
+# reset --hard를 원작에 걸면 /home/gieokkim 전체가 원작 상태로 날아간다.
+# 그래서 'upstream' 리모트를 fetch한 뒤 14개 파일만 git archive로 가져온다.
+# ---------------------------------------------------------------------------
+UPSTREAM_REPO_URL = "https://github.com/pipios4006-boop/pipiosToss_bot.git"
+UPSTREAM_REMOTE_NAME = "upstream"
+UPSTREAM_MARKER_FILENAME = ".upstream_head"
+# 동기화 대상: 15대 코어 중 plugin_updater.py 자신을 제외한 14개.
+# 업데이터 자신을 원작본으로 덮어쓰면 이 수정이 사라져 다음부터 다시
+# 원작을 못 찾으므로 제외한다. 업데이터 자체의 원작 변경은 Muse가 별도 staging한다.
+UPSTREAM_SYNC_MODULES: Tuple[str, ...] = tuple(
+    f for f in REQUIRED_CORE_MODULES if f != "plugin_updater.py"
+)
+
+_TG_TOKEN_STRICT_RE = re.compile(r"\b(\d{7,15}:[A-Za-z0-9_-]{25,60})\b")
+
+
+def _extract_ledger_updated_at_bytes(raw_bytes: bytes) -> str:
+    try:
+        parsed = json.loads(raw_bytes.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            return ""
+        for k in ("SOXL", "BARBELL"):
+            sub = parsed.get(k)
+            if isinstance(sub, dict) and sub.get("updated_at"):
+                return str(sub.get("updated_at") or "")
+        return str(parsed.get("updated_at") or "")
+    except Exception:
+        return ""
+
+# [Case 85]: f-string 내 닫는 중괄호 '}' 가 '>' 로 오기된 패턴 자동 치유 정규식
+_FSTRING_BROKEN_BRACE_RE = re.compile(
+    r"(\{[A-Za-z_][A-Za-z0-9_]*)>(\.[A-Za-z0-9_]+)"
+)
+
+# [Case 85]: 삼항 연산자 조건절 내 비괄호 바다코끼리 연산자(:=) 오기 패턴 선제 치유 정규식
+_TERNARY_WALRUS_GLITCH_RE = re.compile(
+    r"\bif\s+\(?[A-Za-z_][A-Za-z0-9_]*\s*:=\s*res_obj\.get\(\s*(['\"]items['\"])\s*\)\s*\)?"
+)
+
+# [Case 81]: 중복 execv 방지를 위한 프로세스 전역 락 및 워치독 상태
+_RESTART_EXEC_LOCK = threading.Lock()
+_RESTART_WATCHDOG_TIMER: Optional[threading.Timer] = None
+
+
+# ---------------------------------------------------------------------------
+# [핵심 0-A · Case 81] 커널 레벨 인플레이스 프로세스 자가 교체(os.execv) 및 3.5초 데몬 하드 워치독
+# ---------------------------------------------------------------------------
+def resolve_tg_offset_dat_path(base_dir: Optional[str] = None) -> str:
+    """
+    # [Case 81 & Case 85]:
+    폴더별 텔레그램 update_id 오프셋 전용 영속화 파일 경로(<base_dir>/.tg_update_offset_<folder_slug>.dat)를 반환한다.
+    """
+    target_dir = get_bot_base_dir(base_dir)
+    slug = get_folder_slug(target_dir)
+    return os.path.join(target_dir, f".tg_update_offset_{slug}.dat")
+
+
+def read_persisted_tg_offset_sync(base_dir: Optional[str] = None) -> int:
+    """
+    # [Case 81]:
+    폴더별 .tg_update_offset_<folder_slug>.dat 파일과 3중 원장(last_tg_update_id) 중 가장 큰 update_id 를 읽어 반환한다.
+    """
+    target_dir = get_bot_base_dir(base_dir)
+    max_uid = 0
+    dat_fp = resolve_tg_offset_dat_path(target_dir)
+    if os.path.isfile(dat_fp):
+        try:
+            with GlobalThrottle.get_file_lock(dat_fp):
+                with open(dat_fp, "r", encoding="utf-8", errors="ignore") as rf:
+                    raw_txt = rf.read().strip()
+            max_uid = max(max_uid, safe_int(raw_txt, 0))
+        except Exception:
+            pass
+
+    primary_fp, legacy_fp, backup_fp, _ = resolve_folder_isolated_ledger_paths(
+        base_dir=target_dir
+    )
+    for l_fp in (primary_fp, legacy_fp, backup_fp):
+        if os.path.isfile(l_fp):
+            try:
+                with GlobalThrottle.get_file_lock(l_fp):
+                    with open(l_fp, "r", encoding="utf-8") as rf:
+                        ldata = json.load(rf)
+                if isinstance(ldata, dict) and isinstance(
+                    ldata.get("SOXL"), dict
+                ):
+                    max_uid = max(
+                        max_uid,
+                        safe_int(ldata["SOXL"].get("last_tg_update_id"), 0),
+                    )
+            except Exception:
+                pass
+    return max_uid
+
+
+def write_persisted_tg_offset_sync(
+    base_dir: Optional[str], update_id: int
+) -> None:
+    """
+    # [Case 81 & Case 75]:
+    폴더별 .tg_update_offset_<folder_slug>.dat 파일에 최신 update_id 를 Dirty-Check 후 원자적으로 기록한다.
+    """
+    uid = safe_int(update_id, 0)
+    if uid <= 0:
+        return
+    target_dir = get_bot_base_dir(base_dir)
+    dat_fp = resolve_tg_offset_dat_path(target_dir)
+    try:
+        with GlobalThrottle.get_file_lock(dat_fp):
+            if os.path.isfile(dat_fp):
+                try:
+                    with open(dat_fp, "r", encoding="utf-8") as rf:
+                        cur_val = safe_int(rf.read().strip(), 0)
+                    if uid <= cur_val:
+                        return
+                except Exception:
+                    pass
+            tmp_fp = f"{dat_fp}.tmp.{os.getpid()}.{threading.get_ident()}"
+            try:
+                with open(tmp_fp, "w", encoding="utf-8") as wf:
+                    wf.write(f"{uid}\n")
+                    wf.flush()
+                    os.fsync(wf.fileno())
+                os.replace(tmp_fp, dat_fp)
+            finally:
+                if os.path.exists(tmp_fp):
+                    try:
+                        os.remove(tmp_fp)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def perform_self_restart_execv(reason: str = "AUTO_UPDATE") -> None:
+    """
+    🚨 [Case 81 핵심 : 커널 레벨 인플레이스 프로세스 자가 교체기]
+    """
+    with _RESTART_EXEC_LOCK:
+        target_dir = get_bot_base_dir()
+        logger.warning(
+            "🔄 [Case 81 커널 레벨 인플레이스 자가 재기동(os.execv) 집행] 사유=%s · PID=%d · 폴더=%s",
+            reason,
+            os.getpid(),
+            target_dir,
+        )
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+        try:
+            os.chdir(target_dir)
+        except Exception:
+            pass
+
+        python_exe = sys.executable or "/usr/bin/python3"
+        raw_argv = (
+            list(sys.argv)
+            if sys.argv
+            else [os.path.join(target_dir, "main.py")]
+        )
+        if not raw_argv[0] or "--verify-only" in raw_argv:
+            script_path = os.path.join(target_dir, "main.py")
+            exec_argv = [python_exe, script_path]
+        else:
+            script_arg = raw_argv[0]
+            if not os.path.isabs(script_arg):
+                cand_abs = os.path.join(target_dir, script_arg)
+                if os.path.isfile(cand_abs):
+                    script_arg = cand_abs
+            exec_argv = [python_exe, script_arg] + raw_argv[1:]
+
+        try:
+            os.execv(python_exe, exec_argv)
+        except Exception as exc:
+            logger.error(
+                "🚨 [Case 81 os.execv 호출 예외 -> os._exit(1) 비정상 종료 코드로 systemd 강제 재기동 폴백]: %s",
+                exc,
+            )
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(1)
+
+
+def arm_hard_restart_watchdog(
+    delay_sec: float = 3.5,
+    reason: str = "AUTO_UPDATE",
+) -> threading.Timer:
+    """
+    🚨 [Case 81 핵심 : 비동기 종료 데드락(Deaf Zombie Process) 타파용 3.5초 데몬 하드 워치독]
+    """
+    global _RESTART_WATCHDOG_TIMER
+    safe_delay = max(1.0, min(15.0, float(delay_sec)))
+
+    def _watchdog_callback() -> None:
+        logger.warning(
+            "⏰ [Case 81 하드 워치독 타이머(%.1fs) 격발] 비동기 종료 지연 감지 -> 즉시 os.execv 인플레이스 교체 강제 집행 (reason=%s)",
+            safe_delay,
+            reason,
+        )
+        perform_self_restart_execv(reason=f"{reason}_WATCHDOG_TIMEOUT")
+
+    timer = threading.Timer(safe_delay, _watchdog_callback)
+    timer.daemon = True
+    timer.start()
+    _RESTART_WATCHDOG_TIMER = timer
+    logger.info(
+        "🛡️ [Case 81 하드 워치독 타이머 장착 완료] %.1f초 내 무응답 시 강제 os.execv 교체 (reason=%s)",
+        safe_delay,
+        reason,
+    )
+    return timer
+
+
+def trigger_graceful_restart(
+    context: Any,
+    shutdown_event: Optional[asyncio.Event] = None,
+    reason: str = "AUTO_UPDATE",
+    watchdog_delay_sec: float = 3.5,
+) -> None:
+    """
+    🚨 [Case 81 : 재기동 플래그 설정 + 3.5초 하드 워치독 가동 + 이벤트 루프 즉시 깨우기 통합 점화기]
+    """
+    if context is not None:
+        try:
+            setattr(context, "restart_requested", True)
+            setattr(context, "restart_reason", str(reason))
+        except Exception:
+            pass
+
+    arm_hard_restart_watchdog(delay_sec=watchdog_delay_sec, reason=reason)
+
+    ev = shutdown_event or (
+        getattr(context, "shutdown_event", None)
+        if context is not None
+        else None
+    )
+    if ev is not None:
+        try:
+            ev.set()
+        except Exception:
+            pass
+
+    wake_ev = (
+        getattr(context, "wakeup_event", None) if context is not None else None
+    )
+    if wake_ev is not None:
+        try:
+            wake_ev.set()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# [핵심 0-B] 폴더 위치(base_dir) 전용 텔레그램 적체 큐 선제 강제 소각기 (Case 68, Case 75 & Case 81)
+# ---------------------------------------------------------------------------
+def _discover_bot_token_sync(base_dir: Optional[str] = None) -> str:
+    target_dir = get_bot_base_dir(base_dir)
+    if os.path.isdir(target_dir):
+        env_fp = os.path.join(target_dir, ".env")
+        if os.path.isfile(env_fp):
+            try:
+                with open(env_fp, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                m = _TG_TOKEN_STRICT_RE.search(content)
+                if m:
+                    return m.group(1)
+            except Exception:
+                pass
+
+    for k in (
+        "TELEGRAM_BOT_TOKEN",
+        "TG_BOT_TOKEN",
+        "BOT_TOKEN",
+        "TELEGRAM_TOKEN",
+        "TG_TOKEN",
+    ):
+        val = str(os.environ.get(k) or "").strip()
+        if "://" not in val:
+            m = _TG_TOKEN_STRICT_RE.search(val)
+            if m:
+                return m.group(1)
+    return ""
+
+
+def _update_ledger_tg_offset_sync(ledger_fp: str, max_uid: int) -> None:
+    if not ledger_fp or not os.path.isfile(ledger_fp) or max_uid <= 0:
+        return
+    target_dir = os.path.dirname(os.path.abspath(ledger_fp))
+    try:
+        with GlobalThrottle.get_file_lock(ledger_fp):
+            with open(ledger_fp, "r", encoding="utf-8") as rf:
+                ldata = json.load(rf)
+            if not (
+                isinstance(ldata, dict)
+                and "SOXL" in ldata
+                and isinstance(ldata["SOXL"], dict)
+            ):
+                return
+            cur_saved = safe_int(ldata["SOXL"].get("last_tg_update_id"), 0)
+            if max_uid <= cur_saved:
+                return
+
+            ldata["SOXL"]["last_tg_update_id"] = max_uid
+            for attempt in range(2):
+                tmp_p = (
+                    f"{ledger_fp}.ack.tmp.{os.getpid()}."
+                    f"{threading.get_ident()}"
+                )
+                try:
+                    with open(tmp_p, "w", encoding="utf-8") as wf:
+                        json.dump(ldata, wf, ensure_ascii=False, indent=2)
+                        wf.flush()
+                        os.fsync(wf.fileno())
+                    os.replace(tmp_p, ledger_fp)
+                    break
+                except OSError as os_err:
+                    try:
+                        if os.path.exists(tmp_p):
+                            os.remove(tmp_p)
+                    except Exception:
+                        pass
+                    if os_err.errno == errno.ENOSPC and attempt == 0:
+                        emergency_free_disk_space_sync(
+                            base_dir=target_dir,
+                            keep_backup_days=3,
+                            remove_pycache=True,
+                        )
+                        continue
+                    break
+                except Exception:
+                    try:
+                        if os.path.exists(tmp_p):
+                            os.remove(tmp_p)
+                    except Exception:
+                        pass
+                    break
+    except Exception:
+        pass
+
+
+def _flush_telegram_pending_updates_sync(
+    base_dir: Optional[str] = None,
+) -> int:
+    target_dir = get_bot_base_dir(base_dir)
+    bot_token = _discover_bot_token_sync(target_dir)
+    if not bot_token:
+        return 0
+
+    def _call_tg_api(method: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"https://api.telegram.org/bot{bot_token}/{method}"
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url=url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            return json.loads(raw) if raw else {"ok": True}
+
+    max_uid = read_persisted_tg_offset_sync(target_dir)
+    try:
+        _call_tg_api("deleteWebhook", {"drop_pending_updates": False})
+    except Exception:
+        pass
+
+    try:
+        res = _call_tg_api("getUpdates", {"offset": -1, "timeout": 0})
+        if isinstance(res, dict) and bool(res.get("ok")):
+            updates = res.get("result")
+            if isinstance(updates, list) and updates:
+                for u in updates:
+                    if isinstance(u, dict):
+                        uid = safe_int(u.get("update_id"), 0)
+                        if uid > max_uid:
+                            max_uid = uid
+                if max_uid > 0:
+                    _call_tg_api(
+                        "getUpdates",
+                        {"offset": max_uid + 1, "limit": 1, "timeout": 0},
+                    )
+    except Exception as exc:
+        logger.debug("텔레그램 큐 선제 소각 예외(무시): %s", exc)
+
+    if max_uid > 0:
+        write_persisted_tg_offset_sync(target_dir, max_uid)
+        primary_fp, legacy_fp, backup_fp, _ = (
+            resolve_folder_isolated_ledger_paths(base_dir=target_dir)
+        )
+        for l_fp in (primary_fp, legacy_fp, backup_fp):
+            _update_ledger_tg_offset_sync(l_fp, max_uid)
+
+    return max_uid
+
+
+# ---------------------------------------------------------------------------
+# [핵심 0-C] git reset --hard 실행 전후 폴더별 원장(스나이퍼 + 바벨 별도수익금고 + 암살자) · .env · 오프셋 철벽 보호기
+# ---------------------------------------------------------------------------
+def _snapshot_protected_local_files_sync(target_dir: str) -> Dict[str, bytes]:
+    """
+    🚨 Case 68, Case 75, Case 81, Case 86, Case 87, Case 88, Case 91 & 바벨 확장:
+    git reset --hard 직전에 폴더 내 모든 원장(*ledger*.json : soxl_stratum_ledger*.json,
+    barbell_ledger*.json, assassin_sim_ledger*.json 포함), 백업, .env, .tg_update_offset 파일을 메모리에 스냅샷 보존한다.
+    """
+    abs_dir = get_bot_base_dir(target_dir)
+    emergency_free_disk_space_sync(
+        base_dir=abs_dir, keep_backup_days=14, remove_pycache=True
+    )
+
+    snapshots: Dict[str, bytes] = {}
+    patterns = (
+        os.path.join(abs_dir, "*ledger*.json"),
+        os.path.join(abs_dir, ".env*"),
+        os.path.join(abs_dir, ".tg_update_offset*.dat"),
+        os.path.join(abs_dir, "*config*.json"),
+        os.path.join(abs_dir, "secrets.json"),
+        os.path.join(abs_dir, "ledger_backups", "*.json"),
+    )
+    for pat in patterns:
+        for fp in glob.glob(pat):
+            if not os.path.isfile(fp):
+                continue
+            bname = os.path.basename(fp)
+            if (
+                bname in DEPRECATED_LEGACY_FILES
+                or ".tmp." in bname
+                or bname.endswith(".heal.tmp")
+            ):
+                continue
+            try:
+                with GlobalThrottle.get_file_lock(fp):
+                    with open(fp, "rb") as rf:
+                        raw_bytes = rf.read()
+                if raw_bytes:
+                    snapshots[os.path.abspath(fp)] = raw_bytes
+            except Exception as exc:
+                logger.warning("보호 파일 스냅샷 실패(%s): %s", fp, exc)
+
+    return snapshots
+
+
+def _restore_protected_local_files_sync(
+    target_dir: str, snapshots: Dict[str, bytes]
+) -> int:
+    abs_dir = get_bot_base_dir(target_dir)
+    restored_cnt = 0
+    for fp, raw_bytes in (snapshots or {}).items():
+        if not fp or not raw_bytes:
+            continue
+        try:
+            with GlobalThrottle.get_file_lock(fp):
+                if os.path.isfile(fp):
+                    try:
+                        with open(fp, "rb") as rf:
+                            existing_bytes = rf.read()
+                        if existing_bytes == raw_bytes:
+                            continue
+                        bname_l = os.path.basename(fp).lower()
+                        if "ledger" in bname_l and bname_l.endswith(".json"):
+                            disk_ts = _extract_ledger_updated_at_bytes(
+                                existing_bytes
+                            )
+                            snap_ts = _extract_ledger_updated_at_bytes(
+                                raw_bytes
+                            )
+                            if disk_ts and snap_ts and disk_ts > snap_ts:
+                                continue
+                    except Exception:
+                        pass
+
+                parent_d = os.path.dirname(fp)
+                for attempt in range(2):
+                    if parent_d and not os.path.isdir(parent_d):
+                        os.makedirs(parent_d, exist_ok=True)
+                    tmp_fp = (
+                        f"{fp}.restore.tmp.{os.getpid()}."
+                        f"{threading.get_ident()}"
+                    )
+                    try:
+                        with open(tmp_fp, "wb") as wf:
+                            wf.write(raw_bytes)
+                            wf.flush()
+                            os.fsync(wf.fileno())
+                        os.replace(tmp_fp, fp)
+                        restored_cnt += 1
+                        break
+                    except OSError as os_err:
+                        try:
+                            if os.path.exists(tmp_fp):
+                                os.remove(tmp_fp)
+                        except Exception:
+                            pass
+                        if os_err.errno == errno.ENOSPC and attempt == 0:
+                            emergency_free_disk_space_sync(
+                                base_dir=abs_dir,
+                                keep_backup_days=3,
+                                remove_pycache=True,
+                            )
+                            continue
+                        raise
+        except Exception as exc:
+            logger.error("보호 파일 복원 예외(%s): %s", fp, exc)
+
+    return restored_cnt
+
+
+# ---------------------------------------------------------------------------
+# [핵심 1] 구버전 폐기 파일 및 고아 임시 파일 자동 청소기
+# ---------------------------------------------------------------------------
+def purge_deprecated_legacy_files(
+    base_dir: Optional[str] = None,
+) -> List[str]:
+    target_dir = get_bot_base_dir(base_dir)
+    removed: List[str] = []
+    for fname in DEPRECATED_LEGACY_FILES:
+        fpath = os.path.join(target_dir, fname)
+        if os.path.isfile(fpath):
+            try:
+                with GlobalThrottle.get_file_lock(fpath):
+                    os.remove(fpath)
+                removed.append(fname)
+            except Exception as exc:
+                logger.warning("폐기 파일 삭제 실패 (%s): %s", fname, exc)
+
+    emergency_free_disk_space_sync(
+        base_dir=target_dir, keep_backup_days=14, remove_pycache=False
+    )
+    return removed
+# -*- coding: utf-8 -*-
+"""
+# MODIFIED: plugin_updater.py (Part 2/2 — Case 85 자동 치유 · 15대 코어 모듈 무디스크 인메모리 AST 교차 검증 ·
+# 스나이퍼/바벨[barbell_ledger.json]/암살자 원장 보호 Git 업데이트 · 장외 업데이트 시 SGOV/실전암살자 미결 주문 보호 · Case 81 무중단 자가 재기동)
+"""
+
+
+# ---------------------------------------------------------------------------
+# [핵심 2] Case 85 f-string 닫는 중괄호 정규식 치유 & 삼항식 walrus 정규식 치유 & 4배수 선제 스냅 자동 치유기
+# ---------------------------------------------------------------------------
+def _auto_heal_indentation_glitches(
+    filepath: str, max_passes: int = 6
+) -> bool:
+    if not os.path.isfile(filepath):
+        return False
+
+    fence_prefix = chr(96) * 3
+    coding_marker = "# -*- coding: utf-8 -*-"
+    target_dir = os.path.dirname(os.path.abspath(filepath))
+
+    try:
+        with GlobalThrottle.get_file_lock(filepath):
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                orig_src = f.read()
+
+            src = _FSTRING_BROKEN_BRACE_RE.sub(r"\1}\2", orig_src)
+            src = _TERNARY_WALRUS_GLITCH_RE.sub(
+                r"if res_obj.get(\1) is not None", src
+            )
+
+            try:
+                ast.parse(src, filename=filepath)
+                if src == orig_src:
+                    return False
+            except (IndentationError, SyntaxError):
+                if coding_marker in src and not src.lstrip().startswith(
+                    coding_marker
+                ):
+                    src = src[src.index(coding_marker) :]
+
+                pre_lines = src.splitlines()
+                snapped_lines: List[str] = []
+                for line in pre_lines:
+                    if line.strip().startswith(fence_prefix):
+                        continue
+                    stripped = line.lstrip(" ")
+                    lead = len(line) - len(stripped)
+                    if (
+                        stripped
+                        and not stripped.startswith(
+                            ("#", '"', "'", ")", "]", "}")
+                        )
+                        and (lead % 4 != 0)
+                    ):
+                        lead = int(round(lead / 4.0)) * 4
+                    snapped_lines.append((" " * lead) + stripped)
+
+                src = "\n".join(snapped_lines) + "\n"
+                src = _FSTRING_BROKEN_BRACE_RE.sub(r"\1}\2", src)
+                src = _TERNARY_WALRUS_GLITCH_RE.sub(
+                    r"if res_obj.get(\1) is not None", src
+                )
+
+                for _ in range(max_passes):
+                    try:
+                        ast.parse(src, filename=filepath)
+                        break
+                    except IndentationError as ind_err:
+                        lineno = getattr(ind_err, "lineno", None)
+                        if not isinstance(lineno, int) or lineno < 1:
+                            break
+                        lines = src.splitlines(keepends=True)
+                        if lineno > len(lines):
+                            break
+
+                        idx = lineno - 1
+                        raw_line = lines[idx]
+                        stripped = raw_line.lstrip(" \t")
+                        if not stripped:
+                            break
+                        lead_len = len(raw_line) - len(stripped)
+
+                        prev_indent = 0
+                        for p_i in range(idx - 1, -1, -1):
+                            p_str = lines[p_i].strip()
+                            if p_str and not p_str.startswith("#"):
+                                prev_indent = len(lines[p_i]) - len(
+                                    lines[p_i].lstrip(" ")
+                                )
+                                if p_str.endswith(":"):
+                                    prev_indent += 4
+                                break
+
+                        if stripped.startswith(
+                            ("else:", "elif ", "except", "finally:")
+                        ):
+                            new_indent = max(0, prev_indent - 4)
+                        elif lead_len % 4 != 0:
+                            new_indent = int(round(lead_len / 4.0)) * 4
+                        else:
+                            new_indent = prev_indent
+
+                        if new_indent == lead_len:
+                            break
+
+                        lines[idx] = (" " * max(0, new_indent)) + stripped
+                        src = "".join(lines)
+                    except SyntaxError:
+                        break
+
+            if src != orig_src:
+                try:
+                    ast.parse(src, filename=filepath)
+                except SyntaxError:
+                    return False
+
+                for attempt in range(2):
+                    tmp_fp = f"{filepath}.heal.tmp"
+                    try:
+                        with open(tmp_fp, "w", encoding="utf-8") as wf:
+                            wf.write(src)
+                            wf.flush()
+                            os.fsync(wf.fileno())
+                        os.replace(tmp_fp, filepath)
+                        logger.info(
+                            "🔧 [Case 85 들여쓰기/f-string 중괄호 자동 정규화 완료] %s",
+                            os.path.basename(filepath),
+                        )
+                        return True
+                    except OSError as os_err:
+                        try:
+                            if os.path.exists(tmp_fp):
+                                os.remove(tmp_fp)
+                        except Exception:
+                            pass
+                        if os_err.errno == errno.ENOSPC and attempt == 0:
+                            emergency_free_disk_space_sync(
+                                base_dir=target_dir,
+                                keep_backup_days=3,
+                                remove_pycache=True,
+                            )
+                            continue
+                        break
+    except Exception as exc:
+        logger.debug("들여쓰기 자동 치유 스킵 (%s): %s", filepath, exc)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# [핵심 3] AST 최상위 익스포트 심볼 추출기 및 15대 코어 모듈 무디스크 인메모리 교차 검증기
+# ---------------------------------------------------------------------------
+def _collect_top_level_module_stmts(
+    stmts: List[ast.stmt], exported: Set[str]
+) -> None:
+    for node in stmts:
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            exported.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    exported.add(target.id)
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    for elt in target.elts:
+                        if isinstance(elt, ast.Name):
+                            exported.add(elt.id)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                exported.add(node.target.id)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                exported.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    exported.add(alias.asname or alias.name)
+        elif isinstance(node, ast.If):
+            _collect_top_level_module_stmts(node.body, exported)
+            _collect_top_level_module_stmts(node.orelse, exported)
+        elif isinstance(node, ast.Try):
+            _collect_top_level_module_stmts(node.body, exported)
+            _collect_top_level_module_stmts(node.orelse, exported)
+            _collect_top_level_module_stmts(node.finalbody, exported)
+            for h in node.handlers:
+                if isinstance(h.name, str) and h.name:
+                    exported.add(h.name)
+                _collect_top_level_module_stmts(h.body, exported)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            _collect_top_level_module_stmts(node.body, exported)
+
+
+def _extract_module_exported_symbols(tree: ast.AST) -> Set[str]:
+    exported: Set[str] = set()
+    body_list = getattr(tree, "body", None)
+    if isinstance(body_list, list):
+        _collect_top_level_module_stmts(body_list, exported)
+    return exported
+
+
+def verify_all_modules_compile(
+    base_dir: Optional[str] = None,
+) -> Tuple[bool, str]:
+    target_dir = get_bot_base_dir(base_dir)
+    emergency_free_disk_space_sync(
+        base_dir=target_dir, keep_backup_days=14, remove_pycache=False
+    )
+
+    errors: List[str] = []
+    ast_trees: Dict[str, ast.AST] = {}
+    exported_map: Dict[str, Set[str]] = {}
+
+    for fname in REQUIRED_CORE_MODULES:
+        fpath = os.path.join(target_dir, fname)
+        mod_name = fname[:-3]
+        if not os.path.isfile(fpath):
+            errors.append(f"필수 코어 모듈 누락: {fname}")
+            continue
+
+        _auto_heal_indentation_glitches(fpath)
+
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                src = f.read()
+        except Exception as exc:
+            errors.append(f"파일 읽기 예외 [{fname}]: {exc}")
+            continue
+
+        try:
+            compile(src, fpath, "exec", dont_inherit=True)
+            tree = ast.parse(src, filename=fpath)
+            ast_trees[mod_name] = tree
+            exported_map[mod_name] = _extract_module_exported_symbols(tree)
+        except SyntaxError as syn_err:
+            line_info = (
+                f" (line {syn_err.lineno})"
+                if getattr(syn_err, "lineno", None)
+                else ""
+            )
+            errors.append(
+                f"문법/컴파일 오류 [{fname}]{line_info}: {syn_err.msg}"
+            )
+        except Exception as exc:
+            errors.append(f"컴파일/AST 파싱 예외 [{fname}]: {exc}")
+
+    if errors:
+        return False, "🚨 컴파일/문법 검증 실패:\n" + "\n".join(errors)
+
+    local_mod_names = {f[:-3] for f in REQUIRED_CORE_MODULES}
+    for mod_name, tree in ast_trees.items():
+        fname = f"{mod_name}.py"
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module in local_mod_names
+            ):
+                target_mod = node.module
+                target_exports = exported_map.get(target_mod, set())
+                for alias in node.names:
+                    sym = alias.name
+                    if sym == "*":
+                        continue
+                    if sym not in target_exports:
+                        errors.append(
+                            f"심볼 임포트 불일치 [{fname}]: from {target_mod} import {sym} ('{target_mod}.py' 내 '{sym}' 미정의)"
+                        )
+
+    if errors:
+        return False, "🚨 컴파일/AST 임포트 검증 실패:\n" + "\n".join(errors)
+
+    return (
+        True,
+        f"✅ {len(REQUIRED_CORE_MODULES)}대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성 100% 통과 ({len(REQUIRED_CORE_MODULES)}개 파일)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# [핵심 4] 스마트 Git 동기화 · 스나이퍼/바벨/암살자 원장 및 오프셋 철벽 보존 쉴드
+# ---------------------------------------------------------------------------
+def _run_cmd_sync(
+    cmd: List[str], cwd: str, timeout_sec: float = 30.0
+) -> Tuple[int, str, str]:
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_sec,
+    )
+    return (
+        int(proc.returncode),
+        (proc.stdout or "").strip(),
+        (proc.stderr or "").strip(),
+    )
+
+
+
+def _ensure_upstream_remote_sync(target_dir: str) -> Tuple[bool, str]:
+    """'upstream' 리모트(원작 저장소)가 없으면 추가하고, 있으면 URL을 맞춘다."""
+    rc, out, _ = _run_cmd_sync(
+        ["git", "remote", "get-url", UPSTREAM_REMOTE_NAME],
+        cwd=target_dir, timeout_sec=8.0,
+    )
+    if rc == 0 and out.strip() == UPSTREAM_REPO_URL:
+        return True, "ok"
+    if rc == 0:
+        rc2, _, err2 = _run_cmd_sync(
+            ["git", "remote", "set-url", UPSTREAM_REMOTE_NAME, UPSTREAM_REPO_URL],
+            cwd=target_dir, timeout_sec=8.0,
+        )
+        return (rc2 == 0), (err2 if rc2 != 0 else "url-fixed")
+    rc3, _, err3 = _run_cmd_sync(
+        ["git", "remote", "add", UPSTREAM_REMOTE_NAME, UPSTREAM_REPO_URL],
+        cwd=target_dir, timeout_sec=8.0,
+    )
+    return (rc3 == 0), (err3 if rc3 != 0 else "added")
+
+
+def _read_upstream_marker_sync(target_dir: str) -> str:
+    try:
+        with open(os.path.join(target_dir, UPSTREAM_MARKER_FILENAME), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def _write_upstream_marker_sync(target_dir: str, sha: str) -> None:
+    try:
+        tmp_fp = os.path.join(target_dir, UPSTREAM_MARKER_FILENAME + ".tmp")
+        with open(tmp_fp, "w", encoding="utf-8") as f:
+            f.write(sha.strip())
+        os.replace(tmp_fp, os.path.join(target_dir, UPSTREAM_MARKER_FILENAME))
+    except Exception as exc:
+        logger.warning("원작 마커 기록 실패: %s", exc)
+
+
+def _commit_synced_files_sync(target_dir: str, sha: str) -> Tuple[bool, str]:
+    """동기화한 14개 파일을 git에 기록한다.
+
+    [Muse 수정 · 동기화 뒤 커밋] 원작 파일을 작업 폴더에 덮어만 쓰면
+    git에는 미저장 변경으로 남아, 사무실 업데이터(bot_updater)의
+    dirty 검사가 다음 텔레그램 업데이트를 멈춘다. 그래서 동기화한
+    파일만(다른 미저장 변경은 건드리지 않고) add + commit 한다.
+    마커(.upstream_head)는 gitignore·미추적이라 dirty 검사 대상이
+    아니라서 커밋하지 않는다. 커밋이 안 돼도 동기화 자체는
+    성공으로 본다(기록은 부기일 뿐).
+    """
+    try:
+        rc_a, _, err_a = _run_cmd_sync(
+            ["git", "add", "--"] + list(UPSTREAM_SYNC_MODULES),
+            cwd=target_dir,
+            timeout_sec=10.0,
+        )
+        if rc_a != 0:
+            return False, f"git add 실패: {err_a}"
+        rc_s, _, _ = _run_cmd_sync(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=target_dir,
+            timeout_sec=10.0,
+        )
+        if rc_s == 0:
+            return True, "바뀐 것 없음(커밋 생략)"
+        short = sha[:7] if sha else "?"
+        rc_c, _, err_c = _run_cmd_sync(
+            [
+                "git",
+                "-c", "user.name=now4happy",
+                "-c", "user.email=gieokkim@gmail.com",
+                "commit",
+                "-m",
+                f"sniper: upstream {short} direct sync",
+            ],
+            cwd=target_dir,
+            timeout_sec=15.0,
+        )
+        if rc_c != 0:
+            return False, f"git commit 실패: {err_c}"
+        return True, f"동기화분 커밋 완료 ({short})"
+    except Exception as exc:
+        return False, f"커밋 예외: {exc}"
+
+
+def _extract_upstream_files_sync(
+    target_dir: str, ref: str, filenames: Tuple[str, ...]
+) -> Tuple[bool, str]:
+    """git archive로 원작 파일을 바이트 그대로 가져와 toss_sniper/에 덮어쓴다.
+    원작 파일은 저장소 루트에 있고 우리 파일은 toss_sniper/ 아래라,
+    archive를 임시 폴더에 풀어 복사한다. .env·원장은 건드리지 않는다."""
+    # git archive pathspec은 실행 위치 기준이다. 원작 파일은 저장소 루트에
+    # 있으므로, 저장소 최상위에서 실행해야 루트 경로가 맞는다.
+    # (toss_sniper/ 안에서 실행하면 :(top)도 '현재 디렉토리 밖'이라며 거부된다.)
+    try:
+        rc_top, toplevel, _ = _run_cmd_sync(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=target_dir, timeout_sec=8.0,
+        )
+        archive_cwd = toplevel.strip() if rc_top == 0 and toplevel.strip() else target_dir
+        proc = subprocess.run(
+            ["git", "archive", ref] + list(filenames),
+            cwd=archive_cwd, capture_output=True, timeout=30.0,
+        )
+    except Exception as exc:
+        return False, f"git archive 실행 예외: {exc}"
+    if proc.returncode != 0:
+        return False, (proc.stderr or b"").decode("utf-8", "replace").strip() or "git archive 실패"
+    tmpd = tempfile.mkdtemp(prefix="upstream_sync_")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tf:
+            tf.extractall(path=tmpd)
+        for fn in filenames:
+            src_fp = os.path.join(tmpd, fn)
+            dst_fp = os.path.join(target_dir, fn)
+            if not os.path.isfile(src_fp):
+                return False, f"원작 archive에 없음: {fn}"
+            shutil.copyfile(src_fp, dst_fp)
+        return True, ""
+    except Exception as exc:
+        return False, f"원작 파일 풀기/복사 예외: {exc}"
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+
+# [🔗토스 토큰 공유 HOOK · v1.2.8] 원작 동기화가 toss_api.py 를 원작본으로 덮어쓰면 공유 토큰 훅이 사라진다.
+# 동기화 직후 toss_hook_patch.py 에 저장된 패치를 다시 적용한다. 실패해도 동기화·스나이퍼 동작은 멈추지 않는다
+# (원작 파일 그대로 동작). 실패는 로그 + 텔레그램 알림 본문(HOOK_ALERT_PREFIX)으로 드러낸다.
+HOOK_ALERT_PREFIX = "⚠️ 토큰 공유 훅"
+
+
+def _load_toss_hook_patch(target_dir: str) -> Any:
+    import importlib.util
+
+    mod_fp = os.path.join(target_dir, "toss_hook_patch.py")
+    spec = importlib.util.spec_from_file_location("toss_hook_patch", mod_fp)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"불러올 수 없음: {mod_fp}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _reapply_toss_hook_sync(
+    target_dir: str, synced_files: Optional[Tuple[str, ...]] = None
+) -> Tuple[str, str]:
+    """반환 (상태, 알림용 한 줄). 상태: applied|already|skip|failed. 예외는 던지지 않는다."""
+    try:
+        thp = _load_toss_hook_patch(target_dir)
+        status, note = thp.reapply_after_sync(target_dir, synced_files)
+    except Exception as exc:
+        status, note = "failed", f"toss_hook_patch.py 불러오기/실행 실패: {exc!r} · 원작 파일 그대로 둠"
+        logger.error("🚨 [토큰 공유 훅] %s", note)
+    if status == "failed":
+        return status, f"{HOOK_ALERT_PREFIX} 재적용 실패(원작 그대로 동작 · 3곳 토큰 공유 끊김): {note}"
+    if status == "applied":
+        return status, f"🔗 {note}"
+    return status, note
+
+
+def _execute_git_pull_and_preflight_sync(
+    base_dir: Optional[str] = None,
+) -> Tuple[bool, str, bool]:
+    """원작 저장소에서 스나이퍼 코어 모듈을 직접 가져와 동기화한다.
+
+    [Muse 수정 · 직접 원작 동기화]
+    기존 origin/main + git reset --hard 방식은 서버 git 저장소가 4bot이라
+    원작 새 버전을 못 찾는다. reset --hard를 원작에 걸면 /home/gieokkim
+    전체(사무실·문서 포함)가 원작 저장소 상태로 날아가므로, 원작은
+    'upstream' 리모트로 fetch만 하고 14개 파일만 git archive로 가져온다.
+    """
+    target_dir = get_bot_base_dir(base_dir)
+    protected_snapshots: Dict[str, bytes] = {}
+    synced_backup: Dict[str, bytes] = {}
+    did_sync = False
+
+    try:
+        rc_h, prev_hash, _ = _run_cmd_sync(
+            ["git", "rev-parse", "HEAD"], cwd=target_dir, timeout_sec=10.0
+        )
+        if rc_h != 0 or not prev_hash:
+            prev_hash = ""
+
+        ok_remote, remote_msg = _ensure_upstream_remote_sync(target_dir)
+        if not ok_remote:
+            ok_local, msg_local = verify_all_modules_compile(target_dir)
+            return (
+                ok_local,
+                f"원작 리모트 준비 실패({remote_msg}) · 로컬 검증: {msg_local}",
+                False,
+            )
+
+        rc_f, _, err_f = _run_cmd_sync(
+            ["git", "fetch", UPSTREAM_REMOTE_NAME, "--prune"],
+            cwd=target_dir,
+            timeout_sec=25.0,
+        )
+        if rc_f != 0:
+            if "No space left on device" in err_f or "ENOSPC" in err_f:
+                emergency_free_disk_space_sync(
+                    base_dir=target_dir,
+                    keep_backup_days=3,
+                    remove_pycache=True,
+                )
+                rc_f, _, _ = _run_cmd_sync(
+                    ["git", "fetch", UPSTREAM_REMOTE_NAME, "--prune"],
+                    cwd=target_dir,
+                    timeout_sec=25.0,
+                )
+            if rc_f != 0:
+                ok_local, msg_local = verify_all_modules_compile(target_dir)
+                return (
+                    ok_local,
+                    f"로컬 검증 완료 (원작 fetch 스킵): {msg_local}",
+                    False,
+                )
+
+        rc_u, upstream_head, _ = _run_cmd_sync(
+            ["git", "rev-parse", f"{UPSTREAM_REMOTE_NAME}/main"],
+            cwd=target_dir,
+            timeout_sec=8.0,
+        )
+        if rc_u != 0 or not upstream_head:
+            ok_local, msg_local = verify_all_modules_compile(target_dir)
+            return (
+                ok_local,
+                f"원작 HEAD 확인 실패 · 로컬 검증: {msg_local}",
+                False,
+            )
+        upstream_head = upstream_head.strip()
+
+        deployed_head = _read_upstream_marker_sync(target_dir)
+        if deployed_head and deployed_head == upstream_head:
+            purged_list = purge_deprecated_legacy_files(target_dir)
+            ok_local, msg_local = verify_all_modules_compile(target_dir)
+            short_hash = upstream_head[:7]
+            purge_note = (
+                f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
+            )
+            if not ok_local:
+                return (
+                    False,
+                    f"🚨 로컬 프리플라이트 검증 실패:\n{msg_local}",
+                    False,
+                )
+            hook_chk_note = ""
+            try:  # [🔗토스 토큰 공유 HOOK] 동기화가 없어도 훅이 살아 있는지 점검 (읽기만, 파일 안 바꿈)
+                ok_hook, msg_hook = _load_toss_hook_patch(
+                    target_dir
+                ).check_hook_installed(target_dir)
+                if not ok_hook:
+                    hook_chk_note = f" · {HOOK_ALERT_PREFIX} 없음: {msg_hook}"
+                    logger.warning("[토큰 공유 훅] %s", msg_hook)
+            except Exception as exc:
+                hook_chk_note = f" · {HOOK_ALERT_PREFIX} 점검 불가: {exc!r}"
+                logger.warning("[토큰 공유 훅] 점검 불가: %r", exc)
+            return (
+                True,
+                f"현재 버전({short_hash}) 유지 · 원장 100% 보존 · {msg_local}{purge_note}{hook_chk_note}",
+                False,
+            )
+
+        _flush_telegram_pending_updates_sync(target_dir)
+        protected_snapshots = _snapshot_protected_local_files_sync(target_dir)
+        for fname in UPSTREAM_SYNC_MODULES:
+            fpath = os.path.join(target_dir, fname)
+            try:
+                with open(fpath, "rb") as rf:
+                    synced_backup[fpath] = rf.read()
+            except Exception:
+                pass
+
+        did_sync = True
+        ok_sync, sync_err = _extract_upstream_files_sync(
+            target_dir, f"{UPSTREAM_REMOTE_NAME}/main", UPSTREAM_SYNC_MODULES
+        )
+        if not ok_sync:
+            for fpath, raw in synced_backup.items():
+                try:
+                    with open(fpath, "wb") as wf:
+                        wf.write(raw)
+                except Exception:
+                    pass
+            _restore_protected_local_files_sync(
+                target_dir, protected_snapshots
+            )
+            return False, f"원작 파일 동기화 실패: {sync_err}", False
+
+        _restore_protected_local_files_sync(target_dir, protected_snapshots)
+
+        # [🔗토스 토큰 공유 HOOK] 원작 파일을 덮어쓴 직후 훅 재적용 (실패해도 동기화는 계속)
+        hook_status, hook_note = _reapply_toss_hook_sync(
+            target_dir, UPSTREAM_SYNC_MODULES
+        )
+
+        for ledger_ignore_name in (
+            "soxl_stratum_ledger.json",
+            "barbell_ledger.json",
+            "assassin_sim_ledger.json",
+        ):
+            try:
+                _run_cmd_sync(
+                    [
+                        "git",
+                        "rm",
+                        "--cached",
+                        "--ignore-unmatch",
+                        ledger_ignore_name,
+                    ],
+                    cwd=target_dir,
+                    timeout_sec=5.0,
+                )
+            except Exception:
+                pass
+            try:
+                _run_cmd_sync(
+                    [
+                        "git",
+                        "update-index",
+                        "--assume-unchanged",
+                        ledger_ignore_name,
+                    ],
+                    cwd=target_dir,
+                    timeout_sec=5.0,
+                )
+            except Exception:
+                pass
+
+        purged_list = purge_deprecated_legacy_files(target_dir)
+
+        updater_script = os.path.join(target_dir, "plugin_updater.py")
+        rc_v, out_v, err_v = _run_cmd_sync(
+            [
+                sys.executable,
+                "-B",
+                updater_script,
+                "--verify-only",
+                "--base-dir",
+                target_dir,
+            ],
+            cwd=target_dir,
+            timeout_sec=25.0,
+        )
+        if rc_v != 0:
+            detail_err = out_v or err_v or "알 수 없는 컴파일/심볼 검증 오류"
+            for fpath, raw in synced_backup.items():
+                try:
+                    with open(fpath, "wb") as wf:
+                        wf.write(raw)
+                except Exception:
+                    pass
+            _restore_protected_local_files_sync(
+                target_dir, protected_snapshots
+            )
+            return (
+                False,
+                f"🚨 프리플라이트 컴파일 에러 감지:\n{detail_err}",
+                False,
+            )
+
+        _write_upstream_marker_sync(target_dir, upstream_head)
+
+        commit_ok, commit_note = _commit_synced_files_sync(
+            target_dir, upstream_head
+        )
+        if not commit_ok:
+            logger.warning("동기화분 커밋 실패(동기화는 성공): %s", commit_note)
+
+        short_hash = upstream_head[:7]
+        status_note = f"신규 커밋({short_hash}) 적용 · 원장 100% 보존"
+        verify_note = (
+            out_v
+            if out_v
+            else f"✅ {len(REQUIRED_CORE_MODULES)}대 코어 모듈 검증 통과 ({len(REQUIRED_CORE_MODULES)}개 파일)"
+        )
+        purge_note = (
+            f" · 폐기파일 {len(purged_list)}개 소각" if purged_list else ""
+        )
+        summary_msg = f"{status_note} · {verify_note}{purge_note} · {commit_note}"
+        if hook_status != "skip":
+            summary_msg += f" · {hook_note}"
+        return True, summary_msg, True
+
+    except Exception as exc:
+        if did_sync and synced_backup:
+            for fpath, raw in synced_backup.items():
+                try:
+                    with open(fpath, "wb") as wf:
+                        wf.write(raw)
+                except Exception:
+                    pass
+        if protected_snapshots:
+            _restore_protected_local_files_sync(
+                target_dir, protected_snapshots
+            )
+        return False, f"업데이트 실행 예외: {exc}", False
+
+
+async def execute_git_pull_and_preflight(
+    base_dir: Optional[str] = None,
+) -> Tuple[bool, str, bool]:
+    return await asyncio.wait_for(
+        asyncio.to_thread(_execute_git_pull_and_preflight_sync, base_dir),
+        timeout=60.0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# [핵심 5] 백그라운드 무인 자동 업데이트 루프 (Case 07: 장중 재기동 차단 & 미결주문 보호 & Case 81: os.execv 인플레이스 교체)
+# ---------------------------------------------------------------------------
+def _is_weekday_market_busy_est(now_est: Optional[datetime] = None) -> bool:
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    if dt.weekday() >= 5:
+        return False
+    hm = dt.hour * 100 + dt.minute
+    return 400 <= hm <= 1605
+
+
+async def run_auto_update_loop(
+    context: Any,
+    interval_sec: float = 3600.0,
+) -> None:
+    wait_s = max(300.0, float(interval_sec or 3600.0))
+    base_dir = get_bot_base_dir(getattr(context, "base_dir", None))
+
+    while not context.shutdown_event.is_set():
+        try:
+            await asyncio.wait_for(
+                context.shutdown_event.wait(), timeout=wait_s
+            )
+            break
+        except asyncio.TimeoutError:
+            pass
+
+        if context.shutdown_event.is_set():
+            break
+
+        now_est = datetime.now(EST_TZ)
+        if _is_weekday_market_busy_est(now_est):
+            continue
+
+        try:
+            st = context.ledger.get_state("SOXL")
+            if str(st.get("buy_order_id") or "").strip() or str(
+                st.get("sell_order_id") or ""
+            ).strip():
+                continue
+        except Exception:
+            pass
+
+        try:
+            if hasattr(context, "barbell_ledger"):
+                bst = context.barbell_ledger.get_state()
+                if str(bst.get("sgov_buy_order_id") or "").strip() or str(
+                    bst.get("sgov_sell_order_id") or ""
+                ).strip():
+                    continue
+        except Exception:
+            pass
+
+        try:
+            if hasattr(context, "assassin_ledger"):
+                ast_st = context.assassin_ledger.get_state()
+                if (
+                    bool(ast_st.get("is_live_position", False))
+                    or str(ast_st.get("pending_buy_order_id") or "").strip()
+                    or str(
+                        ast_st.get("pending_exit_sell_order_id") or ""
+                    ).strip()
+                ):
+                    continue
+        except Exception:
+            pass
+
+        try:
+            ok, msg, changed = await execute_git_pull_and_preflight(base_dir)
+            if ok and changed:
+                st_chk = context.ledger.get_state("SOXL")
+                if str(st_chk.get("buy_order_id") or "").strip() or str(
+                    st_chk.get("sell_order_id") or ""
+                ).strip():
+                    logger.info(
+                        "⏳ [Case 81 재기동 유예] 업데이트 도중 신규 SOXL 미결주문 감지 -> 정산 완료 후 차기 주기 재기동"
+                    )
+                    continue
+                logger.warning(
+                    "🚀 [Case 81 장외 무인 자동 업데이트 검증 통과] %s -> 3.5초 워치독 및 os.execv 인플레이스 자가 재기동 개시",
+                    msg,
+                )
+                if hasattr(context, "send_slim_alert"):
+                    try:
+                        await asyncio.wait_for(
+                            context.send_slim_alert(
+                                title=(
+                                    "⚠️ [장외 자동 업데이트 완료 · 토큰 공유 훅 확인 필요]"
+                                    if HOOK_ALERT_PREFIX in msg
+                                    else "🚀 [장외 자동 업데이트 완료]"
+                                ),
+                                body=f"{msg} · 최신 엔진으로 무중단 자가 재기동합니다.",
+                            ),
+                            timeout=5.0,
+                        )
+                    except Exception:
+                        pass
+
+                trigger_graceful_restart(
+                    context=context,
+                    shutdown_event=getattr(context, "shutdown_event", None),
+                    reason="OFF_HOURS_AUTO_UPDATE",
+                    watchdog_delay_sec=3.5,
+                )
+                await asyncio.sleep(0.4)
+                perform_self_restart_execv(reason="OFF_HOURS_AUTO_UPDATE")
+                break
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.debug("무인 업데이트 점검 루프 예외: %s", exc)
+
+
+# 하위 호환 별칭
+auto_update_loop = run_auto_update_loop
+start_auto_update_loop = run_auto_update_loop
+background_auto_update_loop = run_auto_update_loop
+purge_obsolete_files_sync = purge_deprecated_legacy_files
+
+
+# ---------------------------------------------------------------------------
+# CLI 엔트리포인트 (`--verify-only` 독립 검증 및 `systemd ExecStartPre` 호환)
+# ---------------------------------------------------------------------------
+def _cli_main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Infinite Snowball v3.0 Diskless Preflight Compiler & AST Verifier"
+    )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="디스크의 15대 코어 모듈 인메모리 컴파일 및 AST 심볼 정합성만 검증하고 종료합니다.",
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=str,
+        default=get_bot_base_dir(),
+        help="검증 대상 디렉토리 경로",
+    )
+    args, _ = parser.parse_known_args()
+    target_dir = get_bot_base_dir(args.base_dir)
+
+    purge_deprecated_legacy_files(target_dir)
+
+    if args.verify_only:
+        ok, msg = verify_all_modules_compile(target_dir)
+        if ok:
+            print(msg)
+            return 0
+        print(msg, file=sys.stderr)
+        return 1
+
+    _flush_telegram_pending_updates_sync(target_dir)
+
+    now_est = datetime.now(EST_TZ)
+    if _is_weekday_market_busy_est(now_est):
+        print(
+            f"🛡️ [{now_est.strftime('%Y-%m-%d %H:%M:%S EST')}] [Case 07 장중 락다운] "
+            "평일 04:00 ~ 16:05 EST 구간 -> 무인 업데이트를 스킵하고 기존 검증 코드로 즉시 기동합니다."
+        )
+        ok, msg = verify_all_modules_compile(target_dir)
+        if not ok:
+            print(msg, file=sys.stderr)
+            return 1
+        return 0
+
+    ok_git, msg_git, _ = _execute_git_pull_and_preflight_sync(target_dir)
+    if ok_git:
+        print(msg_git)
+        return 0
+    print(msg_git, file=sys.stderr)
+    ok_local, _ = verify_all_modules_compile(target_dir)
+    return 0 if ok_local else 1
+
+
+if __name__ == "__main__":
+    sys.exit(_cli_main())
