@@ -2,7 +2,7 @@
 # =====================================================================
 # FILE: bot_office/sniper_upstream.py   (업데이트 비서 부품 · 2번 스나이퍼 원작자 새 버전 알림 + 자동 업뎃)
 #
-#  사무실 vNEXT (2026-11-19, 방 updater-redesign-sniper-separate 판 2): 원작자 알림이 오면 2번 자동 업뎃 — 원작 직접 동기화(빨리감기만) → 스나이퍼만 재시작(항상, 장 시간 구분 없음) → 건강 확인 ①~④
+#  사무실 v1.9.3 (2026-11-19, 방 updater-redesign-sniper-separate 판 2): 원작자 알림이 오면 2번 자동 업뎃 — 원작 직접 동기화(빨리감기만) → 스나이퍼만 재시작(항상, 장 시간 구분 없음) → 건강 확인 ①~④
 #                       · 조건이 하나라도 안 맞으면 하지 않고 알림만(사유 표시) · 실패하면 적용 전 모습으로 자동 되돌림 + 그 원작 커밋은 사람이 풀 때까지 자동 중단 · [↩️ 되돌리기] 버튼
 #                       · 자동 범위 밖: staging 코드 변경, 다른 봇 재시작, targets.json·환경·설정 변경, 병합 충돌, 새 설정 항목이 필요한 원작 업뎃
 #                       · 동기화 명령 기본값 = 스나이퍼 자체 CLI: python3 <스나이퍼 폴더>/plugin_updater.py --base-dir <스나이퍼 폴더> (원작 HEAD 는 그 CLI 가 'upstream' 리모트에서 직접 읽음 · 원작 14개 파일만 가져와 'sniper: upstream <sha7> direct sync' 로 커밋)
@@ -37,7 +37,7 @@ WORK = os.environ.get("U_SNIPER_WORK", "/var/lib/bot-updater/sniper_upstream")
 # 2026-10-28 비교 결과: 2번 봇(v1.0.7 이후)은 원작 2e23df2 (10-24 11:54 KST) 와 가장 같음 → 처음 기준
 BASE_DEFAULT = "2e23df2ede063e4db6d14e57b3cd833938c15395"
 KST = ZoneInfo("Asia/Seoul")
-# --- 자동 업뎃 (사무실 vNEXT) — 장 시간 게이트 없음: 언제 업뎃하든 스나이퍼는 항상 재시작 (결정 2026-11-19) ---
+# --- 자동 업뎃 (사무실 v1.9.3) — 장 시간 게이트 없음: 언제 업뎃하든 스나이퍼는 항상 재시작 (결정 2026-11-19) ---
 AUTO_UPDATE = os.environ.get("U_SNIPER_AUTO_UPDATE", "1") != "0"                 # 0 이면 자동 업뎃 끔 (알림만)
 SYNC_CMD = os.environ.get("U_SNIPER_SYNC_CMD", "").strip()                      # 원작 직접 동기화 실행 명령 (서버 설정 · 비어 있으면 기본값 = plugin_updater CLI, _sync_cmd 참고). U_REPO·U_UPSTREAM_SHA·U_UPSTREAM_BASE 환경변수는 안 쓰고 넘기지도 않음 — 원작 HEAD 는 CLI 가 직접 읽음
 RECONCILE_CMD = os.environ.get("U_SNIPER_RECONCILE_CMD", "").strip()            # 잔고·장부 일치 확인 명령 (선택 · 종료코드 0 = 일치)
@@ -190,7 +190,7 @@ def check(u, st, force=False):
     o = sl["offers"].get(key)
     if o and not force:   # 아직 ✅/🔕 안 누른 같은 버전 → 매일 아침 다시 알림
         u.say("🔁 <b>[다시 알림]</b> 아직 처리하지 않았어요\n\n" + o["msg"], o["rows"])
-        return _auto_safe(u, st, head, key)   # 사무실 vNEXT: 알림이 간 뒤 조건이 맞으면 자동 업뎃 (조건이 풀리는 날 다시 시도)
+        return _auto_safe(u, st, head, key)   # 사무실 v1.9.3: 알림이 간 뒤 조건이 맞으면 자동 업뎃 (조건이 풀리는 날 다시 시도)
     n, stat, added, gone = _summary(base, head)
     files = ""
     if added:
@@ -211,7 +211,7 @@ def check(u, st, force=False):
             [{"text": "✅ 반영 완료 (기준 갱신)", "callback_data": f"um:{key}"}, {"text": "🔕 이번 버전 무시", "callback_data": f"ui:{key}"}]]
     sl["offers"][key] = {"sha": head, "at": time.time(), "msg": msg, "rows": rows}
     u.say(msg, rows)
-    if not force:   # 사무실 vNEXT: 수동 '원작 확인'은 알림만 · 매일 자동 확인에서 새 원작 커밋 알림이 간 뒤 자동 업뎃을 시도
+    if not force:   # 사무실 v1.9.3: 수동 '원작 확인'은 알림만 · 매일 자동 확인에서 새 원작 커밋 알림이 간 뒤 자동 업뎃을 시도
         _auto_safe(u, st, head, key)
 
 
@@ -269,7 +269,7 @@ def ignore(u, st, key):
     u.say("🔕 이 원작 버전은 알림을 끕니다. (봇 그대로 · 원작이 또 바뀌면 다시 알려 드려요)")
 
 
-# ---------------------------------------------------------------- 4) 자동 업뎃 (사무실 vNEXT)
+# ---------------------------------------------------------------- 4) 자동 업뎃 (사무실 v1.9.3)
 # 범위: 원작 새 커밋 알림 → 원작 직접 동기화(빨리감기만) → 스나이퍼만 재시작(항상) → 건강 확인 ①~④ → 실패하면 적용 전 모습으로 되돌림.
 # 자동 범위 밖(항상 수동): staging 코드 변경 · 다른 봇 재시작 · targets.json·환경·설정 변경 · 병합 충돌 · 원작이 새 설정 항목을 요구하는 업뎃.
 def _today():

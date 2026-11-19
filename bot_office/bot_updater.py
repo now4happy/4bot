@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT (2026-11-19, 방 updater-redesign-sniper-separate 판 2): 업데이트 봇 재설계 1단계 — ① 2번 스나이퍼를 적용 대상에서 제외(classify 무시·두 전체 검사에서 경로 제외·병합 때 스나이퍼 파일 그대로 둠 · NAMES·원작 알림·매일 STATUS·sniper_tiers는 유지)
+# 사무실 v1.9.3 (2026-11-19, 방 updater-redesign-sniper-separate 판 2): 업데이트 봇 재설계 1단계 — ① 2번 스나이퍼를 적용 대상에서 제외(classify 무시·두 전체 검사에서 경로 제외·병합 때 스나이퍼 파일 그대로 둠 · NAMES·원작 알림·매일 STATUS·sniper_tiers는 유지)
 #                       ② A: 저장 안 된 변경 검사를 이번에 바뀌는 봇 폴더 + 공용 파일로 한정 ③ B: 서버에만 있는 수정과 겹치는 봇만 '앞섬, 사람 승인 필요'로 보류
 #                       ④ D: 매매 중·일시중지 대기·앞섬인 봇만 보류하고 나머지는 적용 (보류 목록·경과일은 STATUS, 사유가 풀리면 자동 재시도)
 #                       ⑤ 원작자 새 커밋 알림 때 2번 자동 업뎃(원작 직접 동기화만 · 재시작 항상 · 건강 확인 실패 시 자동 되돌림) — 본체는 sniper_upstream.py
@@ -132,7 +132,7 @@ NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service":
          "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립",
          "meritz_laoer.service": "7번 메리츠 속쓸 적립봇"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
-# --- 사무실 vNEXT: 스나이퍼 제외 + 봇별 검사·보류 ---
+# --- 사무실 v1.9.3: 스나이퍼 제외 + 봇별 검사·보류 ---
 SNIPER_UNIT, SNIPER_DIR = "toss_sniper.service", "toss_sniper"
 SCOPED = os.environ.get("U_SCOPED_CHECKS", "1") != "0"   # 스위치 1개: 0 이면 스나이퍼 제외·A·B·D 전부 끄고 예전 동작(저장소 전체 검사·전체 중단)
 HOLDS = os.environ.get("U_HOLDS", "/var/lib/bot-updater/holds.json")   # 보류 목록 (D)
@@ -221,7 +221,7 @@ def _dirty_code_files(include_staged=False, scope=None):
     """저장 안 된 변경 중 실제 코드 변경만 반환한다.
     브리핑이 매번 다시 쓰는 생성 상태 파일(need.json·sniper_tiers.json)은 제외한다.
     include_staged=True면 스테이징된 변경도 포함한다.
-    사무실 vNEXT (U_SCOPED_CHECKS 켜짐): ① 2번 스나이퍼 폴더(toss_sniper/) 변경은 제외한다 (임시 수정이 있어도 다른 봇 적용을 막지 않음)
+    사무실 v1.9.3 (U_SCOPED_CHECKS 켜짐): ① 2번 스나이퍼 폴더(toss_sniper/) 변경은 제외한다 (임시 수정이 있어도 다른 봇 적용을 막지 않음)
       ② scope=(봇 목록, 이번에 바뀌는 파일들)을 주면 그 봇 폴더 + 공용 파일(어느 봇 폴더도 아닌 곳) + 이번에 바뀌는 파일에 겹치는 변경만 본다 (A)
       scope 없으면 저장소 전체(스나이퍼 제외). 스위치를 끄면 예전처럼 저장소 전체를 본다."""
     state = {NEED_FILE, SNIPER_TIERS_FILE}
@@ -313,7 +313,7 @@ def classify(files):
     sniper_pre = _sniper_prefixes() if SCOPED else ()
     for f in files:
         if sniper_pre and f.startswith(sniper_pre):
-            # 사무실 vNEXT: 2번 스나이퍼 폴더는 업데이트 비서가 건드리지 않는다 (가져오기·덮어쓰기·삭제 전부 안 함 — 원작 직접 동기화로 따로 관리)
+            # 사무실 v1.9.3: 2번 스나이퍼 폴더는 업데이트 비서가 건드리지 않는다 (가져오기·덮어쓰기·삭제 전부 안 함 — 원작 직접 동기화로 따로 관리)
             skipped.append(f)
             continue
         if f == "alert-hub" or f.startswith("alert-hub/"):
@@ -343,7 +343,7 @@ def sniper_orders_open():
     """2번 스나이퍼 장부에 매수·매도 주문이 걸려 있으면 보류 사유 문장, 없으면 ''.
     현 장부(인피니트 스노우볼 soxl_stratum_ledger*.json, {"SOXL": {...}}): 매수·매도 주문이 걸려 있으면 보류.
     (스노우볼은 원래 보유를 다음 날로 넘기는 전략이라 '보유 중'만으로는 막지 않음 · 재시작하면 장부·잔고로 이어서 관리)
-    사무실 vNEXT: busy_reason 에서 떼어 냄 — 스나이퍼는 이제 다른 봇 적용 판단에서 빠지고, 이 확인은 2번 자동 업뎃 조건에서 쓴다."""
+    사무실 v1.9.3: busy_reason 에서 떼어 냄 — 스나이퍼는 이제 다른 봇 적용 판단에서 빠지고, 이 확인은 2번 자동 업뎃 조건에서 쓴다."""
     import glob
     root = targets().get(SNIPER_UNIT, "")
     for p in glob.glob(os.path.join(root, "soxl_stratum_ledger*.json")):
@@ -841,7 +841,7 @@ def build_status(reason):
         fs = [x for x in fs.splitlines() if x.strip()]
         pend.append(f"- `{br}`: {', '.join(fs[:6])}{' 외' if len(fs) > 6 else ''}")
     L += pend or ["- 없음"]
-    if SCOPED:   # 사무실 vNEXT: 보류 목록(D) · 2번 스나이퍼 관찰 줄
+    if SCOPED:   # 사무실 v1.9.3: 보류 목록(D) · 2번 스나이퍼 관찰 줄
         L += ["", "## 보류 중인 봇 업데이트 (매매 중·일시중지 대기는 풀리면 자동 재시도 · 앞섬은 사람 승인 필요)", ""]
         L += hold_status_lines() or ["- 없음"]
         L += ["", "## 2번 스나이퍼 (관찰 전용 — 업데이트 비서가 적용하지 않음)", ""]
@@ -991,7 +991,7 @@ def _only_sync_ahead(main, head):
 
 
 def _sniper_only_ahead(main, head):
-    """사무실 vNEXT: 서버 HEAD 가 origin/main 의 빨리감기이고 앞선 커밋이 전부 2번 스나이퍼 폴더만 건드리면 True (서버 앞섬 검사에서 스나이퍼 제외).
+    """사무실 v1.9.3: 서버 HEAD 가 origin/main 의 빨리감기이고 앞선 커밋이 전부 2번 스나이퍼 폴더만 건드리면 True (서버 앞섬 검사에서 스나이퍼 제외).
     올릴 내용에 비밀키로 보이는 값이 있으면 False. 스위치가 꺼져 있으면 항상 False(예전 동작)."""
     if not SCOPED or not main or main == head or git("merge-base", "--is-ancestor", main, head)[0] != 0:
         return False
@@ -1260,7 +1260,7 @@ def restart_service(unit, active=None):
     return active
 
 
-# ---------------------------------------------------------------- 사무실 vNEXT: 봇별 보류(D) · 병합에서 파일 빼기 · 보류 재시도
+# ---------------------------------------------------------------- 사무실 v1.9.3: 봇별 보류(D) · 병합에서 파일 빼기 · 보류 재시도
 def git_env(extra, *a, timeout=120):
     """git() 과 같되 환경변수를 더 줌 (임시 인덱스 파일 등)"""
     cmd = ["env", f"HOME={OWNER.pw_dir}", "GIT_TERMINAL_PROMPT=0", *[f"{k}={v}" for k, v in extra.items()],
@@ -1509,7 +1509,7 @@ def apply(st, key):
     if SECRET_RE.search("\n".join(l for l in added.splitlines() if l.startswith("+"))):
         return say("바뀐 내용에 비밀키로 보이는 값이 있어 적용하지 않았습니다. GitHub에서 그 내용을 지우고 키는 새로 발급해 주세요.")
     pause_verified = set()
-    held, held_kind, dc_rows = {}, {}, []   # 사무실 vNEXT(D): 이번에 적용하지 않고 보류할 봇 → 사유 · 종류('busy' 자동 재시도 / 'ahead' 사람 승인) · 재개 버튼
+    held, held_kind, dc_rows = {}, {}, []   # 사무실 v1.9.3(D): 이번에 적용하지 않고 보류할 봇 → 사유 · 종류('busy' 자동 재시도 / 'ahead' 사람 승인) · 재개 버튼
     for unit in units:
         root = targets().get(unit)
         if unit in DC.UNITS.values() and DC.state_path(root).exists():
@@ -1846,7 +1846,7 @@ def handle(st, upd):
         elif txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
             say("원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
-        elif txt in ("원작 자동 재개", "/upstream_resume") and SU:   # 사무실 vNEXT: 자동 업뎃 실패로 멈춘 원작 커밋을 사람이 풀어 줌
+        elif txt in ("원작 자동 재개", "/upstream_resume") and SU:   # 사무실 v1.9.3: 자동 업뎃 실패로 멈춘 원작 커밋을 사람이 풀어 줌
             SU.release(sys.modules[__name__], st, "all")
         elif txt in ("거래 상태", "일시중지 상태", "/pause_status"):
             found = False
@@ -2018,7 +2018,7 @@ def main():
                 scan(st)
             except Exception as e:
                 print("확인 오류:", e, flush=True)
-            try:   # 사무실 vNEXT(D): 보류한 봇 재시도 — 사유가 풀린 것만 (아직이면 조용히 기다림)
+            try:   # 사무실 v1.9.3(D): 보류한 봇 재시도 — 사유가 풀린 것만 (아직이면 조용히 기다림)
                 retry_holds(st)
             except Exception as e:
                 print("보류 재시도 오류:", type(e).__name__, e, flush=True)

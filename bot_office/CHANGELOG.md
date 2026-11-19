@@ -1,5 +1,10 @@
 # 사무실 파일(bot_office) 변경 기록
 
+## v1.9.3 · 2026-11-19 17:40 (KST)
+- 파일: bot_updater.py, sniper_upstream.py
+- 내용: updater redesign pan2 v2: sniper sync via plugin_updater CLI --base-dir; record all-held to holds list
+- 브랜치: staging
+
 ## v1.9.2 · 2026-11-19 15:40 (KST)
 - 파일: bot_updater.py, fanding_trade.py, fanding_vr6.py, office_secretary.py, office_sgov.py
 - 내용: 텔레그램 매매봇 메뉴 정리 3차 v2 (7번 제외): 첫 화면 4칸·금액 메뉴 설명·범위 표시·이모티콘 제거
