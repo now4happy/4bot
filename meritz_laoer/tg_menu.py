@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.0.6)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.0.7)
+# v2.0.7 (2026-11-19, 판 9): 자동환전 시간이 한국시간 오전 9시로 바뀐 데 맞춰 안내 글자 3곳만 고침 (💰 자금의 '신청은 주문 시간에만' · 💱 화면 설명 · 켜기 확인 문구). 로직 변경 없음
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.4 (2026-11-19): 💰 자금 화면에 '현금 부족 → 부분 매수'(몇 회차 몇 주만, 원래 몇 주) 표시. 판 5 보완(메뉴가 멈추거나 메시지를 버리는 이유를 로그에 남김·오래된 메시지 안내) 포함
 # v2.0.3 (2026-11-18): 지시 2026-11-18 — 자동환전 여유%·하루 상한은 사용자가 💱 안·⚙️ 설정 안에서 직접 입력(값은 클로드가 안 정함) → 그 뒤에 💱 켜기.
@@ -402,7 +403,7 @@ class MenuBot:
             i = plan["info"]
             today = fmt_krw(i["unit_usd"] * i["fx"]) if i.get("fx") else "미확인"
             need = (f"▫️ 오늘 필요 달러 ${i['need_usd']:,.0f} · " + (f"부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "부족 없음")
-                    + f" · 자동환전 {'켜짐 (신청은 주문 시간에만)' if i.get('auto_fx') else '꺼짐'}"
+                    + f" · 자동환전 {'켜짐 (신청은 한국시간 오전 9시)' if i.get('auto_fx') else '꺼짐'}"
                     + (f"\n▫️ 현금 부족 → ${i['partial']['price']:.2f} 회차 {i['partial']['qty']}주만 부분 매수 (원래 {i['partial']['full_qty']}주)" if i.get("partial") else ""))
         else:
             today, need = "미확인", f"▫️ 오늘 필요 달러: 미확인 ({d['plan_err']})"
@@ -448,7 +449,7 @@ class MenuBot:
                           f"▫️ 여유 {k('auto_fx_buffer_pct')} · 하루 상한 {k('auto_fx_max_usd_per_day')}",
                           "▫️ 켜기 전에 여유%와 하루 상한을 직접 입력해 주세요 (아래 두 버튼, ⚙️ 설정에도 있어요)."
                           if not fx_values_ready(s) else "▫️ 값이 입력돼 있어요. 켤 수 있어요.",
-                          "▫️ 켜면: 실거래 모드에서 하루 한 번, 오늘 매수에 모자란 달러 + 여유%를 하루 상한 안에서 환전 신청해요.",
+                          "▫️ 켜면: 실거래 모드에서 한국시간 오전 9시에 하루 한 번, 다음 한 회차에 모자란 달러 + 여유%를 하루 상한 안에서 환전 신청해요.",
                           "▫️ 이 메뉴에서는 환전 신청을 하지 않아요 (설정 값만 바뀜)."]
                          + (["▫️ 지금은 모의 모드라 켜 둬도 환전 신청은 안 나가요."] if s.get("dry_run", True) else []))
 
@@ -571,7 +572,7 @@ class MenuBot:
             if not fx_values_ready(s):
                 return say(FX_NEED)
             return self.propose(s, say, {"auto_fx_enabled": True},
-                                "켜면 실거래 모드에서만, 하루 한 번, 하루 상한 안에서 환전을 신청해요. 실제 환전은 아직 시험 전이라 첫 환전은 꼭 확인해 주세요.")
+                                "켜면 실거래 모드에서만, 한국시간 오전 9시에 하루 한 번, 하루 상한 안에서 환전을 신청해요. 실제 환전은 아직 시험 전이라 첫 환전은 꼭 확인해 주세요.")
         if text == FX_OFF:
             return self.apply(s, say, {"auto_fx_enabled": False})
         # ---- 📋 전술
