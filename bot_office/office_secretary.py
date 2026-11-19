@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 v1.8.8 (2026-11-19): 8번 비서 도움말·"모르는 명령" 안내 글자를 새 메뉴 구조(자금 · 환율 규칙 · SGOV 현황 · 도움말)에 맞춤 — 글자만 변경, 버튼 글자·구조·매매 로직 그대로
 # 사무실 v1.8.7 (2026-11-14): 웹 사무실 완전 제거에 맞춰 8번 비서를 SGOV 메뉴 전용으로 정리 — 🏢 사무실·/주소·🖥 PC 상태·💰 잔액·Update 안내 삭제
 #                         (남김: SGOV 메뉴 office_sgov.py · 허브 신호 · 전략·종목·금액·enabled 변경 없음)
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
@@ -57,9 +58,9 @@ TELEGRAM_API = os.environ.get("OFFICE_TELEGRAM_API", "https://api.telegram.org")
 SYSTEMCTL = os.environ.get("OFFICE_SYSTEMCTL", "systemctl")
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 
-HELP = ("🤖 <b>8번 비서 사용법</b> (SGOV 메뉴)\n"
-        "▫️ <b>📈 상황판</b> : SGOV 상황판\n"
-        "▫️ <b>☰ 메뉴</b> : 🪙 SGOV 현황 · 💰 자금·SGOV · ⚙️ 시드·SGOV · 💵 분배금 기록 · 🛠 도구 · ❓ 도움말")
+HELP = ("<b>8번 비서 사용법</b> (SGOV 메뉴)\n"
+        "· <b>상황판</b> 버튼 : SGOV 상황판\n"
+        "· <b>메뉴</b> 버튼 : 자금 · 환율 규칙 · SGOV 현황 · 도움말")
 
 
 def load(p, default):
@@ -178,7 +179,7 @@ def handle_message(tg, st, msg):
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?") or raw == "❓ 도움말":
         tg.send(HELP, keyboard=MENU_KB); return
-    tg.send("모르는 명령이에요. 아래 버튼(📈 상황판 · ☰ 메뉴)으로 써 주세요.", keyboard=MENU_KB)
+    tg.send("모르는 명령이에요. 아래 상황판·메뉴 버튼으로 써 주세요. (메뉴 안: 자금 · 환율 규칙 · SGOV 현황 · 도움말)", keyboard=MENU_KB)
 
 
 def handle_callback(tg, st, cb):

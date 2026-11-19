@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_vNEXT)
+# v1.6.0 (2026-11-19, 방 telegram-bot-menu-review 3차): 4번 메뉴 정리 — 첫 화면 4칸(P 매매·VR6 매매·전체 현황·전체 도움말) · 배수(P)·환전 금액·배수 맞추기 일수를 숫자 버튼 대신 입력창으로(범위 안내) · 배수는 지금 값→새 값 확인 후 적용 · 단순 이모티콘 제거(예전 키보드 글자도 같은 버튼으로 읽음)
+#        · 주문·매수·매도·자동환전·재예약·재판독 판단 로직은 바꾸지 않음 (환전 확인 화면·10분 유효·1% 환율 변동 중단은 그대로)
 # v1.5.9 (2026-11-18, 방 fanding-autoorder-read30): 자동주문 모드 A '판독후 30분뒤' 시각을 이름대로 — max(알림일 09:30, 실제 알림 발송 시각+30분)
 #        · 평소 표(알림 09:00 발송) 09:30 그대로, 늦게 읽힌 표(10:11 발송)는 10:41 자동주문 (발송 시각은 분 단위 내림)
 #        · late 는 안전망으로 유지: 계산된 시각 자체가 지난 경우(봇 꺼짐 등)·모드를 그 시각 뒤에 켠 경우·발송 기록 없음 · 한 번 late 면 알림 재발송으로 시각이 밀려도 계속 late
@@ -27,7 +29,7 @@
 # 1.6.2: 금요일 가격표는 월요일 아침에 받아도 됨 → '가격표 안 옴' 알림을 토요일이 아닌 월요일에 확인
 # 1.0.1: 웹서버(bot-office 계정)가 텔레그램 키를 못 읽는 문제 → 윈도우 알림은 파일로 넘겨 이 프로그램이 전송 / 설정 저장 시 권한 유지
 # 1.7.2: 하단 버튼 메뉴(/start)·배수/자동주문/발주시간 선택 버튼 — 기존 명령과 같은 기능을 버튼으로 (7번 비서의 팬딩 메뉴 공용)
-# 1.8.0: 5번 봇 메뉴를 [🅿 P 메뉴](기존 가격표 매매 11버튼) · [🅥 VR6 메뉴](fanding_vr6.py, TQQQ 2주 1회 표 수신)로 분리
+# 1.8.0: 4번 봇 메뉴를 [🅿 P 메뉴](기존 가격표 매매 11버튼) · [🅥 VR6 메뉴](fanding_vr6.py, TQQQ 2주 1회 표 수신)로 분리
 #        · 윈도우 업로드에 X-Fanding-Kind: vr6* 경로 추가(기존 P 업로드·판독·주문 흐름은 그대로)
 # 1.8.3 (사무실 v1.0.47): ① 접수 일부 실패(partial) → 마감 전까지 10분 간격 최대 3번 자동 재시도
 #        (재시도 전 메리츠 '살아 있는 예약' 수를 확인해 이미 접수된 게 있을 수 있으면 자동 재시도 안 함 → 중복주문 방지 ·
@@ -55,11 +57,11 @@
 #        ② 잔고 조회 실패 → 매도는 표 수량 그대로 (점검 실패 아님, 증권사가 거절하면 그 줄만 실패)
 #        ③ 거래소 번호를 잔고에서 한 번 알아내면 exch_seen.json 에 저장 → 0주가 돼도 계속 사용
 #        · 보유 수량 차이는 지금처럼 참고 표시만 (사용자가 직접 처리)
-# 1.10.0 (사무실 v1.0.64): 5번 봇 메뉴 정리 (사용자 시안 2026-10-29)
+# 1.10.0 (사무실 v1.0.64): 4번 봇 메뉴 정리 (사용자 시안 2026-10-29)
 #        · 처음: [🅿 P 매매][🅥 VR6 매매][❓ 도움말] · P: 📋 가격표 💱 환전 🤖 자동(누르면 즉시 켜짐↔꺼짐) 📐 배수 🩺 진단 🔄 재판독 🛠 도구 🏠 처음
 #          🛠 도구: ⏱ 발주시간 🔁 재예약 ⚠️ 재예약 강제 🧠 판독 AI 🗂 과거 수집 ❓ 도움말 ⬅️ P 메뉴 · 메뉴를 열면 상태 한 줄만
 #        · 비서 팬딩 메뉴 잔재 제거: menu_rows(), 비서용 모듈 다시 불러오기(_reload_if_changed — 돌고 있는 본 프로그램을
-#          다시 불러오는 위험) · secretary_message/secretary_callback → bot_message/bot_callback (5번 봇 전용)
+#          다시 불러오는 위험) · secretary_message/secretary_callback → bot_message/bot_callback (4번 봇 전용)
 #        · 예전 버튼 글자(🅿 P 메뉴·🏠 메인 메뉴 등)도 계속 동작
 # 1.10.1 (사무실 v1.0.65): VR6 버튼 글자에서 'VR6' 빼기 (사용자 요청 — 산만함) → P·VR6 가 같은 글자 버튼을 씀
 #        · 하단 버튼은 글자만 오므로, 마지막으로 띄운 키보드가 P/VR6 중 무엇인지 menu_mode.json 에 기억해서
@@ -102,9 +104,9 @@
 # 1.14.3 (사무실 v1.3.1): 과거자료 다운을 버튼으로 (사용자 지시 2026-11-05) — 매매·주문·판독·알림 로직 불변
 #        ① loop() 의 past_sheet_telegram.tick() 호출 삭제 → 매일 자동 전송 없음
 #        ② 🛠 도구에 [📥 과거자료 다운] (/과거자료다운): 누르면 숫자 파일을 바로 갱신(history 가 바뀐 경우만) → 5칸 검사 →
-#          5번 팬딩 봇으로 1번 전송 → 줄 수·날짜 범위·빠진 매매일 답장 · /빠진날짜 는 전송 없이 목록만
+#          4번 팬딩 봇으로 1번 전송 → 줄 수·날짜 범위·빠진 매매일 답장 · /빠진날짜 는 전송 없이 목록만
 #        ③ 🩺 진단·🔄 재판독 버튼을 P 메뉴에서 🛠 도구로 옮김 (/진단·/재판독 글자 명령·알림 안 버튼은 그대로)
-# 1.14.2 (사무실 v1.3.0): 과거 가격표 숫자 파일을 5번 팬딩 봇으로 보냄 — past_sheet_telegram.tick() 호출 1줄
+# 1.14.2 (사무실 v1.3.0): 과거 가격표 숫자 파일을 4번 팬딩 봇으로 보냄 — past_sheet_telegram.tick() 호출 1줄
 #        (파일이 오늘 새로 갱신되고 내용이 바뀐 날 1번만 · 숫자 파일 1개만 · 기존 팬딩 봇 설정 · 매매 로직 불변)
 # 1.14.1 (사무실 v1.3.0): 과거 가격표 숫자 파일 자동 갱신 — 매일 12:00 KST 뒤(과거 수집 시간대 8~12시 이후),
 #        history.jsonl 이 바뀌었을 때만 export_past_sheet.auto_export() 를 이 서비스 계정으로 실행 (10분에 한 번 확인)
@@ -164,7 +166,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.5.9"
+VERSION = "v1.6.0"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -184,7 +186,7 @@ DEFAULTS = {
     "symbol": "SOXL",
     "price_market": "AX",        # 메리츠 현재가 조회용 거래소 구분 (SOXL: NYSE Arca → 보통 AX). check 명령으로 확인
     "exch_id": "",               # 예약주문용 거래소 번호. 비우면 잔고에서 자동으로 찾음
-    "multiplier": 5,             # 처음 배수 (이후엔 5번 팬딩 봇 📐 배수 로 변경)
+    "multiplier": 5,             # 처음 배수 (이후엔 4번 팬딩 봇 배수 로 변경)
     "max_buy_usd": 8000,         # 1회 매수 총액 한도(배수 적용 후). 넘으면 주문 막음
     "auto_order": True,          # 버튼 안 누르면 마감 10분 전 자동주문
     "submit_kst": "09:01",       # 예약주문 접수 시작 (한국시간)
@@ -741,7 +743,7 @@ def diagnosis():
     expected = last_session_date().isoformat()
     sh = st.get("sheets", {}).get(expected)
     stages = {"idle":"대기", "connecting":"사이트 접속", "listing":"글 목록 탐색", "images":"이미지 다운로드", "uploading":"서버 전송", "parsing":"서버 판독 대기", "history":"과거 자료 수집", "daily_done":"하루 작업 완료·PC 수집기 종료", "daily_stopped":"종료 시각 도달·자료 확인 필요", "sent":"전송 완료", "logged_out":"로그인 필요", "no_posts":"글 목록 없음", "no_image":"이미지 없음", "error":"PC 수집 오류", "server_error":"서버 연결/전송 오류"}
-    lines = [f"🩺 팬딩 연결 진단 · v{VERSION}", f"필요 종가일: {expected} (월요일은 금요일 종가, 토요일 게시 가능)",
+    lines = [f"팬딩 연결 진단 · v{VERSION}", f"필요 종가일: {expected} (월요일은 금요일 종가, 토요일 게시 가능)",
              "윈도우 연결: " + (f"{age}초 전" if age is not None else "새 수집기 연결 기록 없음"),
              "PC 단계: " + stages.get(pc.get("stage"), "미확인"),
              "PC 수집기 버전: " + str(pc.get("version") or "미확인"),
@@ -813,7 +815,7 @@ def recovery_tick(tg):
             if control.get("alert_key") == key:
                 return
             control["alert_key"] = key
-        reply = tg.send("⚠️ <b>팬딩 자료 누락 진단</b>\n" + html.escape(problem) + "\n필요 종가일: " + expected
+        reply = tg.send("<b>팬딩 자료 누락 진단</b>\n" + html.escape(problem) + "\n필요 종가일: " + expected
                         + "\n" + pc_status_lines()
                         + "\n재접속·재수집 요청은 자동 등록됩니다. /재판독 으로도 요청 가능")
         replay("diag_alert", "ok" if isinstance(reply, dict) and reply.get("message_id") else "failed",
@@ -840,7 +842,7 @@ def vision_status():
     today = now_kst().date().isoformat()
     v, attempt = st.get("vision_today") or {}, st.get("vision_last_attempt") or {}
     names = {"gemini": "Gemini", "deepseek": "DeepSeek"}
-    lines = [f"🔎 팬딩 판독 상태 · v{VERSION}"]
+    lines = [f"팬딩 판독 상태 · v{VERSION}"]
     if v.get("date") == today:
         lines.append("오늘 1차 판독 성공: " + names.get(v.get("provider"), "확인 필요"))
     else:
@@ -1023,9 +1025,9 @@ def run_checks(sheet, mult, market=None):
     if market and market.get("sellable") is not None:        # 1.9.0: 잔고 차이로 막지 않음
         s_ok = market["sellable"]
         add(True, f"매도 합계 {sell_qty}주 ≤ 매도가능 {s_ok}주" if sell_qty <= s_ok else
-            f"⚠️ 매도가능 {s_ok}주 < 표 매도 {sell_qty}주 → 가장 높은 매도가부터 {sell_qty - s_ok}주 줄여 주문")
+            f"매도가능 {s_ok}주 < 표 매도 {sell_qty}주 → 가장 높은 매도가부터 {sell_qty - s_ok}주 줄여 주문")
     elif sell_qty:
-        add(True, "⚠️ 잔고 조회 실패 → 매도는 표 수량 그대로 (증권사가 거절하면 그 줄만 실패)")
+        add(True, "잔고 조회 실패 → 매도는 표 수량 그대로 (증권사가 거절하면 그 줄만 실패)")
     if market and market.get("holding") is not None and p.get("holding_qty"):
         add(True, f"참고: 표 보유 {p['holding_qty']}×{mult}={p['holding_qty'] * mult}주 / 내 계좌 {market['holding']}주")
     if not (cfg().get("exch_id") or (market or {}).get("exch_id") or seen_exch(cfg()["symbol"])):
@@ -1079,20 +1081,20 @@ def account_lines(sheet, snapshot=None):
     # 사용자 결정(2026-10-28): 환전 판단 기준은 추정 예수금. 예수금 기준 부족은 참고로만 표시한다.
     def whole(x):   # 소수점 첫째 자리에서 반올림한 정수, 천 단위 쉼표
         return f"${x.quantize(Decimal(1), rounding=ROUND_HALF_UP):,}"
-    lines = ["\n💵 <b>달러</b>",
-             f"▫️ {whole(est)} 보유 달러" if est is not None else "▫️ 보유 달러: 조회 불가",
-             f"▫️ {whole(need)} 표 매수 필요 달러",
-             f"▫️ {whole(est_gap)} 환전 필요 달러" if est_gap is not None else "▫️ 환전 필요 달러: 계산 보류"]
+    lines = ["\n<b>달러</b>",
+             f"· {whole(est)} 보유 달러" if est is not None else "· 보유 달러: 조회 불가",
+             f"· {whole(need)} 표 매수 필요 달러",
+             f"· {whole(est_gap)} 환전 필요 달러" if est_gap is not None else "· 환전 필요 달러: 계산 보류"]
     target = number(sheet["parsed"].get("holding_qty"))
     actual = number(market.get("holding"))
-    lines.append("\n📦 <b>보유 수량 비교</b>")
+    lines.append("\n<b>보유 수량 비교</b>")
     if target is None or mult is None or actual is None:
-        lines.append("▫️ 차이 계산 보류: 표 보유 개수 또는 계좌 수량 확인 필요")
+        lines.append("· 차이 계산 보류: 표 보유 개수 또는 계좌 수량 확인 필요")
     else:
         expected = target * mult
         difference = actual - expected
-        lines.append(f"▫️ 표 {target:g}주 × {mult:g} = {expected:g}주 / 실제 {actual:g}주")
-        lines.append("▫️ 차이: " + (f"{difference:+g}주 (실제 보유가 {abs(difference):g}주 {'많음' if difference > 0 else '적음'})" if difference else "0주 (일치)"))
+        lines.append(f"· 표 {target:g}주 × {mult:g} = {expected:g}주 / 실제 {actual:g}주")
+        lines.append("· 차이: " + (f"{difference:+g}주 (실제 보유가 {abs(difference):g}주 {'많음' if difference > 0 else '적음'})" if difference else "0주 (일치)"))
     return lines
 
 
@@ -1288,40 +1290,40 @@ def seen_exch(symbol):
     return load(EXCH_SEEN, {}).get(symbol)
 
 
-def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
+def sheet_text(sheet, head="<b>팬딩 가격표 도착</b>"):
     c = cfg()
     p, mult = sheet["parsed"], sheet["mult"]
     alarm, auto, cutoff = deadlines(sheet)
     us = datetime.strptime(sheet["us_date"], "%Y%m%d")
-    L = [head, f"▫️ {c['symbol']} · {html.escape(p['close_date'])} 종가 {p['close']} · {html.escape(p.get('cycle') or '')}",
-         f"▫️ 배수 <b>×{mult}</b> · 주문일(미국) {us:%m/%d} · Limit VWAP 예약 · <b>{RESERVE_NAMES.get(str(c.get('reserve_time', '2')), '')} 발주</b>"]
+    L = [head, f"· {c['symbol']} · {html.escape(p['close_date'])} 종가 {p['close']} · {html.escape(p.get('cycle') or '')}",
+         f"· 배수 <b>×{mult}</b> · 주문일(미국) {us:%m/%d} · Limit VWAP 예약 · <b>{RESERVE_NAMES.get(str(c.get('reserve_time', '2')), '')} 발주</b>"]
     for (side, price, rq), (_, _, qty) in zip(raw_lines(sheet), order_lines(sheet, keep_zero=True)):
         cut = f" ← 매도가능 부족으로 {rq}에서 줄임" if qty < rq else ""
-        L.append(f"{'🔴 매수' if side == 'buy' else '🔵 매도'} <b>{price:g} × {qty}</b>"
+        L.append(f"{'매수' if side == 'buy' else '매도'} <b>{price:g} × {qty}</b>"
                  f"  {fmt_money(price * qty)}{cut}")
     cq = int(sheet.get("catchup_qty") or 0)
     cp = sheet.get("catchup_price")
     if cq > 0 and cp is not None:
-        L.append(f"📈 배수 맞추기: {cq}주가 가장 낮은 매수가({cp:g})에 포함돼 있어요  {fmt_money(float(cp) * cq)}")
+        L.append(f"배수 맞추기: {cq}주가 가장 낮은 매수가({cp:g})에 포함돼 있어요  {fmt_money(float(cp) * cq)}")
     bad = [x for x in sheet["checks"] if not x["ok"]]
     if bad:
-        L.append("\n⚠️ <b>확인 필요</b>")
+        L.append("\n<b>확인 필요</b>")
         L += [f"  · {html.escape(x['msg'])}" for x in bad]
     else:
-        L.append("\n✅ 안전점검 모두 통과")
+        L.append("\n안전점검 모두 통과")
     sub = datetime(*now_kst().timetuple()[:3], *hm(c["submit_kst"]), tzinfo=KST)
-    L.append(f"\n⏱ 주문 접수: 승인 후 {('지금 바로' if now_kst() >= sub else c['submit_kst'] + ' 이후')}")
+    L.append(f"\n주문 접수: 승인 후 {('지금 바로' if now_kst() >= sub else c['submit_kst'] + ' 이후')}")
     mode = auto_mode(c)
     if c["auto_order"] and mode:
         at = auto_mode_time(sheet, mode)
-        L.append(f"⏰ {AUTO_MODES[mode]} {at:%H:%M} " +
+        L.append(f"{AUTO_MODES[mode]} {at:%H:%M} " +
                  (("자동주문" if sheet["auto_ok"] else "<b>자동주문 안 함</b>(점검 미통과)") if not sheet.get("auto_late")
                   else "<b>자동주문 안 함</b>(시각 지남 · 버튼으로 결정)") + f" · 마감 {cutoff:%m/%d %H:%M}")
     elif c["auto_order"]:
-        L.append(f"⏰ 마감 {alarm:%m/%d %H:%M} 알림 → {auto:%H:%M} " +
+        L.append(f"마감 {alarm:%m/%d %H:%M} 알림 → {auto:%H:%M} " +
                  ("자동주문" if sheet["auto_ok"] else "<b>자동주문 안 함</b>(점검 미통과)"))
     else:
-        L.append(f"⏰ 마감 {cutoff:%m/%d %H:%M} (자동주문 꺼짐)")
+        L.append(f"마감 {cutoff:%m/%d %H:%M} (자동주문 꺼짐)")
     L += account_lines(sheet)
     return "\n".join(L)
 
@@ -1335,13 +1337,82 @@ def sheet_text(sheet, head="📋 <b>팬딩 가격표 도착</b>"):
 #       멈춤(다시 안 함, 바로 알림): 원화 부족 · 실행 직전 환율 1% 이상 변동 · 같은 회차 이미 함 · 결과 불확실.
 FX_TTL_MINUTES = 10
 FX_RATE_MAX_CHANGE = None  # (예전 이름 유지)
-FX_PRESETS = (100, 300, 500, 1000)
+FX_PRESETS = (100, 300, 500, 1000)   # v1.6.0: 숫자 버튼은 없앰 (입력창으로). 옛 상수는 호환용으로만 남김
 FX_STEP, FX_MAX_PICK = 100, 99999
 FX_SKIP_STATUS = ("cancelled", "expired")
 FX_NO_SHEET = "아직 몰라요 (주문표 없음)"
 FX_PICK_CACHE_SEC = 600
 _FX_PICK = {}          # 금액 고르기 화면의 계좌 숫자 (메모리에만 둠, 파일에 남기지 않음)
-AUTO_FX_ON_LABEL, AUTO_FX_OFF_LABEL = "💱 자동환전 켜짐", "💱 자동환전 꺼짐"
+AUTO_FX_ON_LABEL, AUTO_FX_OFF_LABEL = "자동환전 켜짐", "자동환전 꺼짐"
+
+
+# ---------- v1.6.0: 숫자 입력창 (버튼 대신 숫자를 직접 보냄) · 지금 값 → 새 값 확인 · 이모티콘 없는 글자
+_EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A0-\u25FF\u2300-\u23FF\u2900-\u297F\uFE0F\u200D])+ ?")
+import types as _types
+# 이 파일이 직접 실행(__main__)돼도, VR6 쪽 import 사본과 같은 대기 정보를 쓰도록 공용 자리에 둔다
+_MS = sys.modules.setdefault("_fanding_menu_state", _types.ModuleType("_fanding_menu_state"))
+if not hasattr(_MS, "AWAIT"):
+    _MS.AWAIT, _MS.CFM = {}, {}
+_AWAIT = _MS.AWAIT   # 지금 기다리는 숫자 입력 1개 (메모리만): {"kind": mult|vr6mult|fx|catchup, "ts", ...}
+AWAIT_SEC = 600      # 입력 기다리는 시간 (다른 봇 메뉴의 "10분 안"과 같음)
+CONFIRM_SEC = 60     # 지금 → 새 값 확인 버튼 유효 시간
+_CFM = _MS.CFM       # 확인 대기 (메모리만): {"mult": (n, ts), "vr6mult": (n, ts)}
+
+
+def _plain(t):
+    """예전 하단 키보드(이모티콘 글자)가 폰에 남아 있어도 같은 버튼으로 읽도록 이모티콘만 뺀다"""
+    return _EMOJI_RE.sub("", t or "").strip()
+
+
+def explain_text(name, now, rng, meaning, effect, example):
+    """금액·배수 입력 설명 (채팅 본문). 항목: 지금 값 · 넣을 수 있는 값 · 무슨 뜻 · 바꾸면 · 예시"""
+    return (f"<b>{name}</b>\n지금 값: {now}\n넣을 수 있는 값: {rng}\n무슨 뜻: {meaning}\n"
+            f"바꾸면: {effect} (주문은 바로 나가지 않아요)\n새 값을 숫자로 보내 주세요. 예: {example}")
+
+
+def await_set(kind, **kw):
+    _AWAIT.clear(); _AWAIT.update(kind=kind, ts=time.time(), **kw)
+
+
+def await_handle(tg, t):
+    """기다리던 숫자 입력이면 처리하고 True. 숫자가 아니면(버튼·명령) 입력 대기를 풀고 False"""
+    if not _AWAIT:
+        return False
+    aw = dict(_AWAIT)
+    if time.time() - aw["ts"] > AWAIT_SEC:
+        _AWAIT.clear(); return False
+    if not re.fullmatch(r"[\$\d.,\s]+", t or ""):
+        _AWAIT.clear(); return False
+    kind = aw["kind"]
+    if kind in ("mult", "vr6mult", "catchup"):
+        hi = 60 if kind == "catchup" else 50
+        if not re.fullmatch(r"\d+", t.strip()) or not 1 <= int(t) <= hi:
+            tg.send(("거래일 수는 1~60 사이 정수로" if kind == "catchup" else "배수는 1~50 사이 정수로") + " 보내 주세요. (예: " + ("12" if kind == "catchup" else "6") + ")")
+            return True
+        n = int(t); _AWAIT.clear()
+        if kind == "mult":
+            mult_confirm(tg, n)
+        elif kind == "vr6mult":
+            import fanding_vr6
+            fanding_vr6.mult_confirm(tg, n)
+        else:
+            with locked_state() as st:
+                catchup_confirm(tg, st, n)
+        return True
+    if kind == "fx":
+        amt = fx_parse_amount(t)
+        if amt is None or amt > FX_MAX_PICK:
+            tg.send(f"금액은 0 초과 ${FX_MAX_PICK:,} 이하 숫자로 보내 주세요. (예: 1500)")
+            return True
+        _AWAIT.clear()
+        if aw.get("prefix") == "vm":
+            import fanding_vr6
+            fanding_vr6.fx_show(tg, amount=amt)
+        else:
+            fx_show_calc(tg, amount=amt, sheet=None)
+        return True
+    _AWAIT.clear()
+    return False
 
 
 def fx_parse_amount(s):
@@ -1430,7 +1501,7 @@ def fx_est_gap(sheet):
 
 
 def track_buttons(sheet, res):
-    """1.14.4 버튼(✅/❌)이 붙은 메시지 번호를 기억 → 마감·자동승인 때 모두 정리"""
+    """1.14.4 버튼(/)이 붙은 메시지 번호를 기억 → 마감·자동승인 때 모두 정리"""
     mid = (res or {}).get("message_id")
     if mid and mid != sheet.get("msg_id"):
         sheet["btn_msgs"] = ([x for x in sheet.get("btn_msgs") or [] if x != mid] + [mid])[-10:]
@@ -1446,10 +1517,10 @@ def clear_sheet_buttons(tg, sheet):
 
 def sheet_rows(sheet):
     k = f"{sheet['date']}:{sheet['ver']}"
-    rows = [[{"text": "✅ 주문", "callback_data": f"fd:ok:{k}"}, {"text": "❌ 이번엔 안 함", "callback_data": f"fd:no:{k}"}]]
+    rows = [[{"text": "주문", "callback_data": f"fd:ok:{k}"}, {"text": "이번엔 안 함", "callback_data": f"fd:no:{k}"}]]
     gap = fx_est_gap(sheet)
     if gap is not None and gap > 0:
-        rows.append([{"text": "💱 환전 금액 확인", "callback_data": f"fx:calc:{k}"}])
+        rows.append([{"text": "환전 금액 확인", "callback_data": f"fx:calc:{k}"}])
     return rows
 
 
@@ -1483,28 +1554,28 @@ def fx_pick_info(sheet=None, fresh=True):
     return dict(info)
 
 
-def fx_pick_view(info, amount, title="💱 <b>P 환전 — 금액 고르기</b>", prefix="fx"):
-    """금액 고르기 화면 (글자, 버튼). VR6 도 같은 틀을 씀 (prefix 만 다름)"""
+def fx_pick_view(info, amount, title="<b>P 환전 — 금액 입력</b>", prefix="fx"):
+    """금액 입력 화면 (글자, 버튼). VR6 도 같은 틀을 씀 (prefix 만 다름). v1.6.0: 숫자 버튼(±$100·프리셋) 없앰 → 숫자를 직접 보냄"""
     from decimal import Decimal
     amount = amount if amount is not None else Decimal(0)
     L = [title,
-         f"▫️ 보유 달러: {fx_money(info.get('est'))} (추정 예수금)"
+         f"지금 값: 보유 달러 {fx_money(info.get('est'))} (추정 예수금)"
          + (f" · 예수금 {fx_money(info.get('cash'))}" if info.get("cash") is not None else ""),
-         "▫️ 이번 회차 필요 달러: " + (f"{fx_money(info['need'])}" + (f" ({info['sheet_date']})" if info.get("sheet_date") else "")
+         "· 이번 회차 필요 달러: " + (f"{fx_money(info['need'])}" + (f" ({info['sheet_date']})" if info.get("sheet_date") else "")
                                 if info.get("need") is not None else FX_NO_SHEET)]
     gap = info.get("gap")
     if gap is not None:
-        L.append("▫️ 부족액(추정 기준): " + (fx_money(gap) if gap > 0 else "없음"))
-    L.append(f"\n👉 선택한 금액: <b>{fx_money(amount)}</b>" if amount > 0
-             else "\n👉 선택한 금액: 아직 없음 — 아래 버튼으로 골라 주세요")
+        L.append("· 부족액(추정 기준): " + (fx_money(gap) if gap > 0 else "없음"))
+    L += [f"넣을 수 있는 값: 0 초과 ~ ${FX_MAX_PICK:,} (달러)",
+          "무슨 뜻: 원화를 달러로 바꿀 금액(환전)이에요.",
+          "바꾸면: 확인 화면에서 적용환율·필요 원화를 보여 주고, 실행 버튼을 눌러야 환전돼요 (10분 안 · 환율이 1% 넘게 바뀌면 실행 안 함).",
+          "새 값을 숫자로 보내 주세요. 예: 1500" + (f" (부족액을 채우려면 {fx_cb_amount(gap)})" if gap is not None and gap > 0 else "")]
+    if amount > 0:
+        L.append(f"\n지금 입력된 금액: <b>{fx_money(amount)}</b>")
     rows = []
-    if gap is not None and gap > 0:
-        rows.append([{"text": f"부족액 {fx_money(gap)} 그대로", "callback_data": f"{prefix}:pk:{fx_cb_amount(gap)}"}])
-    rows.append([{"text": "-$100", "callback_data": f"{prefix}:pk:{fx_cb_amount(max(Decimal(0), amount - FX_STEP))}"},
-                 {"text": "+$100", "callback_data": f"{prefix}:pk:{fx_cb_amount(min(Decimal(FX_MAX_PICK), amount + FX_STEP))}"}])
-    rows.append([{"text": f"${n:,}", "callback_data": f"{prefix}:pk:{n}"} for n in FX_PRESETS])
-    rows.append([{"text": "다음: 확인 화면으로 →", "callback_data": f"{prefix}:cf:{fx_cb_amount(amount)}"},
-                 {"text": "❌ 취소", "callback_data": f"{prefix}:cancel" if prefix == "fx" else f"{prefix}:fn"}])
+    if amount > 0:
+        rows.append([{"text": f"{fx_money(amount)}로 확인 화면", "callback_data": f"{prefix}:cf:{fx_cb_amount(amount)}"}])
+    rows.append([{"text": "취소", "callback_data": f"{prefix}:cancel" if prefix == "fx" else f"{prefix}:fn"}])
     return "\n".join(L), rows
 
 
@@ -1517,13 +1588,14 @@ def fx_screen(tg_s, text, rows, msg_id=None):
 
 
 def fx_open_picker(tg_s, amount=None, sheet=None, msg_id=None, fresh=True):
-    """💱 환전 버튼·/환전: 금액 고르기 화면. 실행하지 않는다"""
+    """환전 버튼·/환전: 금액 고르기 화면. 실행하지 않는다"""
     from decimal import Decimal
     info = fx_pick_info(sheet, fresh=fresh)
     if amount is None:
         amount = info["gap"] if info.get("gap") is not None and info["gap"] > 0 else Decimal(0)
     text, rows = fx_pick_view(info, amount)
     fx_screen(tg_s, text, rows, msg_id)
+    await_set("fx", prefix="fx")
     return True
 
 
@@ -1533,8 +1605,8 @@ def fx_show_calc(tg_s, amount=None, sheet=None, msg_id=None):
     if amount is None or amount <= 0:
         return fx_open_picker(tg_s, amount=None, sheet=sheet, msg_id=msg_id)
     amount = amount.quantize(Decimal("0.01"))
-    back = {"text": "↩ 금액 다시 고르기", "callback_data": f"fx:pk:{fx_cb_amount(amount)}"}
-    cancel = {"text": "❌ 취소", "callback_data": "fx:cancel"}
+    back = {"text": "금액 다시 입력", "callback_data": f"fx:pk:{fx_cb_amount(amount)}"}
+    cancel = {"text": "취소", "callback_data": "fx:cancel"}
     try:
         from meritz_client import Meritz
         m = Meritz()
@@ -1542,7 +1614,7 @@ def fx_show_calc(tg_s, amount=None, sheet=None, msg_id=None):
         rate = Decimal(str(rate_info["rate"]))
         exrt_time = str(rate_info.get("exrt_stnd_time") or "")
     except Exception as e:
-        fx_screen(tg_s, f"💱 <b>P 환전 — 확인</b>\n적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). "
+        fx_screen(tg_s, f"<b>P 환전 — 확인</b>\n적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). "
                   "환전 가능 시간(평일 낮)인지 확인하고 다시 눌러 주세요. 돈은 움직이지 않았어요.", [[back, cancel]], msg_id)
         return True
     try:
@@ -1551,13 +1623,13 @@ def fx_show_calc(tg_s, amount=None, sheet=None, msg_id=None):
         krw = None
     krw_needed = amount * rate
     short = (krw_needed - krw).quantize(Decimal(1), rounding=ROUND_UP) if krw is not None and krw < krw_needed else None
-    L = ["💱 <b>P 환전 — 확인</b> (아직 실행하지 않았어요)"]
+    L = ["<b>P 환전 — 확인</b> (아직 실행하지 않았어요)"]
     if short is not None:
-        L.append(f"⚠️ <b>원화가 {short:,.0f}원 모자라요</b> — 그래서 실행 버튼이 없어요. 원화를 먼저 넣거나 금액을 줄여 주세요.")
-    L += [f"▫️ 환전할 달러: <b>{fx_money(amount)}</b>",
-          f"▫️ 적용환율: {rate:,.4f} (기준 {html.escape(exrt_time)})",
-          f"▫️ 필요 원화(추정): 약 {krw_needed:,.0f}원 (수수료 별도 · 실제 금액은 실행 결과 기준)",
-          "▫️ 원화 예수금: " + (f"{krw:,.0f}원" if krw is not None else "조회 불가")]
+        L.append(f"<b>원화가 {short:,.0f}원 모자라요</b> — 그래서 실행 버튼이 없어요. 원화를 먼저 넣거나 금액을 줄여 주세요.")
+    L += [f"· 환전할 달러: <b>{fx_money(amount)}</b>",
+          f"· 적용환율: {rate:,.4f} (기준 {html.escape(exrt_time)})",
+          f"· 필요 원화(추정): 약 {krw_needed:,.0f}원 (수수료 별도 · 실제 금액은 실행 결과 기준)",
+          "· 원화 예수금: " + (f"{krw:,.0f}원" if krw is not None else "조회 불가")]
     if short is not None:
         with locked_state() as st:
             st.pop("fx_pending", None)
@@ -1568,7 +1640,7 @@ def fx_show_calc(tg_s, amount=None, sheet=None, msg_id=None):
                             "created_at": now_kst().isoformat(), "sheet_date": (sheet or {}).get("date")}
     L.append(f"실행 버튼은 {FX_TTL_MINUTES}분 동안 유효해요. 누르면 그때 환율을 다시 보고, 1% 넘게 바뀌었으면 실행하지 않아요.")
     fx_screen(tg_s, "\n".join(L),
-              [[{"text": f"✅ {fx_money(amount)} 환전 실행", "callback_data": f"fx:exec:{amount:.2f}"}], [back, cancel]], msg_id)
+              [[{"text": f"{fx_money(amount)} 환전 실행", "callback_data": f"fx:exec:{amount:.2f}"}], [back, cancel]], msg_id)
     return True
 
 
@@ -1584,12 +1656,12 @@ def fx_result_lines(head, amount, res, rate, after, krw_label="차감 원화"):
     after = after or {}
     est, cash = _dec(after.get("usd_est")), _dec(after.get("usd_cash"))
     return [head,
-            f"▫️ 환전한 달러: {fx_money(amount)}",
-            f"▫️ 실제 적용환율: {html.escape(str(res.get('aply_exrt') or rate))}",
-            f"▫️ {krw_label}: " + (val("tr_amt", "원") or "결과에 없음 (메리츠 앱 환전 내역에서 확인)"),
-            "▫️ 수수료: " + (val("fee") or "결과에 없음"),
-            "▫️ 거래번호: " + (val("tr_srno") or "결과에 없음"),
-            f"▫️ 환전 후 보유 달러: 추정 예수금 {fx_money(est)} · 예수금 {fx_money(cash)}"]
+            f"· 환전한 달러: {fx_money(amount)}",
+            f"· 실제 적용환율: {html.escape(str(res.get('aply_exrt') or rate))}",
+            f"· {krw_label}: " + (val("tr_amt", "원") or "결과에 없음 (메리츠 앱 환전 내역에서 확인)"),
+            "· 수수료: " + (val("fee") or "결과에 없음"),
+            "· 거래번호: " + (val("tr_srno") or "결과에 없음"),
+            f"· 환전 후 보유 달러: 추정 예수금 {fx_money(est)} · 예수금 {fx_money(cash)}"]
 
 
 def fx_handle_callback(tg_s, cb):
@@ -1605,7 +1677,7 @@ def fx_handle_callback(tg_s, cb):
             st.pop("fx_pending", None)
         tg_s.answer(cb_id, "환전 취소했어요")
         tg_s.buttons(msg_id, [])
-        tg_s.send("❌ 환전 취소했어요. 실행하지 않았어요.")
+        tg_s.send("환전 취소했어요. 실행하지 않았어요.")
         return True
     if kind in ("pk", "cf"):
         # fx:pk:{금액} 금액 고르기 화면 (같은 메시지 고쳐 쓰기) · fx:cf:{금액} 확인 화면으로
@@ -1645,7 +1717,7 @@ def fx_handle_callback(tg_s, cb):
         tg_s.answer(cb_id, "환전을 확인할게요")
         tg_s.buttons(msg_id, [])
         if not pending:
-            tg_s.send("환전 대기 정보가 없어요. 다시 확인 화면을 열어 주세요. (<code>/환전</code> 또는 💱 환전 버튼)")
+            tg_s.send("환전 대기 정보가 없어요. 다시 확인 화면을 열어 주세요. (<code>/환전</code> 또는 환전 버튼)")
             return True
         if pending.get("amount") != f"{amount:.2f}":
             tg_s.send("환전 금액이 확인 화면과 달라요. 다시 확인 화면을 열어 주세요.")
@@ -1677,12 +1749,12 @@ def fx_handle_callback(tg_s, cb):
         try:
             result = m.fx_exchange(f"{amount:.2f}", str(new_rate), new_time)
         except Exception as e:
-            tg_s.send(f"⚠️ 환전 실행 결과를 확인하지 못했어요 ({html.escape(type(e).__name__)}). "
+            tg_s.send(f"환전 실행 결과를 확인하지 못했어요 ({html.escape(type(e).__name__)}). "
                      "서버에서 환전이 됐을 수도 있으니, 자동으로 다시 실행하지 않았어요. "
                      "메리츠 앱의 환전 내역에서 먼저 확인해 주세요.")
             return True
         snap = account_snapshot(m)
-        tg_s.send("\n".join(fx_result_lines("✅ <b>P 환전 완료</b>", amount, result, new_rate, snap)))
+        tg_s.send("\n".join(fx_result_lines("<b>P 환전 완료</b>", amount, result, new_rate, snap)))
         return True
     tg_s.answer(cb_id, "모르는 환전 버튼이에요")
     return True
@@ -1693,7 +1765,7 @@ def fx_handle_callback(tg_s, cb):
 #         정방향·역방향 모두 우대 시간(KST 평일 09:00~15:30) 안에서만. 밖이면 그 회차는 자동환전 안 함(재시도 없음).
 FX_PREF_START, FX_PREF_END = (9, 0), (15, 30)
 RFX_KEEP_USD, RFX_MIN_USD, RFX_MAX_USD, FX_GAP_MIN = 1000, 100, 300000, 5
-AUTO_RFX_ON_LABEL, AUTO_RFX_OFF_LABEL = "💱 역자동환전 켜짐", "💱 역자동환전 꺼짐"
+AUTO_RFX_ON_LABEL, AUTO_RFX_OFF_LABEL = "역자동환전 켜짐", "역자동환전 꺼짐"
 
 
 def fx_pref_time(now=None):
@@ -1733,10 +1805,10 @@ def set_auto_fx(tg_s, on=None):
         new = (not cur) if on is None else bool(on)
         st["auto_fx"] = {"on": new, "at": now_kst().isoformat()}
     replay("auto_fx_toggle", "ok", "on" if new else "off", event_type="user_event")
-    tg_s.send(f"🅿 💱 P 자동환전 <b>{'켜짐' if new else '꺼짐'}</b>\n"
+    tg_s.send(f"P 자동환전 <b>{'켜짐' if new else '꺼짐'}</b>\n"
               + ("지금부터 새로 오는 가격표에서 추정 예수금 기준 부족이 있으면 가격표 알림 전에 1번 자동환전해요 "
                  "(부족 $10 이상 → $10 단위 반올림 · $10 미만 → $100 · 평일 09:00~15:30 만). P 계좌만, VR6 에는 영향 없어요."
-                 if new else "자동환전하지 않아요. 💱 환전(수동)은 그대로 쓸 수 있어요."),
+                 if new else "자동환전하지 않아요. 환전(수동)은 그대로 쓸 수 있어요."),
               keyboard=menu_keyboard())
     return True
 
@@ -1748,7 +1820,7 @@ def set_auto_rfx(tg_s, on=None):
         new = (not cur) if on is None else bool(on)
         st["auto_rfx"] = {"on": new, "at": now_kst().isoformat()}
     replay("auto_rfx_toggle", "ok", "on" if new else "off", event_type="user_event")
-    tg_s.send(f"🅿 💱 P 역자동환전 <b>{'켜짐' if new else '꺼짐'}</b>\n"
+    tg_s.send(f"P 역자동환전 <b>{'켜짐' if new else '꺼짐'}</b>\n"
               + (f"이번 회차 주문이 접수됐거나 남은 주문이 없으면, 평일 09:00~15:30 에 남는 달러를 원화로 1번 바꿔요 "
                  f"(보유 달러(추정) − max(${RFX_KEEP_USD:,}, 앞으로 쓸 달러), $10 내림, ${RFX_MIN_USD} 미만이면 안 함). P 계좌만."
                  if new else "역자동환전하지 않아요."),
@@ -1864,13 +1936,13 @@ def auto_fx_core(date, sh, now=None, mark=None):
         out["result"] = "outside_hours"
         g = fx_est_gap(sh)
         if g is not None and g > 0:
-            out["lines"] = ["ℹ️ 우대 시간(평일 09:00~15:30) 밖이라 자동환전 안 했어요 · 필요하면 아래 💱 버튼으로 직접 환전"]
+            out["lines"] = ["우대 시간(평일 09:00~15:30) 밖이라 자동환전 안 했어요 · 필요하면 아래 버튼으로 직접 환전"]
         return out
     try:
         from meritz_client import Meritz
         m = Meritz()                       # P 키 (/etc/bot-office/meritz.json) 만
     except Exception as e:
-        out.update(result="stop", lines=[f"⛔ 자동환전 안 함: P 계좌 키를 못 읽었어요 ({html.escape(type(e).__name__)}) · 💱 버튼으로 직접 환전"])
+        out.update(result="stop", lines=[f"자동환전 안 함: P 계좌 키를 못 읽었어요 ({html.escape(type(e).__name__)}) · 버튼으로 직접 환전"])
         return out
     need = fx_need(sh)
     try:
@@ -1878,7 +1950,7 @@ def auto_fx_core(date, sh, now=None, mark=None):
     except Exception:
         est = None
     if need is None or est is None:
-        out.update(result="unknown", lines=["⛔ 자동환전 안 함: 추정 예수금을 못 읽어 부족을 계산하지 못했어요 · 💱 버튼으로 직접 환전"])
+        out.update(result="unknown", lines=["자동환전 안 함: 추정 예수금을 못 읽어 부족을 계산하지 못했어요 · 버튼으로 직접 환전"])
         return out
     gap = need - est
     amount = fx_auto_amount(gap)
@@ -1887,17 +1959,17 @@ def auto_fx_core(date, sh, now=None, mark=None):
     status, info = auto_fx_execute(m, amount, before_exchange=mark)
     base = f"부족액(추정 기준) {fx_money(gap)} → 자동환전 {fx_money(amount)}"
     if status == "stop":
-        out.update(result="stop", lines=[f"⛔ <b>자동환전 중단</b> · {base}", f"  이유: {html.escape(info['why'])}",
-                                         "  돈은 움직이지 않았어요 · 이 회차는 다시 안 해요 · 아래 💱 버튼으로 직접 환전"])
+        out.update(result="stop", lines=[f"<b>자동환전 중단</b> · {base}", f"  이유: {html.escape(info['why'])}",
+                                         "  돈은 움직이지 않았어요 · 이 회차는 다시 안 해요 · 아래 버튼으로 직접 환전"])
         return out
     if status == "uncertain":
-        out.update(result="uncertain", lines=[f"⚠️ <b>자동환전 결과 확인 안 됨</b> · {base}",
+        out.update(result="uncertain", lines=[f"<b>자동환전 결과 확인 안 됨</b> · {base}",
                                               f"  ({html.escape(info['why'])}) 환전이 됐을 수도 있어 다시 하지 않아요. 메리츠 앱의 환전 내역에서 먼저 확인해 주세요."])
         return out
     after = account_snapshot(m)
     res = info["res"]
-    full = fx_result_lines(f"✅ <b>자동환전 완료</b> · {base}", amount, res, info["rate"], after)
-    out.update(result="ok", after=after, full=full, lines=["💱 " + full[0]] + ["  · " + x.replace("▫️ ", "", 1) for x in full[2:6]])
+    full = fx_result_lines(f"<b>자동환전 완료</b> · {base}", amount, res, info["rate"], after)
+    out.update(result="ok", after=after, full=full, lines=["" + full[0]] + ["  · " + x.replace("· ", "", 1) for x in full[2:6]])
     return out
 
 
@@ -1922,7 +1994,7 @@ def auto_fx_before_alert(st, sheet, now=None):
     if rec:
         if rec.get("result") == "ok" and str(rec.get("ver")) != str(sheet.get("ver")):
             rec["dup_ver"] = sheet.get("ver")
-            return ["ℹ️ 이 회차는 이미 자동환전했어요 (같은 회차는 1번만) · 더 필요하면 💱 버튼"]
+            return ["이 회차는 이미 자동환전했어요 (같은 회차는 1번만) · 더 필요하면 버튼"]
         return []
     done[date] = {"ver": sheet.get("ver"), "at": now.isoformat(timespec="seconds"), "result": "running"}
     for k in sorted(done)[:-30]:
@@ -1935,7 +2007,7 @@ def auto_fx_before_alert(st, sheet, now=None):
         r = auto_fx_core(date, sheet, now, mark=mark)
     except Exception as e:
         print("P 자동환전 오류:", type(e).__name__, flush=True)
-        r = {"result": "error", "lines": [f"⚠️ 자동환전 처리 오류 ({html.escape(type(e).__name__)}) · 다시 하지 않아요 · 메리츠 앱 환전 내역 확인 후 💱 버튼"],
+        r = {"result": "error", "lines": [f"자동환전 처리 오류 ({html.escape(type(e).__name__)}) · 다시 하지 않아요 · 메리츠 앱 환전 내역 확인 후 버튼"],
              "after": None}
     done[date]["result"] = r["result"]
     _apply_after(sheet, r.get("after"))
@@ -1964,8 +2036,8 @@ def auto_fx_tick(tg, now=None):
                     and str(rec.get("dup_ver")) != str(sh.get("ver"))):
                 with locked_state() as s2:
                     s2.setdefault("auto_fx_done", {}).setdefault(date, {})["dup_ver"] = sh.get("ver")
-                tg.send(f"🅿 💱 <b>P 자동환전 안 함</b> · {date} 가격표 (새 판독)\n"
-                        "이 회차는 이미 자동환전했어요. 같은 회차는 1번만 해요. 더 필요하면 💱 환전으로 직접 해 주세요.")
+                tg.send(f"<b>P 자동환전 안 함</b> · {date} 가격표 (새 판독)\n"
+                        "이 회차는 이미 자동환전했어요. 같은 회차는 1번만 해요. 더 필요하면 환전으로 직접 해 주세요.")
             continue
         _auto_fx_one(tg, date, sh, now)
 
@@ -1982,13 +2054,13 @@ def _auto_fx_one(tg, date, sh, now):
         r = auto_fx_core(date, sh, now, mark=_fx_mark_locked)
     except Exception as e:
         print("P 자동환전 오류:", type(e).__name__, flush=True)
-        r = {"result": "error", "lines": [f"⚠️ 자동환전 처리 오류 ({html.escape(type(e).__name__)}) · 다시 하지 않아요 · 메리츠 앱 환전 내역 확인"]}
+        r = {"result": "error", "lines": [f"자동환전 처리 오류 ({html.escape(type(e).__name__)}) · 다시 하지 않아요 · 메리츠 앱 환전 내역 확인"]}
     with locked_state() as st:
         st.setdefault("auto_fx_done", {}).setdefault(date, {})["result"] = r["result"]
     if r.get("full"):                      # 알림이 이미 나간 뒤라 따로 완료 알림 (전체 항목)
-        tg.send(f"🅿 P · {date} 가격표\n" + "\n".join(r["full"]))
+        tg.send(f"P · {date} 가격표\n" + "\n".join(r["full"]))
     elif r["lines"]:
-        tg.send(f"🅿 💱 <b>P 자동환전</b> · {date} 가격표\n" + "\n".join(r["lines"]))
+        tg.send(f"<b>P 자동환전</b> · {date} 가격표\n" + "\n".join(r["lines"]))
     replay("auto_fx", "ok" if r["result"] == "ok" else ("skipped" if r["result"] in ("no_gap", "unknown", "outside_hours") else "failed"),
            r["result"], event_type="external_call" if r["result"] in ("ok", "uncertain") else "decision", sheet=date, when="after_alert")
 
@@ -2070,8 +2142,8 @@ def auto_rfx_tick(tg, now=None):
 
 
 def _auto_rfx_run(tg, m, key, amount, est, need):
-    head = f"🅿 💱 <b>P 역자동환전"
-    base = f"▫️ 보유 달러(추정) {fx_money(est)} − 남길 달러 {fx_money(max(_dec(RFX_KEEP_USD), need))} → {fx_money(amount)}"
+    head = f"<b>P 역자동환전"
+    base = f"· 보유 달러(추정) {fx_money(est)} − 남길 달러 {fx_money(max(_dec(RFX_KEEP_USD), need))} → {fx_money(amount)}"
     try:
         cash = _dec(m.usd_cash())
     except Exception:
@@ -2084,19 +2156,19 @@ def _auto_rfx_run(tg, m, key, amount, est, need):
     elif amount > cash:
         why = f"결제된 달러(예수금 {fx_money(cash)})보다 많아요 — 미결제 달러는 원화로 못 바꿀 수 있어요"
     if why:
-        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n⛔ {html.escape(why)}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
+        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n{html.escape(why)}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
         return "stop"
     status, info = auto_fx_execute(m, amount, direction="2", before_exchange=_fx_mark_locked)
     if status == "stop":
-        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n⛔ {html.escape(info['why'])}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
+        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n{html.escape(info['why'])}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
         return "stop"
     if status == "uncertain":
-        tg.send(f"🅿 ⚠️ <b>P 역자동환전 결과 확인 안 됨</b> · {key} 회차\n{base}\n"
+        tg.send(f"<b>P 역자동환전 결과 확인 안 됨</b> · {key} 회차\n{base}\n"
                 f"실행 결과를 확인하지 못했어요 ({html.escape(info['why'])}). 환전이 됐을 수도 있어 다시 하지 않아요.\n"
                 "메리츠 앱의 환전 내역에서 먼저 확인해 주세요.")
         return "uncertain"
     after = account_snapshot(m)
-    text = "\n".join(fx_result_lines(f"🅿 ✅ <b>P 역자동환전 완료</b> · {key} 회차", amount, info["res"], info["rate"], after,
+    text = "\n".join(fx_result_lines(f"<b>P 역자동환전 완료</b> · {key} 회차", amount, info["res"], info["rate"], after,
                                      krw_label="입금 원화") + [base])
     tg.send(text); _hub_alert('4번 팬딩 가격표', 'info', text)
     return "ok"
@@ -2108,7 +2180,7 @@ def sheet_notice_time(sheet):
     return day.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=KST)
 
 
-def send_sheet_alert(tg, sheet, head="📋 <b>팬딩 가격표 도착</b>", st=None):
+def send_sheet_alert(tg, sheet, head="<b>팬딩 가격표 도착</b>", st=None):
     sheet["notice_not_before"] = sheet_notice_time(sheet).isoformat()
     sheet["notice_head"] = head
     if now_kst() < sheet_notice_time(sheet):
@@ -2161,12 +2233,12 @@ PC_NOTE_DAILY_DONE = ("오늘 필요 자료 확보·PC 수집 작업 완료. 수
 
 
 def pc_note_is_routine(note):
-    """정상 진행 노트(텔레그램 안 보냄)인지. 정확히 아는 2종만 True, 그 외·완료(✅)·빈 노트는 False(보냄)"""
+    """정상 진행 노트(텔레그램 안 보냄)인지. 정확히 아는 2종만 True, 그 외·완료()·빈 노트는 False(보냄)"""
     t = (note or "").strip()
     if t == PC_NOTE_DAILY_DONE:
         return True
     return (t.startswith("과거 자료 PC 저장 ") and "개 글 · 서버 신규 전송 " in t
-            and "개 글 · 남은 글 " in t and "✅ 과거 글 수집 완료" not in t)
+            and "개 글 · 남은 글 " in t and "과거 글 수집 완료" not in t)
 
 
 def process_inbox(tg):
@@ -2181,7 +2253,7 @@ def process_inbox(tg):
         if pc_note_is_routine(note):
             print("PC 노트 정상 → 텔레그램 미전송:", note.strip()[:60], flush=True)
         else:
-            tg.send("🖥 <b>윈도우 PC (팬딩)</b>\n" + html.escape(note))
+            tg.send("<b>윈도우 PC (팬딩)</b>\n" + html.escape(note))
         f.unlink(missing_ok=True)
     for f in sorted(INBOX.glob("*.img")):
         mf = f.with_suffix(".json")
@@ -2198,7 +2270,7 @@ def process_inbox(tg):
             n = int(meta.get("tries", 0)) + 1
             print(f"가격표 처리 오류({n}번째):", type(e).__name__, e, flush=True)
             if n == 1 and meta.get("mode") != "history":
-                tg.send("⚠️ <b>팬딩 서버 판독 단계 실패</b>\n이미지 수신은 완료됐지만 AI 처리 실패. 2분 뒤 재시도합니다. /판독 · /진단 확인")
+                tg.send("<b>팬딩 서버 판독 단계 실패</b>\n이미지 수신은 완료됐지만 AI 처리 실패. 2분 뒤 재시도합니다. /판독 · /진단 확인")
                 _hub_alert('4번 팬딩 가격표','warning','팬딩 서버 판독 단계 실패: 이미지 수신 완료, AI 처리 실패, 2분 뒤 재시도')
             if n < 5:                                 # 2분 뒤 다시 (Gemini 일시 장애 대비)
                 meta.update(tries=n, retry_at=time.time() + 120, last_error=str(e)[:200])
@@ -2206,7 +2278,7 @@ def process_inbox(tg):
                 continue
             kind = "error"
             if meta.get("mode") != "history":
-                tg.send(f"🚨 <b>팬딩 가격표 처리 실패</b> (5번 시도)\n{html.escape(str(e))[:300]}\n"
+                tg.send(f"<b>팬딩 가격표 처리 실패</b> (5번 시도)\n{html.escape(str(e))[:300]}\n"
                         "윈도우 PC에서 <code>py fanding_fetch.py send</code> 로 다시 보내거나 가격표를 직접 확인해 주세요.")
                 _hub_alert('4번 팬딩 가격표','critical','팬딩 가격표 처리 실패 (5번 시도)')
         f.unlink(missing_ok=True)
@@ -2256,7 +2328,7 @@ def batch_done(tg, meta, kind):
                     alerted[notice_key] = now_kst().isoformat()
                     st["wrong_date_post_alerted"] = dict(list(alerted.items())[-800:])
                     seen = (st.get("wrong_dates") or {}).get(bid, "")
-                    tg.send("⚠️ 최근 글 판독 완료: 필요한 종가일의 가격표를 아직 찾지 못했습니다."
+                    tg.send("최근 글 판독 완료: 필요한 종가일의 가격표를 아직 찾지 못했습니다."
                             + (" (이 글에서 읽은 종가일: " + html.escape(seen) + ")" if seen else "")
                             + " /진단 확인 · 다음 자동 재접속에서 재확인합니다.")
             elif not any(k in ("sheet", "sheet_dup", "error") for k in b["kinds"]):
@@ -2264,7 +2336,7 @@ def batch_done(tg, meta, kind):
                 if notice_key not in alerted:
                     alerted[notice_key] = now_kst().isoformat()
                     st["missing_post_alerted"] = dict(list(alerted.items())[-800:])
-                    tg.send(f"❓ <b>팬딩 글에서 가격표를 못 찾았어요</b>\n이미지 {b['n']}장을 확인했지만 모두 가격표가 아니었어요."
+                    tg.send(f"<b>팬딩 글에서 가격표를 못 찾았어요</b>\n이미지 {b['n']}장을 확인했지만 모두 가격표가 아니었어요."
                             f"\n글: {html.escape(meta.get('post', ''))[:200]}\n가격표가 다른 글에 올라왔는지 확인해 주세요.")
         for k in [k for k, v in st["batches"].items() if time.time() - v.get("at", 0) > 86400]:
             st["batches"].pop(k, None)
@@ -2347,10 +2419,10 @@ def handle_image(tg, data, sha, meta):
                         notify = True
             if notify:
                 if close_now:
-                    tg.send("⚠️ <b>가격표 날짜 오독 의심</b>\n읽은 종가일 " + html.escape(got) + " / 필요 " + html.escape(expected)
+                    tg.send("<b>가격표 날짜 오독 의심</b>\n읽은 종가일 " + html.escape(got) + " / 필요 " + html.escape(expected)
                             + "\n다른 AI 교차 확인에서도 날짜·핵심 숫자를 확정하지 못했습니다.\n주문에 사용하지 않음 · /재판독 또는 가격표 직접 확인")
                 else:
-                    tg.send("ℹ️ 재수집 이미지 종가일 불일치: " + html.escape(got) + " / 필요 " + html.escape(expected) + " · 주문에 사용하지 않음")
+                    tg.send("재수집 이미지 종가일 불일치: " + html.escape(got) + " / 필요 " + html.escape(expected) + " · 주문에 사용하지 않음")
             return "wrong_date"
     if second is None:  # 날짜가 처음부터 맞던 기존 정상 가격표 경로
         try:
@@ -2370,11 +2442,11 @@ def handle_image(tg, data, sha, meta):
         st.setdefault("kinds2", {})[sha] = "sheet"
         date = parsed["close_date"]
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
-            tg.send("🚨 가격표에서 날짜를 못 읽었어요. 주문하지 않습니다. 직접 확인해 주세요.")
+            tg.send("가격표에서 날짜를 못 읽었어요. 주문하지 않습니다. 직접 확인해 주세요.")
             return "sheet"
         old = st["sheets"].get(date)
         if old and old["status"] in ("submitted", "partial", "submitting"):
-            tg.send(f"⚠️ <b>{date} 가격표가 바뀐 것 같아요</b> (이미 주문 접수 후)\n자동으로 고치지 않았어요. 앱에서 직접 확인해 주세요.")
+            tg.send(f"<b>{date} 가격표가 바뀐 것 같아요</b> (이미 주문 접수 후)\n자동으로 고치지 않았어요. 앱에서 직접 확인해 주세요.")
             return "sheet"
         sd = datetime.strptime(date, "%Y-%m-%d").date()
         sheet = {"date": date, "img": img_name, "sha": sha, "parsed": parsed, "reads": reads, "reads_agree": agree,
@@ -2387,7 +2459,7 @@ def handle_image(tg, data, sha, meta):
             sheet["catchup_price"] = old.get("catchup_price")
         _, _, cu_ended = apply_catchup_to_sheet(st, sheet, market)
         if cu_ended:
-            tg.send("📈 <b>배수 맞추기 완료</b>\n부족분이 없어졌어요. 목표 배수에 맞는 보유가 됐습니다.")
+            tg.send("<b>배수 맞추기 완료</b>\n부족분이 없어졌어요. 목표 배수에 맞는 보유가 됐습니다.")
         sheet["checks"], sheet["auto_ok"] = run_checks(sheet, sheet["mult"], market)
         log_history("sheet", {"date": date, "parsed": parsed, "reads_agree": agree, "market": market,
                               "mult": sheet["mult"], "us_date": sheet["us_date"], "post": sheet["post"], "img": img_name})
@@ -2396,7 +2468,7 @@ def handle_image(tg, data, sha, meta):
         st["sheets"][date] = sheet
         for k in sorted(st["sheets"])[:-20]:
             st["sheets"].pop(k, None)
-        head = "📋 <b>팬딩 가격표가 바뀌었어요 (새 숫자)</b>" if old else "📋 <b>팬딩 가격표 도착</b>"
+        head = "<b>팬딩 가격표가 바뀌었어요 (새 숫자)</b>" if old else "<b>팬딩 가격표 도착</b>"
         if sheet["status"] == "pending":
             send_sheet_alert(tg, sheet, head, st)
     if agree:   # 수익금 분리 그림자 기록 (주문·계좌 조회 없음, 실패해도 매매에 영향 없음) — 두 번 판독이 일치한 표만
@@ -2415,16 +2487,16 @@ def pc_status_lines():
     try:
         pc = (load(HOME / "pc-monitor.json", {}) or {}).get("pc") or {}
         age = int(time.time() - pc["at"]) if pc.get("at") else None
-        out.append("🖥 한국 PC: " + ("보고 기록 없음 (감시 프로그램 미연결)" if age is None else
-                                    (f"켜져 있음 ({age // 60}분 전 보고)" if age <= 300 else f"⚠️ {age // 60}분째 보고 없음 → 꺼짐·인터넷 끊김 의심")))
+        out.append("한국 PC: " + ("보고 기록 없음 (감시 프로그램 미연결)" if age is None else
+                                    (f"켜져 있음 ({age // 60}분 전 보고)" if age <= 300 else f"{age // 60}분째 보고 없음 → 꺼짐·인터넷 끊김 의심")))
     except Exception:
-        out.append("🖥 한국 PC: 확인 실패")
+        out.append("한국 PC: 확인 실패")
     try:
         b = (load(BRIDGE, {}) or {}).get("pc") or {}
         age = int(time.time() - b["at"]) if b.get("at") else None
-        out.append("📥 팬딩 수집기: " + ("연결 기록 없음" if age is None else f"{age // 60}분 전 · 단계 {html.escape(str(b.get('stage') or '미확인'))}"))
+        out.append("팬딩 수집기: " + ("연결 기록 없음" if age is None else f"{age // 60}분 전 · 단계 {html.escape(str(b.get('stage') or '미확인'))}"))
     except Exception:
-        out.append("📥 팬딩 수집기: 확인 실패")
+        out.append("팬딩 수집기: 확인 실패")
     return "\n".join(out)
 
 
@@ -2449,17 +2521,17 @@ def auto_retry(tg, sh, c, now):
         mine = [r for r in rows if any(str(v).strip().upper() == sym for v in r.values())] or rows
         if len(mine) > sum(1 for o in sh["orders"] if o.get("no")):
             sh["auto_retry"] = limit
-            tg.send(f"⚠️ <b>{sh['date']} 자동 재시도 안 함</b>\n실패로 기록된 주문이 메리츠에는 이미 접수됐을 수 있어요 "
-                    f"(살아 있는 예약 {len(mine)}건). 메리츠 앱에서 확인 후 필요하면 [🔁 실패한 것만 다시] 버튼을 눌러 주세요.")
+            tg.send(f"<b>{sh['date']} 자동 재시도 안 함</b>\n실패로 기록된 주문이 메리츠에는 이미 접수됐을 수 있어요 "
+                    f"(살아 있는 예약 {len(mine)}건). 메리츠 앱에서 확인 후 필요하면 [실패한 것만 다시] 버튼을 눌러 주세요.")
             return
     except Exception as e:
         sh["auto_retry"] = limit
-        tg.send(f"⚠️ <b>{sh['date']} 자동 재시도 안 함</b> — 메리츠 예약 목록 확인 실패({html.escape(type(e).__name__)}). "
+        tg.send(f"<b>{sh['date']} 자동 재시도 안 함</b> — 메리츠 예약 목록 확인 실패({html.escape(type(e).__name__)}). "
                 "앱에서 확인 후 버튼으로 다시 넣어 주세요.")
         return
     sh["auto_retry"] = sh.get("auto_retry", 0) + 1
     sh["status"] = "retry"
-    tg.send(f"🔁 <b>{sh['date']} 실패한 주문 자동 재시도</b> ({sh['auto_retry']}/{limit}) — 결과를 곧 알려 드려요.")
+    tg.send(f"<b>{sh['date']} 실패한 주문 자동 재시도</b> ({sh['auto_retry']}/{limit}) — 결과를 곧 알려 드려요.")
 
 
 def submit(tg, sheet, confirm_warn=False):
@@ -2501,17 +2573,17 @@ def submit(tg, sheet, confirm_warn=False):
     sheet["status"] = "submitted" if ok else "partial"
     log_history("orders", {"date": sheet["date"], "us_date": sheet["us_date"], "mult": sheet["mult"],
                            "by": sheet.get("approved_by"), "orders": sheet["orders"]})
-    L = [f"{'✅' if ok else '⚠️'} <b>메리츠 예약주문 {'완료' if ok else '일부 실패'}</b> · {sheet['date']} 가격표"
+    L = [f"<b>메리츠 예약주문 {'완료' if ok else '일부 실패'}</b> · {sheet['date']} 가격표"
          f" · {'자동' if sheet.get('approved_by') == 'auto' else '승인'}"]
     for o in sheet["orders"]:
-        tag = f"접수 #{o['no']}" if o.get("no") else (f"⚠️ 증권사 경고: {o['warn']}" if o.get("warn") else f"❌ {o.get('err')}")
-        L.append(f"{'🔴 매수' if o['side'] == 'buy' else '🔵 매도'} {o['price']:g} × {o['qty']} → {html.escape(str(tag))[:200]}")
+        tag = f"접수 #{o['no']}" if o.get("no") else (f"증권사 경고: {o['warn']}" if o.get("warn") else f"{o.get('err')}")
+        L.append(f"{'매수' if o['side'] == 'buy' else '매도'} {o['price']:g} × {o['qty']} → {html.escape(str(tag))[:200]}")
     rows = None
     if any(o.get("warn") for o in sheet["orders"]):
         L.append("\n증권사 '주문 착오 방지' 경고예요. 숫자가 맞으면 아래 버튼으로 경고 확인 후 다시 넣어요.")
-        rows = [[{"text": "⚠️ 경고 확인하고 주문", "callback_data": f"fd:wy:{sheet['date']}:{sheet['ver']}"}]]
+        rows = [[{"text": "경고 확인하고 주문", "callback_data": f"fd:wy:{sheet['date']}:{sheet['ver']}"}]]
     elif not ok:
-        rows = [[{"text": "🔁 실패한 것만 다시", "callback_data": f"fd:re:{sheet['date']}:{sheet['ver']}"}]]
+        rows = [[{"text": "실패한 것만 다시", "callback_data": f"fd:re:{sheet['date']}:{sheet['ver']}"}]]
     L += account_lines(sheet, account_snapshot(m))
     tg.send("\n".join(L), rows)
 
@@ -2543,33 +2615,33 @@ def tick(tg):
             alarm, auto, cutoff = deadlines(sh)
             if now >= cutoff:
                 if sh["status"] != "pending":
-                    tg.send(f"❌ {date} 가격표: 예약 마감({cutoff:%H:%M})이 지나 주문을 못 넣었어요.")
+                    tg.send(f"{date} 가격표: 예약 마감({cutoff:%H:%M})이 지나 주문을 못 넣었어요.")
                 else:
-                    tg.send(f"ℹ️ {date} 가격표: 마감이 지나 이번 주문은 넘어갑니다.")
+                    tg.send(f"{date} 가격표: 마감이 지나 이번 주문은 넘어갑니다.")
                 clear_sheet_buttons(tg, sh)
                 sh["status"] = "expired"
                 continue
             if sh["status"] == "pending" and sh.get("notice_pending") and now >= sheet_notice_time(sh):
-                send_sheet_alert(tg, sh, sh.get("notice_head") or "📋 <b>팬딩 가격표 도착</b>", st)
+                send_sheet_alert(tg, sh, sh.get("notice_head") or "<b>팬딩 가격표 도착</b>", st)
             if sh["status"] == "pending" and c["auto_order"]:
                 due = auto_due(sh, c, now)
                 if due == "late" and not sh.get("auto_late"):      # 고른 시각이 이미 지남 → 소급 자동주문 안 함, 수동 결정
                     sh["auto_late"] = True
                     mode = auto_mode(c)
-                    track_buttons(sh, tg.send(f"⏰ <b>{AUTO_MODES[mode]}({auto_mode_time(sh, mode):%H:%M})가 이미 지나</b> · {date} 가격표는 자동주문 안 해요.\n"
+                    track_buttons(sh, tg.send(f"<b>{AUTO_MODES[mode]}({auto_mode_time(sh, mode):%H:%M})가 이미 지나</b> · {date} 가격표는 자동주문 안 해요.\n"
                             "주문하려면 아래 버튼으로 결정해 주세요.", sheet_rows(sh)))
                     continue
                 if due == "fire" and not sh.get("auto_skipped"):
                     if sh["auto_ok"]:
                         clear_sheet_buttons(tg, sh)
                         sh["status"], sh["approved_by"] = "approved", "auto"
-                        tg.send(f"🤖 <b>버튼이 안 눌려 자동주문 진행</b> · {date} 가격표 (점검 모두 통과)")
+                        tg.send(f"<b>버튼이 안 눌려 자동주문 진행</b> · {date} 가격표 (점검 모두 통과)")
                     else:
                         # 1.14.4: 자동주문만 안 함. 상태는 결정 대기 그대로 → 버튼 유지, 마감 전까지 직접 결정 (예전: skipped + 버튼 삭제)
                         sh["auto_skipped"] = True
                         bad = "\n".join("  · " + html.escape(x["msg"]) for x in sh["checks"] if not x["ok"])
-                        track_buttons(sh, tg.send(f"⛔ <b>자동주문 안 함</b> · {date} 가격표\n안전점검을 통과 못 했어요:\n{bad}\n"
-                                                  f"숫자가 맞으면 마감({cutoff:%m/%d %H:%M}) 전까지 아래 ✅ 주문 버튼으로 직접 주문할 수 있어요.",
+                        track_buttons(sh, tg.send(f"<b>자동주문 안 함</b> · {date} 가격표\n안전점검을 통과 못 했어요:\n{bad}\n"
+                                                  f"숫자가 맞으면 마감({cutoff:%m/%d %H:%M}) 전까지 아래 주문 버튼으로 직접 주문할 수 있어요.",
                                                   sheet_rows(sh)))
                     continue
                 if now >= alarm and not sh.get("alarm_sent"):
@@ -2580,7 +2652,7 @@ def tick(tg):
                     when = (f"{left}분 뒤({at:%H:%M}) " if not mode else f"{AUTO_MODES[mode]}({at:%H:%M}) ")
                     tail = (("자동주문합니다." if sh["auto_ok"] else "점검 미통과라 자동주문 안 합니다.") if not sh.get("auto_late")
                             else "시각이 지나 자동주문 안 합니다.")
-                    track_buttons(sh, tg.send(f"⏰ <b>주문 확인 마감 30분 전</b> · {date} 가격표\n" + when + tail
+                    track_buttons(sh, tg.send(f"<b>주문 확인 마감 30분 전</b> · {date} 가격표\n" + when + tail
                             + "\n지금 결정하려면 아래 버튼을 눌러 주세요.", sheet_rows(sh)))
                     continue
             if sh["status"] in ("approved", "retry", "retry_warn") and (now.hour, now.minute) >= (sub_h, sub_m):
@@ -2591,8 +2663,8 @@ def tick(tg):
                     submit(tg, sh, confirm_warn=warn)
                 except Exception as e:
                     sh["status"] = "partial"
-                    tg.send(f"🚨 <b>주문 접수 오류</b> · {date}\n{html.escape(str(e))[:400]}",
-                            [[{"text": "🔁 다시 시도", "callback_data": f"fd:re:{date}:{sh['ver']}"}]])
+                    tg.send(f"<b>주문 접수 오류</b> · {date}\n{html.escape(str(e))[:400]}",
+                            [[{"text": "다시 시도", "callback_data": f"fd:re:{date}:{sh['ver']}"}]])
         # 가격표가 안 오는 날 알림: 미국 장 다음 날 한국 오전, 정해진 시각까지 안 오면 1번만
         exp = last_session_date(now)
         key = f"missing:{exp.isoformat()}"
@@ -2601,13 +2673,13 @@ def tick(tg):
         if (exp.isoformat() not in st["sheets"] and now.date() == due and c.get("missing_early_kst")
                 and (now.hour, now.minute) >= hm(c["missing_early_kst"]) and not st.get(ekey) and not st.get(key)):
             st[ekey] = True
-            tg.send(f"❓ <b>{exp.isoformat()} 가격표가 아직 없어요</b> ({c['missing_early_kst']} 조기 확인)\n"
+            tg.send(f"<b>{exp.isoformat()} 가격표가 아직 없어요</b> ({c['missing_early_kst']} 조기 확인)\n"
                     + pc_status_lines() + "\n휴장일이면 무시하세요. 11:00에 한 번 더 확인해요.",
-                    [[{"text": "🔄 재판독 요청", "callback_data": "fm:rs"}, {"text": "🩺 진단", "callback_data": "fm:dg"}]])
+                    [[{"text": "재판독 요청", "callback_data": "fm:rs"}, {"text": "진단", "callback_data": "fm:dg"}]])
         if (exp.isoformat() not in st["sheets"] and now.date() == due
                 and (now.hour, now.minute) >= hm(c["missing_alert_kst"]) and not st.get(key)):
             st[key] = True
-            tg.send(f"❓ <b>{exp.isoformat()} 가격표가 아직 안 왔어요</b> ({c['missing_alert_kst']} 기준)\n"
+            tg.send(f"<b>{exp.isoformat()} 가격표가 아직 안 왔어요</b> ({c['missing_alert_kst']} 기준)\n"
                     "윈도우 PC가 켜져 있는지, 팬딩 로그인이 풀리지 않았는지 확인해 주세요. (휴장일이면 무시)")
         for k in sorted(k for k in st if k.startswith("missing:"))[:-10]:
             st.pop(k, None)
@@ -2629,12 +2701,12 @@ def loop():
         for d, sh in st["sheets"].items():
             if sh["status"] == "submitting":
                 sh["status"] = "partial"
-                tg.send(f"⚠️ {d} 가격표 주문 접수 도중 프로그램이 다시 켜졌어요. 메리츠 앱에서 접수 여부를 확인해 주세요.",
-                        [[{"text": "🔁 빠진 것만 다시", "callback_data": f"fd:re:{d}:{sh['ver']}"}]])
+                tg.send(f"{d} 가격표 주문 접수 도중 프로그램이 다시 켜졌어요. 메리츠 앱에서 접수 여부를 확인해 주세요.",
+                        [[{"text": "빠진 것만 다시", "callback_data": f"fd:re:{d}:{sh['ver']}"}]])
     if tg.own:
         print("팬딩 전용 텔레그램 봇 사용 (버튼·명령을 직접 받음)", flush=True)
         if not load(HOME / "tg_offset.json", {}).get("hello"):
-            tg.send(f"👋 <b>팬딩 봇 연결 완료</b> (v{VERSION})\n앞으로 팬딩 가격표 알림·주문 버튼은 여기로 와요.\n" + HELP_TEXT)
+            tg.send(f"<b>팬딩 봇 연결 완료</b> (v{VERSION})\n앞으로 팬딩 가격표 알림·주문 버튼은 여기로 와요.\n" + HELP_TEXT)
             save(HOME / "tg_offset.json", {"hello": True})
     while True:
         _hub_beat('4번 팬딩 가격표')
@@ -2660,68 +2732,69 @@ def loop():
             os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
 
 
-HELP_TEXT = ("▫️ <b>/가격표</b> 최근 가격표·주문 상태\n▫️ <b>/배수</b> 현재 배수 · <b>/배수 6</b> 배수 바꾸기\n"
-             "▫️ <b>/맞추기</b> 배수 맞추기(따라잡기) — 부족한 보유를 정한 일수 동안 매일 조금씩 추가 매수 · <b>/맞추기 12</b> 12일로 시작\n"
-             "▫️ <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n▫️ <b>/과거</b> 과거 가격표 수집 현황\n"
-             "▫️ <b>/과거자료다운</b> 과거 숫자 파일 받기(누를 때만) · <b>/빠진날짜</b> 빠진 매매일 목록\n"
-             "▫️ <b>/재판독</b> PC 사이트 재접속·최신 자료 요청 · <b>/진단</b> 단계별 상태\n"
-             "▫️ <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
-             "▫️ <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
-             "▫️ <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기\n"
-             "▫️ <b>/환전</b> 금액 고르기 버튼 → 확인 → 실행 · <b>/환전 [금액]</b> 바로 확인 화면 (실행은 확인 화면 버튼으로만)\n"
-             "▫️ <b>/자동환전</b> 부족금 자동환전 상태 · <b>/자동환전켜기</b> · <b>/자동환전끄기</b> (P 계좌만, 기본 꺼짐, 평일 09:00~15:30)\n"
-             "▫️ <b>/역환전자동</b> 남는 달러 원화로 역자동환전 상태 · <b>/역환전자동켜기</b> · <b>/역환전자동끄기</b> (P 계좌만, 기본 꺼짐)")
+HELP_TEXT = ("· <b>/가격표</b> 최근 가격표·주문 상태\n· <b>/배수</b> 현재 배수 · <b>/배수</b> 입력창에 숫자(1~50) 보내면 확인 후 바뀜 (<b>/배수 6</b> 도 확인 화면으로)\n"
+             "· <b>/맞추기</b> 배수 맞추기(따라잡기) — 부족한 보유를 정한 거래일 수 동안 매일 조금씩 추가 매수 · <b>/맞추기</b> 뒤 입력창에 거래일 수(1~60) 보내기 · <b>/맞추기 12</b> 12일로 확인 화면\n"
+             "· <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n· <b>/과거</b> 과거 가격표 수집 현황\n"
+             "· <b>/과거자료다운</b> 과거 숫자 파일 받기(누를 때만) · <b>/빠진날짜</b> 빠진 매매일 목록\n"
+             "· <b>/재판독</b> PC 사이트 재접속·최신 자료 요청 · <b>/진단</b> 단계별 상태\n"
+             "· <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
+             "· <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
+             "· <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기\n"
+             "· <b>/환전</b> 금액(0 초과 ~ $99,999)을 숫자로 보내기 → 확인 → 실행 · <b>/환전 [금액]</b> 바로 확인 화면 (실행은 확인 화면 버튼으로만)\n"
+             "· <b>/자동환전</b> 부족금 자동환전 상태 · <b>/자동환전켜기</b> · <b>/자동환전끄기</b> (P 계좌만, 기본 꺼짐, 평일 09:00~15:30)\n"
+             "· <b>/역환전자동</b> 남는 달러 원화로 역자동환전 상태 · <b>/역환전자동켜기</b> · <b>/역환전자동끄기</b> (P 계좌만, 기본 꺼짐)")
 
-# ---------------------------------------------------------- 5번 봇 하단 버튼 메뉴
+# ---------------------------------------------------------- 4번 봇 하단 버튼 메뉴
 # 버튼은 기존 명령 글자와 똑같이 처리된다(새 기능이 아니라 같은 기능을 버튼으로 누르는 것).
 # (key, 버튼 글자, 명령) — key 는 알림 안 인라인 버튼(fm:key)에서도 씀
-MENU_ITEMS = [("pr", "📋 가격표", "/가격표"), ("fx", "💱 환전", "/환전"), ("mt", "📐 배수", "/배수"),
-              ("cu", "📈 배수 맞추기", "/맞추기"),
-              ("dg", "🩺 진단", "/진단"), ("rs", "🔄 재판독", "/재판독"),
-              ("rt", "⏱ 발주시간", "/발주시간"), ("rr", "🔁 재예약", "/재예약"), ("rf", "⚠️ 재예약 강제", "/재예약강제"),
-              ("vi", "🧠 판독 AI", "/판독"), ("ps", "🗂 과거 수집", "/과거"), ("hp", "❓ P 도움말", "/help"),   # 1.10.0 글자
-              ("au", "🤖 자동주문", "/자동"), ("pd", "📥 과거자료 다운", "/과거자료다운")]   # 1.14.3
+MENU_ITEMS = [("pr", "가격표", "/가격표"), ("fx", "환전", "/환전"), ("mt", "배수", "/배수"),
+              ("cu", "배수 맞추기", "/맞추기"),
+              ("dg", "진단", "/진단"), ("rs", "재판독", "/재판독"),
+              ("rt", "발주시간", "/발주시간"), ("rr", "재예약", "/재예약"), ("rf", "재예약 강제", "/재예약강제"),
+              ("vi", "판독 AI", "/판독"), ("ps", "과거 수집", "/과거"), ("hp", "P 도움말", "/help"),   # 1.10.0 글자
+              ("au", "자동주문", "/자동"), ("pd", "과거자료 다운", "/과거자료다운")]   # 1.14.3
 MENU_ALIAS = {label: cmd for _, label, cmd in MENU_ITEMS}
-MENU_ALIAS.update({"❓ 도움말": "/help"})          # 1.10.0 전 하단 버튼 글자
+MENU_ALIAS.update({"도움말": "/help"})          # 1.10.0 전 하단 버튼 글자
 MENU_CMD = {key: cmd for key, _, cmd in MENU_ITEMS}
 
-P_LABEL, VR6_LABEL, HOME_LABEL, HELP_LABEL = "🅿 P 매매", "🅥 VR6 매매", "🏠 처음", "❓ 전체 도움말"
-P_TOOLS_LABEL, P_BACK_LABEL = "🛠 도구", "⬅️ 메뉴"
-OLD_P_LABELS = ("🅿 P 메뉴", "⬅️ P 메뉴")            # 예전 키보드가 남아 있어도 동작
-OLD_HOME_LABELS = ("🏠 메인 메뉴",)
-AUTO_ON_LABEL, AUTO_OFF_LABEL = "🤖 자동 켜짐", "🤖 자동 꺼짐"          # 옛 글자 (별칭으로만)
+P_LABEL, VR6_LABEL, HOME_LABEL, HELP_LABEL = "P 매매", "VR6 매매", "처음", "전체 도움말"
+ALL_LABEL = "전체 현황"          # v1.6.0 첫 화면 3번째 칸: P·VR6 상태를 한 번에
+P_TOOLS_LABEL, P_BACK_LABEL = "도구", "메뉴"
+OLD_P_LABELS = ("P 메뉴", "P 메뉴")            # 예전 키보드가 남아 있어도 동작
+OLD_HOME_LABELS = ("메인 메뉴",)
+AUTO_ON_LABEL, AUTO_OFF_LABEL = "자동 켜짐", "자동 꺼짐"          # 옛 글자 (별칭으로만)
 # 1.14.0 메뉴 토글 = 동작 표시 (꺼져 있으면 ⚡ 켜기, 켜져 있으면 💤 끄기). P·VR6 같은 글자
-AUTO_ON_BTN, AUTO_OFF_BTN = "⚡ 자동 켜기", "💤 자동 끄기"
-FX_ON_BTN, FX_OFF_BTN = "⚡ 자동환전 켜기", "💤 자동환전 끄기"
-RFX_ON_BTN, RFX_OFF_BTN = "⚡ 역자동환전 켜기", "💤 역자동환전 끄기"
+AUTO_ON_BTN, AUTO_OFF_BTN = "자동 켜기", "자동 끄기"
+FX_ON_BTN, FX_OFF_BTN = "자동환전 켜기", "자동환전 끄기"
+RFX_ON_BTN, RFX_OFF_BTN = "역자동환전 켜기", "역자동환전 끄기"
 
 
 def main_keyboard():
     """/start 첫 화면"""
-    return [[{"text": P_LABEL}, {"text": VR6_LABEL}], [{"text": HELP_LABEL}]]
+    return [[{"text": P_LABEL}, {"text": VR6_LABEL}], [{"text": ALL_LABEL}, {"text": HELP_LABEL}]]
 
 
 def menu_keyboard():
-    """P 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태 (1.14.3: 진단·재판독은 🛠 도구로)"""
+    """P 메뉴: 자주 쓰는 6개 + 도구·처음. 자동 버튼 글자는 지금 상태 (1.14.3: 진단·재판독은 도구로)"""
     auto = AUTO_OFF_BTN if cfg()["auto_order"] else AUTO_ON_BTN
-    return [[{"text": "📋 가격표"}, {"text": "💱 환전"}], [{"text": auto}, {"text": "📐 배수"}],
+    return [[{"text": "가격표"}, {"text": "환전"}], [{"text": auto}, {"text": "배수"}],
             [{"text": auto_fx_label()}, {"text": auto_rfx_label()}],
-            [{"text": "📈 배수 맞추기"}],
+            [{"text": "배수 맞추기"}],
             [{"text": P_TOOLS_LABEL}, {"text": HOME_LABEL}]]
 
 
 def tools_keyboard():
-    return [[{"text": "⏱ 발주시간"}, {"text": "🔁 재예약"}], [{"text": "⚠️ 재예약 강제"}, {"text": "🧠 판독 AI"}],
-            [{"text": "🩺 진단"}, {"text": "🔄 재판독"}],
-            [{"text": "🗂 과거 수집"}, {"text": "📥 과거자료 다운"}], [{"text": "❓ 도움말"}, {"text": P_BACK_LABEL}]]
+    return [[{"text": "발주시간"}, {"text": "재예약"}], [{"text": "재예약 강제"}, {"text": "판독 AI"}],
+            [{"text": "진단"}, {"text": "재판독"}],
+            [{"text": "과거 수집"}, {"text": "과거자료 다운"}], [{"text": "도움말"}, {"text": P_BACK_LABEL}]]
 
 
 # ---------- P·VR6 가 같은 글자를 쓰는 버튼 → 지금 보고 있는 메뉴로 보냄 (1.10.1)
 MENU_MODE = HOME / "menu_mode.json"
-P_KB_MARKS, VR6_KB_MARKS, HOME_KB_MARKS = ("📋 가격표", "⏱ 발주시간"), ("📝 주문표", "📋 받은 표"), ("🅿 P 매매",)
-SHARED = {"💱 환전": ("/환전", "/vr6환전"), "📐 배수": ("/배수", "/vr6배수"), "🩺 진단": ("/진단", "/vr6진단"),
-          "🔄 재판독": ("/재판독", "/vr6재판독"), "🛠 도구": (P_TOOLS_LABEL, "/vr6도구"), "❓ 도움말": ("/help", "/vr6도움말"),
-          "⬅️ 메뉴": ("/p", "/vr6"), AUTO_ON_LABEL: (AUTO_ON_LABEL, "/vr6자동전환"), AUTO_OFF_LABEL: (AUTO_OFF_LABEL, "/vr6자동전환"),
+P_KB_MARKS, VR6_KB_MARKS, HOME_KB_MARKS = ("가격표", "발주시간"), ("주문표", "받은 표"), ("P 매매",)
+SHARED = {"환전": ("/환전", "/vr6환전"), "배수": ("/배수", "/vr6배수"), "진단": ("/진단", "/vr6진단"),
+          "재판독": ("/재판독", "/vr6재판독"), "도구": (P_TOOLS_LABEL, "/vr6도구"), "도움말": ("/help", "/vr6도움말"),
+          "메뉴": ("/p", "/vr6"), AUTO_ON_LABEL: (AUTO_ON_LABEL, "/vr6자동전환"), AUTO_OFF_LABEL: (AUTO_OFF_LABEL, "/vr6자동전환"),
           AUTO_FX_ON_LABEL: ("/자동환전전환", "/vr6자동환전전환"), AUTO_FX_OFF_LABEL: ("/자동환전전환", "/vr6자동환전전환"),
           AUTO_RFX_ON_LABEL: ("/역환전자동전환", "/vr6역환전자동전환"), AUTO_RFX_OFF_LABEL: ("/역환전자동전환", "/vr6역환전자동전환")}
 SHARED.update({AUTO_ON_BTN: ("/자동켜기", "/vr6자동켜기"), AUTO_OFF_BTN: ("/자동끄기", "/vr6자동끄기"),
@@ -2747,7 +2820,7 @@ MENU_UNKNOWN = "__menu_unknown__"
 
 def route_shared(t):
     """같은 글자 버튼이면 지금 메뉴(P/VR6)의 명령으로 바꿈. 모르면 P (1.10.0 전 동작과 같음).
-    단 🤖 자동(누르면 바로 바뀜)은 어느 메뉴인지 모르면 아무것도 바꾸지 않고 메뉴를 다시 열게 함"""
+    단 자동(누르면 바로 바뀜)은 어느 메뉴인지 모르면 아무것도 바꾸지 않고 메뉴를 다시 열게 함"""
     if t not in SHARED:
         return t
     mode = load(MENU_MODE, {}).get("mode")
@@ -2765,12 +2838,12 @@ def p_status_line():
     c, st = cfg(), load(STATE, {})
     sheets = st.get("sheets") or {}
     last = sheets[max(sheets)] if sheets else None
-    head = (f"🅿 <b>P 매매</b> · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])} · 자동 {'켜짐' if c['auto_order'] else '꺼짐'}"
+    head = (f"<b>P 매매</b> · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])} · 자동 {'켜짐' if c['auto_order'] else '꺼짐'}"
             f" · 자동환전 {'켜짐' if auto_fx_state(st)[0] else '꺼짐'} · 역자동환전 {'켜짐' if auto_rfx_state(st)[0] else '꺼짐'}")
     plan = catchup_plan(st)
     if plan:
-        head += (f"\n📈 배수 맞추기 진행 중: 목표 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · "
-                 f"{plan.get('days')}일 중 {int(plan.get('applied', 0)) + 1}일째")
+        head += (f"\n배수 맞추기 진행 중: 목표 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · "
+                 f"{plan.get('days')}거래일 중 {int(plan.get('applied', 0)) + 1}거래일째")
     return head + ("\n최근 가격표: " + f"{last['date']} · {STATUS_KO.get(last['status'], last['status'])}" if last else "\n최근 가격표: 없음")
 
 
@@ -2779,8 +2852,8 @@ def main_menu_text():
         import fanding_vr6
         vr6 = fanding_vr6.status_line()
     except Exception:
-        vr6 = "🅥 <b>VR6 매매</b> · 상태를 못 읽었어요 (/vr6진단)"
-    return "📋 <b>팬딩 봇</b>\n\n" + p_status_line() + "\n\n" + vr6 + "\n\n아래 버튼에서 골라 주세요."
+        vr6 = "<b>VR6 매매</b> · 상태를 못 읽었어요 (/vr6진단)"
+    return "<b>팬딩 봇</b>\n\n" + p_status_line() + "\n\n" + vr6 + "\n\n아래 버튼에서 골라 주세요."
 
 
 # ---------- 자동주문 시간 선택 (1.14.0): 켤 때 판독후 30분뒤(A) / 마감 1시간전(B) 중 고름. 모드 없는 ON(legacy)은 마감 10분 전
@@ -2845,14 +2918,14 @@ def p_ref_sheet(now=None):
 def auto_pick_rows(prefix, times):
     return [[{"text": f"{AUTO_MODES['A']} ({times['A']:%H:%M})", "callback_data": f"{prefix}:am:A"}],
             [{"text": f"{AUTO_MODES['B']} ({times['B']:%H:%M})", "callback_data": f"{prefix}:am:B"}],
-            [{"text": "❌ 취소", "callback_data": f"{prefix}:am:x"}]]
+            [{"text": "취소", "callback_data": f"{prefix}:am:x"}]]
 
 
 def p_auto_picker(tg):
-    """⚡ 자동 켜기 · /자동켜기: 바로 켜지 않고 시간 선택 화면"""
+    """자동 켜기 · /자동켜기: 바로 켜지 않고 시간 선택 화면"""
     sh = p_ref_sheet()
     times = {m: auto_mode_time(sh, m) for m in AUTO_MODES}
-    tg.send("🅿 <b>P 자동주문 켜기 — 시간을 골라줘</b>\n(한국시간, " + (f"{sh['date']} 가격표 기준)" if sh.get("date") else "다음 가격표 기준)"),
+    tg.send("<b>P 자동주문 켜기 — 시간을 골라줘</b>\n(한국시간, " + (f"{sh['date']} 가격표 기준)" if sh.get("date") else "다음 가격표 기준)"),
             auto_pick_rows("fm", times))
     return True
 
@@ -2868,14 +2941,14 @@ def set_p_auto(tg, mode):
     save(CFG, c)
     if mode in AUTO_MODES:
         at = auto_mode_time(p_ref_sheet(), mode)
-        tg.send(f"🅿 🤖 P 자동주문 <b>켜짐</b> — {AUTO_MODES[mode]} ({at:%H:%M})에 자동주문해요 (점검 통과 시).", keyboard=menu_keyboard())
+        tg.send(f"P 자동주문 <b>켜짐</b> — {AUTO_MODES[mode]} ({at:%H:%M})에 자동주문해요 (점검 통과 시).", keyboard=menu_keyboard())
     else:
-        tg.send("🅿 🤖 P 자동주문 <b>꺼짐</b> — 버튼을 안 누르면 주문하지 않아요.", keyboard=menu_keyboard())
+        tg.send("P 자동주문 <b>꺼짐</b> — 버튼을 안 누르면 주문하지 않아요.", keyboard=menu_keyboard())
     return True
 
 
 def toggle_auto(tg):
-    """옛 버튼 글자(🤖 자동 켜짐/꺼짐) 별칭: 켜져 있으면 끄고, 꺼져 있으면 시간 선택"""
+    """옛 버튼 글자(자동 켜짐/꺼짐) 별칭: 켜져 있으면 끄고, 꺼져 있으면 시간 선택"""
     return set_p_auto(tg, None) if cfg()["auto_order"] else p_auto_picker(tg)
 
 
@@ -2886,24 +2959,57 @@ def _vr6_text(tg, t):
         return fanding_vr6.handle_text(tg, t)
     except Exception as e:
         print("VR6 명령 오류:", type(e).__name__, e, flush=True)
-        tg.send("⚠️ VR6 처리 중 오류가 났어요. /vr6진단 으로 확인해 주세요.")
+        tg.send("VR6 처리 중 오류가 났어요. /vr6진단 으로 확인해 주세요.")
         return True
 
 
-def mult_rows(cur):
-    cb = lambda n: {"text": f"×{n}", "callback_data": f"fm:mt:{n}"}
-    return [[{"text": "➖ 1", "callback_data": f"fm:mt:{max(1, cur - 1)}"}, {"text": f"현재 ×{cur}", "callback_data": "fm:noop"},
-             {"text": "➕ 1", "callback_data": f"fm:mt:{min(50, cur + 1)}"}],
-            [cb(n) for n in (1, 2, 3, 4, 5)], [cb(n) for n in (6, 7, 8, 10, 12)]]
+def mult_ask(tg_s):
+    """v1.6.0 /배수 (숫자 없이): 설명 + 입력 기다림. 버튼 숫자판은 없앰"""
+    with locked_state() as st:
+        cur = st["multiplier"]
+    tg_s.send(explain_text("P 배수", f"×{cur}", "1~50 사이 정수",
+                           "가격표의 수량에 곱하는 수 (표 수량 × 배수 = 실제 주문 수량)",
+                           "다음 가격표부터 곱하는 수가 바뀜. 대기 중인 오늘 가격표가 있으면 거기에도 바로 적용돼요", "6"))
+    await_set("mult")
+    return True
+
+
+def mult_confirm(tg_s, n):
+    """새 배수 확인 화면 (지금 값 → 새 값). [적용][취소] 눌러야 바뀜"""
+    with locked_state() as st:
+        cur = st["multiplier"]
+    if n == cur:
+        tg_s.send(f"지금 배수가 이미 <b>×{cur}</b> 예요. 바뀐 것이 없어요."); return True
+    _CFM["mult"] = (n, time.time())
+    tg_s.send(f"<b>P 배수 바꾸기 확인</b>\n지금 값 ×{cur} → 새 값 <b>×{n}</b>\n"
+              "누르면 바뀌고, 대기 중인 오늘 가격표가 있으면 거기에도 바로 적용돼요. 주문은 바로 나가지 않아요.",
+              [[{"text": f"×{n}로 바꾸기", "callback_data": f"fm:mc:{n}"}, {"text": "취소", "callback_data": "fm:mx"}]])
+    return True
+
+
+def mult_apply(tg_s, n):
+    with locked_state() as st:
+        old = st["multiplier"]
+        st["multiplier"] = n
+        sh = _pending_sheet(st)
+        msg = f"배수 변경 ×{old} → <b>×{n}</b>"
+        if sh:
+            sh["mult"], sh["ver"] = n, sh["ver"] + 1
+            sh["checks"], sh["auto_ok"] = run_checks(sh, n, sh.get("market"))
+            tg_s.send(msg + "\n대기 중인 오늘 가격표에도 바로 적용했어요. 새 알림의 버튼으로 결정해 주세요.")
+            send_sheet_alert(TG(), sh, "<b>배수 바뀐 가격표</b>", st)
+        else:
+            tg_s.send(msg + "\n다음 가격표부터 적용돼요.")
+    return True
 
 
 def auto_rows(on):
-    return [[{"text": ("✅ " if on else "") + "🟢 켜기", "callback_data": "fm:au:1"},
-             {"text": ("" if on else "✅ ") + "🔴 끄기", "callback_data": "fm:au:0"}]]
+    return [[{"text": ("[선택] " if on else "") + "켜기", "callback_data": "fm:au:1"},
+             {"text": ("" if on else "[선택] ") + "끄기", "callback_data": "fm:au:0"}]]
 
 
 def rt_rows(cur):
-    btn = lambda k: {"text": ("✅ " if str(k) == str(cur) else "") + RESERVE_NAMES[str(k)], "callback_data": f"fm:rt:{k}"}
+    btn = lambda k: {"text": ("[선택] " if str(k) == str(cur) else "") + RESERVE_NAMES[str(k)], "callback_data": f"fm:rt:{k}"}
     return [[btn(0), btn(3)], [btn(2), btn(1)]]
 
 
@@ -2913,9 +3019,9 @@ def menu_text(tg_s, t):
         tg_s.send(vision_status()); return True
     if t in ("/과거", "과거"):
         st = load(STATE, {})
-        tg_s.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)"); return True
+        tg_s.send(f"과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)"); return True
     if t in ("/help", "도움말"):
-        tg_s.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT); return True
+        tg_s.send("<b>P 사용법</b>\n" + HELP_TEXT); return True
     return bot_message(tg_s, t)
 
 
@@ -2938,29 +3044,33 @@ def poll_own_bot(tg):
                 m = u["message"]
                 if str((m.get("chat") or {}).get("id")) != tg.chat:
                     continue
-                t = (m.get("text") or "").strip()
+                t = _plain(m.get("text") or "")     # 예전 키보드의 이모티콘 글자도 같은 버튼으로
+                if await_handle(tg, t):             # 숫자 입력 기다리는 중이면 여기서 처리
+                    continue
                 t = route_shared(t)        # P·VR6 같은 글자 버튼 → 지금 메뉴의 명령
                 t = MENU_ALIAS.get(t, t)   # 하단 버튼 글자 → 같은 명령
                 if t.lower() in ("/start", "?", "메뉴", "/menu") or t in (HOME_LABEL,) + OLD_HOME_LABELS:
                     tg.send(main_menu_text(), keyboard=main_keyboard())
+                elif t == ALL_LABEL or t == "/현황":
+                    tg.send(main_menu_text(), keyboard=main_keyboard())
                 elif t == HELP_LABEL:
                     try:
                         import fanding_vr6
-                        vh = "\n\n🅥 <b>VR6 사용법</b>\n" + fanding_vr6.HELP
+                        vh = "\n\n<b>VR6 사용법</b>\n" + fanding_vr6.HELP
                     except Exception:
                         vh = ""
-                    tg.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT + vh + "\n\n▫️ 첫 화면은 <b>/start</b>", keyboard=main_keyboard())
+                    tg.send("<b>P 사용법</b>\n" + HELP_TEXT + vh + "\n\n· 첫 화면은 <b>/start</b>", keyboard=main_keyboard())
                 elif t in (P_LABEL, P_BACK_LABEL) + OLD_P_LABELS or t.lower() == "/p":
-                    tg.send(p_status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 🛠 도구에 있어요.", keyboard=menu_keyboard())
+                    tg.send(p_status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 도구에 있어요.", keyboard=menu_keyboard())
                 elif t == P_TOOLS_LABEL:
-                    tg.send("🛠 <b>P 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard())
+                    tg.send("<b>P 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard())
                 elif t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):
                     toggle_auto(tg)
                 elif t == MENU_UNKNOWN:
                     tg.send("P·VR6 중 어느 메뉴의 버튼인지 몰라서 아무것도 바꾸지 않았어요. 메뉴를 다시 열고 눌러 주세요.",
                             keyboard=main_keyboard())
                 elif t.lower() in ("/help", "도움말"):
-                    tg.send("🅿 <b>P 사용법</b>\n" + HELP_TEXT + "\n\n▫️ VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
+                    tg.send("<b>P 사용법</b>\n" + HELP_TEXT + "\n\n· VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
                             keyboard=menu_keyboard())
                 elif t in ("/판독", "판독"):
                     tg.send(vision_status())
@@ -2970,7 +3080,7 @@ def poll_own_bot(tg):
                     tg.send(diagnosis())
                 elif t in ("/과거", "과거"):
                     st = load(STATE, {})
-                    tg.send(f"🗂 과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")
+                    tg.send(f"과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)")
                 elif _vr6_text(tg, t):
                     pass
                 elif not bot_message(tg, t):
@@ -3059,7 +3169,7 @@ def _past_refresh():
 
 
 def past_download(tg_s):
-    """누를 때만 숫자 파일 1개를 5번 팬딩 봇으로 보내고, 줄 수·날짜 범위·빠진 매매일을 답장"""
+    """누를 때만 숫자 파일 1개를 4번 팬딩 봇으로 보내고, 줄 수·날짜 범위·빠진 매매일을 답장"""
     _past_refresh()
     try:
         import past_sheet_telegram
@@ -3068,11 +3178,11 @@ def past_download(tg_s):
         print("과거자료 다운 오류:", type(e).__name__, flush=True)
         r = {"status": "error"}
     if r.get("status") == "sent":
-        tg_s.send(f"📥 <b>과거자료 보냄</b> · {r['rows']}줄 · {r['first']} ~ {r['last']}\n"
+        tg_s.send(f"<b>과거자료 보냄</b> · {r['rows']}줄 · {r['first']} ~ {r['last']}\n"
                   + html.escape(r.get("missing") or "") + "\n" + PAST_FILL_NOTE)
     else:
         print("과거자료 다운 안 보냄:", r.get("status"), flush=True)
-        tg_s.send("📥 " + PAST_SEND_KO.get(r.get("status"), "보내지 않았어요."))
+        tg_s.send("" + PAST_SEND_KO.get(r.get("status"), "보내지 않았어요."))
     return True
 
 
@@ -3081,14 +3191,14 @@ def past_missing(tg_s):
     mod = _past_refresh()
     try:
         cov = mod.coverage_of_file(HOME / "past_sheet_numbers.jsonl")
-        tg_s.send("🗓 <b>과거자료 빠진 매매일</b>\n" + html.escape(mod.missing_text(cov)) + "\n" + PAST_FILL_NOTE)
+        tg_s.send("<b>과거자료 빠진 매매일</b>\n" + html.escape(mod.missing_text(cov)) + "\n" + PAST_FILL_NOTE)
     except Exception as e:
         print("빠진 날짜 확인 오류:", type(e).__name__, flush=True)
-        tg_s.send("🗓 빠진 날짜를 확인하지 못했어요 (숫자 파일 없음 또는 읽기 오류).")
+        tg_s.send("빠진 날짜를 확인하지 못했어요 (숫자 파일 없음 또는 읽기 오류).")
     return True
 
 
-# ---------------------------------------------------------- 5번 봇 글자 명령·버튼 처리
+# ---------------------------------------------------------- 4번 봇 글자 명령·버튼 처리
 def _pending_sheet(st):
     for d in sorted(st["sheets"], reverse=True):
         if st["sheets"][d]["status"] in ("pending",):
@@ -3129,60 +3239,62 @@ def _catchup_plan_params(total, days):
 
 
 def catchup_setup(tg_s, st):
-    """📈 배수 맞추기 설정 화면. 진행 중이면 상태 + 중단 버튼, 아니면 부족분 + 일수 버튼."""
+    """배수 맞추기 설정 화면. 진행 중이면 상태 + 중단 버튼, 아니면 부족분 + 일수 버튼."""
     plan = catchup_plan(st)
     if plan:
         gap, sheet, mult, table, actual = _catchup_current_gap(st)
         eff_days = int(plan.get('days', 1)) + (1 if plan.get('remainder') else 0)
-        L = ["📈 <b>배수 맞추기 진행 중</b>",
-             f"▫️ 목표 배수 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · {eff_days}일 중 {int(plan.get('applied', 0)) + 1}일째",
-             f"▫️ 하루 {plan.get('daily')}주씩" + (f" · 나머지 {int(plan.get('remainder', 0))}주는 마지막에 하루 더" if plan.get('remainder') else ""),
-             f"▫️ 시작 {plan.get('started')}"]
+        L = ["<b>배수 맞추기 진행 중</b>",
+             f"· 목표 배수 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · {eff_days}거래일 중 {int(plan.get('applied', 0)) + 1}거래일째",
+             f"· 하루 {plan.get('daily')}주씩" + (f" · 나머지 {int(plan.get('remainder', 0))}주는 마지막에 하루 더" if plan.get('remainder') else ""),
+             f"· 시작 {plan.get('started')}"]
         if gap is not None:
-            L.append(f"▫️ 지금 부족분 {gap}주" + ("" if gap > 0 else " (다 채워졌어요)"))
-        tg_s.send("\n".join(L), [[{"text": "⏸ 중단하기", "callback_data": "cu:stop"}]])
+            L.append(f"· 지금 부족분 {gap}주" + ("" if gap > 0 else " (다 채워졌어요)"))
+        tg_s.send("\n".join(L), [[{"text": "중단하기", "callback_data": "cu:stop"}]])
         return True
     gap, sheet, mult, table, actual = _catchup_current_gap(st)
     if sheet is None or gap is None:
-        tg_s.send("📈 배수 맞추기를 시작하려면 가격표가 먼저 와야 해요. 오늘 가격표가 오면 다시 눌러 주세요.")
+        tg_s.send("배수 맞추기를 시작하려면 가격표가 먼저 와야 해요. 오늘 가격표가 오면 다시 눌러 주세요.")
         return True
     if gap <= 0:
-        tg_s.send(f"📈 지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
+        tg_s.send(f"지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
         return True
     price = catchup_lowest_buy_price(sheet)
-    L = ["📈 <b>배수 맞추기</b> — 부족한 보유를 매일 조금씩 추가 매수해요",
-         f"▫️ 표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주 → <b>부족 {gap}주</b>",
-         f"▫️ 매수 가격: 가장 낮은 표 매수가 {price:g}" if price is not None else "▫️ 매수 가격: 표 매수가",
-         "▫️ 발주: 장마감 30분 전 (30분 VWAP) 그대로",
+    L = ["<b>배수 맞추기</b> — 부족한 보유를 매일 조금씩 추가 매수해요",
+         f"· 표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주 → <b>부족 {gap}주</b>",
+         f"· 매수 가격: 가장 낮은 표 매수가 {price:g}" if price is not None else "· 매수 가격: 표 매수가",
+         "· 발주: 장마감 30분 전 (30분 VWAP) 그대로",
          "",
-         "며칠에 나눠서 채울까요?"]
-    rows = [[{"text": f"{d}일 · 매일 약 {max(1, gap // d)}주", "callback_data": f"cu:day:{d}"}] for d in CATCHUP_DAY_PRESETS]
-    tg_s.send("\n".join(L), rows)
+         ]
+    tg_s.send("\n".join(L) + "\n\n" + explain_text("배수 맞추기 일수", "아직 없음", "1~60 사이 정수 (거래일)",
+              f"부족한 {gap}주를 며칠(거래일)에 나눠 채울지 (하루 약 부족분 ÷ 거래일 수)",
+              "하루에 사는 수량이 정해져요. 확인 화면에서 한 번 더 보고 시작해요", "12"))
+    await_set("catchup")
     return True
 
 
 def catchup_confirm(tg_s, st, days):
-    """일수 선택 후 확인 화면. [✅ 시작하기] [❌ 취소]."""
+    """일수 선택 후 확인 화면. [시작하기] [취소]."""
     if not 1 <= int(days) <= 60:
-        tg_s.send("일수는 1~60일 사이로 적어 주세요. (예: /맞추기 12)")
+        tg_s.send("거래일 수는 1~60 사이로 적어 주세요. (예: /맞추기 12)")
         return True
     gap, sheet, mult, table, actual = _catchup_current_gap(st)
     if sheet is None or gap is None:
-        tg_s.send("📈 가격표가 아직 없어서 부족분을 못 재요. 오늘 가격표가 오면 다시 눌러 주세요.")
+        tg_s.send("가격표가 아직 없어서 부족분을 못 재요. 오늘 가격표가 오면 다시 눌러 주세요.")
         return True
     if gap <= 0:
-        tg_s.send(f"📈 지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
+        tg_s.send(f"지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
         return True
     eff, daily, rem = _catchup_plan_params(gap, int(days))
     price = catchup_lowest_buy_price(sheet)
-    L = ["📈 <b>배수 맞추기 확인</b>",
-         f"▫️ 목표 배수 ×{mult} · 부족분 <b>{gap}주</b> (표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주)",
-         f"▫️ 기간 {eff}일 · 매일 {daily}주씩" + (f" · 나머지 {rem}주는 마지막에 하루 더" if rem else ""),
-         f"▫️ 매수 가격: 가장 낮은 표 매수가 {price:g}" if price is not None else "▫️ 매수 가격: 표 매수가",
-         "▫️ 발주: 장마감 30분 전 (30분 VWAP) 그대로",
-         "▫️ 미체결이면 다음 날로 넘어가고, 부족분이 0이 되면 자동으로 끝나요"]
-    rows = [[{"text": "✅ 시작하기", "callback_data": f"cu:go:{eff}"},
-             {"text": "❌ 취소", "callback_data": "cu:cancel"}]]
+    L = ["<b>배수 맞추기 확인</b>",
+         f"· 목표 배수 ×{mult} · 부족분 <b>{gap}주</b> (표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주)",
+         f"· 기간 {eff}거래일 · 매일 {daily}주씩" + (f" · 나머지 {rem}주는 마지막에 하루 더" if rem else ""),
+         f"· 매수 가격: 가장 낮은 표 매수가 {price:g}" if price is not None else "· 매수 가격: 표 매수가",
+         "· 발주: 장마감 30분 전 (30분 VWAP) 그대로",
+         "· 미체결이면 다음 날로 넘어가고, 부족분이 0이 되면 자동으로 끝나요"]
+    rows = [[{"text": "시작하기", "callback_data": f"cu:go:{eff}"},
+             {"text": "취소", "callback_data": "cu:cancel"}]]
     tg_s.send("\n".join(L), rows)
     return True
 
@@ -3190,17 +3302,17 @@ def catchup_confirm(tg_s, st, days):
 def catchup_start(tg_s, st, days):
     """계획 시작. st['catchup_plan'] 저장. 대기 중인 오늘 가격표가 있으면 바로 적용."""
     if not 1 <= int(days) <= 60:
-        tg_s.send("일수는 1~60일 사이로 적어 주세요. (예: /맞추기 12)")
+        tg_s.send("거래일 수는 1~60 사이로 적어 주세요. (예: /맞추기 12)")
         return True
     if catchup_plan(st):
-        tg_s.send("📈 이미 진행 중인 배수 맞추기가 있어요. 먼저 중단한 뒤에 새로 시작해 주세요.")
+        tg_s.send("이미 진행 중인 배수 맞추기가 있어요. 먼저 중단한 뒤에 새로 시작해 주세요.")
         return True
     gap, sheet, mult, table, actual = _catchup_current_gap(st)
     if sheet is None or gap is None:
-        tg_s.send("📈 가격표가 아직 없어서 부족분을 못 재요. 오늘 가격표가 오면 다시 눌러 주세요.")
+        tg_s.send("가격표가 아직 없어서 부족분을 못 재요. 오늘 가격표가 오면 다시 눌러 주세요.")
         return True
     if gap <= 0:
-        tg_s.send(f"📈 지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
+        tg_s.send(f"지금은 부족분이 없어요.\n표 {table}주 × {mult} = {table * mult}주 · 실제 {actual}주")
         return True
     eff, daily, rem = _catchup_plan_params(gap, int(days))
     st["catchup_plan"] = {"active": True, "target_mult": int(mult), "total": int(gap),
@@ -3213,10 +3325,10 @@ def catchup_start(tg_s, st, days):
     if sh is not None:
         apply_catchup_to_sheet(st, sh, sh.get("market"))
         sh["checks"], sh["auto_ok"] = run_checks(sh, sh["mult"], sh.get("market"))
-        send_sheet_alert(TG(), sh, "📋 <b>배수 맞추기 적용된 가격표</b>", st)
+        send_sheet_alert(TG(), sh, "<b>배수 맞추기 적용된 가격표</b>", st)
         note = "\n오늘 가격표에도 바로 적용했어요. 새 알림의 버튼으로 결정해 주세요."
-    tg_s.send(f"📈 <b>배수 맞추기 시작</b>\n▫️ 목표 배수 ×{mult} · 부족분 {gap}주\n"
-              f"▫️ {eff}일 · 매일 {daily}주씩" + (f" · 나머지 {rem}주는 마지막에 하루 더" if rem else "") + note)
+    tg_s.send(f"<b>배수 맞추기 시작</b>\n· 목표 배수 ×{mult} · 부족분 {gap}주\n"
+              f"· {eff}거래일 · 매일 {daily}주씩" + (f" · 나머지 {rem}주는 마지막에 하루 더" if rem else "") + note)
     return True
 
 
@@ -3224,7 +3336,7 @@ def catchup_stop(tg_s, st):
     """진행 중인 계획 중단. 대기 중인 오늘 가격표에 저장된 따라잡기도 지우고 검산을 다시 돌린다."""
     plan = catchup_plan(st)
     if not plan:
-        tg_s.send("📈 진행 중인 배수 맞추기가 없어요.")
+        tg_s.send("진행 중인 배수 맞추기가 없어요.")
         return True
     st.pop("catchup_plan", None)
     sh = _pending_sheet(st)
@@ -3232,14 +3344,14 @@ def catchup_stop(tg_s, st):
         clear_catchup_from_sheet(sh)
         sh["checks"], sh["auto_ok"] = run_checks(sh, sh["mult"], sh.get("market"))
     gap, sheet, mult, table, actual = _catchup_current_gap(st)
-    msg = (f"📈 <b>배수 맞추기 중단</b>\n총 {plan.get('total')}주 계획 중 {int(plan.get('applied', 0))}일 적용했어요."
+    msg = (f"<b>배수 맞추기 중단</b>\n총 {plan.get('total')}주 계획 중 {int(plan.get('applied', 0))}거래일 적용했어요."
            + (f"\n지금 부족분 {gap}주" if gap is not None else ""))
     tg_s.send(msg)
     return True
 
 
 def cu_handle_callback(tg_s, cb):
-    """📈 배수 맞추기 인라인 버튼 (cu:day:<일수> · cu:go:<일수> · cu:cancel · cu:stop)."""
+    """배수 맞추기 인라인 버튼 (cu:day:<일수> · cu:go:<일수> · cu:cancel · cu:stop)."""
     data = cb.get("data", "")
     parts = data.split(":")
     cb_id = cb.get("id")
@@ -3265,7 +3377,7 @@ def cu_handle_callback(tg_s, cb):
                 return True
             return catchup_start(tg_s, st, days)
         if kind == "cancel":
-            tg_s.send("📈 배수 맞추기를 취소했어요.")
+            tg_s.send("배수 맞추기를 취소했어요.")
             return True
         if kind == "stop":
             return catchup_stop(tg_s, st)
@@ -3273,10 +3385,10 @@ def cu_handle_callback(tg_s, cb):
 
 
 def bot_message(tg_s, text):
-    """처리했으면 True. tg_s 는 5번 팬딩 봇의 TG 객체"""
+    """처리했으면 True. tg_s 는 4번 팬딩 봇의 TG 객체"""
     t = text.strip()
     low = t.lower()
-    if t in ("/과거자료다운", "과거자료다운", "/과거다운"):       # 1.14.3 🛠 도구 [📥 과거자료 다운]
+    if t in ("/과거자료다운", "과거자료다운", "/과거다운"):       # 1.14.3 도구 [과거자료 다운]
         return past_download(tg_s)
     if t in ("/빠진날짜", "빠진날짜"):
         return past_missing(tg_s)
@@ -3286,25 +3398,12 @@ def bot_message(tg_s, text):
         tg_s.send(diagnosis()); return True
     m = re.fullmatch(r"(?:/배수|배수|/mult)\s*(\d+)?", t)
     if m:
-        with locked_state() as st:
-            if not m.group(1):
-                tg_s.send(f"📐 지금 배수는 <b>×{st['multiplier']}</b> 예요. 아래 버튼으로 바꾸세요. (글자로는 <code>/배수 6</code>)",
-                          mult_rows(st['multiplier'])); return True
-            n = int(m.group(1))
-            if not 1 <= n <= 50:
-                tg_s.send("배수는 1~50 사이로 적어 주세요."); return True
-            old = st["multiplier"]
-            st["multiplier"] = n
-            sh = _pending_sheet(st)
-            msg = f"📐 배수 변경 ×{old} → <b>×{n}</b>"
-            if sh:
-                sh["mult"], sh["ver"] = n, sh["ver"] + 1
-                sh["checks"], sh["auto_ok"] = run_checks(sh, n, sh.get("market"))
-                tg_s.send(msg + "\n대기 중인 오늘 가격표에도 바로 적용했어요. 새 알림의 버튼으로 결정해 주세요.")
-                send_sheet_alert(TG(), sh, "📋 <b>배수 바뀐 가격표</b>", st)
-            else:
-                tg_s.send(msg + "\n다음 가격표부터 적용돼요.", mult_rows(n))
-        return True
+        if not m.group(1):
+            return mult_ask(tg_s)
+        n = int(m.group(1))
+        if not 1 <= n <= 50:
+            tg_s.send("배수는 1~50 사이 정수로 보내 주세요. (예: 6)"); return True
+        return mult_confirm(tg_s, n)
     m = re.fullmatch(r"(?:/맞추기|맞추기)\s*(\d+)?", t)
     if m:
         with locked_state() as st:
@@ -3317,7 +3416,7 @@ def bot_message(tg_s, text):
         elif low in ("/자동끄기", "/자동 끄기", "/자동 off"):
             return set_p_auto(tg_s, None)
         else:
-            tg_s.send(f"🤖 자동주문은 지금 <b>{'켜짐' if cfg()['auto_order'] else '꺼짐'}</b>.\n"
+            tg_s.send(f"자동주문은 지금 <b>{'켜짐' if cfg()['auto_order'] else '꺼짐'}</b>.\n"
                       "아래 버튼으로 바꾸세요. (글자로는 <code>/자동켜기</code> · <code>/자동끄기</code>)",
                       auto_rows(cfg()['auto_order'])); return True
     if low in ("/재예약강제", "재예약강제"):
@@ -3325,10 +3424,10 @@ def bot_message(tg_s, text):
             sh = st["sheets"].get(sorted(st["sheets"])[-1]) if st["sheets"] else None
             if not sh or sh["status"] not in ("submitted", "partial") or now_kst() >= deadlines(sh)[2]:
                 tg_s.send("다시 넣을 수 있는 주문이 없거나 마감이 지났어요."); return True
-            tg_s.send(f"⚠️ <b>{sh['date']} 가격표를 취소 없이 새로 넣을까요?</b>\n메리츠 앱에서 기존 SOXL 예약을 <b>모두 직접 취소한 경우에만</b> 누르세요. "
+            tg_s.send(f"<b>{sh['date']} 가격표를 취소 없이 새로 넣을까요?</b>\n메리츠 앱에서 기존 SOXL 예약을 <b>모두 직접 취소한 경우에만</b> 누르세요. "
                       "하나라도 남아 있으면 주문이 두 번 나가요.",
-                      [[{"text": "✅ 모두 취소했어요 · 새로 넣기", "callback_data": f"fd:rf:{sh['date']}:{sh['ver']}"},
-                        {"text": "↩️ 그만", "callback_data": f"fd:rx:{sh['date']}:{sh['ver']}"}]])
+                      [[{"text": "모두 취소했어요 · 새로 넣기", "callback_data": f"fd:rf:{sh['date']}:{sh['ver']}"},
+                        {"text": "그만", "callback_data": f"fd:rx:{sh['date']}:{sh['ver']}"}]])
         return True
     if low in ("/재예약", "재예약"):
         with locked_state() as st:
@@ -3339,10 +3438,10 @@ def bot_message(tg_s, text):
                 tg_s.send("예약 마감이 지나 다시 예약할 수 없어요. 메리츠 앱에서 확인해 주세요."); return True
             new = RESERVE_NAMES.get(str(cfg().get("reserve_time", "2")))
             olds = sorted({RESERVE_NAMES.get(o.get("hour", "0"), "장개시") for o in sh["orders"] if o.get("no")})
-            tg_s.send(f"🔁 <b>{sh['date']} 가격표 예약을 다시 넣을까요?</b>\n지금 예약({', '.join(olds)} 발주)을 모두 취소하고 "
+            tg_s.send(f"<b>{sh['date']} 가격표 예약을 다시 넣을까요?</b>\n지금 예약({', '.join(olds)} 발주)을 모두 취소하고 "
                       f"<b>{new} 발주</b>로 같은 주문을 다시 넣어요.",
-                      [[{"text": "✅ 취소하고 다시 예약", "callback_data": f"fd:rr:{sh['date']}:{sh['ver']}"},
-                        {"text": "↩️ 그대로 두기", "callback_data": f"fd:rx:{sh['date']}:{sh['ver']}"}]])
+                      [[{"text": "취소하고 다시 예약", "callback_data": f"fd:rr:{sh['date']}:{sh['ver']}"},
+                        {"text": "그대로 두기", "callback_data": f"fd:rx:{sh['date']}:{sh['ver']}"}]])
         return True
     m2 = re.fullmatch(r"/발주시간\s*([0-3])?", t)
     if m2:
@@ -3350,7 +3449,7 @@ def bot_message(tg_s, text):
         if m2.group(1):
             c["reserve_time"] = m2.group(1); save(CFG, c)
         cur = str(cfg().get("reserve_time", "2"))
-        tg_s.send(f"⏱ 예약 발주 시간: <b>{RESERVE_NAMES[cur]}</b>\n바꾸기: <code>/발주시간 2</code> 장마감 30분 전 · "
+        tg_s.send(f"예약 발주 시간: <b>{RESERVE_NAMES[cur]}</b>\n바꾸기: <code>/발주시간 2</code> 장마감 30분 전 · "
                   "<code>/발주시간 1</code> 장마감 10분 전 · <code>/발주시간 0</code> 장개시 · <code>/발주시간 3</code> 장개시 30분 후\n"
                   "(이미 접수된 주문은 <b>/재예약</b> 으로 바꿔요)", rt_rows(cur))
         return True
@@ -3366,27 +3465,27 @@ def bot_message(tg_s, text):
             label = {"pending": "결정 대기 · 자동주문 안 함(버튼으로 결정)" if sh.get("auto_skipped") else "결정 대기", "approved": "승인됨·접수 대기", "submitting": "접수 중", "submitted": "접수 완료",
                      "partial": "일부 실패", "cancelled": "안 함", "skipped": "자동주문 안 함", "expired": "마감 지남"}
             view = dict(sh, market=current_account)
-            res = tg_s.send(sheet_text(view, f"📋 <b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
+            res = tg_s.send(sheet_text(view, f"<b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
                             sheet_rows(sh) if sh["status"] == "pending" else None)
             if sh["status"] == "pending":
                 track_buttons(sh, res)
         return True
-    if low in ("/자동환전전환", "자동환전전환"):           # 💱 자동환전 버튼: 누르면 바로 켜짐↔꺼짐
+    if low in ("/자동환전전환", "자동환전전환"):           # 자동환전 버튼: 누르면 바로 켜짐↔꺼짐
         return set_auto_fx(tg_s)
     if low in ("/자동환전켜기", "/자동환전끄기", "자동환전켜기", "자동환전끄기"):
         return set_auto_fx(tg_s, "켜기" in low)
-    if low in ("/역환전자동전환", "역환전자동전환"):         # 💱 역자동환전 버튼: 누르면 바로 켜짐↔꺼짐
+    if low in ("/역환전자동전환", "역환전자동전환"):         # 역자동환전 버튼: 누르면 바로 켜짐↔꺼짐
         return set_auto_rfx(tg_s)
     if low in ("/역환전자동켜기", "/역환전자동끄기", "역환전자동켜기", "역환전자동끄기"):
         return set_auto_rfx(tg_s, "켜기" in low)
     if low in ("/역환전자동", "역환전자동"):
         on, at = auto_rfx_state()
-        tg_s.send(f"🅿 💱 P 역자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                  + "\n바꾸기: <code>/역환전자동켜기</code> · <code>/역환전자동끄기</code> 또는 P 메뉴의 ⚡ 역자동환전 켜기 · 💤 역자동환전 끄기 버튼"); return True
+        tg_s.send(f"P 역자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
+                  + "\n바꾸기: <code>/역환전자동켜기</code> · <code>/역환전자동끄기</code> 또는 P 메뉴의 역자동환전 켜기 · 역자동환전 끄기 버튼"); return True
     if low in ("/자동환전", "자동환전"):
         on, at = auto_fx_state()
-        tg_s.send(f"🅿 💱 P 자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                  + "\n바꾸기: <code>/자동환전켜기</code> · <code>/자동환전끄기</code> 또는 P 메뉴의 ⚡ 자동환전 켜기 · 💤 자동환전 끄기 버튼"); return True
+        tg_s.send(f"P 자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
+                  + "\n바꾸기: <code>/자동환전켜기</code> · <code>/자동환전끄기</code> 또는 P 메뉴의 자동환전 켜기 · 자동환전 끄기 버튼"); return True
     if low == "/환전" or low == "환전" or low.startswith("/환전 "):
         arg = t[len("/환전"):].strip() if t.startswith("/환전") else ""
         if not arg:
@@ -3415,14 +3514,26 @@ def bot_callback(tg_s, cb):
         tg_s.answer(cb.get("id"))
         if key == "noop":
             return True
+        if key in ("mc", "mx", "mt"):         # v1.6.0 배수: 확인 단계 (mt = 예전 숫자 버튼 → 확인으로)
+            tg_s.buttons((cb.get("message") or {}).get("message_id"), [])
+            if key == "mx":
+                _CFM.pop("mult", None); tg_s.send("배수 바꾸기를 취소했어요. 그대로예요."); return True
+            if not arg.isdigit() or not 1 <= int(arg) <= 50:
+                tg_s.send("배수를 못 읽었어요. 다시 /배수 로 입력해 주세요."); return True
+            if key == "mt":
+                return mult_confirm(tg_s, int(arg))
+            pend = _CFM.pop("mult", None)
+            if not pend or pend[0] != int(arg) or time.time() - pend[1] > CONFIRM_SEC:
+                tg_s.send("확인 시간이 지났어요. 다시 /배수 로 입력해 주세요."); return True
+            return mult_apply(tg_s, int(arg))
         if key == "am":                       # 자동주문 시간 선택 화면
             tg_s.buttons((cb.get("message") or {}).get("message_id"), [])
             if arg in AUTO_MODES:
                 return set_p_auto(tg_s, arg)
-            tg_s.send("❌ 취소했어요. 자동주문은 그대로 " + ("켜짐" if cfg()["auto_order"] else "꺼짐") + "이에요.\n" + p_status_line(),
+            tg_s.send("취소했어요. 자동주문은 그대로 " + ("켜짐" if cfg()["auto_order"] else "꺼짐") + "이에요.\n" + p_status_line(),
                       keyboard=menu_keyboard())
             return True
-        cmd = {"mt": f"/배수 {arg}" if arg.isdigit() else "/배수",
+        cmd = {"mt": "/배수",
                "au": {"1": "/자동켜기", "0": "/자동끄기"}.get(arg, "/자동"),
                "rt": f"/발주시간 {arg}" if arg in ("0", "1", "2", "3") else "/발주시간"}.get(key, MENU_CMD.get(key))
         if cmd:
@@ -3453,13 +3564,13 @@ def bot_callback(tg_s, cb):
             tg_s.buttons(msg_id, [])
             c = cfg()
             when = "곧" if (now_kst().hour, now_kst().minute) >= hm(c["submit_kst"]) else f"{c['submit_kst']}에"
-            tg_s.send(f"✅ <b>주문 승인</b> · {date} 가격표 ×{sh['mult']}\n{when} 메리츠 예약주문을 넣고 결과를 알려 드릴게요.")
+            tg_s.send(f"<b>주문 승인</b> · {date} 가격표 ×{sh['mult']}\n{when} 메리츠 예약주문을 넣고 결과를 알려 드릴게요.")
         elif kind == "no":
             if sh["status"] != "pending":
                 tg_s.answer(cb_id, "이미 처리됐어요"); tg_s.buttons(msg_id, []); return True
             sh["status"] = "cancelled"
             tg_s.answer(cb_id, "이번엔 주문 안 해요"); tg_s.buttons(msg_id, [])
-            tg_s.send(f"❌ {date} 가격표: 이번엔 주문하지 않아요. (자동주문도 안 함)")
+            tg_s.send(f"{date} 가격표: 이번엔 주문하지 않아요. (자동주문도 안 함)")
         elif kind == "rx":
             tg_s.answer(cb_id, "그대로 둘게요"); tg_s.buttons(msg_id, [])
         elif kind == "rr":
@@ -3487,11 +3598,11 @@ def bot_callback(tg_s, cb):
                 except Exception as e:
                     fails.append(f"{o['side']} {o['price']:g}×{o['qty']}: {str(e)[:80]}")
             if fails:
-                tg_s.send("🚨 <b>예약 취소 일부 실패</b> — 새로 넣지 않았어요 (중복 방지).\n" + html.escape("\n".join(fails))
+                tg_s.send("<b>예약 취소 일부 실패</b> — 새로 넣지 않았어요 (중복 방지).\n" + html.escape("\n".join(fails))
                           + "\n메리츠 앱에서 예약 내역을 확인해 주세요.")
                 return True
             sh["orders"], sh["status"] = [], "approved"
-            tg_s.send(f"✅ 기존 예약 정리 완료" + (f" (이미 취소돼 있던 {skipped}건은 건너뜀)" if skipped else "")
+            tg_s.send(f"기존 예약 정리 완료" + (f" (이미 취소돼 있던 {skipped}건은 건너뜀)" if skipped else "")
                       + f" → <b>{RESERVE_NAMES.get(str(cfg().get('reserve_time', '2')))} 발주</b>로 1분 안에 다시 넣을게요.")
         elif kind == "rf":
             tg_s.buttons(msg_id, [])
@@ -3499,13 +3610,13 @@ def bot_callback(tg_s, cb):
                 tg_s.answer(cb_id, "다시 넣을 수 없는 상태예요"); return True
             sh["orders"], sh["status"] = [], "approved"
             tg_s.answer(cb_id, "새로 넣을게요")
-            tg_s.send(f"✅ <b>{RESERVE_NAMES.get(str(cfg().get('reserve_time', '2')))} 발주</b>로 1분 안에 새로 넣을게요.")
+            tg_s.send(f"<b>{RESERVE_NAMES.get(str(cfg().get('reserve_time', '2')))} 발주</b>로 1분 안에 새로 넣을게요.")
         elif kind in ("wy", "re"):
             if sh["status"] != "partial":
                 tg_s.answer(cb_id, "다시 넣을 주문이 없어요"); tg_s.buttons(msg_id, []); return True
             sh["status"] = "retry_warn" if kind == "wy" else "retry"
             tg_s.answer(cb_id, "다시 넣을게요"); tg_s.buttons(msg_id, [])
-            tg_s.send("🔁 남은 주문을 다시 넣을게요. (1분 안에 결과 알림)")
+            tg_s.send("남은 주문을 다시 넣을게요. (1분 안에 결과 알림)")
     return True
 
 

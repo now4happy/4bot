@@ -4,7 +4,8 @@ from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from math import isfinite
 
-BOT_VERSION = "v4.3.6"
+BOT_VERSION = "v4.4.0"
+# v4.4.0 (2026-11-19): 메뉴 정리 — 하단 4칸(BTC 설정·ETH 설정·전체 상황판·도움말), 숫자 버튼 제거→입력창+범위 안내, 값 변경 전 지금→새 값 확인, 익절·매도비율 0 초과 100 이하 검사, 이모티콘 제거 (매매 동작 변경 없음)
 # v4.2.0 (draft rework): unified SMA법; separate per-coin buy amount and explicit approval.
 # v4.0.4 (2026-10-28): 재생 로그 추가 — 버튼·명령 / 매매 판단 / 빗썸 주문·조회 / 설정 변경 / 보낸 메시지를 logs/ 에 한 줄 JSON 으로.
 #                     금액·코인·수량은 감사 로그(logs/audit-*, 권한 600)에만. 실패 시 이유 코드 필수.
@@ -111,7 +112,7 @@ def tg_api(method, payload=None):
     return res
 
 # v4.3.6: 화면 맨 아래에 항상 붙어 있는 하단 키보드 (8번 비서 send() 방식) — 딱 한 줄, 딱 2개
-BOTTOM_KB = [[{"text": "🪙 BTC 설정"}, {"text": "🪙 ETH 설정"}]]
+BOTTOM_KB = [[{"text": "BTC 설정"}, {"text": "ETH 설정"}], [{"text": "전체 상황판"}, {"text": "도움말"}]]   # v4.4.0: 4칸
 
 def send_panel(text, inline_kb=None):
     # 텔레그램 메시지 1개에는 reply_markup 1개만: 인라인 버튼이 있으면 인라인만, 없으면 하단 키보드만.

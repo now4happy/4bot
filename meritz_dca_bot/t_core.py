@@ -32,8 +32,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.9"
-BOT_TITLE = "🟦6번 메리츠 적립"
+BOT_VERSION = "v1.3.0"
+BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -83,9 +83,12 @@ def tg_api(method, payload=None):
 #   각 화면이 만든 버튼 목록({"text", "callback_data"})은 그대로 두고, 보낼 때 맨밑 키보드로 바꾼다.
 #   눌린 글자 → 원래 callback_data 는 REPLY_MAP 에 둔다 (가장 최근에 보낸 키보드 1개 · 메모리만).
 #   화면 이동용(관제탑 callback "panel")은 📈 상황판 으로 대신하므로 뺀다. SGOV 버튼(callback "sgov…")은 비서봇으로 옮겨서 뺀다.
-MAIN_ROW = ["📈 상황판", "☰ 메뉴"]
-MENU_ROWS = [["📋 보유종목", "➕ 종목 추가"], ["💰 자금·주식", "⚙️ 시드·주식"], ["🛠 도구", "❓ 도움말"], ["🏠 처음 화면"]]
-TOOLS_ROWS = [["📐 지수 연동 배수", "🎯 익절/매도비율"], ["🔎 종목 검색", "🔢 진행일수 보정"], ["🔙 메뉴"]]
+MAIN_ROW = ["상황판", "메뉴"]
+# v1.3.0 (2026-11-19): 첫 화면 4칸 [자금][매매 규칙][현재 상태][종목 관리] (+ 기존 이동 버튼 [처음 화면]).
+MENU_ROWS = [["자금", "매매 규칙"], ["현재 상태", "종목 관리"], ["처음 화면"]]
+RULES_ROWS = [["익절/매도비율", "지수 연동 배수"], ["진행일수 보정", "메뉴"]]
+STOCKS_ROWS = [["보유종목", "종목 추가"], ["종목 검색", "도움말"], ["메뉴"]]
+TOOLS_ROWS = RULES_ROWS   # 옛 '도구' 호환
 REPLY_MAP = {}
 
 
@@ -94,7 +97,7 @@ def _drop_button(cb: str) -> bool:
 
 
 def reply_rows(inline_kb):
-    """화면 버튼 목록 → (맨밑 키보드 줄, 글자→callback_data). 첫 줄 [📈 상황판, ☰ 메뉴]는 넣지 않음"""
+    """화면 버튼 목록 → (맨밑 키보드 줄, 글자→callback_data). 첫 줄 [상황판, 메뉴]는 넣지 않음"""
     rows, amap = [], {}
     for row in inline_kb or []:
         out = []
@@ -112,7 +115,7 @@ def reply_markup(rows):
 
 def send_panel(text, inline_kb, msg_id=None):
     """v1.2.6: 화면 1개 = 새 메시지 1개 + 맨밑 키보드 (msg_id 는 예전 호출 모양 유지용, 쓰지 않음)"""
-    head = ("🧪[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
+    head = ("[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
     rows, amap = reply_rows(inline_kb)
     REPLY_MAP.clear(); REPLY_MAP.update(amap)
     kb = [[{"text": t} for t in MAIN_ROW]] + rows
@@ -122,14 +125,14 @@ def send_panel(text, inline_kb, msg_id=None):
 def send_keyboard(text, rows_labels):
     """메뉴·도구·처음 화면 키보드 (글자 줄 그대로). 화면 버튼 표(REPLY_MAP)는 비움"""
     REPLY_MAP.clear()
-    head = ("🧪[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
+    head = ("[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
     return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": head + "\n" + text,
                                   "reply_markup": reply_markup([[{"text": t} for t in row] for row in rows_labels])})
 
 
 # 하단 키보드는 별도 메시지로 전송한다.
 # v1.2.6: 처음 화면 = 첫 줄 [📈 상황판, ☰ 메뉴] 만 (예전 [주식, SGOV, 관제탑] 대신).
-def send_bottom_menu(text="📌 처음 화면 · 아래 버튼을 눌러 주세요"):
+def send_bottom_menu(text="처음 화면 · 아래 버튼을 눌러 주세요"):
     return send_keyboard(text, [MAIN_ROW])
 
 def check_holiday():
@@ -443,10 +446,10 @@ async def n7_market_multipliers(client, cfg: dict, is_kr_market: bool) -> dict:
             RL.ev("decision", "n7_multiplier", "ok", None, actor="scheduler", index=idx, d=round(d, 4), mult=eff,
                   cand=st.get("cand"), cand_days=st.get("cand_days"), changed=changed)
             if changed:
-                msg = (f"📐 [지수 연동 배수 변경 · {name} ({etf})]\n• 200일선 대비 {d*100:+.1f}% (전일 {cdate} 종가 기준)\n"
+                msg = (f"[지수 연동 배수 변경 · {name} ({etf})]\n• 200일선 대비 {d*100:+.1f}% (전일 {cdate} 종가 기준)\n"
                        f"• 매수 배수: {before:.1f}배 → {eff:.1f}배 (연속 {N7_CONFIRM_DAYS}거래일 확인)")
                 if eff > 1.0: msg += "\n" + n7_forecast_text(cfg, idx, eff)
-                send_panel(msg, [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
+                send_panel(msg, [[{"text": "관제탑", "callback_data": "panel"}]])
         if dirty:
             cfg["n7_state"] = states; await n7_save_state(states)
     except Exception as e:
@@ -457,8 +460,8 @@ async def n7_market_multipliers(client, cfg: dict, is_kr_market: bool) -> dict:
 def n7_status_lines(cfg: dict) -> list:
     """관제탑 표시용: 켜짐/꺼짐 + 기준 지수별 현재 배수·거리·후보 일수."""
     if not cfg.get("n7_enabled", False):
-        return [" • 지수 연동 배수(N7): ⚪ 꺼짐 — 기존 금액 그대로"]
-    lines = [" • 지수 연동 배수(N7): 🟢 켜짐 (200일선 기준, 최대 2.0배)"]
+        return [" • 지수 연동 배수(N7): 꺼짐 — 기존 금액 그대로"]
+    lines = [" • 지수 연동 배수(N7): 켜짐 (200일선 기준, 최대 2.0배)"]
     states = cfg.get("n7_state") or {}
     for idx, (etf, _, name) in N7_INDEX.items():
         st = states.get(idx)

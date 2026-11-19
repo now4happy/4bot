@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 v1.9.1 (2026-11-19, 방 telegram-bot-menu-review 3차): 9번 첫 화면 4칸 [업데이트 확인 | 거래 상태 | 유지보수 | 도움말] — 충돌 정리·상태 기록·원작 확인은 유지보수 안 · 단순 이모티콘 제거(예전 키보드 글자도 같은 버튼으로 읽음) · 업데이트 적용·일시중지·재개 동작 불변
 # 사무실 v1.9.0 (2026-11-17): live-board 브랜치를 업데이트 알림 대상에서 제외 — 보드용 고아 브랜치가 1분마다 커밋을 올려 매번 새 업데이트 알림이 뜨던 폭주 수정 (음수 refspec 가드와 별개로 코드에서도 제외)
 # 사무실 v1.8.8 (2026-11-15): 한 달 무인 운영 대비 — ① 매일 06:10 STATUS 기록 때 대상 서비스·상시 서비스의 실행(is-active)·부팅 자동시작(is-enabled)을 확인해
 #                       문제가 있으면 8번 방(alert-hub 긴급)으로 즉시 알림 ② STATUS 기록이 같은 이유로 이틀 연속 건너뛰어지면 하루 1번 긴급 알림
@@ -123,7 +124,7 @@ CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
          "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립",
-         "meritz_laoer.service": "7번 메리츠 무매"}
+         "meritz_laoer.service": "7번 메리츠 속쓸 적립봇"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
 HUB_DIR = os.path.join(REPO, "alert-hub")
@@ -317,7 +318,7 @@ def scan(st, force=False):
     rc, out = git("fetch", "-q", "--prune", "origin")
     if rc:
         if st.get("fetch_err") != out[:80]:
-            st["fetch_err"] = out[:80]; say("⚠️ <b>[업데이트 비서] GitHub 확인 실패</b>\n▫️ " + esc(out[-200:]))
+            st["fetch_err"] = out[:80]; say("<b>[업데이트 비서] GitHub 확인 실패</b>\n· " + esc(out[-200:]))
         return None
     st["fetch_err"] = ""
     main_ahead_notice(st)
@@ -360,11 +361,11 @@ def main_ahead_notice(st):
     _, subj = git("log", "--format=%s", "HEAD..origin/main", "-n", "3")
     _, fs = git("diff", "--name-only", "HEAD...origin/main")
     fs = [f for f in fs.splitlines() if f.strip()]
-    say("⚠️ <b>[업데이트 비서] GitHub main 에 서버를 거치지 않은 수정이 있습니다</b>\n"
-        "▫️ 수정: " + esc(" / ".join(subj.splitlines()) or "-") + "\n"
-        "▫️ 파일: " + esc(", ".join(fs[:6]) + (" 외" if len(fs) > 6 else "")) + "\n"
-        "▫️ 이대로면 충돌 정리·STATUS 기록이 멈춥니다.\n"
-        "→ GitHub 에서 <b>main 기준 새 브랜치</b>를 만들면 업데이트 알림이 뜹니다. 그 알림을 ✅ 승인하면 서버와 main 이 다시 같아집니다.")
+    say("<b>[업데이트 비서] GitHub main 에 서버를 거치지 않은 수정이 있습니다</b>\n"
+        "· 수정: " + esc(" / ".join(subj.splitlines()) or "-") + "\n"
+        "· 파일: " + esc(", ".join(fs[:6]) + (" 외" if len(fs) > 6 else "")) + "\n"
+        "· 이대로면 충돌 정리·STATUS 기록이 멈춥니다.\n"
+        "→ GitHub 에서 <b>main 기준 새 브랜치</b>를 만들면 업데이트 알림이 뜹니다. 그 알림을 승인하면 서버와 main 이 다시 같아집니다.")
 
 
 def prune(st, live):
@@ -435,10 +436,10 @@ def revert_check(sha, files):
             continue                                   # main 에 없던 새 파일
         rc_n, new_txt = git("show", f"{sha}:{f}")
         if rc_n:
-            out.append(f"🗑 <code>{esc(f)}</code> 파일을 지웁니다"); continue
+            out.append(f"<code>{esc(f)}</code> 파일을 지웁니다"); continue
         hv, nv = _ver(head_txt), _ver(new_txt)
         if hv and nv and nv < hv:
-            out.append(f"🔻 <code>{esc(f)}</code> 버전이 더 낮아요: 지금 {'.'.join(map(str, hv))} → 올린 것 {'.'.join(map(str, nv))}")
+            out.append(f"<code>{esc(f)}</code> 버전이 더 낮아요: 지금 {'.'.join(map(str, hv))} → 올린 것 {'.'.join(map(str, nv))}")
         new_lines = {l.strip() for l in new_txt.splitlines()}
         head_lines = {l.strip() for l in head_txt.splitlines()}
         _, log = git("log", f"--since={REVERT_DAYS}.days", "--no-merges", "-n", "12", "--format=%H\t%ad\t%s",
@@ -455,7 +456,7 @@ def revert_check(sha, files):
             added = {l for l in added if len(l) >= 8 and l in head_lines}     # 지금도 main 에 살아 있는 의미 있는 줄
             lost = [l for l in added if l not in new_lines]
             if added and len(lost) >= max(2, len(added) * 0.3):
-                out.append(f"⚠️ <code>{esc(f)}</code>: {esc(when)} 수정 '<b>{esc(subj[:40])}</b>'의 {len(lost)}/{len(added)}줄이 사라져요"
+                out.append(f"<code>{esc(f)}</code>: {esc(when)} 수정 '<b>{esc(subj[:40])}</b>'의 {len(lost)}/{len(added)}줄이 사라져요"
                            f"\n    예) <code>{esc(sorted(lost, key=len, reverse=True)[0][:70])}</code>")
     return out
 
@@ -519,49 +520,49 @@ def superseded(sha, others=None):
 
 def _superseded_text(sup):
     if sup["where"] == "HEAD":
-        return (f"♻️ <b>이미 서버에 반영된 옛 브랜치예요</b> — 같은 수정(제목·작성 시각 같음)이 다른 커밋 "
+        return (f"<b>이미 서버에 반영된 옛 브랜치예요</b> — 같은 수정(제목·작성 시각 같음)이 다른 커밋 "
                 f"<code>{esc(sup['by'][:8])}</code>로 이미 들어와 있어요 (리베이스 전 원본으로 보임)."
-                "\n→ ✅·충돌 정리 말고 <b>🗑 옛 브랜치 지우기</b>를 눌러 주세요. 백업 태그를 남기고 지웁니다.")
-    return (f"♻️ <b>같은 수정의 새 브랜치가 따로 있어요</b>: <code>{esc(sup['where'])}</code> "
+                "\n→ 업데이트 버튼·충돌 정리 말고 <b>옛 브랜치 지우기</b>를 눌러 주세요. 백업 태그를 남기고 지웁니다.")
+    return (f"<b>같은 수정의 새 브랜치가 따로 있어요</b>: <code>{esc(sup['where'])}</code> "
             f"(<code>{esc(sup['by'][:8])}</code>, 리베이스본으로 보임)."
-            "\n→ 이 옛 브랜치 말고 새 브랜치 알림을 승인하고, 이건 <b>🗑 옛 브랜치 지우기</b>로 정리해 주세요.")
+            "\n→ 이 옛 브랜치 말고 새 브랜치 알림을 승인하고, 이건 <b>옛 브랜치 지우기</b>로 정리해 주세요.")
 
 
 def _drop_row(key):
-    return [{"text": "🗑 옛 브랜치 지우기 (백업 남김)", "callback_data": f"rm:{key}"}]
+    return [{"text": "옛 브랜치 지우기 (백업 남김)", "callback_data": f"rm:{key}"}]
 
 
 def drop_superseded(st, key):
-    """🗑 옛 브랜치 지우기 — 누를 때 다시 확인: GitHub 최신 SHA 같음 + 여전히 '이미 반영된 옛 브랜치'.
+    """옛 브랜치 지우기 — 누를 때 다시 확인: GitHub 최신 SHA 같음 + 여전히 '이미 반영된 옛 브랜치'.
     백업 태그 만들기와 브랜치 삭제를 한 번에(--atomic), 그사이 브랜치가 바뀌었으면 거부(--force-with-lease).
     서버 작업 폴더·HEAD·main·staging 은 건드리지 않는다. Git 출력은 보여 주지 않는다(주소에 인증값이 있을 수 있음)."""
     o = st.get("offers", {}).get(key)
     if not o:
-        return say("⚠️ 최신 업데이트 알림에서 다시 눌러 주세요.")
+        return say("최신 업데이트 알림에서 다시 눌러 주세요.")
     br, sha = o["branch"], o["sha"]
     if br in ("main", "staging", "HEAD") or not _BRANCH_RE.fullmatch(br):
-        return say("⛔ 이 브랜치는 여기서 지울 수 없습니다.")
+        return say("이 브랜치는 여기서 지울 수 없습니다.")
     if git("fetch", "-q", "--prune", "origin")[0]:
-        return say("⚠️ GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요. (아무것도 지우지 않았습니다)")
+        return say("GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요. (아무것도 지우지 않았습니다)")
     rc, now_sha = git("rev-parse", f"origin/{br}")
     if rc or now_sha != sha:
-        return say("⚠️ 그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림에서 다시 확인해 주세요. (아무것도 지우지 않았습니다)")
+        return say("그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림에서 다시 확인해 주세요. (아무것도 지우지 않았습니다)")
     live = live_branches() or {}
     sup = superseded(sha, live)
     if not sup:
-        return say("⛔ 이미 반영된 옛 브랜치로 확인되지 않아 지우지 않았습니다.")
+        return say("이미 반영된 옛 브랜치로 확인되지 않아 지우지 않았습니다.")
     backup = "updater-backup/superseded-" + datetime.now(KST).strftime("%Y%m%d-%H%M%S") + "-" + sha[:8]
     rc, _out = git("push", "--atomic", f"--force-with-lease=refs/heads/{br}:{sha}", "origin",
                    f"{sha}:refs/tags/{backup}", f":refs/heads/{br}")
     if rc:
-        return say(f"⛔ 옛 브랜치를 지우지 못했습니다 (코드 {rc}). 브랜치·태그 모두 그대로입니다.")
+        return say(f"옛 브랜치를 지우지 못했습니다 (코드 {rc}). 브랜치·태그 모두 그대로입니다.")
     git("fetch", "-q", "--prune", "origin")
     for k, ofr in list(st.get("offers", {}).items()):
         if ofr.get("branch") == br:
             st["offers"].pop(k, None)
     st.setdefault("seen", {}).pop(br, None)
-    say(f"🗑 옛 브랜치 <code>{esc(br)}</code> 를 지웠습니다.\n▫️ 백업 태그: <code>{esc(backup)}</code> (필요하면 이 태그로 되살릴 수 있어요)"
-        "\n▫️ 서버 코드·main·staging 은 그대로입니다.")
+    say(f"옛 브랜치 <code>{esc(br)}</code> 를 지웠습니다.\n· 백업 태그: <code>{esc(backup)}</code> (필요하면 이 태그로 되살릴 수 있어요)"
+        "\n· 서버 코드·main·staging 은 그대로입니다.")
 
 
 def offer(st, br, sha, live=None):
@@ -572,14 +573,14 @@ def offer(st, br, sha, live=None):
     key = sha[:12]
     st.setdefault("offers", {})[key] = {"branch": br, "sha": sha, "at": time.time()}
     bots = ", ".join(uname(u) for u, fs in units.items() if fs) or "봇 코드 없음(문서만)"
-    warn = ("\n⏭️ <b>배포에서 빠진 파일</b>: " + esc(", ".join(skipped[:5])) + (" 외 " + str(len(skipped) - 5) + "개" if len(skipped) > 5 else "")
+    warn = ("\n<b>배포에서 빠진 파일</b>: " + esc(", ".join(skipped[:5])) + (" 외 " + str(len(skipped) - 5) + "개" if len(skipped) > 5 else "")
             + " (서버에 적용하지 않고 넘김 · 업데이트는 그대로 진행 가능)") if skipped else ""
     try:
         reverts = revert_check(sha, files)
     except Exception as e:
         print("되돌림 감지 실패:", type(e).__name__, e, flush=True); reverts = []
     if reverts:
-        warn += ("\n\n🚨 <b>덮어쓰기 의심</b> (예전 파일을 기준으로 고친 것 같아요)\n" + "\n".join(reverts[:6])
+        warn += ("\n\n<b>덮어쓰기 의심</b> (예전 파일을 기준으로 고친 것 같아요)\n" + "\n".join(reverts[:6])
                  + ("\n…외 " + str(len(reverts) - 6) + "건" if len(reverts) > 6 else "")
                  + "\n→ 최신 main 파일을 받아 다시 고쳐 올리는 걸 추천해요. 알고 올린 거면 그대로 승인해도 돼요.")
         st["offers"][key]["reverts"] = len(reverts)
@@ -591,30 +592,30 @@ def offer(st, br, sha, live=None):
     except Exception as e:
         print("옛 브랜치 확인 실패:", type(e).__name__, e, flush=True); behind, conflicts, sup = None, None, None
     if behind:
-        warn += f"\n\n🕰 기준: 서버보다 <b>{behind}개</b> 뒤처진 브랜치"
+        warn += f"\n\n기준: 서버보다 <b>{behind}개</b> 뒤처진 브랜치"
     if conflicts:
-        warn += ("\n⛔ <b>지금 적용하면 충돌하는 파일</b>: " + esc(", ".join(conflicts[:6])) + (" 외" if len(conflicts) > 6 else "")
-                 + ("" if sup else "\n→ 최신 main 기준으로 다시 올려(리베이스) 주세요. 이대로 ✅를 누르면 충돌로 멈춥니다."))
+        warn += ("\n<b>지금 적용하면 충돌하는 파일</b>: " + esc(", ".join(conflicts[:6])) + (" 외" if len(conflicts) > 6 else "")
+                 + ("" if sup else "\n→ 최신 main 기준으로 다시 올려(리베이스) 주세요. 이대로 업데이트를 누르면 충돌로 멈춥니다."))
         st["offers"][key]["conflicts"] = len(conflicts)
     if sup:
         warn += "\n\n" + _superseded_text(sup)
         st["offers"][key]["superseded"] = sup["where"]
-    rows = [[{"text": "🔍 바뀐 내용 보기", "callback_data": f"df:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]]
+    rows = [[{"text": "바뀐 내용 보기", "callback_data": f"df:{key}"}, {"text": "무시", "callback_data": f"ig:{key}"}]]
     if sup:
         rows.append(_drop_row(key))
     if UC:
-        rows.append([{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}])
-    rows.insert(0, [{"text": "⚠️ 알고 있음 · 그래도 업데이트" if reverts else "✅ 업데이트", "callback_data": f"up:{key}"}])   # 빠진 파일이 있어도 항상 표시
+        rows.append([{"text": "이전 변경·충돌 정리", "callback_data": "cp:" + key}])
+    rows.insert(0, [{"text": "알고 있음 · 그래도 업데이트" if reverts else "업데이트", "callback_data": f"up:{key}"}])   # 빠진 파일이 있어도 항상 표시
     gated = {u for u in DC.UNITS.values() if units.get(u) and gate_installed(u)}   # 차단 부품이 설치된 봇만 일시중지 버튼
     if gated:
-        rows.append([{'text':'⏸ 이번 업데이트 대상 전체 중지 대기','callback_data':'pa:'+key},
-                     {'text':'▶️ 이번 대상 거래 재개','callback_data':'ra:'+key}])
+        rows.append([{'text':'이번 업데이트 대상 전체 중지 대기','callback_data':'pa:'+key},
+                     {'text':'이번 대상 거래 재개','callback_data':'ra:'+key}])
     for number, unit in DC.UNITS.items():
         if unit in gated:
-            rows.append([{ "text": "⏸ " + NAMES[unit] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + number}])
-    say(f"📦 <b>[업데이트 비서] 새 수정이 올라왔어요</b>\n▫️ 대상: {esc(bots)}\n▫️ 브랜치: <code>{esc(br)}</code>\n"
-        f"▫️ 파일: {esc(', '.join(files[:8]))}{' 외' if len(files) > 8 else ''}\n▫️ 내용:\n{esc(log[:600])}{warn}\n\n"
-        "✅를 누르면 매매 중인지 확인 → 적용 → 재시작 확인(실패 시 자동 복구) → 버전 기록 → GitHub main 업로드까지 진행합니다.", rows)
+            rows.append([{ "text": "" + NAMES[unit] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + number}])
+    say(f"<b>[업데이트 비서] 새 수정이 올라왔어요</b>\n· 대상: {esc(bots)}\n· 브랜치: <code>{esc(br)}</code>\n"
+        f"· 파일: {esc(', '.join(files[:8]))}{' 외' if len(files) > 8 else ''}\n· 내용:\n{esc(log[:600])}{warn}\n\n"
+        "업데이트 버튼을 누르면 매매 중인지 확인 → 적용 → 재시작 확인(실패 시 자동 복구) → 버전 기록 → GitHub main 업로드까지 진행합니다.", rows)
  
  
 # ---------------------------------------------------------------- STATUS.md (자동 현재 상태)
@@ -652,7 +653,7 @@ def _svc(unit):
             since = dt.astimezone(KST).strftime("%m-%d %H:%M") if dt.tzinfo else dt.strftime("%m-%d %H:%M")
         except ValueError:
             since = m.group(1)[5:16]
-    mark = "🟢 실행 중" if state == "active" else ("⚪ 꺼짐" if state == "inactive" else f"🔴 {state or '확인 불가'}")
+    mark = "실행 중" if state == "active" else ("꺼짐" if state == "inactive" else f"상태 {state or '확인 불가'}")
     return mark, since
 
 
@@ -664,7 +665,7 @@ def build_status(reason):
     now = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
     roots = targets()
     L = ["# STATUS — 서버가 자동으로 쓰는 현재 상태", "",
-         "> ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).",
+         "> 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).",
          "> 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.", "",
          f"- 갱신: {now} (KST) · 계기: {_cell(reason)}", ""]
     L += ["## 봇별 현재 상태", "", "| 봇 | 서비스 | 상태 | 버전 | 마지막 적용 | 내용 |", "|---|---|---|---|---|---|"]
@@ -673,16 +674,16 @@ def build_status(reason):
         mark, since = _svc(u)
         cl = _changelog(roots.get(u, ""), 10) if roots.get(u) else []
         ver, when, _, what = cl[0] if cl else ("-", "-", "", "-")
-        L.append(f"| {name} | `{u.replace('.service', '')}` | {mark}{' (' + since + ' KST부터)' if since and mark.startswith('🟢') else ''} | {ver} | {when} | {_cell(what)[:60]} |")
+        L.append(f"| {name} | `{u.replace('.service', '')}` | {mark}{' (' + since + ' KST부터)' if since and mark == '실행 중' else ''} | {ver} | {when} | {_cell(what)[:60]} |")
         recent += [(w, name, v, f, t) for v, w, f, t in cl]
     cl = _changelog(roots.get(OFFICE_KEY, ""), 10) if roots.get(OFFICE_KEY) else []   # v1.8.7: 사무실 파일은 서비스가 없어 상태 칸 대신 '파일 묶음'
     ver, when, _, what = cl[0] if cl else ("-", "-", "", "-")
-    L.append(f"| {OFFICE_NAME} | `{OFFICE_KEY}` (서비스 없음) | 📁 파일 묶음 | {ver} | {when} | {_cell(what)[:60]} |")
+    L.append(f"| {OFFICE_NAME} | `{OFFICE_KEY}` (서비스 없음) | 파일 묶음 | {ver} | {when} | {_cell(what)[:60]} |")
     recent += [(w, OFFICE_NAME, v, f, t) for v, w, f, t in cl]
     L += ["", "## 사무실 상시 서비스", ""]
     for u, name in EXTRA_UNITS.items():
         mark, since = _svc(u)
-        L.append(f"- {name} `{u.replace('.service', '')}`: {mark}{' (' + since + ' KST부터)' if since and mark.startswith('🟢') else ''}")
+        L.append(f"- {name} `{u.replace('.service', '')}`: {mark}{' (' + since + ' KST부터)' if since and mark == '실행 중' else ''}")
     _, failed = sh(SYSTEMCTL, "list-units", "--failed", "--plain", "--no-legend", "--no-pager")
     failed = [ln.split()[0] for ln in failed.splitlines() if ln.split()]
     L.append(f"- 실패 상태로 남은 서비스·타이머: {', '.join('`' + f + '`' for f in failed) if failed else '없음'}")
@@ -709,7 +710,7 @@ def build_status(reason):
     L += ["", "## AI·사람 작업 순서 (요약)", "",
           "1. 이 파일과 START.md 를 먼저 읽는다. 위 표가 서버의 실제 상태다 (다른 문서의 '현재 상태'보다 우선).",
           "2. 고칠 파일은 **main 의 최신본**을 받아서 고친다 (기억·예전 대화의 파일로 고치지 않는다).",
-          "3. 고친 파일은 staging 에 올리고 9. Update 에서 승인한다. 예전 파일로 덮어쓰면 승인 알림에 🚨 경고가 뜬다.",
+          "3. 고친 파일은 staging 에 올리고 9. Update 에서 승인한다. 예전 파일로 덮어쓰면 승인 알림에 경고가 뜬다.",
           "4. 작업 기록은 docs/log/날짜_AI이름_작업.md 새 파일로 남긴다 (공용 문서를 여럿이 고치지 않는다).", ""]
     return "\n".join(L)
 
@@ -833,7 +834,7 @@ def health_check(st, today):
     sig = today + "|" + "|".join(bad)
     if bad and st.get("health_sig") != sig:
         st["health_sig"] = sig
-        text = "🚨 [9번 업데이트 비서] 매일 점검 — 서비스 확인 필요\n" + "\n".join("▫️ " + b for b in bad)
+        text = "[9번 업데이트 비서] 매일 점검 — 서비스 확인 필요\n" + "\n".join("· " + b for b in bad)
         _hub_alert("9번 업데이트 비서", "critical", text)
         say(esc(text))
     if not bad:
@@ -863,8 +864,8 @@ def status_skip_watch(st, today, result):
         return False
     sk["alerted"] = today
     st["status_skip"] = sk
-    text = ("⚠️ [9번 업데이트 비서] STATUS.md 기록이 " + sk["since"] + " 부터 멈춰 있습니다\n"
-            "▫️ 이유: " + result + "\n▫️ 봇 매매와는 별개입니다. 서버·GitHub 상태 확인이 필요합니다.")
+    text = ("[9번 업데이트 비서] STATUS.md 기록이 " + sk["since"] + " 부터 멈춰 있습니다\n"
+            "· 이유: " + result + "\n· 봇 매매와는 별개입니다. 서버·GitHub 상태 확인이 필요합니다.")
     _hub_alert("9번 업데이트 비서", "critical", text)
     say(esc(text))
     return True
@@ -1111,12 +1112,12 @@ def restart_service(unit, active=None):
 def apply(st, key):
     o = st.get("offers", {}).get(key)
     if not o:
-        return say("⚠️ 이 업데이트 정보를 찾지 못했습니다. GitHub에 다시 올리면 새로 알려 드려요.")
+        return say("이 업데이트 정보를 찾지 못했습니다. GitHub에 다시 올리면 새로 알려 드려요.")
     br, sha = o["branch"], o["sha"]
     git("fetch", "-q", "origin")
     rc, now_sha = git("rev-parse", f"origin/{br}")
     if rc or now_sha != sha:
-        return say("⚠️ 그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림의 버튼을 눌러 주세요.")
+        return say("그사이 브랜치가 바뀌었거나 사라졌습니다. 새 알림의 버튼을 눌러 주세요.")
     _, files = git("diff", "--name-only", f"HEAD...{sha}")
     files = [f for f in files.splitlines() if f.strip()]
     units, skipped = classify(files)
@@ -1125,7 +1126,7 @@ def apply(st, key):
     units = {u: fs for u, fs in units.items() if fs}   # 문서(.md)만 바뀐 봇은 재시작·버전 기록 안 함
     _, added = git("diff", f"HEAD...{sha}")
     if SECRET_RE.search("\n".join(l for l in added.splitlines() if l.startswith("+"))):
-        return say("⛔ 바뀐 내용에 비밀키로 보이는 값이 있어 적용하지 않았습니다. GitHub에서 그 내용을 지우고 키는 새로 발급해 주세요.")
+        return say("바뀐 내용에 비밀키로 보이는 값이 있어 적용하지 않았습니다. GitHub에서 그 내용을 지우고 키는 새로 발급해 주세요.")
     pause_verified = set()
     for unit in units:
         root = targets().get(unit)
@@ -1133,7 +1134,7 @@ def apply(st, key):
             try:
                 state = DC.read(DC.state_path(root))
             except Exception:
-                return say("⛔ 중지 상태 파일을 확인할 수 없습니다. 적용하지 않았습니다.")
+                return say("중지 상태 파일을 확인할 수 없습니다. 적용하지 않았습니다.")
             if state.get('phase') == 'paused':
                 transport = 'kis_api_client.py' if unit == DC.UNITS['1'] else 'b_core.py' if unit == DC.UNITS['4'] else 'toss_api.py'
                 relative = os.path.relpath(root, REPO)
@@ -1141,29 +1142,29 @@ def apply(st, key):
                 rc, source = git('show', sha + ':' + relative + '/' + transport)
                 rc_gate, gate_source = git('show', sha + ':' + relative + '/deployment_gate.py')
                 if rc or rc_gate or marker not in source or 'VERSION = 1' not in gate_source:
-                    return say('⛔ 업데이트 코드에 신규 주문 차단 연결이 없습니다. 차단 부품을 보존한 수정본이 필요합니다.')
+                    return say('업데이트 코드에 신규 주문 차단 연결이 없습니다. 차단 부품을 보존한 수정본이 필요합니다.')
             if state.get('phase') not in ('running','waiting','paused'):
-                return say('⛔ 일시중지 상태 값이 잘못돼 적용하지 않았습니다.')
+                return say('일시중지 상태 값이 잘못돼 적용하지 않았습니다.')
             if state.get('phase') in ('waiting','paused'):
                 if not DC.ready(sys.modules[__name__],unit):
-                    return say("⏳ " + NAMES[unit] + " 보유/미체결 또는 실행 차단 확인 대기 중입니다. 적용하지 않았습니다.", DC.resume_rows(unit))
+                    return say("" + NAMES[unit] + " 보유/미체결 또는 실행 차단 확인 대기 중입니다. 적용하지 않았습니다.", DC.resume_rows(unit))
                 pause_verified.add(unit)
     busy = [f"{uname(u)}: {r}" for u in units if (r := busy_reason(u, u in pause_verified))]
     if {os.path.basename(f) for f in units.get(OFFICE_KEY, [])} & set(OFFICE_EXTRA[FANDING_UNIT]) and (r := busy_reason(FANDING_UNIT)):
         busy.append("4번 팬딩: " + r)
     if busy:
-        return say("⏸ <b>지금은 적용하지 않았습니다</b>\n▫️ " + "\n▫️ ".join(esc(b) for b in busy) + "\n▫️ 나중에 같은 알림의 ✅를 다시 눌러 주세요.",
-                   [[{"text": "✅ 다시 시도", "callback_data": f"up:{key}"}]] +
-                   [[{"text": "⏸ " + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
+        return say("<b>지금은 적용하지 않았습니다</b>\n· " + "\n· ".join(esc(b) for b in busy) + "\n· 나중에 같은 알림의 업데이트 버튼을 다시 눌러 주세요.",
+                   [[{"text": "다시 시도", "callback_data": f"up:{key}"}]] +
+                   [[{"text": "" + NAMES[u] + " 비울 때 일시중지", "callback_data": "ps:" + key + ":" + n}] for n,u in DC.UNITS.items() if u in units and gate_installed(u)])
     if _dirty_code_files(include_staged=True):
-        return say("⛔ 서버에 저장 안 된 변경이 있어 멈췄습니다.")
+        return say("서버에 저장 안 된 변경이 있어 멈췄습니다.")
     rc_m, main_sha = git("rev-parse", "origin/main")
     if rc_m == 0 and git("merge-base", "--is-ancestor", main_sha, "HEAD")[0] and git("merge-base", "--is-ancestor", main_sha, sha)[0]:
-        return say("⛔ GitHub main 에 서버를 거치지 않은 수정이 있고, 이 브랜치는 그 수정을 포함하지 않아 적용하지 않았습니다.\n"
-                   "▫️ 그대로 적용하면 main 업로드가 실패하고 서버·main 이 더 어긋납니다.\n"
+        return say("GitHub main 에 서버를 거치지 않은 수정이 있고, 이 브랜치는 그 수정을 포함하지 않아 적용하지 않았습니다.\n"
+                   "· 그대로 적용하면 main 업로드가 실패하고 서버·main 이 더 어긋납니다.\n"
                    "→ main 기준 새 브랜치로 먼저 승인하거나, 이 브랜치를 최신 main 기준으로 다시 올려 주세요.")
     _, old_head = git("rev-parse", "HEAD")
-    say(f"⏳ 업데이트 적용 중… ({esc(', '.join(uname(u) for u in units) or '문서')})")
+    say(f"업데이트 적용 중… ({esc(', '.join(uname(u) for u in units) or '문서')})")
     rc, out = git("merge", "--no-edit", "-m", f"update: {br}", sha)
     if rc:
         git("merge", "--abort")
@@ -1171,13 +1172,13 @@ def apply(st, key):
             sup = superseded(sha, live_branches())
         except Exception:
             sup = None
-        rows = ([_drop_row(key)] if sup else []) + ([[{"text": "🧹 이전 변경·충돌 정리", "callback_data": "cp:" + key}]] if UC else [])
-        return say("⛔ 서버 코드와 업데이트 브랜치가 충돌해 적용하지 않았습니다. 이미 처리한 이전 변경만 선택해 정리한 뒤 새 알림으로 승인하세요."
+        rows = ([_drop_row(key)] if sup else []) + ([[{"text": "이전 변경·충돌 정리", "callback_data": "cp:" + key}]] if UC else [])
+        return say("서버 코드와 업데이트 브랜치가 충돌해 적용하지 않았습니다. 이미 처리한 이전 변경만 선택해 정리한 뒤 새 알림으로 승인하세요."
                    + ("\n\n" + _superseded_text(sup) if sup else ""), rows or None)
     bad_py = [f for fs in units.values() for f in fs if f.endswith(".py") and os.path.exists(os.path.join(REPO, f)) and sh(sys.executable, "-m", "py_compile", os.path.join(REPO, f))[0]]
     if bad_py:
         git("reset", "-q", "--hard", old_head)
-        return say("⛔ 문법 오류가 있어 원래대로 되돌렸습니다: " + esc(", ".join(bad_py)))
+        return say("문법 오류가 있어 원래대로 되돌렸습니다: " + esc(", ".join(bad_py)))
     vers = bump_versions([u for u in units if u != OFFICE_KEY], old_head)
     office_files = units.get(OFFICE_KEY, [])
     saved = office_deploy(office_files) if office_files else []
@@ -1200,7 +1201,7 @@ def apply(st, key):
         office_restore(saved)
         for u in restart:
             restart_service(u, was_active[u])
-        return say("🚨 <b>업데이트 후 봇이 정상 실행되지 않아 원래 코드로 되돌렸습니다</b>\n▫️ " + esc(", ".join(uname(u) for u in failed)) + "\n▫️ 봇은 이전 버전으로 다시 켜졌습니다.")
+        return say("<b>업데이트 후 봇이 정상 실행되지 않아 원래 코드로 되돌렸습니다</b>\n· " + esc(", ".join(uname(u) for u in failed)) + "\n· 봇은 이전 버전으로 다시 켜졌습니다.")
     # 버전 기록 (봇 폴더 CHANGELOG.md) → 커밋 → 태그 → main 업로드
     _, msgs = git("log", "--format=%s", f"{old_head}..{sha}", "-n", "8")
     tags, roots, now = [], targets(), datetime.now(KST).strftime("%Y-%m-%d %H:%M")
@@ -1243,14 +1244,14 @@ def apply(st, key):
     git("push", "-q", "-f", "origin", "HEAD:staging")   # 다음 수정은 항상 최신 main 기준 staging 에서
     st.setdefault("seen", {}).pop(br, None)
     done = ", ".join(uname(u) + " " + t.rsplit("-", 1)[-1] for u, t in zip(units, tags)) or "문서만 반영"
-    say(f"🎉 <b>업데이트 완료</b>\n▫️ {esc(done)}\n"
-        + (f"▫️ 사무실 파일 읽기 권한 고침: {esc(', '.join(perm_fixed))}\n" if perm_fixed else "")
-        + f"▫️ 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
-        + ("\n▫️ 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
+    say(f"<b>업데이트 완료</b>\n· {esc(done)}\n"
+        + (f"· 사무실 파일 읽기 권한 고침: {esc(', '.join(perm_fixed))}\n" if perm_fixed else "")
+        + f"· 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
+        + ("\n· 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
     for unit in units:
         root = targets().get(unit)
         if unit in DC.UNITS.values() and DC.state_path(root).exists() and DC.read(DC.state_path(root)).get('phase') == 'paused':
-            say("⏸ " + NAMES[unit] + " 업데이트용 차단은 유지 중입니다. 준비되면 재개하세요.", DC.resume_rows(unit))
+            say("" + NAMES[unit] + " 업데이트용 차단은 유지 중입니다. 준비되면 재개하세요.", DC.resume_rows(unit))
     if self_update:
         st["self_pending"] = {"since": time.time()}
         save(STATE, st)
@@ -1260,38 +1261,46 @@ def apply(st, key):
 def show_diff(st, key):
     o = st.get("offers", {}).get(key)
     if not o:
-        return say("⚠️ 이 업데이트 정보를 찾지 못했습니다.")
+        return say("이 업데이트 정보를 찾지 못했습니다.")
     _, stat = git("diff", "--stat", f"HEAD...{o['sha']}")
     _, d = git("diff", "-U1", f"HEAD...{o['sha']}", "--", "*.py")
     lines = [l for l in d.splitlines() if l.startswith(("+", "-", "@@")) and not l.startswith(("+++", "---"))]
-    say(f"🔍 <b>바뀐 내용</b> (<code>{esc(o['branch'])}</code>)\n<pre>{esc(stat[-800:])}</pre>\n<pre>{esc(chr(10).join(lines)[:2600])}</pre>",
-        [[{"text": "✅ 업데이트", "callback_data": f"up:{key}"}, {"text": "❌ 무시", "callback_data": f"ig:{key}"}]])
+    say(f"<b>바뀐 내용</b> (<code>{esc(o['branch'])}</code>)\n<pre>{esc(stat[-800:])}</pre>\n<pre>{esc(chr(10).join(lines)[:2600])}</pre>",
+        [[{"text": "업데이트", "callback_data": f"up:{key}"}, {"text": "무시", "callback_data": f"ig:{key}"}]])
  
  
 # ---------------------------------------------------------------- 하단 버튼 메뉴 (/start 로 뜸)
 # 버튼은 기존 글자 명령과 똑같이 처리된다. 승인·코드 보기·무시·일시중지·재개는 업데이트 알림 안의 버튼으로 이미 처리한다.
-MENU_ALIAS = {"🔄 업데이트 확인": "업데이트 확인", "⏸ 거래 상태": "거래 상태", "🔎 원작 확인": "원작 확인", "❓ 도움말": "/help", "🧹 충돌 정리": "충돌 정리",
-              "☰ 메뉴": "메뉴", "⬅ 처음 화면": "처음 화면"}
-HELP_TEXT = ("🛠 <b>업데이트 비서 사용법</b>\n"
-             "▫️ 아래 버튼은 <b>🔄 업데이트 확인</b> · <b>☰ 메뉴</b> 2개 — 나머지 버튼은 ☰ 메뉴 안에 있습니다 (⬅ 처음 화면으로 돌아감)\n"
-             "▫️ <b>🔄 업데이트 확인</b> : GitHub에 올라온 수정 확인 → 새 알림의 버튼(✅ 적용 · 🔍 코드 보기 · 🗑 무시)\n"
-             "▫️ <b>🧹 충돌 정리</b> : 이전 변경 파일 선택 → 확인 → 원래 브랜치를 백업 후 정리 → 별도 업데이트 승인\n"
-             "▫️ <b>⏸ 거래 상태</b> : 업데이트용 일시중지·대기 중인 봇 보기 → ▶ 재개 버튼\n"
-             "▫️ <b>🔎 원작 확인</b> : 2번 스나이퍼 원작자 새 버전 지금 확인 (평소엔 매일 09:02 자동 · 알림 전용)\n"
-             "▫️ <b>상태 기록</b> (글자로) : 저장소 STATUS.md 를 지금 갱신 (평소엔 적용 때·매일 06:10 자동)\n"
-             "▫️ 일시중지·재개·승인은 업데이트 알림 아래 버튼으로 진행합니다.")
+MENU_ALIAS = {"업데이트 확인": "업데이트 확인", "거래 상태": "거래 상태", "원작 확인": "원작 확인", "도움말": "/help", "충돌 정리": "충돌 정리",
+              "메뉴": "메뉴", "유지보수": "메뉴", "처음 화면": "처음 화면", "상태 기록": "상태 기록"}   # 예전 "메뉴" 글자도 유지보수로
+_EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A0-\u25FF\u2300-\u23FF\u2900-\u297F\u2139\u21A9\uFE0F\u200D])+ ?")
+
+
+def _plain(t):
+    """예전 하단 키보드(이모티콘 글자)가 폰에 남아 있어도 같은 버튼으로 읽도록 이모티콘만 뺀다"""
+    return _EMOJI_RE.sub("", t or "").strip()
+
+HELP_TEXT = ("<b>업데이트 비서 사용법</b>\n"
+             "· 첫 화면 버튼 4개: <b>업데이트 확인</b> · <b>거래 상태</b> · <b>유지보수</b> · <b>도움말</b> (유지보수 안에 충돌 정리·상태 기록·원작 확인, 처음 화면으로 돌아감)\n"
+             "· <b>업데이트 확인</b> : GitHub에 올라온 수정 확인 → 새 알림의 버튼(적용 · 코드 보기 · 무시)\n"
+             "· <b>충돌 정리</b> : 이전 변경 파일 선택 → 확인 → 원래 브랜치를 백업 후 정리 → 별도 업데이트 승인\n"
+             "· <b>거래 상태</b> : 업데이트용 일시중지·대기 중인 봇 보기 → 재개 버튼\n"
+             "· <b>원작 확인</b> : 2번 스나이퍼 원작자 새 버전 지금 확인 (평소엔 매일 09:02 자동 · 알림 전용)\n"
+             "· <b>상태 기록</b> (유지보수 안) : 저장소 STATUS.md 를 지금 갱신 (평소엔 적용 때·매일 06:10 자동)\n"
+             "· 일시중지·재개·승인은 업데이트 알림 아래 버튼으로 진행합니다.")
 
 
 def menu_keyboard():
-    """처음 화면: 2개만 (나머지는 ☰ 메뉴 안)."""
-    return [[{"text": "🔄 업데이트 확인"}, {"text": "☰ 메뉴"}]]
+    """처음 화면: 4칸 (업데이트 확인 / 거래 상태 / 유지보수 / 도움말). 충돌 정리·상태 기록·원작 확인은 유지보수 안."""
+    return [[{"text": "업데이트 확인"}, {"text": "거래 상태"}], [{"text": "유지보수"}, {"text": "도움말"}]]
 
 
 def menu_sub_keyboard():
-    """☰ 메뉴 안: 예전 버튼 전부 (충돌 정리는 UC, 원작 확인은 SU 있을 때만 — 예전과 같은 조건) + ⬅ 처음 화면."""
-    rows = [["⏸ 거래 상태", "🧹 충돌 정리"] if UC else ["⏸ 거래 상태"],
-            ["🔎 원작 확인", "❓ 도움말"] if SU else ["❓ 도움말"],
-            ["⬅ 처음 화면"]]
+    """유지보수 안: 충돌 정리(UC 있을 때만) · 상태 기록 · 원작 확인(SU 있을 때만 — 예전과 같은 조건) + 처음 화면."""
+    rows = [["충돌 정리", "상태 기록"] if UC else ["상태 기록"],
+            ["원작 확인"] if SU else [],
+            ["처음 화면"]]
+    rows = [r for r in rows if r]
     return [[{"text": t} for t in r] for r in rows]
 
 
@@ -1307,20 +1316,20 @@ def handle(st, upd):
         if act == "cp" and UC:
             o = st.get("offers", {}).get(key)
             if o and o.get("superseded"):   # v1.8.1: 옛 브랜치면 정리보다 지우기가 맞다고 먼저 안내 (정리 화면도 그대로 열림)
-                say("ℹ️ 이 브랜치는 이미 반영된 옛 브랜치로 보여요. 충돌 정리보다 지우기가 맞습니다.", [_drop_row(key)])
+                say("이 브랜치는 이미 반영된 옛 브랜치로 보여요. 충돌 정리보다 지우기가 맞습니다.", [_drop_row(key)])
             return UC.preview(sys.modules[__name__], st, key)
-        elif act == "rm":   # v1.8.1: 🗑 옛 브랜치 지우기
+        elif act == "rm":   # v1.8.1: 옛 브랜치 지우기
             return drop_superseded(st, key)
         elif act in ("ct", "cc", "cr", "cx") and UC:
             return UC.handle(sys.modules[__name__], st, act, key)
         elif act == "pa":
             offer_data = st.get('offers',{}).get(key)
             if not offer_data:
-                return say('⚠️ 최신 업데이트 알림에서 다시 눌러 주세요.')
+                return say('최신 업데이트 알림에서 다시 눌러 주세요.')
             git('fetch','-q','origin')
             rc, sha = git('rev-parse','origin/'+offer_data['branch'])
             if rc or sha != offer_data['sha']:
-                return say('⚠️ 브랜치가 바뀌었습니다. 새 알림에서 눌러 주세요.')
+                return say('브랜치가 바뀌었습니다. 새 알림에서 눌러 주세요.')
             _, files = git('diff','--name-only','HEAD...'+sha)
             units, _skipped = classify(files.splitlines())   # 빠진 파일 때문에 중지 요청을 거부하지 않음
             for unit in DC.UNITS.values():
@@ -1338,15 +1347,15 @@ def handle(st, upd):
             unit = DC.UNITS.get(number)
             offer_data = st.get("offers", {}).get(offer_key)
             if not unit or not offer_data:
-                return say("⚠️ 최신 업데이트 알림에서 다시 눌러 주세요.")
+                return say("최신 업데이트 알림에서 다시 눌러 주세요.")
             git("fetch", "-q", "origin")
             rc, sha = git("rev-parse", "origin/" + offer_data['branch'])
             if rc or sha != offer_data['sha']:
-                return say("⚠️ 브랜치가 바뀌었습니다. 업데이트 확인 후 새 버튼을 눌러 주세요.")
+                return say("브랜치가 바뀌었습니다. 업데이트 확인 후 새 버튼을 눌러 주세요.")
             _, files = git("diff", "--name-only", "HEAD..." + sha)
             units, _skipped = classify(files.splitlines())
             if not units.get(unit):
-                return say("⛔ 해당 업데이트 대상 봇만 중지할 수 있습니다.")
+                return say("해당 업데이트 대상 봇만 중지할 수 있습니다.")
             DC.request(sys.modules[__name__], unit, offer_key)
         elif act == "rs":
             if key in DC.UNITS:
@@ -1356,22 +1365,22 @@ def handle(st, upd):
         elif act == "df":
             show_diff(st, key)
         elif act == "ig":
-            st.get("offers", {}).pop(key, None); say("🗑 이 업데이트는 무시했습니다. (봇 그대로)")
+            st.get("offers", {}).pop(key, None); say("이 업데이트는 무시했습니다. (봇 그대로)")
         elif act in ("um", "ud", "ui") and SU:   # 2번 스나이퍼 원작 새 버전 (합치기 / 보기 / 무시)
             {"um": SU.merge, "ud": SU.show, "ui": SU.ignore}[act](sys.modules[__name__], st, key)
     elif msg and str(msg.get("chat", {}).get("id")) == str(CFG.get("chat_id")):
-        txt = (msg.get("text") or "").strip()
+        txt = _plain(msg.get("text") or "")
         txt = MENU_ALIAS.get(txt, txt)   # 하단 버튼 글자 → 같은 명령
         if txt in ("/start", "/help", "도움말", "?"):
             say(HELP_TEXT, keyboard=menu_keyboard())
-        elif txt in ("메뉴", "/menu"):   # ☰ 메뉴 → 하위 메뉴 펼치기
-            say("☰ <b>메뉴</b>", keyboard=menu_sub_keyboard())
-        elif txt == "처음 화면":   # ⬅ 처음 화면 → 처음 2개로 돌아가기
-            say("⬅ 처음 화면", keyboard=menu_keyboard())
+        elif txt in ("메뉴", "/menu"):   # 메뉴 → 하위 메뉴 펼치기
+            say("<b>유지보수</b> — 가끔 쓰는 기능", keyboard=menu_sub_keyboard())
+        elif txt == "처음 화면":   # 처음 화면 → 처음 2개로 돌아가기
+            say("처음 화면입니다.", keyboard=menu_keyboard())
         elif txt in ("충돌 정리", "/conflicts") and UC:
             live = live_branches()
             if live is None:
-                return say('⚠️ GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요. (아무것도 지우지 않았습니다)')
+                return say('GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요. (아무것도 지우지 않았습니다)')
             removed = prune(st, live)
             offers = st.setdefault('offers', {})
             missing = [b for b in live if b not in {o['branch'] for o in offers.values()}]
@@ -1379,16 +1388,16 @@ def handle(st, upd):
                 for b in missing:
                     st.setdefault('seen', {})[b] = live[b]
                     offer(st, b, live[b], live)
-            head = ('🗑 반영 안 된 지난 알림 ' + str(removed) + '개를 지웠습니다.\n') if removed else ''
+            head = ('반영 안 된 지난 알림 ' + str(removed) + '개를 지웠습니다.\n') if removed else ''
             if not offers:
-                return say(head + '✅ 정리할 업데이트가 없습니다. (GitHub에 대기 중인 수정 없음)')
-            rows = [[{'text': '🧹 ' + o['branch'] + ' (' + o['sha'][:7] + ')', 'callback_data': 'cp:' + k}]
+                return say(head + '정리할 업데이트가 없습니다. (GitHub에 대기 중인 수정 없음)')
+            rows = [[{'text': '' + o['branch'] + ' (' + o['sha'][:7] + ')', 'callback_data': 'cp:' + k}]
                     for k, o in offers.items()]
             return say(head + '현재 대기 중인 업데이트입니다. 정리할 브랜치를 선택하세요. 아직 파일은 변경하지 않습니다.', rows)
         elif txt in ("상태 기록", "상태기록", "/status"):
-            say("📝 STATUS.md: " + esc(status_daily(st, force=True) or "확인 안 함"))
+            say("STATUS.md: " + esc(status_daily(st, force=True) or "확인 안 함"))
         elif txt in ("원작 확인", "원작 업데이트", "원작업데이트", "/upstream") and SU:
-            say("🔄 원작 스나이퍼 저장소를 확인합니다…")
+            say("원작 스나이퍼 저장소를 확인합니다…")
             SU.check(sys.modules[__name__], st, force=True)
         elif txt in ("거래 상태", "일시중지 상태", "/pause_status"):
             found = False
@@ -1398,20 +1407,20 @@ def handle(st, upd):
                 try:
                     state = DC.read(DC.state_path(root))
                 except Exception:
-                    say("⚠️ " + NAMES[unit] + " 중지 상태 파일 확인 필요")
+                    say("" + NAMES[unit] + " 중지 상태 파일 확인 필요")
                     continue
                 if state.get('phase') in ('waiting', 'paused'):
                     found = True
-                    say("⏸ " + NAMES[unit] + ": " + ('일시중지' if state['phase']=='paused' else '잔고 0 대기') + "\n" + esc(state.get('reason','확인 중')), DC.resume_rows(unit))
+                    say("" + NAMES[unit] + ": " + ('일시중지' if state['phase']=='paused' else '잔고 0 대기') + "\n" + esc(state.get('reason','확인 중')), DC.resume_rows(unit))
             if not found:
-                say("✅ 업데이트용 일시중지/대기 중인 봇이 없습니다.")
+                say("업데이트용 일시중지/대기 중인 봇이 없습니다.")
         elif txt in ("업데이트", "업데이트 확인", "/update"):
-            say("🔄 GitHub를 확인합니다…")
+            say("GitHub를 확인합니다…")
             sent = scan(st, force=True)   # v1.8.1: 보낸 알림 수로 판단 (예전엔 같은 알림을 다시 보내고도 '없습니다'가 같이 떴음)
             if sent == 0:
-                say("✅ 새로 올라온 수정이 없습니다.")
+                say("새로 올라온 수정이 없습니다.")
             elif sent is None:
-                say("⚠️ GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요.")
+                say("GitHub 확인에 실패했습니다. 잠시 후 다시 눌러 주세요.")
  
  
 def _run_as_owner(*a, timeout=120):
@@ -1541,7 +1550,7 @@ def main():
         hub_result = hub_install()
         if hub_result:
             print("alert-hub 자동 설치:", hub_result, flush=True)
-            say("🔔 <b>alert-hub 자동 설치</b>\n▫️ " + esc(hub_result))
+            say("<b>alert-hub 자동 설치</b>\n· " + esc(hub_result))
     except Exception as e:
         print("alert-hub 자동 설치 오류:", type(e).__name__, e, flush=True)
     try:   # 설치 여부와 상관없이 시작할 때마다 (설치 직후 만들어진 DB 도 포함)
@@ -1577,13 +1586,13 @@ def main():
             time.sleep(10); continue
         if st.pop("self_pending", None):
             cl = _changelog(os.path.join(REPO, "bot_office"), 1)
-            save(STATE, st); say(f"✅ 업데이트 비서 새 버전{' (사무실 ' + cl[0][0] + ')' if cl else ''} 정상 작동 확인", keyboard=menu_keyboard())
+            save(STATE, st); say(f"업데이트 비서 새 버전{' (사무실 ' + cl[0][0] + ')' if cl else ''} 정상 작동 확인", keyboard=menu_keyboard())
         for upd in r.get("result", []):
             offset = upd["update_id"] + 1; st["offset"] = offset
             try:
                 handle(st, upd)
             except Exception as e:
-                print("처리 오류:", e, flush=True); say("🚨 업데이트 비서 처리 오류: " + esc(str(e)[:200]))
+                print("처리 오류:", e, flush=True); say("업데이트 비서 처리 오류: " + esc(str(e)[:200]))
             save(STATE, st)
         if os.environ.get("U_ONCE"):
             break
