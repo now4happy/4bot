@@ -3,7 +3,7 @@
 > 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-19 21:53 (KST) · 계기: 업데이트 적용 (staging: meritz_laoer v2.2.4: 1층 시작가 설정 메뉴)
+- 갱신: 2026-11-20 05:31 (KST) · 계기: 업데이트 적용 (staging: meritz_laoer v2.2.5: 1층 채우기 매수 (판 16 일부))
 
 ## 봇별 현재 상태
 
@@ -11,9 +11,9 @@
 |---|---|---|---|---|---|
 | 1번 한투 라오어 | `han4384tubot` | 실행 중 (11-19 20:53 KST부터) | v1.0.4 | 2026-11-19 20:54 | fix(audit): 1번 보유 조회 실패 구분·타임아웃 중복 방지, 6번 v1.3.2, 7번 v2.2.1 |
 | 2번 토스 스나이퍼 | `toss_sniper` | 실행 중 (11-19 12:46 KST부터) | v1.2.8 | 2026-11-18 19:45 | toss: 공유 토큰 복원 (a) + 동기화 뒤 훅 자동 재적용 Q5 (방 room2-toss-sniper) |
-| 6번 메리츠 적립 | `meritz_dca` | 실행 중 (11-19 20:53 KST부터) | v1.3.2 | 2026-11-19 20:54 | fix(audit): 1번 보유 조회 실패 구분·타임아웃 중복 방지, 6번 v1.3.2, 7번 v2.2.1 |
+| 6번 메리츠 적립 | `meritz_dca` | 실행 중 (11-19 22:51 KST부터) | v1.3.2 | 2026-11-19 20:54 | fix(audit): 1번 보유 조회 실패 구분·타임아웃 중복 방지, 6번 v1.3.2, 7번 v2.2.1 |
 | 3번 빗썸 적립 | `bithumb_bot` | 실행 중 (11-19 15:39 KST부터) | v4.4.0 | 2026-11-19 15:40 | 텔레그램 매매봇 메뉴 정리 3차 v2 (7번 제외): 첫 화면 4칸·금액 메뉴 설명·범위 표시·이모티콘 제거 |
-| 7번 메리츠 속쓸 적립봇 | `meritz_laoer` | 실행 중 (11-19 21:53 KST부터) | v1.1.6 | 2026-11-19 21:53 | meritz_laoer v2.2.4: 1층 시작가 설정 메뉴 |
+| 7번 메리츠 속쓸 적립봇 | `meritz_laoer` | 실행 중 (11-20 05:31 KST부터) | v1.1.7 | 2026-11-20 05:31 | meritz_laoer v2.2.5: 1층 채우기 매수 (판 16 일부) |
 | 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 파일 묶음 | v1.9.3 | 2026-11-19 17:40 | updater redesign pan2 v2: sniper sync via plugin_updater CLI |
 
 ## 사무실 상시 서비스
@@ -26,6 +26,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-20 05:31 · 7번 메리츠 속쓸 적립봇 v1.1.7 · main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.5: 1층 채우기 매수 (판 16 일부)
 - 2026-11-19 21:53 · 7번 메리츠 속쓸 적립봇 v1.1.6 · config.py, main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.4: 1층 시작가 설정 메뉴
 - 2026-11-19 21:37 · 7번 메리츠 속쓸 적립봇 v1.1.5 · main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.3: 층 칸 색상 + 다음 회차 가격별 배정
 - 2026-11-19 21:23 · 7번 메리츠 속쓸 적립봇 v1.1.4 · main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.2: tower layer visualization (pan 14) - to
@@ -35,7 +36,6 @@
 - 2026-11-19 20:42 · 7번 메리츠 속쓸 적립봇 v1.1.2 · main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.0: tower stacking (pan 13) - new tower_str
 - 2026-11-19 17:40 · 사무실 파일(bot_office) v1.9.3 · bot_updater.py, sniper_upstream.py · updater redesign pan2 v2: sniper sync via plugin_updater CLI
 - 2026-11-19 17:08 · 7번 메리츠 속쓸 적립봇 v1.1.1 · main.py · meritz_laoer v2.1.0: merge pan 12 intraday sell gate fix ont
-- 2026-11-19 16:49 · 7번 메리츠 속쓸 적립봇 v1.1.0 · main.py, notifier.py, tg_menu.py · 텔레그램 매매봇 메뉴 정리 3차 v3: 7번 v2.0.9 기준 재적용 + 6번 문구 정리
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
