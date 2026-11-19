@@ -1,5 +1,10 @@
 # 7번 메리츠 속쓸 적립봇 변경 기록
 
+## v1.1.4 · 2026-11-19 21:23 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.2: tower layer visualization (pan 14) - tower_lines in status board, view_lines in tower_strategy, filled layers only
+- 브랜치: staging
+
 ## v1.1.3 · 2026-11-19 20:54 (KST)
 - 파일: accum_strategy.py, config.py, main.py
 - 내용: fix(audit): 1번 보유 조회 실패 구분·타임아웃 중복 방지, 6번 v1.3.2, 7번 v2.2.1
