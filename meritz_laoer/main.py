@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.6)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.7)
+# v2.2.7 (2026-11-20, 층 표시 고침): ① 층 수는 채움 비율 합계 (1층 48%면 0.48/10층) ② 미완성 층은 한 칸에 사선 ◧ (2칸 중 1칸이 아니라 한 칸) — tower_strategy.py view_lines·layer_marker만 바뀜
 # v2.2.6 (2026-11-20, 판 16 본격): ① 층별 매도(계획은 tower_strategy.make_plan) + 장중 확인이 층마다 1건씩 냄(층당 하루 1건·게이트는 가장 낮은 층 평단) ② 체결 반영: 시간순(체결 시각 필드 미확인이면 매도 먼저)·주문번호별 증분 반영(두 번 반영 방지)·장부와 층을 같은 묶음으로 저장
 #   ③ 장중 매도 체결을 확인하는 즉시 장부와 층에 반영 (16:10 동기화 전에도 층 상태가 맞음) ④ 체결 텔레그램 알림: 장중 확인에서도 알림(부분 체결은 이전 알림 이후 늘어난 수량, 주문별 notified_qty 를 주문 기록 파일에 저장, 전송 성공 뒤에만 저장) + 다음 매매 안내
 #   ⑤ 토스 입고분(--add-shares)은 탑쌓기면 1층 빈곳에 넣음 ⑥ 장중 확인 기본 간격 30초(config.py). 판 15(장후 매도) 코드는 이 ZIP 에 없음 — 주문 기록 형식(floor_id·floor_avg·notified_qty·sell_attempts)만 맞춰 둠
@@ -96,7 +97,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.6"
+BOT_VERSION = "v2.2.7"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작

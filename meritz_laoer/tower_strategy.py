@@ -676,23 +676,21 @@ def layer_block(f):
     return LAYER_COLORS[(int(_f(f.get("id"))) - 1) % len(LAYER_COLORS)]
 
 
-EMPTY_HALF = "⬜"          # 비어 있는 반칸
-HALF_MIN = 0.25            # 미완성 층은 원가가 목표의 이만큼 이상이면 반칸을 칠함
-
-
 def fill_ratio(f):
     """층 채움 비율 = 원가 ÷ 목표 (0~1)"""
     tg = _f(f.get("target") or FLOOR_USD)
     return min(1.0, max(0.0, _f(f.get("cost")) / tg)) if tg > 0 else 0.0
 
 
+DIAG_HALF = "◧"           # 미완성 층 한 칸에 그리는 사선 (반만 찬 표시, v2.2.7)
+
+
 def layer_marker(f):
-    """v2.2.6 반칸 표시 (사용자 결정: 반칸은 반만 색을 칠한다). 층 하나 = 두 반칸.
-    완성 → 두 칸 다 색 (🟩🟩) · 미완성 → 한 칸만 색 + 빈 반칸 (🟩⬜ — 50% 매도 뒤 1층) · 원가가 목표의 4분의 1 미만이면 둘 다 빔 (⬜⬜)"""
-    c = layer_block(f)
+    """v2.2.7 반칸 표시 (사용자 결정: 2칸 중 1칸이 아니라 한 칸에 사선). 층 하나 = 한 칸.
+    완성 → 층 색 (🟩) · 미완성 → 사선 한 칸 (◧)"""
     if is_complete(f):
-        return c + c
-    return (c if fill_ratio(f) >= HALF_MIN else EMPTY_HALF) + EMPTY_HALF
+        return layer_block(f)
+    return DIAG_HALF
 
 
 def floor_status(f):
@@ -700,16 +698,23 @@ def floor_status(f):
     return "완성" if is_complete(f) else "미완성"
 
 
+def _fmt_layers(total):
+    """층 수 표시: 완성 층 1 + 미완성 층은 채움 비율만큼 (v2.2.7). 0.48 → '0.48', 1.5 → '1.5', 2.0 → '2'."""
+    s = f"{total:.2f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+
+
 def view_lines(st, s=None):
     """탑쌓기 층 시각화 글자 줄. 채워진 층(수량 > 0)만 보임 — 비어 있는 층은 안 보임.
-    첫 줄: 층마다 두 반칸 마커(완성 🟩🟩 · 미완성 🟩⬜, 색은 1층 🟩 · 2층 🟦 · 3층 🟨 · 4층 🟧 · 5층 🟥 · 6층 🟪 · 7층 🟫 · 8층 ⬛ · 9층 ⬜ · 10층 🟩) + 'N/최대층'.
-    다음 줄들: 층별 '1층 · 평단 $48.59 · 149주 · 미완성 (49%)' (위에서부터, % = 원가 ÷ 층 목표).
+    첫 줄: 층마다 한 칸 마커(완성 🟩 · 미완성 ◧ 사선, 색은 1층 🟩 · 2층 🟦 · 3층 🟨 · 4층 🟧 · 5층 🟥 · 6층 🟪 · 7층 🟫 · 8층 ⬛ · 9층 ⬜ · 10층 🟩) + 'N/최대층' (N은 채움 비율 합계, 1층 48%면 0.48).
+    다음 줄들: 층별 '1층 · 평단 $48.59 · 149주 · 미완성 (48%)' (위에서부터, % = 원가 ÷ 층 목표).
     평단 = 층 투자금(실제 체결 합계) ÷ 수량 = 가중평균. 상태가 비었거나 이상하면 0층"""
     _fu, nfl, _g = params(s)
     fl = [f for f in top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
     if not fl:
         return [f"탑: 0/{nfl}층 (채운 층 없음)"]
-    lines = [f"탑: {' '.join(layer_marker(f) for f in fl)}  {len(fl)}/{nfl}층"]
+    total = sum(1.0 if is_complete(f) else fill_ratio(f) for f in fl)
+    lines = [f"탑: {' '.join(layer_marker(f) for f in fl)}  {_fmt_layers(total)}/{nfl}층"]
     for f in fl:
         lines.append(f"{int(_f(f.get('id')))}층 · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}"
                      + ("" if is_complete(f) else f" ({int(round(fill_ratio(f) * 100))}%)"))
