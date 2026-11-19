@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.0.3)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.6)
+# v2.2.6 (2026-11-20, 판 16 본격): ① intraday_sell_check_sec 기본 120 → 30 (코드 검증 하한 — 체결 알림 간격과 같게) ② apply_fill: 같은 체결(exec_id)을 장부 파일(position.json)의 applied_ids 로도 막고(원금·수량이 먼저 저장돼 중복·누락이 안 생김),
+#   매도 때 층별 매도의 '뺀 원가'(cost_removed)를 받으면 평단 비례 대신 그 값을 씀 (층 합계와 장부 원금이 어긋나지 않게). 호출 형식은 그대로(새 인자는 선택)
 # v2.2.1 (2026-11-19, audit-fix 7-1): credit_problems 추가 + validate_settings(s, fx=None) — 환율을 알면 start.first_round_credit_usd < 1회차 단위액(total_krw÷split_count÷환율) 검사. 그 외 검증은 그대로
 # v2.0.3 (2026-11-18): 설정 intraday_sell_check_sec 추가(당일 매도 확인 간격 초, 기본 120, 0 이면 끔) + validate_settings 에 그 값 검사 한 줄. 나머지 검증·장부 함수는 그대로
 # 메리츠 속쓸 적립봇(SOXL 분할매수·부분매도) — 설정·장부
@@ -54,7 +56,7 @@ SAFE_DEFAULTS = {
     "max_rounds_per_day": None,            # 노션 Q4: 하루 최대 회차 수(정수 1 이상) — 비어 있으면 주문 안 함
     "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
     "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
-    "intraday_sell_check_sec": 120,        # v2.0.3 당일 매도: 장중 이 간격(초)마다 매도 조건 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작
+    "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
     "auto_fx_enabled": False,              # true 면 오늘 매수에 달러가 모자랄 때 원화→달러 환전 신청 (실주문 모드에서만)
     "auto_fx_buffer_pct": None,            # 부족 달러에 더할 여유 % (환율·체결가 변동 대비)
@@ -489,19 +491,27 @@ class ConfigManager:
         q = int(_f((pos or {}).get("qty")))
         return round(_f(pos.get("principal")) / q, 4) if q > 0 else 0.0
 
-    def apply_fill(self, side, qty, price, date_et, is_reverse, exec_id):
-        """체결 1건 반영 → (새 장부, 끝난 사이클 기록 또는 None). 같은 exec_id 는 한 번만"""
+    def apply_fill(self, side, qty, price, date_et, is_reverse, exec_id, cost_removed=None):
+        """체결 1건 반영 → (새 장부, 끝난 사이클 기록 또는 None). 같은 exec_id 는 한 번만.
+        v2.2.6: 한 번 반영한 exec_id 는 position.json 의 applied_ids 에 함께 저장 (원금·수량과 한 파일이라 같이 저장됨) — 원금·수량을 먼저, 거래 기록을 나중에 쓰므로
+        중간에 멈춰도 다시 부르면 빠진 쪽만 채움 (원금·수량은 두 번 안 바뀜). cost_removed: 매도 때 줄일 원가 (층별 매도가 계산한 값. 없으면 예전처럼 평단 × 수량)"""
         with GlobalThrottle.get_file_lock(self.FILES["POSITION"]):
             pos = self.get_position()
             if not pos:
                 raise RuntimeError("장부 없음 (start 주입 전)")
             ledger = self._load_json(self.FILES["LEDGER"], [])
-            if any(isinstance(r, dict) and r.get("exec_id") == exec_id for r in ledger):
-                return pos, None
+            in_ledger = any(isinstance(r, dict) and r.get("exec_id") == exec_id for r in ledger)
+            ids = pos.get("applied_ids") if isinstance(pos.get("applied_ids"), list) else []
             qty, price = int(qty), _f(price)
             if qty <= 0 or price <= 0:
                 return pos, None
             avg = self.avg_price(pos)
+            if exec_id in ids or in_ledger:                          # 이미 반영됨 (새 코드는 원금·수량을 먼저 저장하므로 거래 기록이 있으면 원금·수량도 반영된 것. 예전 장부는 applied_ids 가 없어 거래 기록으로 판단)
+                if not in_ledger:                                    # 원금·수량은 저장됐는데 거래 기록만 빠진 경우 (중간에 멈춤) → 기록만 채움
+                    ledger.append({"id": len(ledger) + 1, "date": date_et, "ticker": pos["ticker"], "side": side,
+                                   "price": price, "qty": qty, "avg_price": avg, "exec_id": exec_id, "is_reverse": bool(is_reverse), "late_record": True})
+                    self._save_json(self.FILES["LEDGER"], ledger)
+                return pos, None
             if side == "BUY":
                 pos["qty"] += qty
                 pos["principal"] = round(pos["principal"] + qty * price, 4)
@@ -510,8 +520,11 @@ class ConfigManager:
                 if qty > pos["qty"]:
                     raise RuntimeError(f"매도 체결 {qty}주가 장부 {pos['qty']}주보다 많음")
                 pos["qty"] -= qty
-                pos["principal"] = round(max(0.0, pos["principal"] - qty * avg), 4) if pos["qty"] > 0 else 0.0
+                out = qty * avg if cost_removed is None else _f(cost_removed)
+                pos["principal"] = round(max(0.0, pos["principal"] - out), 4) if pos["qty"] > 0 else 0.0
                 pos["cycle_sell_total"] = round(pos["cycle_sell_total"] + qty * price, 4)
+            pos["applied_ids"] = (ids + [exec_id])[-300:]
+            self._save_json(self.FILES["POSITION"], dict(pos))        # 원금·수량 먼저 (exec_id 와 같은 파일)
             ledger.append({"id": len(ledger) + 1, "date": date_et, "ticker": pos["ticker"], "side": side,
                            "price": price, "qty": qty, "avg_price": avg, "exec_id": exec_id, "is_reverse": bool(is_reverse)})
             self._save_json(self.FILES["LEDGER"], ledger)

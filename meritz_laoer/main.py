@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.5)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.6)
+# v2.2.6 (2026-11-20, 판 16 본격): ① 층별 매도(계획은 tower_strategy.make_plan) + 장중 확인이 층마다 1건씩 냄(층당 하루 1건·게이트는 가장 낮은 층 평단) ② 체결 반영: 시간순(체결 시각 필드 미확인이면 매도 먼저)·주문번호별 증분 반영(두 번 반영 방지)·장부와 층을 같은 묶음으로 저장
+#   ③ 장중 매도 체결을 확인하는 즉시 장부와 층에 반영 (16:10 동기화 전에도 층 상태가 맞음) ④ 체결 텔레그램 알림: 장중 확인에서도 알림(부분 체결은 이전 알림 이후 늘어난 수량, 주문별 notified_qty 를 주문 기록 파일에 저장, 전송 성공 뒤에만 저장) + 다음 매매 안내
+#   ⑤ 토스 입고분(--add-shares)은 탑쌓기면 1층 빈곳에 넣음 ⑥ 장중 확인 기본 간격 30초(config.py). 판 15(장후 매도) 코드는 이 ZIP 에 없음 — 주문 기록 형식(floor_id·floor_avg·notified_qty·sell_attempts)만 맞춰 둠
 # v2.2.5 (2026-11-20, 판 16 1층 채우기 매수): BOT_VERSION 만 (1층 채우기 매수 로직은 tower_strategy.py apply_fill — 새 층 계획 매수 체결이 1층 빈칸 가격이면 1층에 넣음). 동작 변경은 tower_strategy.py에만 있음
 # v2.2.4 (2026-11-19, 1층 시작가 메뉴): 1층 시작가 설정(tower_floor1_start_usd) 추가 — 정하면 1층 칸이 시작가 기준, 안 정하면 평단 기준(지금 그대로). 동작 변경 없음
 # v2.2.3 (2026-11-19, 판 14 색상 고침 + 다음 회차 가격별 배정): 층 칸 색상(tower_strategy.py) + plan_head 에 다음 회차 칸별 배정 표시. 동작 변경 없음
@@ -93,7 +96,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.5"
+BOT_VERSION = "v2.2.6"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -229,7 +232,7 @@ def tower_state_for(cfg, qty, principal, s=None):
     """탑쌓기 층 상태 → (상태, 파일에 있었는지). 파일이 없으면 지금 보유분(장부의 주식수·원금, 실행 시 읽은 값)을 1층으로 만든 상태를 돌려줌 (저장은 안 함)"""
     d = cfg._load_json(TOWER_FILE, None)
     if isinstance(d, dict) and isinstance(d.get("floors"), list):
-        return d, True
+        return TW.ensure_state(d), True          # v2.2.6: 예전 상태(sell_block)를 층별 rebuy_pending 으로 옮김·주문번호 맵 준비
     return TW.migrate_from_holdings(qty, principal, s), False
 
 
@@ -320,7 +323,8 @@ def plan_head(plan, s):
         fl = tw.get("floors") or []
         head = (f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 층 "
                 + (f"{tw['active']}층{' (새 층)' if tw.get('new_floor') else ''}" if tw.get("active") else "없음") + "\n"
-                f"매도 목표 ${i['sell_target']:.2f} · 칸당 ${i.get('unit_usd', 0):,.0f} · 간격 ${tw.get('gap', 0)}"
+                + ("매도 목표 " + " · ".join(f"{r['id']}층 ${r['target']:.2f}" for r in i["sells"]) if i.get("sells") else f"매도 목표 ${i['sell_target']:.2f}")
+                + f" · 칸당 ${i.get('unit_usd', 0):,.0f} · 간격 ${tw.get('gap', 0)}"
                 + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else ""))
         cells = tw.get("cells") or []   # v2.2.3: 다음 회차 가격별 배정
         if cells:
@@ -374,10 +378,145 @@ def _warn_once(cfg, mark, m, key, note, text):
     note.send(text)
 
 
-def run_intraday_sell(s, api, note):
-    """당일 매도 확인 (실거래만, loop 가 주문 시간대에 부름). 오늘 주문 기록이 있고 체결 반영 전인 동안 intraday_sell_check_sec 마다:
-    오늘 체결된 매수까지 반영한 평단의 +목표% 에 현재가가 닿았는지 보고, 닿으면 보유의 매도 비중을 지정가로 한 번 매도.
-    매수는 안 함 · 하루 매도 주문 1건 · 장부·적립 상태는 안 바꿈 (체결 반영은 run_sync 가 그대로) → 상태 글자"""
+# ---------------------------------------------------------------- v2.2.6 체결 반영 · 알림 도우미
+def fill_rows_for(api, s, d):
+    """그날 주문의 체결 내역 {주문번호: {"no","side","qty","amt","t"}}. t = 체결 시각 글자 (설정 fill_time_field 로 읽음 — 필드 이름 미확인, 없으면 None).
+    api 에 fills_rows 가 있으면 그것, 없으면 fills()"""
+    dt = datetime.date.fromisoformat(d)
+    a, b = (dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d")
+    fr = getattr(api, "fills_rows", None)
+    if fr is not None:
+        tk = str(s.get("fill_time_field") or "").strip()
+        try:
+            rows = fr(a, b, tk) if tk else fr(a, b)
+        except TypeError:
+            rows = fr(a, b)
+        return {str(r["no"]): dict(r, t=r.get("t")) for r in rows}
+    return {str(no): {"no": str(no), "side": v[0], "qty": int(v[1]), "amt": float(v[2]), "t": None} for no, v in api.fills(a, b).items()}
+
+
+def fill_items(m, rows):
+    """오늘 주문 기록(m["orders"]) 중 체결이 있는 것 → [{"o": 주문, "side", "q": 누적 체결 수량, "amt": 누적 금액, "t"}]"""
+    out = []
+    for o in m.get("orders") or []:
+        r = rows.get(str(o.get("no")))
+        if r and int(r["qty"]) >= 1:
+            out.append({"o": o, "side": r["side"], "q": int(r["qty"]), "amt": float(r["amt"]), "t": r.get("t")})
+    return out
+
+
+def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True):
+    """체결을 층 상태(tst)와 장부에 반영 → [{"o","side","dq","da","cq","closed"}] (실제로 새로 반영한 것만).
+    - 순서: TW.sort_fills (시간순, 시각 필드가 없으면 매도 먼저, 새 층 계획 매수는 매도 뒤) — 장부도 같은 순서로 반영 (버그 1)
+    - 두 번 반영 방지: 주문번호별 누적 체결 중 늘어난 몫만 (TW.apply_fill_delta). 장부는 exec_id(날짜_주문번호[_누적수량])로도 막음 (버그 2)
+    - 한 묶음 저장: 항목마다 장부(원금·수량 → 거래 기록)에 쓰고, 끝에 층 상태를 저장. 중간에 멈춰도 다시 부르면 장부는 exec_id 로, 층은 주문번호 맵으로 각각 빠진 몫만 채워 맞춰짐
+    - 매도는 층별로 줄이고, 장부 원금은 그 층 원가만큼만 줄임 (cost_removed)
+    persist=False 면 층 상태(메모리)만 바꾸고 장부·파일은 안 건드림 (장중 평단 판단용)"""
+    gap, start = TW.params(s)[2], float(s.get("tower_floor1_start_usd") or 0)
+    done = []
+    for it in TW.sort_fills(tst, items):
+        if only_sells and it["side"] != "SELL":
+            continue
+        o, side = it["o"], it["side"]
+        pq = TW.applied_qty(tst, o)
+        dq, da = TW.apply_fill_delta(tst, o, it["q"], it["amt"], gap, start)
+        removed = tst.pop("_cost_removed", None)
+        if dq <= 0:
+            continue
+        closed = None
+        if persist:
+            exec_id = f"{d}_{o['no']}" if pq == 0 else f"{d}_{o['no']}_{it['q']}"
+            _, closed = cfg.apply_fill(side, dq, da / dq, d, False, exec_id, cost_removed=(removed if side == "SELL" else None))
+        done.append({"o": o, "side": side, "dq": dq, "da": da, "cq": it["q"], "closed": closed})
+    tst.pop("_cost_removed", None)
+    if persist and done:
+        cfg._save_json(TOWER_FILE, tst)
+    return done
+
+
+def next_trade_lines(s, st):
+    """체결 알림에 붙는 '다음 매매': 층별 다음 매도(목표가·수량)와 다음에 살 칸. 상태(st)는 바꾸지 않음. 글자 주의: notifier.to_korean 이 '= $'·'필요 $' 같은 앞말 뒤 금액의 소수점을 지우므로
+    가격 앞에는 '평단'·'목표가'·'→' 만 씀 (금액은 어차피 정수)"""
+    pct = float(s.get("sell_profit_pct") or 0)
+    frac = float(s.get("sell_fraction_pct") or 0)
+    lines = []
+    tq, tc = TW.totals(st)
+    live = [f for f in TW.top_down(st) if int(f.get("qty") or 0) > 0]
+    for f in live[:4]:
+        fa = TW.floor_avg(f)
+        wait = " (이 층 재매수가 체결된 뒤부터)" if f.get("rebuy_pending") and not s.get("allow_consecutive_sell") else ""
+        lines.append(f"다음 매도: {int(f['id'])}층 평단 ${fa:.2f} → 목표가 ${ceil2(fa * (1 + pct / 100.0)):.2f} 에 {TW.floor_sell_qty(int(f['qty']), frac)}주 ({pct:g}%){wait}")
+    if len(live) > 4:
+        lines.append(f"다음 매도: 그 위·아래 {len(live) - 4}개 층은 같은 규칙")
+    try:
+        pl = TW.make_plan(dict(s, auto_fx_enabled=True), st, tq, tc, 0.0, 1.0, 1e12, tq)
+        tw = (pl.get("info") or {}).get("tower") or {}
+        cells = (tw.get("cells") or [])[:max(1, int(float(s.get("max_rounds_per_day") or 1)))]
+        if cells and tw.get("active"):
+            lines.append(f"다음 매수: {tw['active']}층{' (새 층)' if tw.get('new_floor') else ''} " + " · ".join(f"${c['price']:.2f} → ${c['amount']:,.0f} ({c['qty']}주)" for c in cells))
+        elif not cells:
+            lines.append("다음 매수: 없음 (층을 다 채웠거나 한도에 닿음)")
+    except Exception:
+        lines.append("다음 매수: 계산 못 함")
+    return lines
+
+
+def fill_alert_text(s, d, new, open_rows, sim, tower):
+    """체결 알림 글자. new = [(item, 이전 알림 수량)]. 한 줄 = 이번에 늘어난 수량·평균가, 주문 대비 누적·미체결, 조건(주문 설명·지정가)"""
+    own_open = {str(r.get("oder_no") or "").strip(): int(float(str(r.get("ncnt_qty") or 0).replace(",", "") or 0)) for r in open_rows if isinstance(r, dict)}
+    lines = [f"{d} 체결 알림"]
+    for it, nq in new:
+        o = it["o"]
+        dq, da = it["q"] - nq, it["amt"] - float(o.get("notified_amt") or 0)
+        px = da / dq if dq else 0.0
+        left = own_open.get(str(o.get("no")), max(0, int(o.get("qty") or 0) - it["q"]))
+        lines.append(f"{SIDE_KO.get(it['side'], it['side'])} 체결 {dq}주 @ ${px:.2f}" + (f" (이전 알림 {nq}주 이후 늘어난 수량)" if nq else ""))
+        lines.append(f"  주문 {o.get('qty')}주 중 누적 {it['q']}주 체결 · " + ("전량 체결" if left <= 0 else f"미체결 {left}주"))
+        lines.append(f"  조건: {o.get('desc', '')}" + (f" · {TYPE_KO.get(o.get('type'), o.get('type'))} ${float(o['price']):.2f}" if o.get("type") != "MOC" and o.get("price") else ""))
+    if tower and sim is not None:
+        lines += next_trade_lines(s, sim)
+    else:
+        lines.append("다음 매매는 내일 아침 계획에서 정해져요")
+    return "\n".join(lines)
+
+
+def send_fill_alerts(s, api, note, cfg, m, mark, items, d, sim, tower):
+    """주문마다 '알림 보낸 누적 수량'(주문 기록의 notified_qty)보다 늘어난 체결이 있으면 한 메시지로 알림 → 보낸 주문 수.
+    '보냄' 표시는 전송 성공 뒤에만 저장 (v2.2.6: 전송이 실패하면 표시 안 함 → 다음 확인 때 다시. 저장 직전에 멈추면 중복은 가능하지만 누락은 없음)"""
+    if not getattr(note, "ok", True):
+        return 0
+    new = [(it, int(it["o"].get("notified_qty") or 0)) for it in items if it["q"] > int(it["o"].get("notified_qty") or 0)]
+    if not new:
+        return 0
+    try:
+        open_rows = api.open_orders_today(s["symbol"])         # 미체결 수량(ncnt_qty)으로 '남은 주문' 구분
+    except Exception as e:
+        logging.warning(f"체결 알림: 미체결 조회 실패 {type(e).__name__} — 주문 수량 − 누적 체결로 계산")
+        open_rows = []
+    if note.send(fill_alert_text(s, d, new, open_rows, sim, tower)) is False:
+        return 0
+    for it, _ in new:
+        it["o"]["notified_qty"] = it["q"]
+        it["o"]["notified_amt"] = round(it["amt"], 4)
+    cfg._save_json(mark, m)
+    return len(new)
+
+
+def foreign_open_sells(open_rows, m, rows):
+    """우리 주문이 아닌 SOXL 매도 미체결 (수동 주문 등). 미체결 행에 주문번호(oder_no)가 있으면 번호로, 없으면 우리 미체결 매도 주문 수만큼 빼고 셈 (필드 이름 미확인)"""
+    opens = [r for r in open_rows if isinstance(r, dict) and str(r.get("seln_byov_clcd")) == "1"]
+    own = {str(o.get("no")) for o in (m.get("orders") or []) if o.get("no")}
+    ids = [str(r.get("oder_no") or "").strip() for r in opens]
+    if opens and all(ids):
+        return [r for r, i in zip(opens, ids) if i not in own]
+    unfilled = sum(1 for o in (m.get("orders") or []) if o.get("no") and o.get("side") == "SELL" and int((rows.get(str(o["no"])) or {}).get("qty", 0)) < int(o.get("qty") or 0))
+    return opens[unfilled:]
+
+
+def run_intraday_sell(s, api, note, allow_new_sells=True):
+    """당일 확인 (실거래만, loop 가 주문 시간대~체결 반영 시각 전에 부름). 오늘 주문 기록이 있고 체결 반영 전인 동안 intraday_sell_check_sec(기본 30초)마다:
+    ① (v2.2.6, 탑쌓기) 오늘 매도 체결을 장부와 층에 즉시 반영 ② 체결 알림 (이전 알림 이후 늘어난 수량) ③ 오늘 체결된 매수까지 반영한 층 평단의 +목표% 에 현재가가 닿은 층마다 그 층의 매도 비중을 지정가로 매도.
+    매수는 안 함 · 층당 하루 매도 1건 (사다리는 하루 1건 그대로) · 매수 체결의 장부 반영은 run_sync (매도 반영 뒤에 새 층 매수를 배정해야 해서). allow_new_sells=False 면 새 매도 주문은 안 내고 ①②만 → 상태 글자"""
     if s.get("dry_run", True):
         return "모의"
     if not intraday_on(s):
@@ -392,45 +531,62 @@ def run_intraday_sell(s, api, note):
     m = cfg._load_json(mark, None)
     if not isinstance(m, dict) or m.get("skipped") or m.get("synced", True) or not isinstance(m.get("orders"), list):
         return "해당 없음"
-    if m.get("sell_attempt") or any(o.get("kind") == "sell" for o in m["orders"]):
-        return "오늘 매도 주문 있음"              # 중복 매도 방지: 아침 주문이든 장중 주문이든 오늘 매도 주문이 있으면 더 안 냄
+    tower = strategy_of(s) == "tower"
+    if not tower and (m.get("sell_attempt") or any(o.get("kind") == "sell" for o in m["orders"])):
+        return "오늘 매도 주문 있음"              # 사다리: 중복 매도 방지 (아침 주문이든 장중 주문이든 오늘 매도 주문이 있으면 더 안 냄)
     bad = gate_problems(s, cfg, live=True)
     if bad:
         logging.warning("당일 매도 확인 건너뜀: " + "; ".join(bad)[:200])
         return "차단"
     pos = cfg.get_position()
-    q0, pr0 = int(pos["qty"]), float(pos["principal"])
     buys = [o for o in m["orders"] if o.get("side") == "BUY"]
     pct = float(s["sell_profit_pct"])
-    if q0 <= 0 and not buys:
-        return "해당 없음"                            # 기존 보유도 오늘 낼 매수도 없음 → 조회할 것 없음
-    # v2.1.0: 체결 조회를 시세 게이트보다 먼저. 지정가 매수는 지정가보다 낮게 체결될 수 있어서, 지정가로 목표를 잡으면 진짜 목표(체결 평단 +목표%)보다 높게 잡힘 (2026-11-18 사례)
-    fills = {}
-    if buys:
-        dt = datetime.date.fromisoformat(d)
+    # v2.1.0: 체결 조회를 시세 게이트보다 먼저 (지정가 매수는 지정가보다 낮게 체결될 수 있음 — 2026-11-18 사례). v2.2.6: 탑쌓기는 매도·알림 때문에 주문이 하나라도 있으면 조회
+    rows = {}
+    if buys or (tower and any(o.get("no") for o in m["orders"])):
         try:
-            fills = api.fills((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
+            rows = fill_rows_for(api, s, d)
         except MeritzError as e:
             logging.warning(f"당일 매도 확인: 체결 조회 실패 {e}")
             return "체결 조회 실패"
+    items = fill_items(m, rows)
+    st, sim, applied_now = None, None, []
+    if tower:
+        st, had = tower_state_for(cfg, int(pos["qty"]) if pos else 0, float(pos["principal"]) if pos else 0.0, s)
+        if had and pos:
+            applied_now = apply_tower_fills(s, cfg, d, items, st, only_sells=True)         # 매도 체결 즉시 반영 (장부·층 같이 저장) — 동기화 전에도 층 상태가 맞음
+            pos = cfg.get_position()
+    if (pos is None) or (int(pos["qty"]) <= 0 and not buys):
+        return "해당 없음"                            # 기존 보유도 오늘 낼 매수도 없음 → 조회할 것 없음
+    q0, pr0 = int(pos["qty"]), float(pos["principal"])
     q, pr = q0, pr0
-    tower = strategy_of(s) == "tower"
-    st = copy.deepcopy(tower_state_for(cfg, q0, pr0, s)[0] if tower else cfg.accum_or_start())
+    sim = copy.deepcopy(st if tower else cfg.accum_or_start())
     cands = [cfg.avg_price(pos)] if q0 > 0 else []     # 시세 게이트용: 평균은 구성 값(기존 평단·오늘 실제 체결 단가) 중 가장 낮은 값보다 낮아질 수 없음 → 안 맞게 막는 일 없음
-    for o in buys:                                   # 오늘 체결된 매수를 '메모리 안에서만' 반영 (장부 파일은 그대로)
-        f = fills.get(str(o.get("no")))
-        if not f or f[0] != "BUY" or int(f[1]) < 1:
-            continue
-        if tower:                                      # v2.2.0 탑쌓기: 실제 체결 수량·금액으로 (메모리 안에서만)
-            TW.apply_fill_to_state(st, o, 0.0, False, fill=(int(f[1]), float(f[2])), start_usd=float(s.get("tower_floor1_start_usd") or 0))
-        else:
-            apply_fill_to_state(st, o, (pr / q) if q > 0 else 0.0, bool(s.get("allow_consecutive_sell")))
-        q += int(f[1])
-        pr += float(f[2])
-        if float(f[2]) > 0:
-            cands.append(float(f[2]) / int(f[1]))      # 실제 체결 단가 (지정가 아님)
+    if tower:                                          # 오늘 체결된 매수를 '메모리 안에서만' 반영 (장부 파일은 그대로) — 새 층 계획 매수는 매도 반영 뒤 1층 빈칸으로 (B1)
+        gap, start = TW.params(s)[2], float(s.get("tower_floor1_start_usd") or 0)
+        for it in TW.sort_fills(sim, [i for i in items if i["side"] == "BUY"]):
+            dq, da = TW.apply_fill_delta(sim, it["o"], it["q"], it["amt"], gap, start)
+            sim.pop("_cost_removed", None)
+            q, pr = q + dq, pr + da
+        cands = [TW.floor_avg(f) for f in TW.top_down(sim) if int(f.get("qty") or 0) > 0 and TW.floor_avg(f) > 0]     # 게이트 = 가장 낮은 층 평단 (v2.2.6)
+    else:
+        for o in buys:
+            r = rows.get(str(o.get("no")))
+            if not r or r["side"] != "BUY" or int(r["qty"]) < 1:
+                continue
+            apply_fill_to_state(sim, o, (pr / q) if q > 0 else 0.0, bool(s.get("allow_consecutive_sell")))
+            q += int(r["qty"])
+            pr += float(r["amt"])
+            if float(r["amt"]) > 0:
+                cands.append(float(r["amt"]) / int(r["qty"]))      # 실제 체결 단가 (지정가 아님)
+    try:
+        send_fill_alerts(s, api, note, cfg, m, mark, items, d, sim, tower)        # v2.2.6 체결 알림 (장중에도). 실패해도 매도 확인은 계속
+    except Exception as e:
+        logging.warning(f"체결 알림 중 오류 {type(e).__name__}")
     if not cands:
         return "해당 없음"                            # 보유 없고 오늘 체결된 매수도 아직 없음 (체결 조회가 늦은 것일 수 있음 → 다음 확인 때 다시)
+    if not allow_new_sells:
+        return "알림만"
     try:
         px = float(api.price(s["symbol"], s["price_market"])["price"])
     except MeritzError as e:
@@ -442,13 +598,20 @@ def run_intraday_sell(s, api, note):
     if hold != q:
         _warn_once(cfg, mark, m, "hold", note, f"오늘 체결 반영 뒤 예상 {q}주 ≠ 메리츠 잔고 {hold}주 — 당일 매도 확인을 보류하고 계속 확인해요 (체결 조회가 늦은 것일 수 있음)")
         return "잔고 불일치"
-    plan = (TW.make_plan if tower else make_plan)(s, st, q, round(pr, 4), px, 0.0, 0.0, sellable)       # 환율 0 → 매수 계산 없이 매도 규칙만 (make_plan 의 매도 규칙 그대로)
+    plan = (TW.make_plan if tower else make_plan)(s, sim, q, round(pr, 4), px, 0.0, 0.0, sellable)       # 환율 0 → 매수 계산 없이 매도 규칙만 (make_plan 의 매도 규칙 그대로)
     info = plan["info"]
     if not info.get("profit_reached"):
         return "목표 아래"                                                   # 오늘 체결로 평단이 올라 목표가 더 높아진 경우
-    sells = [o for o in plan["orders"] if o.get("kind") == "sell"]
+    if tower:                                                                # 층당 하루 1건: 오늘 이미 매도 주문(접수·시도)이 있는 층은 건너뜀. 예전 sell_attempt 표시가 있으면 전부 건너뜀
+        used = {int(x["floor_id"]) for x in (list(m["orders"]) + list(m.get("attempts") or []) + list(m.get("sell_attempts") or []))
+                if isinstance(x, dict) and x.get("kind", "sell") == "sell" and x.get("floor_id") is not None and (x.get("side") in (None, "SELL"))}
+        sells = [o for o in plan["orders"] if o.get("kind") == "sell" and o.get("reached") and not m.get("sell_attempt") and int(o["floor_id"]) not in used]
+        if not sells and any(o.get("kind") == "sell" and o.get("reached") for o in plan["orders"]):
+            return "오늘 매도 주문 있음"
+    else:
+        sells = [o for o in plan["orders"] if o.get("kind") == "sell"]
     if not sells:
-        why = "; ".join(n for n in plan["notes"] if n.startswith("매도")) or "매도 조건 미충족"
+        why = "; ".join(n for n in plan["notes"] if "매도" in n) or "매도 조건 미충족"
         _warn_once(cfg, mark, m, "block", note, f"평가 이익 +{pct:g}% 에 닿았지만 매도 안 함: {why}")
         return "매도 보류"
     exch = str(s.get("exch_id") or exch_vid or "")
@@ -458,24 +621,42 @@ def run_intraday_sell(s, api, note):
     # v2.0.5: 정규장("004") 아니면 건너뜀을 유지. 003 프리마켓·005 애프터마켓에 지정가 매도가 접수·체결되는지는 공식 openapi.json 에 없음(주문 API 에 연장 시간 구분 필드 없음) → 미확인, 실거래 시험은 사용자 결정 필요
     if str(api.us_market_status()) != "004":      # 조기폐장일(13:00 ET)·장 마감 뒤에는 장중 매도를 안 냄 (order_deadline_et 만으로는 못 거름)
         return "장 닫힘"
-    if any(str(r.get("seln_byov_clcd")) == "1" for r in api.open_orders_today(s["symbol"])):
+    if foreign_open_sells(api.open_orders_today(s["symbol"]), m, rows):
         _warn_once(cfg, mark, m, "open_sell", note, "이 계좌에 SOXL 매도 미체결 주문이 이미 있어 당일 매도를 안 냄 (수동 확인)")
         return "매도 미체결 있음"
-    o = dict(sells[0], desc="당일 매도 · " + sells[0].get("desc", ""))
-    m["sell_attempt"] = {"at": now_et().isoformat(), "qty": o["qty"], "price": o["price"],
-                         "status": "접수 시도 (이 기록이 있으면 오늘 다시 매도 주문을 내지 않음)"}
-    cfg._save_json(mark, m)                          # 주문 전에 먼저 기록 → 응답이 불확실해도 중복 주문 없음
-    errs = []
-    res = send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True)     # v2.0.4: 응답을 못 받으면 attempts 에 남겨 마감 뒤 자동으로 찾음
-    err = (errs[0] if errs else None)
-    if res == "ok":
-        m["sell_attempt"].update(status="접수 완료", no=m["orders"][-1]["no"])
-    else:
-        m["sell_attempt"]["status"] = ("증권사가 거절 — 오늘 다시 안 냄: " if res == "rejected" else "응답 못 받음 — 오늘 다시 안 냄, 체결 내역에서 자동으로 찾음: ") + (err or "")[:100]
-    cfg._save_json(mark, m)
-    head = (f"당일 매도 {'접수' if res == 'ok' else ('실패' if res == 'rejected' else '응답 못 받음')}\n오늘 체결 반영 평단 ${info['avg']:.2f} (보유 {q}주) → 목표 ${info['sell_target']:.2f} · 현재가 ${px:.2f}\n")
-    note.send(head + fmt_orders([o]) + (f"\n{err}\n오늘은 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if err else ""))
-    return {"ok": "매도 접수", "rejected": "매도 실패"}.get(res, "매도 응답 유실")
+    results, errs_all, placed = [], [], []
+    for sel in sells:                                                          # 층마다 1건씩 (여러 층이 같은 날 닿으면 모두)
+        o = dict(sel, desc="당일 매도 · " + sel.get("desc", ""))
+        o.pop("reached", None)
+        att = {"at": now_et().isoformat(), "qty": o["qty"], "price": o["price"], "kind": "sell", "floor_id": o.get("floor_id"),
+               "status": "접수 시도 (이 기록이 있으면 오늘 이 층은 다시 매도 주문을 내지 않음)"}
+        m.setdefault("sell_attempts", []).append(att)
+        if not tower:                                      # 사다리는 예전 표시(sell_attempt) 그대로 — 탑쌓기는 층별 sell_attempts 만
+            m["sell_attempt"] = {k: att[k] for k in ("at", "qty", "price", "status")}
+        cfg._save_json(mark, m)                          # 주문 전에 먼저 기록 → 응답이 불확실해도 중복 주문 없음
+        errs = []
+        res = send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True)     # v2.0.4: 응답을 못 받으면 attempts 에 남겨 마감 뒤 자동으로 찾음
+        err = (errs[0] if errs else None)
+        if res == "ok":
+            att.update(status="접수 완료", no=m["orders"][-1]["no"])
+            if not tower:
+                m["sell_attempt"].update(status="접수 완료", no=m["orders"][-1]["no"])
+        else:
+            att["status"] = ("증권사가 거절 — 오늘 이 층은 다시 안 냄: " if res == "rejected" else "응답 못 받음 — 오늘 이 층은 다시 안 냄, 체결 내역에서 자동으로 찾음: ") + (err or "")[:100]
+            if not tower:
+                m["sell_attempt"]["status"] = att["status"]
+        cfg._save_json(mark, m)
+        results.append(res)
+        placed.append(o)
+        if err:
+            errs_all.append(err)
+    ok_n = sum(1 for r in results if r == "ok")
+    head = (f"당일 매도 {'접수' if ok_n == len(results) else ('실패' if ok_n == 0 and all(r == 'rejected' for r in results) else '일부 접수 · 실패·응답 없음 있음')}\n"
+            f"오늘 체결 반영 {'층별' if tower else '전체'} 평단 기준 · 현재가 ${px:.2f}\n")
+    note.send(head + fmt_orders(placed) + ("\n" + "\n".join(errs_all) + "\n오늘은 이 층 매도를 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if errs_all else ""))
+    if ok_n:
+        return "매도 접수"
+    return "매도 실패" if all(r == "rejected" for r in results) else "매도 응답 유실"
 
 
 # ---------------------------------------------------------------- 하루 주문
@@ -1023,41 +1204,53 @@ def run_sync(s, api, note, mark_path):
             logging.warning(f"주문 응답 유실 자동 확인 실패: {type(e).__name__}")
         lost = len(m.get("attempts") or [])
         cfg._save_json(mark_path, m)
-    fills = api.fills((dt - datetime.timedelta(days=1)).strftime("%Y%m%d"), (dt + datetime.timedelta(days=2)).strftime("%Y%m%d"))
+    rows = fill_rows_for(api, s, d)                   # v2.2.6: 체결 시각(t)까지 읽음 — 필드 이름 미확인이면 t 는 None → 매도 먼저
+    items = fill_items(m, rows)
     lines, done = [], None
     tower = strategy_of(s) == "tower"
     tst = None
     if tower:                                       # v2.2.0 탑쌓기: 층 상태 (파일이 없으면 이 체결들을 넣기 전 장부로 1층)
         _p0 = cfg.get_position() or {"qty": 0, "principal": 0.0}
         tst = tower_state_for(cfg, int(_p0["qty"]), float(_p0["principal"]), s)[0]
-    for o in m["orders"]:
-        f = fills.get(str(o.get("no")))
-        if not f:
-            continue
-        side, q, amt = f
-        px = amt / q if q else 0.0
-        pos0 = cfg.get_position() or {"qty": 0}
-        avg0 = cfg.avg_price(cfg.get_position())
-        pos, closed = cfg.apply_fill(side, q, px, d, False, f"{d}_{o['no']}")
-        if tower:                                   # 실제 체결 수량·금액으로만 층을 갱신 (계획 금액 아님)
-            if int(pos["qty"]) != int(pos0["qty"]):      # 장부가 실제로 바뀐 체결만 (같은 체결을 다시 반영하면 장부가 안 바뀌어 층도 그대로)
-                TW.apply_fill_to_state(tst, o, avg0, False, fill=(int(q), float(amt)), gap=TW.params(s)[2], start_usd=float(s.get("tower_floor1_start_usd") or 0))
-            cfg._save_json(TOWER_FILE, tst)
-        else:
+        # v2.2.6: 시간순(없으면 매도 먼저)·새 층 계획 매수는 매도 뒤·주문번호별 증분만 (장중에 이미 반영한 매도는 다시 안 넣음)·장부와 층을 같은 묶음으로 저장
+        applied = apply_tower_fills(s, cfg, d, items, tst)
+        got = {id(a["o"]) for a in applied}
+        for it in items:
+            if id(it["o"]) not in got:
+                lines.append(f"- {SIDE_KO.get(it['side'], it['side'])} {it['q']}주 (이미 반영한 체결 — 다시 안 넣음) ({it['o'].get('desc', '')})")
+        for a in applied:
+            o = a["o"]
+            lines.append(f"- {SIDE_KO.get(a['side'], a['side'])} {a['dq']}주 @ ${a['da'] / a['dq']:.2f} ({o.get('desc', '')})")
+            if a["side"] == "SELL":
+                lines.append(f"  매도 체결 → {int(o['floor_id'])}층만 줄이고 그 층 탑업 단계 시작 (층 평단 ${float(o.get('floor_avg') or 0):.2f})" if o.get("floor_id") is not None
+                             else "  매도 체결 → 층별로 나눠 줄이고 탑업 단계 시작")
+            done = a["closed"] or done
+    else:
+        for o in m["orders"]:
+            r = rows.get(str(o.get("no")))
+            if not r or int(r["qty"]) < 1:
+                continue
+            side, q, amt = r["side"], int(r["qty"]), float(r["amt"])
+            px = amt / q if q else 0.0
+            avg0 = cfg.avg_price(cfg.get_position())
+            pos, closed = cfg.apply_fill(side, q, px, d, False, f"{d}_{o['no']}")
             ast = cfg.accum_or_start()
             apply_fill_to_state(ast, o, avg0, bool(s.get("allow_consecutive_sell")))    # 같은 체결을 다시 반영해도 결과가 같음
             cfg.save_accum(ast)
-        lines.append(f"- {SIDE_KO.get(side, side)} {q}주 @ ${px:.2f} ({o.get('desc', '')})")
-        if o.get("kind") == "sell":
-            lines.append(f"  매도 체결 → 층별로 나눠 줄이고 탑업 단계 시작 (전체 평단 ${avg0:.2f})" if tower
-                         else f"  매도 체결 → 재매수 단계 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
-        done = closed or done
+            lines.append(f"- {SIDE_KO.get(side, side)} {q}주 @ ${px:.2f} ({o.get('desc', '')})")
+            if o.get("kind") == "sell":
+                lines.append(f"  매도 체결 → 재매수 단계 시작 (기준 평단 ${avg0:.2f}, 첫 재매수 ${avg0 - float(s['rebuy_drop_usd']):.2f})")
+            done = closed or done
     hold, _, _ = api.holding(s["symbol"])
     pos = cfg.get_position()
     if tower and tst is not None:                   # 매일 동기화: 층 상태를 장부(실제 보유분)에 맞추고, 꼬인 층은 합침
         tst, tnotes = TW.reconcile(tst, int(pos["qty"]), float(pos["principal"]), TW.params(s)[2], s)
         cfg._save_json(TOWER_FILE, tst)
         lines += [f"  {n}" for n in tnotes]
+    try:                                            # v2.2.6 체결 알림: 장중에 못 보낸(또는 아직 안 보낸) 몫만 — 주문별 notified_qty 기준
+        send_fill_alerts(s, api, note, cfg, m, mark_path, items, d, tst, tower)
+    except Exception as e:
+        logging.warning(f"체결 알림 중 오류 {type(e).__name__}")
     m["synced"] = True
     cfg._save_json(mark_path, m)
     msg = f"{d} 체결 반영\n" + ("\n".join(lines) if lines else "- 체결 없음") + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}"
@@ -1125,17 +1318,20 @@ def loop():
             note = Notifier(s["telegram_file"], dry_run=not live)
             n = now_et()
             api = run_fx_tasks(s, note, live)       # v2.0.8 자동환전 창·휴장 전날 알림·마감 60분 전 달러부족 알림 (실패해도 주문·체결 반영 흐름은 계속) → 만든 api 는 아래에서 재사용
-            if n.weekday() < 5 and _hm(s["order_time_et"], datetime.time(10, 5)) <= n.time() <= _hm(s["order_deadline_et"], datetime.time(15, 40)):
+            ot, dl = _hm(s["order_time_et"], datetime.time(10, 5)), _hm(s["order_deadline_et"], datetime.time(15, 40))
+            if n.weekday() < 5 and ot <= n.time() <= dl:
                 api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                 run_order_day(s, api, note, live)
-                if live:                                    # v2.0.3 당일 매도 확인 (실패해도 주문·체결 반영 흐름은 계속)
-                    try:
-                        run_intraday_sell(s, api, note)
-                    except Exception as e:
-                        logging.exception(f"당일 매도 확인 중 오류: {type(e).__name__}")
-                        if _INTRA["err_day"] != n.strftime("%Y-%m-%d"):
-                            _INTRA["err_day"] = n.strftime("%Y-%m-%d")
-                            note.send(f"당일 매도 확인 중 오류가 났어요 ({type(e).__name__}) — 이미 낸 주문은 그대로예요. 서버 로그를 확인해 주세요.")
+            # v2.0.3 당일 매도 확인 + v2.2.6 체결 반영·알림 (실패해도 주문·체결 반영 흐름은 계속). 주문 마감(order_deadline_et) 뒤~체결 반영 시각 전에는 새 매도 주문 없이 체결 반영·알림만
+            if live and n.weekday() < 5 and ot <= n.time() < _hm(s["sync_time_et"], datetime.time(16, 10)):
+                try:
+                    api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
+                    run_intraday_sell(s, api, note, allow_new_sells=(n.time() <= dl))
+                except Exception as e:
+                    logging.exception(f"당일 매도 확인 중 오류: {type(e).__name__}")
+                    if _INTRA["err_day"] != n.strftime("%Y-%m-%d"):
+                        _INTRA["err_day"] = n.strftime("%Y-%m-%d")
+                        note.send(f"당일 매도 확인 중 오류가 났어요 ({type(e).__name__}) — 이미 낸 주문은 그대로예요. 서버 로그를 확인해 주세요.")
             if live:
                 today = n.strftime("%Y-%m-%d")
                 for mp in pending_syncs(state):
@@ -1248,7 +1444,16 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
             note.send(msg)
             return 1
         t0, g0 = sell_target(s, cfg, pos)
+        tw_txt = ""
+        if strategy_of(s) == "tower":      # v2.2.6 (사용자 결정): 토스 입고분은 1층 빈곳에 넣고, 1층 평단 기준 탑쌓기로 나머지 빈칸을 채움. 층 상태는 장부에 넣기 '전' 값에서 시작 (파일이 없으면 넣기 전 장부로 1층)
+            tst0, _had = tower_state_for(cfg, int(pos["qty"]), float(pos["principal"]), s)
+        else:
+            tst0 = None
         before, after = cfg.add_shares(qty, avg, n.strftime("%Y-%m-%d"))
+        if tst0 is not None:
+            _fid, tw_notes = TW.add_holdings(tst0, qty, avg, s)
+            cfg._save_json(TOWER_FILE, tst0)
+            tw_txt = "\n탑쌓기: " + " / ".join(tw_notes)
         t1, g1 = sell_target(s, cfg, after)
         a0, a1 = cfg.avg_price(before), cfg.avg_price(after)
         cr_txt = ""
@@ -1259,7 +1464,7 @@ def cmd_add_shares(s, qty, avg, api=None, credit=False):
             cr_txt = f"\n1회차 매수 때 차감: +${qty * avg:,.0f} (합계 ${ast['credit_usd']:,.0f})"
         msg = (f"추가 투입 반영 {qty}주 @ ${avg:.2f} (주문 없음)\n"
                f"전: {before['qty']}주 · 원금 ${before['principal']:,.0f} · 평단 ${a0:.2f} · 회차 {t0} · 매도 목표 ${g0:.2f}\n"
-               f"후: {after['qty']}주 · 원금 ${after['principal']:,.0f} · 평단 ${a1:.2f} · 회차 {t1} · 매도 목표 ${g1:.2f}" + cr_txt)
+               f"후: {after['qty']}주 · 원금 ${after['principal']:,.0f} · 평단 ${a1:.2f} · 회차 {t1} · 매도 목표 ${g1:.2f}" + cr_txt + tw_txt)
         hist = cfg._load_json("data/add_shares_log.json", [])
         hist.append({"at": n.isoformat(), "qty": qty, "avg": avg, "hold": hold, "credit": bool(credit),
                      "before": {"qty": before["qty"], "principal": before["principal"], "avg": a0},

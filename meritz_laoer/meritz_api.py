@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.9)
+# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.2.6)
+# v2.2.6 (2026-11-20, 판 16 본격): fills_rows(date_from, date_to, time_key="") — 체결 행의 체결 시각을 time_key 로 읽어 row["t"] 에 담음 (체결 반영 순서용). 체결 시각 필드 이름은 이 ZIP 의 근거 파일(공식 openapi.json 없음)에서 확인 못 해 '미확인' —
+#   time_key 가 비어 있으면(기본) t 는 None → main 이 매도를 먼저 반영. 설정 fill_time_field 에 필드 이름을 넣으면 그 값을 씀. 나머지 함수·반환 모양은 그대로
 # v2.0.9 (2026-11-19, 판 11): usd_cash()가 estm_frcr_amt를 읽게 고침 (Q27 원인 고침). frcr_amt는 주식 가치를 포함해 메리츠 앱 외화예수금과 달라서 바꿈 — 서버 진단 2026-11-19 + 공식 openapi.json 대조 확인. estm_frcr_amt가 없거나 빈 값이면 MeritzError (되돌림 없음 — 틀린 값으로 거래하지 않게).
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.5 (2026-11-19): fills_rows 가 체결 행 심볼을 ovrs_stck_symb_iscd 가 없으면 iscd 로도 읽음 (실제 체결 내역 응답에는 iscd 만 있음 — Muse 서버 확인). holding()·open_orders_today() 는 그대로
@@ -215,8 +217,9 @@ class MeritzApi:
         return [r for r in (d.get("data") or []) if isinstance(r, dict)
                 and str(r.get("ovrs_stck_symb_iscd", "")).upper() == symbol.upper() and _num(r.get("ncnt_qty")) > 0]
 
-    def fills_rows(self, date_from, date_to):
-        """기간 체결 내역 [{"no", "side", "qty", "amt", "sym"}] (주문번호별 합산). sym 은 ovrs_stck_symb_iscd 가 있으면 그것, 없으면 iscd (체결 내역 응답은 iscd 만 있음). 둘 다 없으면 빈 문자열"""
+    def fills_rows(self, date_from, date_to, time_key=""):
+        """기간 체결 내역 [{"no", "side", "qty", "amt", "sym", "t"}] (주문번호별 합산). sym 은 ovrs_stck_symb_iscd 가 있으면 그것, 없으면 iscd (체결 내역 응답은 iscd 만 있음). 둘 다 없으면 빈 문자열.
+        t = 그 주문의 가장 늦은 체결 시각 글자 (time_key 로 읽음, 같은 길이 글자끼리 비교 가능한 값이라고 가정 — 미확인). time_key 가 비었거나 응답에 없으면 None"""
         out, q = {}, {"oder_sta_date": date_from, "oder_fin_date": date_to, "cntg_cls_code": "1", "seln_byov_clcd": "0"}
         for _ in range(20):
             d = self._call("GET", "/trading/v1/overseas/orders/history", q)
@@ -229,9 +232,12 @@ class MeritzApi:
                 if no and qty > 0:
                     side = "SELL" if str(r.get("seln_byov_clcd")) == "1" else "BUY"
                     row = out.setdefault(no, {"no": no, "side": side, "qty": 0, "amt": 0.0,
-                                              "sym": str(r.get("ovrs_stck_symb_iscd") or r.get("iscd") or "").strip().upper()})
+                                              "sym": str(r.get("ovrs_stck_symb_iscd") or r.get("iscd") or "").strip().upper(), "t": None})
                     row["qty"] += qty
                     row["amt"] += amt
+                    tv = str(r.get(time_key) or "").strip() if time_key else ""
+                    if tv and (row.get("t") is None or tv > row["t"]):
+                        row["t"] = tv
             if d.get("tr_cont") != "1" or not d.get("tr_cont_key"):
                 break
             q = dict(q, tr_cont="1", tr_cont_key=d["tr_cont_key"])

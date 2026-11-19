@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.5)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.6)
+# v2.2.6 (2026-11-20, 판 16 본격): 상황판 장부 줄의 매도 목표가 탑쌓기면 '가장 낮은 층 기준'(층별 매도라 전체 평단 목표는 의미 없음) 1곳만 고침. 층 표시(반칸·미완성 글자)는 tower_strategy.view_lines, 장중 확인 간격 표시(30초마다)는 기존 intraday_text 가 설정값을 그대로 보여 줌. 매매 동작 변경 없음
 # v2.2.5 (2026-11-20, 판 16 1층 채우기 매수): 버전 표기만 올림 (1층 채우기 매수 로직은 tower_strategy.py)
 # v2.2.4 (2026-11-19, 1층 시작가 메뉴): 설정 메뉴에 "1층 시작가 변경" 추가 (기본값 0 = 안 정함, 평단 기준)
 # v2.2.3 (2026-11-19, 판 14 색상 고침): 버전 표기만 올림 (층 색상은 tower_strategy.py)
@@ -395,7 +396,8 @@ class MenuBot:
         if pos:
             tw = ((d.get("plan") or {}).get("info") or {}).get("tower")
             fill_txt = (f"층 {len(tw['floors'])}개" if tw else "층 미확인") if self.strategy_text(s) == "탑쌓기" else f"채운 회차 {d['t']}"
-            lines.append(f"· 장부: {pos['qty']}주 · 평단 ${d['avg']:.2f} · {fill_txt} · 매도 목표 ${d['target']:.2f}")
+            tgt = (((d.get("plan") or {}).get("info") or {}).get("sell_target") or d["target"]) if self.strategy_text(s) == "탑쌓기" else d["target"]     # v2.2.6: 탑쌓기는 층별 매도라 가장 낮은 층의 목표 (제일 먼저 닿는 값)
+            lines.append(f"· 장부: {pos['qty']}주 · 평단 ${d['avg']:.2f} · {fill_txt} · 매도 목표 ${tgt:.2f}" + (" (가장 낮은 층 기준)" if self.strategy_text(s) == "탑쌓기" else ""))
         else:
             lines.append("· 장부: 시작 전 (기타 → 장부 시작)")
         lines += self.tower_lines(s, d)

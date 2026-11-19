@@ -1,5 +1,9 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.5)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.6)
+# v2.2.6 (2026-11-20, 판 16 본격): ① 층별 매도(각 층 자기 평단 +10% 에 그 층 50%, 주문마다 floor_id·floor_avg 기록, 1주 층은 1주) ② 전역 sell_block → 층별 rebuy_pending (그 층 매수 체결·층 닫힘 때 해제)
+#   ③ 반영한 주문번호 맵(st["applied"]) — 같은 체결 두 번 반영 방지(누적 체결 기준 증분만 반영) ④ sort_fills: 시간순(없으면 매도 먼저)·새 층 계획 매수는 그날 매도 반영 뒤로 (B1)
+#   ⑤ 새 층 계획 매수의 1층 빈칸 판정은 체결 평균가 기준 ±0.01 (B2) · closes 층은 건너뜀 (B3) · 층 시드 상한·base_usd 재계산 (B4) · 흡수한 가격은 새 층 settled (B5)
+#   ⑥ add_holdings(토스 입고분을 1층 빈곳에 넣음) ⑦ view_lines: 반칸 표시·미완성 글자. 새 층 기준점은 아래층 평단 그대로 (Q4)
 # v2.2.5 (2026-11-20, 판 16 1층 채우기 매수): apply_fill 매수 체결 때, 계획한 새 층이 아직 없는데 위에 미완성 층이 있고 그 층의 안 산 칸에 이 체결 가격이 있으면 그 층(1층 탑업)에 넣음. 아침에 1층 완성 상태로 2층을 계획했는데 장중 매도로 1층이 미완성이 된 경우(버그 2) — 매수가 2층이 아니라 1층 빈곳을 채움. 이월(carry)은 주문의 계획 금액 기준으로 계산 (마지막 칸이 남은 부족분을 전부 가져가서 스스로 바로잡힘)
 # v2.2.4 (2026-11-19, 1층 시작가 메뉴): _topup_setup·apply_fill·apply_fill_to_state·normalize·reconcile 에 start_usd 전달 — 1층 시작가가 정해졌으면 1층 칸이 시작가 기준
 # v2.2.3 (2026-11-19, 판 14 색상 고침): 층 칸을 층별 색상 네모로 바꿈 (1층 🟩 시작). 흰색 █ 한 가지라 층 구분이 안 된다는 사용자 지적. 완성/쌓는 중 구분은 상세 줄 글자로만.
@@ -11,15 +15,17 @@
 #   - 한 층 = 간격(달러) 칸. 칸마다 1달러씩 내려가며 분산 매수. 칸당 금액 = 층 금액 ÷ 간격 (반올림). 주식수도 반올림(0.5 는 올림)
 #   - 층은 동적: 층 투자금(실제 체결 수량×체결가)이 층 금액에서 TOL_USD 이내로 모자라거나 넘으면 완성. 그 층 평단(가중평균)이 기준 →
 #     다음 층 첫 칸 = 기준 평단 − 간격 (이어서 1달러씩 아래로 간격 칸)
-#   - 매도: 전체 평단 +10% 에 보유 50% (설정값 sell_profit_pct·sell_fraction_pct). 매도 수량은 층별로 보유 비율대로 나눠 뺌
+#   - 매도: (v2.2.6) 각 층이 자기 평단 +10% 에 닿으면 그 층 보유의 50% (설정값 sell_profit_pct·sell_fraction_pct). 예전(v2.2.5 까지)은 전체 평단 기준·층별 비례로 뺌
 #   - 탑업: 매도 뒤 각 층은 (남은 주식 원가 + 새로 사는 금액) = 층 금액 이 되도록 부족분을, 그 층 평단 −1 ~ −간격 달러 칸에 나눠 산다
 #   - 층이 꼬이면(위 층보다 평단이 같거나 높음) 가중평균으로 합치고 평단 오름차순으로 재배치 (수량·투자금 보존)
 #   - 슬리피지: 층 상태는 실제 체결로만 계산. 못 산 금액은 같은 층의 다음 칸에 더함. 매일 동기화 때 장부(실제 보유분)와 다르면 가장 최근 층이 차이를 흡수
 #   - 바벨 모드·SGOV·현금 배분 없음
-# 상태(state): {"version": 1, "floors": [ {id, qty, cost, target, done, closed, levels, settled, base_usd, carry_usd, kind} ... 평단 오름차순 ],
-#               "next_id": int, "sell_block": bool}
+# 상태(state): {"version": 1, "floors": [ {id, qty, cost, target, done, closed, levels, settled, base_usd, carry_usd, kind, rebuy_pending} ... 평단 오름차순 ],
+#               "next_id": int, "applied": {주문번호: {"q": 반영한 누적 체결 수량, "amt": 누적 금액}}, "absorbed": {새 층 id: [1층에 흡수된 가격]}}
+#   v2.2.6: 전역 sell_block 은 없어지고 층마다 rebuy_pending (예전 상태 파일의 sell_block=true 는 ensure_state 가 미완성 층의 rebuy_pending 으로 옮김)
 #   id = 위에서부터 몇 층인지 (1 = 평단 가장 높은 층). 정리(normalize) 때마다 평단 순서로 다시 붙임
 # ==========================================================
+import copy
 import math
 
 FLOOR_USD = 15000.0        # 한 층 금액 (달러)
@@ -45,6 +51,16 @@ def rnd(x):
     return int(math.floor(_f(x) + 0.5 + 1e-9))
 
 
+def floor_sell_qty(q, frac):
+    """한 층의 매도 수량: 보유 q 의 frac% (반올림, 0.5 는 올림). 2주 이상이면 1주는 남김. 1주 층은 0주가 아니라 1주를 판다 (v2.2.6 — 예전엔 '1주 남김' 상한 때문에 1주 층이 영영 안 팔렸음)"""
+    q = int(_f(q))
+    if q <= 0 or _f(frac) <= 0:
+        return 0
+    if q == 1:
+        return 1
+    return max(0, min(rnd(q * _f(frac) / 100.0), q - 1))
+
+
 def params(s):
     """(층 금액, 층 수, 간격=칸 수). 설정에 없거나 이상하면 기본값. 간격은 1 이상 정수만"""
     s = s or {}
@@ -57,7 +73,28 @@ def params(s):
 
 # ---------------------------------------------------------------- 상태 기본 동작
 def new_state():
-    return {"version": 1, "floors": [], "next_id": 1, "sell_block": False}
+    return {"version": 1, "floors": [], "next_id": 1, "applied": {}, "absorbed": {}}
+
+
+APPLIED_KEEP = 200          # 반영한 주문번호 맵에 남기는 최대 개수 (오래된 것부터 지움 — 하루 주문은 몇 건이라 충분)
+
+
+def ensure_state(st):
+    """상태 보정 (여러 번 불러도 같음, 모양만 맞춤): applied·absorbed 맵, 층마다 rebuy_pending.
+    예전 상태의 전역 sell_block=true 는 '미완성인 층'의 rebuy_pending 으로 옮기고 sell_block 키는 지움 (v2.2.6). 이상한 입력이면 새 상태"""
+    if not isinstance(st, dict) or not isinstance(st.get("floors"), list):
+        return new_state()
+    st.setdefault("version", 1)
+    st.setdefault("next_id", 1)
+    if not isinstance(st.get("applied"), dict):
+        st["applied"] = {}
+    if not isinstance(st.get("absorbed"), dict):
+        st["absorbed"] = {}
+    legacy = bool(st.pop("sell_block", False))
+    for f in st["floors"]:
+        if "rebuy_pending" not in f:
+            f["rebuy_pending"] = bool(legacy and int(_f(f.get("qty"))) > 0 and not is_complete(f))
+    return st
 
 
 def floor_avg(f):
@@ -72,7 +109,7 @@ def is_complete(f, tol=TOL_USD):
 
 def _floor(fid, qty, cost, target, kind):
     return {"id": int(fid), "qty": int(qty), "cost": round(_f(cost), 4), "target": float(target), "done": False, "closed": False,
-            "levels": [], "settled": [], "base_usd": 0.0, "carry_usd": 0.0, "kind": kind}
+            "levels": [], "settled": [], "base_usd": 0.0, "carry_usd": 0.0, "kind": kind, "rebuy_pending": False}
 
 
 def migrate_from_holdings(qty, principal, s=None):
@@ -135,6 +172,7 @@ def next_layer_cells(active, tgt_active):
             amount = max(0.0, _f(tgt_active) - _f(active.get("cost")) - planned)
         else:
             amount = max(0.0, _f(active.get("base_usd")) + carry + roll)
+            amount = min(amount, max(0.0, _f(tgt_active) - _f(active.get("cost")) - planned))      # v2.2.6 B4: 마지막이 아닌 칸도 층 목표를 못 넘게
         q = rnd(amount / p) if amount > 0 and p > 0 else 0
         if q < 1:
             roll += amount
@@ -154,29 +192,44 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     avg = round(principal / qty, 4) if qty > 0 else 0.0
     pct, frac = _f(s.get("sell_profit_pct")), _f(s.get("sell_fraction_pct"))
     otype, per_day = s.get("order_type"), int(_f(s.get("max_rounds_per_day")))
-    st = st if isinstance(st, dict) and isinstance(st.get("floors"), list) else new_state()
+    st = ensure_state(copy.deepcopy(st))                              # 상태·장부를 바꾸지 않음 (사본으로 계산)
     notes, orders = [], []
-    target = ceil2(avg * (1 + pct / 100.0)) if qty > 0 else 0.0
     profit_pct = round((price / avg - 1) * 100, 2) if avg > 0 and price > 0 else None
     fl_qty, fl_cost = totals(st)
-    info = {"mode": "tower", "avg": avg, "qty": qty, "price": price, "fx": fx, "sell_target": target, "profit_pct": profit_pct,
+    info = {"mode": "tower", "avg": avg, "qty": qty, "price": price, "fx": fx, "sell_target": 0.0, "profit_pct": profit_pct,
             "filled": [], "levels": [], "rebuy_anchor": None, "rebuy_k": 0,
-            "profit_reached": bool(qty > 0 and target > 0 and price >= target), "credit_usd": 0.0}
+            "profit_reached": False, "credit_usd": 0.0, "sells": []}
     if qty > 0 and fl_qty != qty:
         notes.append(f"층 합계 {fl_qty}주 ≠ 장부 {qty}주 — 다음 주문일 동기화 때 가장 최근 층이 차이를 흡수해요")
 
-    # ---------------- 매도: 전체 평단 +pct% 에 보유 frac% (반올림, 1주는 남김)
+    # ---------------- 매도 (v2.2.6 층별): 각 층이 자기 평단 +pct% 에 닿으면 그 층 보유의 frac%. 여러 층이 같은 날 닿으면 모두 판다.
+    # 주문마다 층 id(floor_id)·매도 시점 층 평단(floor_avg) 기록. 층당 하루 1건은 호출한 쪽(main)이 지킴. 총 매도가능 검사는 층 합계 기준
     if qty > 0:
-        sell_qty = min(rnd(qty * frac / 100.0), qty - 1)
-        if st.get("sell_block") and not s.get("allow_consecutive_sell"):
-            notes.append("매도 보류: 직전 매도 뒤 재매수(탑업) 체결이 아직 없음 (allow_consecutive_sell=false)")
-        elif sell_qty < 1:
-            notes.append(f"매도 {frac:g}% = 0주 (보유 {qty}주) — 매도 안 함")
-        elif sell_qty > min(int(_f(sellable)), qty):
-            notes.append(f"매도 {sell_qty}주 > 매도가능 {int(_f(sellable))}/장부 {qty} — 매도 안 함")
-        else:
-            orders.append({"side": "SELL", "type": otype, "qty": sell_qty, "price": target, "kind": "sell", "level": None,
-                           "desc": f"전체 평단 ${avg:.2f} +{pct:g}% 매도 {frac:g}%"})
+        cap_q, taken = min(int(_f(sellable)), qty), 0
+        for f in top_down(st):
+            fq = int(_f(f.get("qty")))
+            if fq <= 0:
+                continue
+            fa = floor_avg(f)
+            tf = ceil2(fa * (1 + pct / 100.0))
+            sq = floor_sell_qty(fq, frac)
+            row = {"id": int(_f(f.get("id"))), "avg": fa, "target": tf, "qty": fq, "sell_qty": sq, "reached": bool(price > 0 and price >= tf),
+                   "pending": bool(f.get("rebuy_pending")), "ordered": False}
+            info["sells"].append(row)
+            if f.get("rebuy_pending") and not s.get("allow_consecutive_sell"):
+                notes.append(f"매도 보류: {row['id']}층은 직전 매도 뒤 이 층 재매수(탑업) 체결이 아직 없음 (allow_consecutive_sell=false)")
+            elif sq < 1:
+                notes.append(f"매도 {row['id']}층 {frac:g}% = 0주 (층 보유 {fq}주) — 매도 안 함")
+            elif taken + sq > cap_q:
+                notes.append(f"매도 {row['id']}층 {sq}주 > 매도가능 {max(cap_q - taken, 0)}주 (총 매도가능 {int(_f(sellable))}/장부 {qty}) — 매도 안 함")
+            else:
+                taken += sq
+                row["ordered"] = True
+                orders.append({"side": "SELL", "type": otype, "qty": sq, "price": tf, "kind": "sell", "level": None, "floor_id": row["id"], "floor_avg": fa,
+                               "reached": row["reached"], "desc": f"{row['id']}층 평단 ${fa:.2f} +{pct:g}% 매도 {frac:g}%"})
+        if info["sells"]:
+            info["sell_target"] = min(r["target"] for r in info["sells"])          # 가장 낮은 층의 목표 (제일 먼저 닿음)
+            info["profit_reached"] = any(r["reached"] for r in info["sells"])
 
     if not (fx and fx > 0):
         notes.append("환율 없음 — 매수 계획 불가 (매도만)")
@@ -222,7 +275,8 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
         info["unit_usd"] = active["base_usd"]
     info["tower"] = {"gap": gap, "floor_usd": fu, "floors_max": nfl, "cap_usd": cap_total, "active": (active or {}).get("id"),
                      "new_floor": bool(new_floor), "floors": [{"id": f["id"], "qty": f["qty"], "cost": round(_f(f["cost"]), 2), "avg": floor_avg(f),
-                                                              "complete": is_complete(f), "closed": bool(f.get("closed")) or f["id"] in closes} for f in floors]}
+                                                              "complete": is_complete(f), "closed": bool(f.get("closed")) or f["id"] in closes,
+                                                              "rebuy_pending": bool(f.get("rebuy_pending"))} for f in floors]}
 
     # ---------------- 칸 금액 (칸당 금액 반올림 · 주식수 반올림 · 못 산 금액은 같은 층 다음 칸에 더함)
     auto_fx = bool(s.get("auto_fx_enabled")) and not ignore_auto_fx
@@ -240,6 +294,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             amount = max(0.0, tgt_active - _f(active.get("cost")) - planned)
         else:
             amount = max(0.0, _f(active["base_usd"]) + carry + roll)
+            amount = min(amount, max(0.0, tgt_active - _f(active.get("cost")) - planned))     # v2.2.6 B4: 층 목표를 못 넘게
         q = rnd(amount / p) if amount > 0 and p > 0 else 0
         if q < 1:
             notes.append(f"{active['id']}층 ${p:.2f} 칸 금액 ${amount:,.2f} < 0.5주 — 생략 (금액은 다음 칸으로 넘김)")
@@ -305,89 +360,250 @@ def _largest_remainder(total, weights):
     return out
 
 
-def apply_fill(st, order, fill_qty, fill_amount, gap=GAP_USD, start_usd=0.0):
-    """체결 1건 반영 (st 를 직접 바꿔 돌려줌). fill_qty = 실제 체결 수량, fill_amount = 실제 체결 금액(수량×체결가 합계). 계획 금액이 아니라 이 값만 씀"""
-    q, amt = int(_f(fill_qty)), _f(fill_amount)
-    kind = order.get("kind")
-    if q <= 0 or amt <= 0:
-        return st
-    if kind == "buy_tower":
-        f = _by_id(st, order.get("floor_id"))
-        nf = order.get("new_floor")
-        if f is None and isinstance(nf, dict):                       # 새 층의 첫 체결 때 층을 만듦 (같은 층의 다음 체결은 같은 id 로 찾음)
-            # v2.2.5 1층 채우기: 새 층 계획이었는데, 위에 미완성 층이 있고 그 층의 안 산 칸에 이 체결 가격이 있으면 그 층에 넣음
-            # (아침에 1층 완성 상태로 2층을 계획했는데, 장중 매도로 1층이 미완성이 된 경우 — 2층이 아니라 1층 빈곳을 채움)
-            lv0 = round(_f(order.get("level")), 2)
-            for cand in top_down(st):
-                if int(_f(cand.get("qty"))) <= 0 or is_complete(cand) or cand.get("closed"):
-                    continue
-                unset = [p for p in cand.get("levels") or [] if p not in set(cand.get("settled") or [])]
-                if lv0 in unset:
-                    f = cand
-                    break
-            if f is None:
-                f = _floor(nf["id"], 0, 0.0, nf["target"], "build")
-                f["levels"], f["base_usd"] = list(nf["levels"]), float(nf["base_usd"])
-                st["floors"].append(f)
-                st["next_id"] = max(int(_f(st.get("next_id"))), int(nf["id"]) + 1)
-        if f is None:
-            return st
-        f["qty"] = int(f["qty"]) + q
-        f["cost"] = round(_f(f["cost"]) + amt, 4)
-        lv = round(_f(order.get("level")), 2)
-        if lv not in (f.get("settled") or []):
-            f.setdefault("settled", []).append(lv)
-        f["carry_usd"] = round(_f(f.get("carry_usd")) - _f(order.get("carry_used")) + (_f(order.get("plan_usd")) - amt), 2)   # 못 산 금액 이월
-        for cid in order.get("closes") or []:
-            c = _by_id(st, cid)
-            if c is not None and c is not f:
-                c["closed"] = True
-        if is_complete(f):
-            f["done"], f["closed"], f["levels"], f["settled"], f["carry_usd"] = True, False, [], [], 0.0
-        elif f["levels"] and all(p in f["settled"] for p in f["levels"]):
-            f["closed"] = True                                       # 칸을 다 썼는데 미완성: 부족분(carry_usd)은 그대로 두고 미완성 층으로
-        st["sell_block"] = False
-    elif kind == "sell":
-        floors = top_down(st)
+PRICE_TOL = 0.01            # B2: 체결 평균가와 1층 빈칸 가격을 맞춰 볼 때의 허용 오차 (달러)
+
+
+def _unset_levels(f):
+    return sorted(p for p in (f.get("levels") or []) if p not in set(f.get("settled") or []))
+
+
+def _after_buy(f):
+    """매수가 들어간 층의 완성·닫힘 정리 (이 층의 매도 금지는 매수 체결로 풀림 / 닫힐 때도 풂)"""
+    f["rebuy_pending"] = False
+    if is_complete(f):
+        f["done"], f["closed"], f["levels"], f["settled"], f["carry_usd"] = True, False, [], [], 0.0
+    elif f["levels"] and all(p in f["settled"] for p in f["levels"]):
+        f["closed"] = True                                       # 칸을 다 썼는데 미완성: 부족분(carry_usd)은 그대로 두고 미완성 층으로
+
+
+def _absorb_into_open_floor(st, order, q, amt):
+    """새 층 계획 매수 체결을, 위에 있는 미완성 층(1층)의 안 산 칸에 넣음 → (남은 수량, 남은 금액).
+    Muse 검증 고침: 칸 판정은 주문 지정가(order["level"]) 기준 ±0.01 (반올림 허용). 체결 평균가(amt/q)는 원가 계산에만 씀.
+    이유: 체결 평균가만으로 칸을 찾으면 지정가 이하로 체결된 주문이 엉뚱한 칸에 들어감 (예: 2층 $42.59 주문이 $42.59에 체결됐는데 1층 $43.59 칸으로 감 — 주문이 노린 칸이 아님).
+    지정가 $43.59 주문이 $43.00에 체결돼도 $43.59 칸으로 감 (주문이 노린 칸). B3: 닫으라는 층(closes)은 건너뜀. B4: 층 원가가 목표를 넘지 않게 정수 주 내림으로 상한 — 넘치는 주식은 남은 수량으로 돌려줘 새 층이 받음.
+    넣은 직후 칸 금액(base_usd)을 (목표 − 원가) ÷ 안 산 칸 수 로 다시 계산 (B4). B5: 흡수한 가격은 새 층의 settled 가 되도록 st["absorbed"] 에 적어 둠"""
+    nf = order.get("new_floor") or {}
+    closes = {int(_f(c)) for c in (order.get("closes") or [])}
+    lv = round(_f(order.get("level")), 2)
+    px = amt / q
+    for cand in top_down(st):
+        if q <= 0:
+            break
+        if int(_f(cand.get("qty"))) <= 0 or is_complete(cand) or cand.get("closed") or int(_f(cand.get("id"))) in closes:
+            continue
+        hit = next((p for p in _unset_levels(cand) if abs(p - lv) <= PRICE_TOL + 1e-9 and px <= p + PRICE_TOL + 1e-9), None)
+        if hit is None:
+            continue
+        n = min(q, int(math.floor((_f(cand.get("target") or FLOOR_USD) - _f(cand.get("cost"))) / px + 1e-9)))
+        if n < 1:
+            continue
+        part = amt if n == q else round(amt * n / q, 4)
+        cand["qty"] = int(cand["qty"]) + n
+        cand["cost"] = round(_f(cand["cost"]) + part, 4)
+        cand.setdefault("settled", []).append(hit)
+        _after_buy(cand)
+        if not cand.get("done") and not cand.get("closed"):
+            left = _unset_levels(cand)
+            if left:
+                cand["base_usd"] = float(rnd((_f(cand.get("target") or FLOOR_USD) - _f(cand["cost"])) / len(left)))
+                cand["carry_usd"] = 0.0
+        ab = st.setdefault("absorbed", {}).setdefault(str(int(_f(nf.get("id")))), [])
+        if lv not in ab:
+            ab.append(lv)
+        q -= n
+        amt = round(amt - part, 4)
+    return q, amt
+
+
+def _apply_buy(st, order, q, amt):
+    f = _by_id(st, order.get("floor_id"))
+    nf = order.get("new_floor")
+    amt0 = amt
+    if f is None and isinstance(nf, dict):                           # 새 층 계획 (그 층은 아직 없음)
+        q, amt = _absorb_into_open_floor(st, order, q, amt)          # v2.2.5·v2.2.6: 위에 미완성 층이 있으면 그 층 빈칸 먼저
+        if q <= 0:
+            return
+        f = _floor(nf["id"], 0, 0.0, nf["target"], "build")
+        f["levels"], f["base_usd"] = list(nf["levels"]), float(nf["base_usd"])
+        f["settled"] = [p for p in (st.get("absorbed") or {}).get(str(int(_f(nf["id"]))), []) if p in f["levels"]]     # B5
+        st["floors"].append(f)
+        st["next_id"] = max(int(_f(st.get("next_id"))), int(nf["id"]) + 1)
+    if f is None:
+        return
+    f["qty"] = int(f["qty"]) + q
+    f["cost"] = round(_f(f["cost"]) + amt, 4)
+    lv = round(_f(order.get("level")), 2)
+    if lv not in (f.get("settled") or []):
+        f.setdefault("settled", []).append(lv)
+    f["carry_usd"] = round(_f(f.get("carry_usd")) - _f(order.get("carry_used")) + (_f(order.get("plan_usd")) - amt0), 2)   # 못 산 금액 이월 (계획 대비 — 1층으로 나눠 들어간 몫도 산 것으로 침)
+    for cid in order.get("closes") or []:
+        c = _by_id(st, cid)
+        if c is not None and c is not f:
+            c["closed"], c["rebuy_pending"] = True, False            # 닫힌 층의 매도 금지는 닫을 때 전부 푼다 (사용자 결정)
+    _after_buy(f)
+
+
+def _apply_sell(st, order, q, amt, gap, start_usd):
+    """매도 체결 반영. 주문에 floor_id 가 있으면 그 층만 (v2.2.6 층별 매도). 없으면(예전 주문) 예전처럼 층별 보유 비율대로.
+    잔여 원가 계산에 쓴 '뺀 원가'는 st["_cost_removed"] 에 임시로 둠 (main 이 장부에 같은 값을 쓰고 지움 — 파일에 저장하지 않음)"""
+    floors = top_down(st)
+    removed, sold = 0.0, []
+    tf = _by_id(st, order.get("floor_id")) if order.get("floor_id") is not None else None
+    if tf is not None:
+        a = min(q, int(_f(tf.get("qty"))))
+        if a > 0:
+            c = _f(tf.get("cost")) if a == int(tf["qty"]) else _f(tf.get("cost")) * a / int(tf["qty"])
+            tf["qty"] = int(tf["qty"]) - a
+            tf["cost"] = round(max(0.0, _f(tf["cost"]) - c), 4)
+            removed = round(c, 4)
+            sold = [tf]
+    else:
         qs = [int(_f(f.get("qty"))) for f in floors]
         tq = sum(qs)
         if tq <= 0:
-            return st
+            st["_cost_removed"] = 0.0
+            return
         before_cost = sum(_f(f.get("cost")) for f in floors)
         cuts = _largest_remainder(q, qs)
         for f, a in zip(floors, cuts):                               # 층 평단은 그대로 두고 수량·투자금만 줄임
             if a > 0:
-                avg0 = floor_avg(f)
                 f["qty"] = int(f["qty"]) - a
-                f["cost"] = round(max(0.0, _f(f["cost"]) - a * avg0), 4)
+                f["cost"] = round(max(0.0, _f(f["cost"]) - a * floor_avg_before(f, a)), 4)
+                sold.append(f)
         left_q = tq - min(q, tq)
         want = round(before_cost * left_q / tq, 4)                   # 장부와 같은 규칙: 남은 원가 = 이전 원가 × 남은 수량 ÷ 이전 수량
         live = [f for f in floors if int(f["qty"]) > 0]
         if live:
             live[-1]["cost"] = round(_f(live[-1]["cost"]) + (want - sum(_f(f["cost"]) for f in live)), 4)   # 반올림 차이는 가장 최근 층이 흡수
-        st["floors"] = live
-        for f in live:
-            _topup_setup(f, gap, start_usd)
-        st["sell_block"] = True
+        removed = round(before_cost - want, 4)
+    st["floors"] = [f for f in st["floors"] if int(_f(f.get("qty"))) > 0]
+    for f in sold:
+        if int(_f(f.get("qty"))) > 0:
+            _topup_setup(f, gap, start_usd)                          # 팔린 층만 탑업 준비 (v2.2.6)
+            f["rebuy_pending"] = not f.get("done")                   # 다시 살 게 없는(완성) 층은 매도 금지를 걸지 않음 — 걸면 풀 매수가 영영 없음
+    st["_cost_removed"] = removed
+
+
+def floor_avg_before(f, a):
+    """(예전 주문용 비례 매도) 이미 수량을 줄인 층의 '줄이기 전 평단' = 원가 ÷ (남은 수량 + a)"""
+    q = int(_f(f.get("qty"))) + int(a)
+    return _f(f.get("cost")) / q if q > 0 else 0.0
+
+
+def apply_fill(st, order, fill_qty, fill_amount, gap=GAP_USD, start_usd=0.0):
+    """체결 1건 반영 (st 를 직접 바꿔 돌려줌). fill_qty = 실제 체결 수량, fill_amount = 실제 체결 금액(수량×체결가 합계). 계획 금액이 아니라 이 값만 씀.
+    같은 체결을 또 반영하지 않게 하려면 주문번호 기준인 apply_fill_delta 를 쓸 것 (이 함수는 부른 만큼 그대로 반영)"""
+    q, amt = int(_f(fill_qty)), _f(fill_amount)
+    kind = order.get("kind")
+    if q <= 0 or amt <= 0:
+        return st
+    ensure_state(st)
+    if kind == "buy_tower":
+        _apply_buy(st, order, q, amt)
+    elif kind == "sell":
+        _apply_sell(st, order, q, amt, gap, start_usd)
     return st
 
 
+def apply_fill_delta(st, order, cum_qty, cum_amount, gap=GAP_USD, start_usd=0.0):
+    """v2.2.6 두 번 반영 방지: 주문번호(order["no"]) 별로 '반영한 누적 체결'(st["applied"])을 두고, 누적 체결 중 아직 안 반영한 증분만 반영 → (반영한 수량, 증분 금액).
+    같은 누적 체결을 다시 넣으면 (0, 0.0). 부분 체결이 이어서 체결돼 누적이 늘면 늘어난 만큼만. 주문번호가 없으면 중복 방지 불가라 그대로 반영"""
+    ensure_state(st)
+    no = str(order.get("no") or "").strip()
+    cq, ca = int(_f(cum_qty)), _f(cum_amount)
+    prev = st["applied"].get(no) if no else None
+    pq = int(_f(prev.get("q"))) if isinstance(prev, dict) else 0
+    pa = _f(prev.get("amt")) if isinstance(prev, dict) else 0.0
+    dq, da = cq - pq, round(ca - pa, 4)
+    if dq <= 0 or da <= 0:
+        return 0, 0.0
+    apply_fill(st, order, dq, da, gap, start_usd)
+    if no:
+        st["applied"][no] = {"q": cq, "amt": round(ca, 4)}
+        while len(st["applied"]) > APPLIED_KEEP:
+            st["applied"].pop(next(iter(st["applied"])))
+    return dq, da
+
+
+def applied_qty(st, order):
+    """이 주문에서 상태에 이미 반영한 누적 수량 (없으면 0)"""
+    prev = (st.get("applied") or {}).get(str(order.get("no") or "").strip())
+    return int(_f(prev.get("q"))) if isinstance(prev, dict) else 0
+
+
+def sort_fills(st, items):
+    """v2.2.6 체결 반영 순서 (버그 1·B1). items = [{"o": 주문, "side": "BUY"|"SELL", "t": 체결 시각 글자 또는 None, ...}] → 반영할 순서의 새 목록.
+    ① 체결 시각이 전부 있으면 시간순 (같은 시각이면 매도 먼저), 하나라도 없으면 매도를 먼저 (안에서는 원래 순서 유지)
+    ② 새 층 계획 매수(그 층이 아직 없는 buy_tower)는 같은 날 매도를 다 반영한 뒤로 미룸 — 매도로 1층이 미완성이 되면 그 매수가 1층 빈칸으로 들어가게 (B1)"""
+    ensure_state(st)
+
+    def new_floor_buy(it):
+        o = it["o"]
+        return o.get("kind") == "buy_tower" and isinstance(o.get("new_floor"), dict) and _by_id(st, o.get("floor_id")) is None
+
+    def order_by(lst):
+        if lst and all(str(it.get("t") or "").strip() for it in lst):
+            return sorted(lst, key=lambda it: (str(it["t"]).strip(), 0 if it["side"] == "SELL" else 1))
+        return sorted(lst, key=lambda it: 0 if it["side"] == "SELL" else 1)
+
+    late = [it for it in items if new_floor_buy(it)]
+    return order_by([it for it in items if not new_floor_buy(it)]) + order_by(late)
+
+
 def apply_fill_to_state(st, order, avg_before=0.0, allow_consecutive_sell=False, fill=None, gap=GAP_USD, start_usd=0.0):
-    """accum_strategy.apply_fill_to_state 와 같은 모양의 입구. fill = (체결 수량, 체결 금액). fill 이 없으면 반영 안 함 (탑쌓기는 실제 체결로만 계산)"""
+    """accum_strategy.apply_fill_to_state 와 같은 모양의 입구. fill = (체결 수량, 체결 금액). fill 이 없으면 반영 안 함 (탑쌓기는 실제 체결로만 계산).
+    (v2.2.6: 주문번호가 있으면 누적 체결 기준으로 증분만 반영 — 같은 체결을 두 번 넣어도 층이 안 바뀜)"""
     if fill is None:
         return st
+    if str(order.get("no") or "").strip():
+        apply_fill_delta(st, order, fill[0], fill[1], gap, start_usd)
+        return st
     return apply_fill(st, order, fill[0], fill[1], gap, start_usd)
+
+
+def add_holdings(st, qty, avg, s=None):
+    """v2.2.6 (사용자 결정): 토스 등에서 들어온 N주(평단 avg)는 '1층 빈곳'에 넣고, 그 층의 새 평단 기준으로 탑쌓기 로직대로 나머지 빈칸을 채운다.
+    위에서부터 처음 미완성 층에 수량·원가를 더함 (미완성 층이 없으면 가장 아래 층 — 매일 동기화가 하는 것과 같음). 층이 없으면 1층을 새로 만듦.
+    층이 목표 안에 들어오면 완성, 아니면 탑업 칸(그 층 평단 −1 ~ −간격)·칸 금액을 새 평단으로 다시 정함. → (층 id, 알림 글자 목록)"""
+    ensure_state(st)
+    fu, _fl, gap = params(s)
+    start_usd = _f((s or {}).get("tower_floor1_start_usd"))
+    q, a = int(_f(qty)), _f(avg)
+    if q < 1 or a <= 0:
+        return None, []
+    live = [f for f in top_down(st) if int(_f(f.get("qty"))) > 0]
+    if not live:
+        f = _floor(1, q, q * a, fu, "migrated")
+        f["done"] = True
+        st["floors"], st["next_id"] = [f], 2
+        return 1, [f"층 없음 → 입고 {q}주를 1층으로 만듦 (평단 ${a:.2f})"]
+    f = next((x for x in live if not is_complete(x)), live[-1])
+    f["qty"] = int(f["qty"]) + q
+    f["cost"] = round(_f(f["cost"]) + q * a, 4)
+    if is_complete(f):
+        f["done"], f["closed"], f["levels"], f["settled"], f["carry_usd"] = True, False, [], [], 0.0
+        f["rebuy_pending"] = False
+        tail = "1층이 완성돼요" if int(_f(f["id"])) == 1 else "이 층이 완성돼요"
+    else:
+        _topup_setup(f, gap, start_usd)
+        tail = f"남은 빈칸 ${max(_f(f.get('target') or fu) - _f(f['cost']), 0):,.0f} 는 탑쌓기로 매수 (칸 {len(f['levels'])}개)"
+    fid = int(_f(f["id"]))
+    return fid, [f"입고 {q}주를 {fid}층 빈곳에 넣음 → {fid}층 {int(f['qty'])}주 · 평단 ${floor_avg(f):.2f} · {tail}"]
 
 
 # ---------------------------------------------------------------- 동기화 · 정리
 def _merge(a, b, gap, start_usd=0.0):
     m = _floor(min(int(a["id"]), int(b["id"])), int(a["qty"]) + int(b["qty"]), _f(a["cost"]) + _f(b["cost"]), max(_f(a["target"]), _f(b["target"])), "merged")
-    return _topup_setup(m, gap, start_usd)
+    _topup_setup(m, gap, start_usd)
+    m["rebuy_pending"] = bool((a.get("rebuy_pending") or b.get("rebuy_pending")) and not m["done"])      # 합쳐도 금지는 이어짐 (다시 살 게 없으면 풂)
+    return m
 
 
 def normalize(st, gap=GAP_USD, start_usd=0.0):
     """수량 0 인 층 정리 → 꼬인 층 합병(위 층보다 평단이 같거나 높으면 가중평균으로 합침) → 평단 오름차순 재배치(id 는 위에서부터 다시 붙임). → 알림 글자 목록"""
     notes = []
+    ensure_state(st)
+    st["absorbed"] = {}                                              # 새 층 id 는 매일 정리 때 다시 붙으니 하루 지나면 비움 (B5)
     fl = [f for f in top_down(st) if int(_f(f.get("qty"))) > 0]
     out = []
     for f in fl:
@@ -411,6 +627,7 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
     """매일 동기화: 층 합계가 장부(실제 보유분)와 다르면 장부에 맞춤 — 차이는 가장 최근 층(가장 아래 층)이 흡수. 그 뒤 꼬인 층 정리.
     → (st, 알림 글자 목록). 장부가 0주면 층을 비움"""
     fu, _fl, _g = params(s)
+    ensure_state(st)
     qty, principal = int(_f(qty)), _f(principal)
     notes = []
     if qty <= 0:
@@ -419,7 +636,9 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
         st["floors"], st["next_id"] = [], 1
         return st, notes
     if not st.get("floors"):
+        keep = st.get("applied") or {}
         st.update(migrate_from_holdings(qty, principal, s))
+        st["applied"] = keep                                          # 반영한 주문번호 기록은 지키지 않으면 같은 체결을 다시 넣을 수 있음
         notes.append(f"층 없음 → 현재 보유분 {qty}주를 1층으로 만듦")
         return st, notes
     tq, tc = totals(st)
@@ -453,26 +672,45 @@ LAYER_COLORS = ("🟩", "🟦", "🟨", "🟧", "🟥", "🟪", "🟫", "⬛", "
 
 
 def layer_block(f):
-    """층 칸 색상: 층 번호로 정함 (1층 🟩). 완성/쌓는 중 구분은 상세 줄 글자(완성·쌓는 중·미완성)로만 보임."""
+    """층 칸 색상: 층 번호로 정함 (1층 🟩)."""
     return LAYER_COLORS[(int(_f(f.get("id"))) - 1) % len(LAYER_COLORS)]
 
 
-def floor_status(f):
-    """층 상태 글자: 완성 | 쌓는 중 | 미완성 (칸을 다 썼는데 부족분이 남아 닫힌 층)"""
+EMPTY_HALF = "⬜"          # 비어 있는 반칸
+HALF_MIN = 0.25            # 미완성 층은 원가가 목표의 이만큼 이상이면 반칸을 칠함
+
+
+def fill_ratio(f):
+    """층 채움 비율 = 원가 ÷ 목표 (0~1)"""
+    tg = _f(f.get("target") or FLOOR_USD)
+    return min(1.0, max(0.0, _f(f.get("cost")) / tg)) if tg > 0 else 0.0
+
+
+def layer_marker(f):
+    """v2.2.6 반칸 표시 (사용자 결정: 반칸은 반만 색을 칠한다). 층 하나 = 두 반칸.
+    완성 → 두 칸 다 색 (🟩🟩) · 미완성 → 한 칸만 색 + 빈 반칸 (🟩⬜ — 50% 매도 뒤 1층) · 원가가 목표의 4분의 1 미만이면 둘 다 빔 (⬜⬜)"""
+    c = layer_block(f)
     if is_complete(f):
-        return "완성"
-    return "미완성" if f.get("closed") else "쌓는 중"
+        return c + c
+    return (c if fill_ratio(f) >= HALF_MIN else EMPTY_HALF) + EMPTY_HALF
+
+
+def floor_status(f):
+    """층 상태 글자: 완성 | 미완성 (v2.2.6 — 완성이 아니면 전부 미완성. 예전의 '쌓는 중'은 없앰)"""
+    return "완성" if is_complete(f) else "미완성"
 
 
 def view_lines(st, s=None):
     """탑쌓기 층 시각화 글자 줄. 채워진 층(수량 > 0)만 보임 — 비어 있는 층은 안 보임.
-    첫 줄: 층마다 색상 칸 1개(1층 🟩 · 2층 🟦 · 3층 🟨 · 4층 🟧 · 5층 🟥 · 6층 🟪 · 7층 🟫 · 8층 ⬛ · 9층 ⬜ · 10층 🟩) + 'N/최대층'. 다음 줄들: 층별 '1층 · 평단 $48.59 · 299주 · 완성' (위에서부터).
+    첫 줄: 층마다 두 반칸 마커(완성 🟩🟩 · 미완성 🟩⬜, 색은 1층 🟩 · 2층 🟦 · 3층 🟨 · 4층 🟧 · 5층 🟥 · 6층 🟪 · 7층 🟫 · 8층 ⬛ · 9층 ⬜ · 10층 🟩) + 'N/최대층'.
+    다음 줄들: 층별 '1층 · 평단 $48.59 · 149주 · 미완성 (49%)' (위에서부터, % = 원가 ÷ 층 목표).
     평단 = 층 투자금(실제 체결 합계) ÷ 수량 = 가중평균. 상태가 비었거나 이상하면 0층"""
     _fu, nfl, _g = params(s)
     fl = [f for f in top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
     if not fl:
         return [f"탑: 0/{nfl}층 (채운 층 없음)"]
-    lines = [f"탑: {' '.join(layer_block(f) for f in fl)}  {len(fl)}/{nfl}층"]
+    lines = [f"탑: {' '.join(layer_marker(f) for f in fl)}  {len(fl)}/{nfl}층"]
     for f in fl:
-        lines.append(f"{int(_f(f.get('id')))}층 · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}")
+        lines.append(f"{int(_f(f.get('id')))}층 · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}"
+                     + ("" if is_complete(f) else f" ({int(round(fill_ratio(f) * 100))}%)"))
     return lines
