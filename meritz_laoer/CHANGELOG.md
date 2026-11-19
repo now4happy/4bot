@@ -1,5 +1,10 @@
 # 7번 메리츠 속쓸 적립봇 변경 기록
 
+## v1.1.2 · 2026-11-19 20:42 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.0: tower stacking (pan 13) - new tower_strategy.py module, strategy switch (default ladder), migration from holdings, slippage handling
+- 브랜치: staging
+
 ## v1.1.1 · 2026-11-19 17:08 (KST)
 - 파일: main.py
 - 내용: meritz_laoer v2.1.0: merge pan 12 intraday sell gate fix onto menu 3rd v3
