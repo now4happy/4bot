@@ -1,5 +1,10 @@
 # 7번 메리츠 속쓸 적립봇 변경 기록
 
+## v1.1.8 · 2026-11-20 06:18 (KST)
+- 파일: config.py, main.py, meritz_api.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.6 (판 16 본격): 층별 매도·반칸 표시·체결 알림
+- 브랜치: staging
+
 ## v1.1.7 · 2026-11-20 05:31 (KST)
 - 파일: main.py, tg_menu.py, tower_strategy.py
 - 내용: meritz_laoer v2.2.5: 1층 채우기 매수 (판 16 일부)
