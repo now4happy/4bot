@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.6)
+# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.9)
+# v2.0.9 (2026-11-19, 판 11): usd_cash()가 estm_frcr_amt를 읽게 고침 (Q27 원인 고침). frcr_amt는 주식 가치를 포함해 메리츠 앱 외화예수금과 달라서 바꿈 — 서버 진단 2026-11-19 + 공식 openapi.json 대조 확인. estm_frcr_amt가 없거나 빈 값이면 MeritzError (되돌림 없음 — 틀린 값으로 거래하지 않게).
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.5 (2026-11-19): fills_rows 가 체결 행 심볼을 ovrs_stck_symb_iscd 가 없으면 iscd 로도 읽음 (실제 체결 내역 응답에는 iscd 만 있음 — Muse 서버 확인). holding()·open_orders_today() 는 그대로
 # v2.0.4 (2026-11-19): MeritzError.definite(서버가 오류 코드로 분명히 거절 = True) 구분 · order() 가 네트워크 오류·시간 초과를 '응답 못 받음'(definite=False)으로 바꿔 던짐 ·
@@ -153,7 +154,8 @@ class MeritzApi:
         return 0, 0, None
 
     def usd_cash(self):
-        """USD 예수금(frcr_amt)만. 평가액·추정예수금으로 대신하지 않음"""
+        """USD 예수금(estm_frcr_amt)만. 앱 외화예수금과 같은 추정 외화 예수금을 읽는다.
+        frcr_amt는 주식 가치를 포함해 앱 값과 다르다 — 서버 진단 2026-11-19 확인 (v2.0.9). 평가액으로 대신하지 않음"""
         d = self._call("GET", "/accounts/v1/me/overseas/currencies")
         if d.get("tr_cont") == "1":
             raise MeritzError("외화잔고 응답이 완전하지 않음")
@@ -161,9 +163,9 @@ class MeritzApi:
         if not isinstance(rows, list):
             raise MeritzError("외화잔고 형식 확인 필요")
         usd = [r for r in rows if isinstance(r, dict) and str(r.get("crcd", "")).strip().upper() == "USD"]
-        if len(usd) != 1 or usd[0].get("frcr_amt") in (None, ""):
+        if len(usd) != 1 or usd[0].get("estm_frcr_amt") in (None, ""):
             raise MeritzError("USD 예수금 행 없음 또는 중복")
-        return _num(usd[0]["frcr_amt"])
+        return _num(usd[0]["estm_frcr_amt"])
 
     def fx_applied(self):
         """메리츠 환전 적용환율 (원화→달러 매수 기준) → (원/달러, 기준시각 exrt_stnd_time). 읽기 전용. 못 읽으면 MeritzError"""

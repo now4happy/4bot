@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.8)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.0.9)
+# v2.0.9 (2026-11-19, 판 11): Q27 원인 고침 — usd_cash()가 estm_frcr_amt를 읽게 함 (meritz_api.py). frcr_amt는 주식 가치를 포함해 앱 값과 달라서 바꿈 (서버 진단 2026-11-19 확인). --diag-cash 문구도 estm_frcr_amt로 고침. 그 외 변경 없음.
 # v2.0.8 (2026-11-19, 판 10): ① 자동환전 창 — 판 9 의 '09:00~09:30 고정 30분'을 없애고, 메리츠 실시간 환전 시간 안에서
 #   '한국시간 09:00 ~ 주문 시간(order_time_et 를 한국시간으로 바꾼 시각)' 까지로 바꿈. 수수료 무료(스프레드 0%)는 실시간 환전 때만이라 시간외(02:00~08:50)·
 #   환전 불가(08:50~09:00, 23:50~00:20)·주말·국내 공휴일엔 환전 안 함 (fx_window_info). 주문 시간 대비용 auto_fx 도 같은 시간 조건을 통과해야 신청.
@@ -82,7 +83,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.0.8"
+BOT_VERSION = "v2.0.9"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -1216,7 +1217,7 @@ _DIAG_SKIP = re.compile(r"acnt|acct|account|cano|pwd|pass", re.I)
 
 def cmd_diag_cash(s, api=None):
     """읽기 전용 (주문·환전·장부 변경 없음). 메리츠 외화잔고 응답의 USD 행을 필드별로 그대로 보여 줌 → 메리츠 앱 '외화예수금' 숫자와 같은 필드가 무엇인지 찾는 용도.
-    봇은 USD 행의 frcr_amt 를 달러 예수금으로 씀 (meritz_api.usd_cash). 보유 주식 가치(보유 수량 × 전일 종가)도 같이 보여 줘서 차이가 그것과 비슷한지 대조"""
+    봇은 USD 행의 estm_frcr_amt 를 달러 예수금으로 씀 (meritz_api.usd_cash, v2.0.9 — frcr_amt는 주식 가치를 포함해 앱 값과 달라서 바꿈. 서버 진단 2026-11-19 확인). 보유 주식 가치(보유 수량 × 전일 종가)도 같이 보여 줘서 차이가 그것과 비슷한지 대조"""
     api = api or MeritzApi(s["key_file"], os.path.join(s["state_dir"], "data", "meritz_token.json"))
     d = api._call("GET", "/accounts/v1/me/overseas/currencies")
     rows = d.get("data")
@@ -1229,7 +1230,7 @@ def cmd_diag_cash(s, api=None):
             print(f"    {k} = {'(가림)' if _DIAG_SKIP.search(str(k)) else v}")
     try:
         bot_cash = api.usd_cash()
-        print(f"- 봇이 쓰는 값 (frcr_amt) = ${bot_cash:,.2f}")
+        print(f"- 봇이 쓰는 값 (estm_frcr_amt) = ${bot_cash:,.2f}")
     except MeritzError as e:
         bot_cash = None
         print(f"- 봇이 쓰는 값 읽기 실패: {e}")
@@ -1237,8 +1238,8 @@ def cmd_diag_cash(s, api=None):
     p = api.price(s["symbol"], s["price_market"])
     val = hold * float(p.get("prev_close") or 0)
     print(f"- 보유 {s['symbol']} {hold}주 × 전일 종가 ${float(p.get('prev_close') or 0):.2f} = ${val:,.2f} (주식 가치 대략)")
-    print("- 읽는 법: 메리츠 앱의 외화예수금(달러) 숫자와 같은 값인 필드를 위에서 찾으세요.")
-    print("  봇 값 − 앱 값 ≈ 주식 가치이면 frcr_amt 에 주식 가치가 섞여 있는 것이고, 그러면 usd_cash() 가 읽을 필드를 앱 값과 같은 필드로 바꿔야 해요 (Muse 검토 뒤).")
+    print("- 읽는 법: 메리츠 앱의 외화예수금(달러) 숫자와 같은 값인 필드를 위에서 찾으세요. v2.0.9부터 봇은 estm_frcr_amt를 씁니다.")
+    print("  봇 값 − 앱 값 ≈ 주식 가치이면 frcr_amt 에 주식 가치가 섞여 있는 것입니다 (v2.0.9에서 estm_frcr_amt로 바꿈).")
     return 0
 
 
