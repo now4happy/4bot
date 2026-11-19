@@ -1,4 +1,4 @@
-"""책 D/D+1/D+2 규칙 엔진. 백테스트와 그림자 모드가 같은 코드를 쓴다. 주문은 내지 않는다.
+"""책 D/D+1/D+2 규칙 엔진. 백테스트와 그림자 모드가 같은 코드를 쓴다. 주문은 내지 않는다. [v2]
 
 봉(bar) = {"t": 봉 시작 datetime(KST, tz 없음), "o","h","l","c","v"}.
 """
@@ -40,11 +40,12 @@ class Variant:
     fail_stop: bool
     tp_pct: float
     last_entry: str
+    stop_pct: float = B.STOP_PCT     # 판 2: 손절폭 축. 기본값 = 판 1 고정값 0.03
 
     @property
     def id(self):
         return (f"m{self.bar_m}-{self.confirm}-fs{int(self.fail_stop)}-tp{self.tp_pct:g}"
-                f"-le{self.last_entry.replace(':', '')}")
+                f"-le{self.last_entry.replace(':', '')}-sl{self.stop_pct * 100:g}")
 
 
 def grid():
@@ -174,14 +175,17 @@ class Book:
             p["ref"] = p["last_c"]
             first = True
         idx = len(p["dates"]) - 1
-        stop, line = p["E"] * (1 - B.STOP_PCT), p["ref"] * (1 - B.GAP_PCT)
+        stop, line = p["E"] * (1 - self.v.stop_pct), p["ref"] * (1 - B.GAP_PCT)
         end = (bar["t"] + timedelta(minutes=self.v.bar_m)).time()
         if idx > 2:
             return self._exit(bar["t"], o * (1 - s), "overdue")
         if first and o <= line:                      # D+1·D+2 시초가 -1%
             return self._exit(bar["t"], o * (1 - s), f"d{idx}_open_gap")
-        if l <= stop:                                # -3% 기계적 손절 (같은 봉이면 불리하게 가정)
-            return self._exit(bar["t"], (stop if fresh else min(o, stop)) * (1 - s), "stop3")
+        # touch 진입 봉: ENTRY_BAR_STOP=close 면 종가로 판정 (저가는 진입 이전일 수 있음). 그 밖의 봉은 저가.
+        low_for_stop = c if (fresh and p["how"] == "touch" and B.ENTRY_BAR_STOP == "close") else l
+        if low_for_stop <= stop:                     # 기계적 손절 (같은 봉이면 불리하게 가정)
+            return self._exit(bar["t"], (stop if fresh else min(o, stop)) * (1 - s),
+                              f"stop{self.v.stop_pct * 100:g}")   # 0.03 -> "stop3" (판 1 라벨 유지)
         if idx == 2 and l <= line:                   # D+2 손절 라인
             return self._exit(bar["t"], min(o, line) * (1 - s), "d2_line")
         if idx == 0 and self.v.fail_stop and not fresh and c < p["prior_high"]:

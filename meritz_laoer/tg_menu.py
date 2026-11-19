@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.0.3)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.0.6)
+# v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
+# v2.0.4 (2026-11-19): 💰 자금 화면에 '현금 부족 → 부분 매수'(몇 회차 몇 주만, 원래 몇 주) 표시. 판 5 보완(메뉴가 멈추거나 메시지를 버리는 이유를 로그에 남김·오래된 메시지 안내) 포함
 # v2.0.3 (2026-11-18): 지시 2026-11-18 — 자동환전 여유%·하루 상한은 사용자가 💱 안·⚙️ 설정 안에서 직접 입력(값은 클로드가 안 정함) → 그 뒤에 💱 켜기.
 #   값 없이 켜면 '여유%와 하루 상한을 먼저 입력해 주세요' 만 알림. 시드는 '2억'·당일 시드는 '2,000만원'만 표시. 속쓸 가격만 소수점, 달러 금액·환율은 정수.
 #   화면의 영어 변수 이름·옵션 이름·오류 문구는 한국말만(notifier.to_korean 이 보내기 직전에 정리). 글자를 짧고 쉽게, 버튼 이름 정리
@@ -162,6 +164,7 @@ class MenuBot:
         self.nav = "main"            # 지금 보이는 화면 (main|fund|tact|stat|etc|settings|fx) — 🔙 뒤로 와 기본 버튼줄이 따라감
         self.confirm = {}            # 확인 버튼 글자 → 누를 수 있는 마지막 시각
         self._cred = (0.0, None)     # (확인 시각, (토큰, chat_id) 또는 None) — 60초마다 다시 확인
+        self._warn_at = {}           # 판 5 보완: 조용히 무시하던 이유별 마지막 로그 시각 (같은 이유는 10분에 한 번만)
 
     # ---------------------------------------------------------- 텔레그램
     def creds(self, s):
@@ -170,10 +173,21 @@ class MenuBot:
         if now - self._cred[0] > 60:
             c = None
             n = Notifier(s.get("telegram_file") or "")
-            if n.ok and not any("텔레그램 토큰이 다른 봇과 같음" in b for b in self.o.check_identity(s)[0]):
+            if not n.ok:
+                self._why("nocred", "메뉴 멈춤: 텔레그램 파일에 토큰 또는 chat_id 가 없음")
+            elif any("텔레그램 토큰이 다른 봇과 같음" in b for b in self.o.check_identity(s)[0]):
+                self._why("dup", "메뉴 멈춤: 텔레그램 토큰이 다른 봇과 같음 (forbid_telegram_files)")
+            else:
                 c = (n.token, n.chat_id)
             self._cred = (now, c)
         return self._cred[1]
+
+    def _why(self, key, text, every=600):
+        """메뉴가 메시지를 조용히 버리거나 멈추는 이유를 로그에 남김 (같은 이유는 every 초에 한 번)"""
+        now = time.time()
+        if now - self._warn_at.get(key, 0.0) > every:
+            self._warn_at[key] = now
+            logging.warning("텔레그램 " + text)
 
     def _call(self, tok, method, payload, timeout):
         req = urllib.request.Request(f"https://api.telegram.org/bot{tok}/{method}", data=json.dumps(payload).encode(),
@@ -208,14 +222,19 @@ class MenuBot:
             if self.offset is not None:
                 q["offset"] = self.offset
             r = self._call(tok, "getUpdates", q, q["timeout"] + 10)
+            stale = False
             for upd in r.get("result") or []:
                 self.offset = upd["update_id"] + 1
                 m = upd.get("message")
                 if not isinstance(m, dict):
                     continue
                 if str((m.get("chat") or {}).get("id", "")).strip() != str(chat):
-                    continue          # 다른 방: 조용히 무시
-                if time.time() - float(m.get("date") or 0) > MSG_MAX_AGE:
+                    self._why("chat", f"메뉴: 등록된 방이 아닌 곳({(m.get('chat') or {}).get('type')})의 메시지는 무시 — telegram 파일 chat_id 확인", 60)
+                    continue          # 다른 방은 무시 (이유는 로그에만)
+                age = time.time() - float(m.get("date") or 0)
+                if age > MSG_MAX_AGE:
+                    self._why("stale", f"메뉴: {int(age)}초 지난 메시지는 처리 안 함 (서버 시계 어긋남이나 긴 대기 확인)", 60)
+                    stale = True
                     continue
                 try:
                     try:
@@ -226,6 +245,8 @@ class MenuBot:
                 except Exception as e:
                     logging.warning(f"텔레그램 메뉴 처리 실패: {type(e).__name__}")
                     self.send(c, "⚠️ 처리 중 오류가 났어요. 다시 눌러 주세요.", dry=s.get("dry_run", True))
+            if stale:                 # 오래된 메시지를 말없이 버리지 않고 한 번 알림
+                self.send(c, "⏱ 메시지가 늦게 도착해서(2분 넘음) 처리하지 않았어요. 버튼을 다시 눌러 주세요.", dry=s.get("dry_run", True))
 
     # ---------------------------------------------------------- 기존 함수 부르기
     def _out(self, fn, *a, **k):
@@ -381,7 +402,8 @@ class MenuBot:
             i = plan["info"]
             today = fmt_krw(i["unit_usd"] * i["fx"]) if i.get("fx") else "미확인"
             need = (f"▫️ 오늘 필요 달러 ${i['need_usd']:,.0f} · " + (f"부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "부족 없음")
-                    + f" · 자동환전 {'켜짐 (신청은 주문 시간에만)' if i.get('auto_fx') else '꺼짐'}")
+                    + f" · 자동환전 {'켜짐 (신청은 주문 시간에만)' if i.get('auto_fx') else '꺼짐'}"
+                    + (f"\n▫️ 현금 부족 → ${i['partial']['price']:.2f} 회차 {i['partial']['qty']}주만 부분 매수 (원래 {i['partial']['full_qty']}주)" if i.get("partial") else ""))
         else:
             today, need = "미확인", f"▫️ 오늘 필요 달러: 미확인 ({d['plan_err']})"
         lines += [f"▫️ 시드 {seed} · 당일 시드 {today}",

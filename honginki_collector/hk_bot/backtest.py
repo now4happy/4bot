@@ -1,4 +1,4 @@
-"""등급 분리 범위 백테스트. 책 확정 규칙은 고정, 등급 C 축만 격자 탐색. 결과: BOT_DIR/backtest_result.json"""
+"""등급 분리 범위 백테스트. 책 확정 규칙은 고정, 등급 C 축만 격자 탐색. 결과: BOT_DIR/backtest_result.json [v2]"""
 import json
 import os
 from collections import Counter, defaultdict
@@ -102,7 +102,8 @@ def run():
            "minute_missing": sorted(f"{c}_{d}" for c, d in missing),
            "n_variants": len(variants), "approximations": APPROX,
            "settings": {"commission": B.COMMISSION, "slippage": B.SLIPPAGE, "tax": B.TAX,
-                        "ma_set": B.MA_SET, "d2_exit": B.D2_EXIT, "bowl": B.BOWL},
+                        "ma_set": B.MA_SET, "d2_exit": B.D2_EXIT, "bowl": B.BOWL,
+                        "entry_bar_stop": B.ENTRY_BAR_STOP, "stop_alt": B.STOP_ALT},
            "summary": {"plus_variants": sum(x > 0 for x in nets), "median_net": nets[len(nets) // 2],
                        "min_net": nets[0], "max_net": nets[-1],
                        "plateau_variants": sorted(k for k, r in res.items()
