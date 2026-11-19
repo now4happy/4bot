@@ -1,5 +1,9 @@
 # ==========================================================
-# FILE: meritz_laoer/accum_strategy.py   (MERITZ_LAOER v2.0.0 — 새 파일)
+# FILE: meritz_laoer/accum_strategy.py   (MERITZ_LAOER v2.0.6)
+# v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
+# v2.0.4 (2026-11-19): 현금 부분 매수 — 달러 예수금이 한 회차에 모자라면 그 회차를 통째로 건너뛰지 않고 현금으로 살 수 있는 만큼만(정수 주 내림, 0주면 안 삼) 매수.
+#   총 투자금 한도가 막는 경우는 예전대로 건너뜀. 부분 매수한 회차는 체결되면 '채운 회차'로 침(남은 주수는 이월·재시도 없음).
+# (v2.0.0 새 파일)
 # 메리츠 속쓸 적립봇 — SOXL 분할매수·부분매도 계획 (순수 계산: 파일·네트워크·시계 없음)
 # 규칙 (노션 작업 페이지 '메리츠 속쓸 적립봇', 2026-11-18):
 #   매수 사다리: $50 부터 $5 내려갈 때마다 1/10 (회차당 총 투자금/10, 매수가 $50~$5 10회)
@@ -115,7 +119,9 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     # ---------------- 회차 금액 (정수 주 내림, 남는 돈 이월 없음)
     cap_usd = _f(s.get("total_krw")) / fx                       # 총 투자금 한도 (달러 환산, 주문 시점 환율)
     auto_fx = bool(s.get("auto_fx_enabled")) and not ignore_auto_fx
-    pool = max(0.0, (cap_usd - principal) if auto_fx else min(_f(usd_cash), cap_usd - principal))   # 이번에 쓸 수 있는 달러
+    cap_room = cap_usd - principal
+    pool = max(0.0, cap_room if auto_fx else min(_f(usd_cash), cap_room))   # 이번에 쓸 수 있는 달러
+    cash_binds = (not auto_fx) and _f(usd_cash) <= cap_room + 1e-9         # 모자란 쪽이 한도가 아니라 현금이면 부분 매수 (v2.0.4)
     if mode == "rebuy" and s.get("unit_base") == "cash":
         unit = pool / rounds
     else:
@@ -133,7 +139,24 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             continue
         cost = q * p
         if spent + cost > pool + 1e-9:
-            notes.append(f"{'한도' if auto_fx else '달러 또는 한도'} 부족 (필요 ${spent + cost:,.2f} > 가용 ${pool:,.2f}) — ${p:.2f} 회차부터 생략")
+            room = pool - spent
+            if cash_binds:                                      # v2.0.4 부분 매수: 현금으로 살 수 있는 만큼만 (정수 주 내림)
+                pq = int(math.floor(room / p + 1e-9)) if room > 0 else 0
+                if pq >= 1:
+                    orders.append({"side": "BUY", "type": otype, "qty": pq, "price": p, "kind": "buy_rebuy" if mode == "rebuy" else "buy_ladder",
+                                   "level": p if mode == "ladder" else None, "idx": j, "credit": round(use_credit, 2),
+                                   "partial": True, "full_qty": q,
+                                   "desc": (f"재매수 {j}번째 (평단 ${_f(st.get('rebuy_anchor')):.2f} −${drop * j:g})" if mode == "rebuy"
+                                            else f"사다리 ${p:g} 회차" + (f" (기존 보유 −${use_credit:,.2f} 차감)" if use_credit else ""))
+                                   + f" · 현금만큼 부분 매수 (원래 {q}주)"})
+                    spent += pq * p
+                    info["partial"] = {"price": p, "qty": pq, "full_qty": q}
+                    notes.append(f"현금 부족 — ${p:.2f} 회차 {q}주 중 {pq}주만 부분 매수 (필요 ${cost:,.2f} > 가용 ${room:,.2f}, "
+                                 f"나머지 {q - pq}주는 이월·재시도 없음)")
+                else:
+                    notes.append(f"현금 부족 — 가용 ${max(room, 0):,.2f} < 1주(${p:.2f}) — 이 회차 안 삼")
+            else:
+                notes.append(f"{'한도' if auto_fx else '달러 또는 한도'} 부족 (필요 ${spent + cost:,.2f} > 가용 ${pool:,.2f}) — ${p:.2f} 회차부터 생략")
             break
         spent += cost
         orders.append({"side": "BUY", "type": otype, "qty": q, "price": p, "kind": "buy_rebuy" if mode == "rebuy" else "buy_ladder",

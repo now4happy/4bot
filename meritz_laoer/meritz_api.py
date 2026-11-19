@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.5)
+# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.0.6)
+# v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.5 (2026-11-19): fills_rows 가 체결 행 심볼을 ovrs_stck_symb_iscd 가 없으면 iscd 로도 읽음 (실제 체결 내역 응답에는 iscd 만 있음 — Muse 서버 확인). holding()·open_orders_today() 는 그대로
 # v2.0.4 (2026-11-19): MeritzError.definite(서버가 오류 코드로 분명히 거절 = True) 구분 · order() 가 네트워크 오류·시간 초과를 '응답 못 받음'(definite=False)으로 바꿔 던짐 ·
 #   fills_rows(체결 행 목록, 심볼 있으면 포함) 추가 — fills() 결과는 그대로. 주문 응답을 못 받았을 때 main 이 자동으로 확인하는 데 씀

@@ -1,4 +1,4 @@
-# 메리츠 속쓸 적립봇 (meritz_laoer · 서비스 meritz_laoer.service) — v2.0.5
+# 메리츠 속쓸 적립봇 (meritz_laoer · 서비스 meritz_laoer.service) — v2.0.6
 
 메리츠 3번 계좌(Super365)에서 **SOXL 분할매수·부분매도**를 하는 봇. 기존 무한매수(V14) 봇 `meritz_laoer`를 고쳐 만들었다
 (계좌 키 지문·텔레그램·장부·정지 장치·텔레그램 메뉴 재사용). 버전 번호·표시 이름은 Muse 가 정한다. `strategy_v14.py` 는 이제 안 불리지만 지우지 않았다.

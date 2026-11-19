@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.0.3)
+# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.0.6)
+# v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
+# v2.0.4 (2026-11-19): _read_chat 추가 (main.check_identity 가 chat_id 가 비었거나 숫자가 아니면 막는 데 씀). 알림 보내기·문구는 그대로
 # v2.0.3 (2026-11-18): to_korean() 추가 — 화면에 나가는 글자에서 영어 변수 이름·옵션 이름을 한국말로 바꾸고, 속쓸 가격이 아닌 달러 금액은 소수점을 없앰.
 #   Notifier.send 가 보내기 직전에 한 번 거침 (표시만 바뀜 · 주문 계산·장부는 그대로). 텔레그램 메뉴(tg_menu.py)도 같은 함수를 씀
 # 새 텔레그램 봇으로 알림만 보냄 (명령·버튼 없음). 토큰 파일: 설정 telegram_file {"token": "...", "chat_id": "..."}
@@ -29,6 +31,15 @@ def _read_token(path):
     except ValueError:
         pass
     return raw.splitlines()[0].strip() if raw else ""
+
+
+def _read_chat(path):
+    """JSON {"chat_id": ...} → chat_id 문자열 (없거나 형식이 다르면 ""). v2.0.4"""
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(d.get("chat_id") or "").strip() if isinstance(d, dict) else ""
 
 
 def token_fp(tok):
