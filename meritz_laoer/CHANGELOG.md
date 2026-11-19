@@ -1,5 +1,10 @@
 # 7번 메리츠 무매 변경 기록
 
+## v1.0.7 · 2026-11-19 13:43 (KST)
+- 파일: main.py, tg_menu.py
+- 내용: meritz_laoer v2.0.7: auto FX at 09:00 KST, one round per day (pan 9)
+- 브랜치: staging
+
 ## v1.0.6 · 2026-11-18 18:01 (KST)
 - 파일: config.py, main.py, tg_menu.py
 - 내용: meritz_laoer v2.0.1: 텔레그램 메뉴 정리 (메인 4개 카테고리, 전술 설정, 상황판 설정값 표시)
