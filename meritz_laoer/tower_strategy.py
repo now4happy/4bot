@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.0)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.2)
+# v2.2.2 (2026-11-19, 판 14): 표시용 view_lines · floor_status 추가 (층 상태를 글자 줄로 바꾸는 순수 계산 — 상태·주문 계산은 안 건드림). 텔레그램 현상태(상황판)에서 tg_menu.py 가 부름
 # v2.2.0 (2026-11-19, 판 13): 새 파일 — 탑쌓기(동적 층 시스템) 계산부. 순수 계산 (파일·네트워크·시계 없음). accum_strategy.py(사다리)는 안 건드림 (롤백용)
 #   main.py 는 settings["strategy"] == "tower" 일 때만 이 모듈을 씀 (기본 "ladder")
 # 설계 (판 13 지시):
@@ -397,3 +398,28 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
             fl[0]["cost"] = round(_f(fl[0]["cost"]) + rest_c, 4)
     notes += normalize(st, gap)
     return st, notes
+
+
+# ---------------------------------------------------------------- 표시 (v2.2.2, 판 14)
+BLOCK_DONE, BLOCK_BUILD = "█", "▒"      # 층 칸 글자: 완성 층 / 쌓는 중·미완성 층 (이모티콘 아님 — 코드 안 이모티콘 금지 규칙)
+
+
+def floor_status(f):
+    """층 상태 글자: 완성 | 쌓는 중 | 미완성 (칸을 다 썼는데 부족분이 남아 닫힌 층)"""
+    if is_complete(f):
+        return "완성"
+    return "미완성" if f.get("closed") else "쌓는 중"
+
+
+def view_lines(st, s=None):
+    """탑쌓기 층 시각화 글자 줄. 채워진 층(수량 > 0)만 보임 — 비어 있는 층은 안 보임.
+    첫 줄: 층마다 칸 1개(완성 █ · 쌓는 중/미완성 ▒) + 'N/최대층'. 다음 줄들: 층별 '1층 · 평단 $48.59 · 299주 · 완성' (위에서부터).
+    평단 = 층 투자금(실제 체결 합계) ÷ 수량 = 가중평균. 상태가 비었거나 이상하면 0층"""
+    _fu, nfl, _g = params(s)
+    fl = [f for f in top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
+    if not fl:
+        return [f"탑: 0/{nfl}층 (채운 층 없음)"]
+    lines = [f"탑: {' '.join(BLOCK_DONE if is_complete(f) else BLOCK_BUILD for f in fl)}  {len(fl)}/{nfl}층"]
+    for f in fl:
+        lines.append(f"{int(_f(f.get('id')))}층 · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}")
+    return lines

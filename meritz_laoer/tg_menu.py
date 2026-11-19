@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.0)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.2)
+# v2.2.2 (2026-11-19, 판 14): 현상태(상황판)에 탑쌓기 층 시각화 추가 — tower_lines (채워진 층 칸 + N/10층 + 층별 상세 줄). 층 상태 파일(tower_state.json)을 읽기만 함. 전략이 사다리면 안 보임. 기존 상황판 줄은 그대로
 # v2.2.0 (2026-11-19, 판 13): 상황판·자금 현황에 현재 전략(사다리/탑쌓기) 표시 추가 — 탑쌓기면 상황판에 '채운 회차' 대신 층 수. 전략 이름은 한글로만 보임 (영어 변수 이름 금지 규칙). 메뉴 토글 버튼은 이번 판에 안 만듦. 매매 동작 변경 없음
 # v2.1.0 (2026-11-19, 방 telegram-bot-menu-review 3차 v3): 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경은 그대로 둠, 매매 동작 변경 없음
 # v2.0.9 (2026-11-19, 판 11): 버전 표기만 올림 (usd_cash 고침은 meritz_api.py·main.py). 이전 v2.0.8 (2026-11-19, 판 10): 자동환전 창이 '한국시간 09:00~주문 시간(실시간 환전 시간 안에서만)'으로 바뀐 데 맞춰 안내 글자 3곳만 고침 (💰 자금의 '신청은 …' · 💱 화면 설명 · 켜기 확인 문구). 로직 변경 없음
@@ -347,6 +348,18 @@ class MenuBot:
         fn = getattr(self.o, "strategy_ko", None)
         return fn(s) if fn else "사다리"
 
+    def tower_lines(self, s, d):
+        """v2.2.2 (판 14): 탑쌓기면 층 시각화 줄 (층 칸 + N/10층 + 층별 상세). 층 상태 파일을 읽기만 함 — 파일이 없으면 지금 장부를 1층으로 본 값(저장 안 함). 사다리면 빈 목록"""
+        if self.strategy_text(s) != "탑쌓기":
+            return []
+        o, pos = self.o, d.get("pos")
+        try:
+            with o.in_dir(s["state_dir"]):
+                tst, _ = o.tower_state_for(o.ConfigManager(s), int(pos["qty"]) if pos else 0, float(pos["principal"]) if pos else 0.0, s)
+            return o.TW.view_lines(tst, s)
+        except Exception:
+            return ["탑: 층 상태 미확인"]
+
     def intraday_text(self, s):
         """당일 매도 확인 상태 글자"""
         sec = _num(s.get("intraday_sell_check_sec")) or 0
@@ -379,6 +392,7 @@ class MenuBot:
             lines.append(f"· 장부: {pos['qty']}주 · 평단 ${d['avg']:.2f} · {fill_txt} · 매도 목표 ${d['target']:.2f}")
         else:
             lines.append("· 장부: 시작 전 (기타 → 장부 시작)")
+        lines += self.tower_lines(s, d)
         if d["api_bad"]:
             lines.append("· 메리츠 조회: 미확인 (" + "; ".join(d["api_bad"][:3]) + ")")
         else:
