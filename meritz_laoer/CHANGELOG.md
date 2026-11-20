@@ -1,4 +1,9 @@
-# 7번 메리츠 SOXL 탑쌓기 변경 기록
+# 7번 메리츠 속쓸 적립봇 변경 기록
+
+## v1.2.1 · 2026-11-20 12:26 (KST)
+- 파일: main.py, notifier.py, tg_menu.py
+- 내용: 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1.1
+- 브랜치: staging
 
 ## v1.2.0 · 2026-11-20 12:17 (KST)
 - 파일: accum_strategy.py, config.py, main.py, notifier.py, tg_menu.py, tower_strategy.py

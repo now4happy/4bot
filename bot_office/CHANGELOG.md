@@ -1,5 +1,10 @@
 # 사무실 파일(bot_office) 변경 기록
 
+## v1.9.6 · 2026-11-20 12:26 (KST)
+- 파일: bot_updater.py
+- 내용: 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1.1
+- 브랜치: staging
+
 ## v1.9.5 · 2026-11-20 12:17 (KST)
 - 파일: bot_updater.py, fanding_fetch_server.py, office_briefing.py, office_secretary.py, office_sgov.py, test_audit_fix_v2.py, test_fanding_fetch_server.py
 - 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)
