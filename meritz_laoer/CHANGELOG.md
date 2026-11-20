@@ -1,5 +1,10 @@
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v1.2.4 · 2026-11-20 18:02 (KST)
+- 파일: main.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.15 (판 19 오늘 계획 미리보기에 탑 진행률): plan_head 한 곳에 탑 줄과 채우는 층 진행률 추가, 표시만 바꿈 (매매·주문·장부 그대로). make_plan이 floors 각 층에 target 키를 실음 (표시 전용)
+- 브랜치: staging
+
 ## v1.2.3 · 2026-11-20 16:46 (KST)
 - 파일: main.py, tg_menu.py, tower_strategy.py
 - 내용: meritz_laoer v2.2.14 (판 17 시초가 상한): 오늘 채우는 층의 안 산 칸이 시초가를 넘지 않게 상한, 시초가는 09:30 ET 이후 첫 확인가로 그날 한 번만 정해 저장
