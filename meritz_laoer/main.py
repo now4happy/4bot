@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.14)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.15)
+# v2.2.15 (2026-11-20, 판 19 오늘 계획 미리보기에 탑 진행률): 표시만 바뀜 (매매 로직·주문·장부 변경 없음). plan_head 한 곳만 고침 → 텔레그램 미리보기(tg_menu)·CLI 미리보기(--check)·주문 알림에 같이 반영
+#   ① 맨 앞에 '탑: ...' 줄 — 상황판과 같은 표현 (tower_strategy.view_lines 첫 줄 재사용: 층 마커 + 채움 비율 합계/최대층) ② '지금 채우는 층 N층' 뒤에 '· 미완성 (74%)' (tower_strategy.floor_status·fill_ratio 재사용, 비율을 새로 계산하지 않음). 새 층이면 '(새 층)' 그대로
+#   ③ 표시 계산이 실패해도 주문·알림이 막히지 않게 탑 줄만 건너뜀 (try/except)
 # v2.2.14 (2026-11-20, 판 17 시초가 상한): ① 시초가 = 정규장(장운영 004) 09:30 ET 이후 처음 확인한 SOXL 현재가 (시세 API 의 시초가 필드는 근거 파일에 없어 미확인 → 첫 확인가 방식). 그날 한 번만 정해 data/open_price_<ET날짜>.json 에 저장(모의는 dry_ 접두), 재시작해도 저장값을 씀. 새 함수 load_open_price·ensure_open_price·run_open_capture, loop 가 주문 시각 전에도 09:30 부터 확인
 #   ② build_plan(open_px=) → tower_strategy.make_plan 이 오늘 채우는 층의 안 산 칸에 상한 적용. 주문 시간(run_order_day)은 저장값(없으면 그때 확인한 현재가)을 씀 ③ plan_head 에 시초가·첫 칸 한 줄. 상황판·--check 은 저장값만 읽음(없으면 계획 그대로 — 시초가를 만들지 않음) ④ 자동환전 아침 계산(_next_rounds_inputs)·체결 알림 '다음 매수'는 시초가 모름 → 계획 그대로. 새 층 생성·매도·간격·금액·층 수 규칙은 그대로
 # v2.2.13 (2026-11-20, audit-fix-v2 r4-fix): ① 하루에 한 층만 매도 (풀이님 결정) — 같은 확인에서 여러 층이 목표에 닿으면 번호가 가장 큰 층(맨 위 층)만 팔고 나머지는 알림만 (층마다 하루 한 번, run_intraday_sell). 첫 매도 뒤 새로 닿은 층 알림(2차)은 그대로 ② v2.0.5 주석 문구를 004·005 매도 동작에 맞게 고침 (주석만, 동작 변경 없음)
@@ -105,7 +108,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.14"
+BOT_VERSION = "v2.2.15"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)
@@ -368,13 +371,31 @@ def fmt_orders(orders):
                      for o in orders) or "- (주문 없음)"
 
 
+def _tower_progress(tw, s):
+    """v2.2.15 판 19: (탑 줄, 지금 채우는 층 진행 글자) — 상황판과 같은 tower_strategy 함수를 그대로 부름 (비율 새로 계산 안 함).
+    plan['info']['tower']['floors'] 를 view_lines 가 읽는 모양(id·qty·cost·target·done)으로 맞춰 넘김. 실패하면 ('', '') — 표시만 빠지고 주문·알림은 그대로"""
+    try:
+        view = [{"id": f["id"], "qty": f["qty"], "cost": f["cost"], "target": f.get("target") or tw.get("floor_usd"), "done": bool(f.get("complete"))}
+                for f in (tw.get("floors") or [])]
+        top = TW.view_lines({"floors": view}, s)[0]
+        act = ""
+        if tw.get("active") and not tw.get("new_floor"):
+            for f in view:
+                if f["id"] == tw["active"]:
+                    act = f" · {TW.floor_status(f)}" + ("" if TW.is_complete(f) else f" ({int(round(TW.fill_ratio(f) * 100))}%)")
+        return top + "\n", act
+    except Exception:
+        return "", ""
+
+
 def plan_head(plan, s):
     i = plan["info"]
     pl = f" ({i['profit_pct']:+.2f}%)" if i.get("profit_pct") is not None else ""
     tw = i.get("tower") or {}
     fl = tw.get("floors") or []
-    head = (f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 층 "
-            + (f"{tw['active']}층{' (새 층)' if tw.get('new_floor') else ''}" if tw.get("active") else "없음") + "\n"
+    top_line, act_prog = _tower_progress(tw, s)      # v2.2.15 판 19: 탑 진행률 (맨 앞 줄 + 지금 채우는 층 뒤)
+    head = (top_line + f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 층 "
+            + (f"{tw['active']}층{' (새 층)' if tw.get('new_floor') else ''}{act_prog}" if tw.get("active") else "없음") + "\n"
             + ("매도 목표 " + " · ".join(f"{r['id']}층 ${r['target']:.2f}" for r in i["sells"]) if i.get("sells") else f"매도 목표 ${i['sell_target']:.2f}")
             + f" · 칸당 ${i.get('unit_usd', 0):,.0f} · 간격 ${tw.get('gap', 0)}"
             + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else ""))

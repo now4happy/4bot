@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.14)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.15)
+# v2.2.15 (2026-11-20, 판 19 오늘 계획 미리보기에 탑 진행률): make_plan 이 info["tower"]["floors"] 각 층에 "target"(그 층 목표 금액) 키를 하나 더 실음 — 표시 전용 (main.plan_head 가 view_lines 와 같은 비율을 내려면 층 목표가 필요). 주문·장부·층 계산은 그대로
 # v2.2.14 (2026-11-20, 판 17 시초가 상한): 오늘 채우는 층의 안 산 칸 가격이 그날 시초가를 넘지 않게 함 — cap_levels(첫 칸 = min(시초가, 첫 계획 칸), 거기서 $1씩 아래로 안 산 칸 수만큼). make_plan(open_px=)·next_layer_cells(open_px=) 에 선택 인자 추가(0 이면 예전 그대로 = 시초가 확정 전).
 #   칸 수·칸당 금액(base_usd)·주식수 반올림 규칙은 그대로, 바뀐 가격으로 주식수만 다시 계산. 상한이 걸리면 주문에 cap_levels 를 실어 _apply_buy 가 체결 반영 때 그 층의 칸(levels)을 '이미 산 칸 + 상한 칸'으로 바꿈(안 그러면 산 칸이 원래 칸 목록에 없어 같은 칸이 또 계획됨). 이미 산 칸(settled)·_new_floor_band·매도·간격·금액·층 수는 안 건드림
 # v2.2.9 (2026-11-20, audit-fix 7-4·새 층 규칙, 3차): ① 1주 층은 자동 매도에서 뺌 (floor_sell_qty(1,·)=0, info["sell_excluded"]) — 풀이님 결정 10:03 ② 새 층을 못 만들면(총 한도 도달·가격 칸 없음) 만들지 않고 info["tower"]["new_floor_blocked"] 로 알림 — 자동으로 늘리거나 멈추지 않음 (풀이님 결정 09:59). 사다리(accum_strategy.py) 삭제로 탑쌓기 전용. 간격 기본값 GAP_USD=5 그대로
@@ -318,7 +319,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             info["open_cap"]["first"] = max(cand)
     info["tower"] = {"gap": gap, "floor_usd": fu, "floors_max": nfl, "cap_usd": cap_total, "active": (active or {}).get("id"),
                      "new_floor": bool(new_floor), "new_floor_blocked": new_floor_blocked, "floors": [{"id": f["id"], "qty": f["qty"], "cost": round(_f(f["cost"]), 2), "avg": floor_avg(f),
-                                                              "complete": is_complete(f), "closed": bool(f.get("closed")) or f["id"] in closes,
+                                                              "complete": is_complete(f), "target": _f(f.get("target") or FLOOR_USD), "closed": bool(f.get("closed")) or f["id"] in closes,
                                                               "rebuy_pending": bool(f.get("rebuy_pending"))} for f in floors]}
 
     # ---------------- 칸 금액 (칸당 금액 반올림 · 주식수 반올림 · 못 산 금액은 같은 층 다음 칸에 더함)
