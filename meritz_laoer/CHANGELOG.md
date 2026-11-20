@@ -1,5 +1,10 @@
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v1.2.3 · 2026-11-20 16:46 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.14 (판 17 시초가 상한): 오늘 채우는 층의 안 산 칸이 시초가를 넘지 않게 상한, 시초가는 09:30 ET 이후 첫 확인가로 그날 한 번만 정해 저장
+- 브랜치: staging
+
 ## v1.2.2 · 2026-11-20 13:53 (KST)
 - 파일: main.py, tg_menu.py
 - 내용: audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
