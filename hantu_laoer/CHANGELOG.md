@@ -1,5 +1,10 @@
 # 1번 한투 라오어 변경 기록
 
+## v1.0.6 · 2026-11-20 13:53 (KST)
+- 파일: kis_order_engine.py
+- 내용: audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
+- 브랜치: staging
+
 ## v1.0.5 · 2026-11-20 12:17 (KST)
 - 파일: kis_order_engine.py, main.py, scheduler_core.py, scheduler_regular.py, scheduler_vwap.py
 - 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)

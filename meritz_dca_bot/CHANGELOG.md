@@ -1,5 +1,10 @@
 # 6번 메리츠 적립 변경 기록
 
+## v1.3.4 · 2026-11-20 13:53 (KST)
+- 파일: main.py, t_core.py
+- 내용: audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
+- 브랜치: staging
+
 ## v1.3.3 · 2026-11-20 12:17 (KST)
 - 파일: main.py, sgov.py, t_core.py
 - 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)
