@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.14)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.17)
+# v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): 설정 메뉴에 "하루 매수 층 수 변경"(tower_max_buy_layers_per_day)·"하루 매도 층 수 변경"(tower_max_sell_layers_per_day) 버튼 추가 — 1~3 정수, 없으면 1 (TOWER_DEFAULTS). MEANS 설명 2개, 설정 화면 SET_ROWS 와 상황판 설정값 줄에 현재 값 표시. 다른 설정 버튼은 그대로
 # v2.2.14 (2026-11-20, 판 17 시초가 상한): 상황판 오늘 계획 미리보기가 저장된 시초가(main.load_open_price, 읽기만)를 build_plan 에 넘김 — 시초가가 아직 없으면 0 → 계획 배정 그대로. 메뉴·문구는 그대로
 # v2.2.12 (2026-11-20, audit-fix-v2 r4): 표시 문구 '당일 시드' → '한층 금액' (상황판·자금 화면 2곳 + 주석). 금액 형식·다른 문구는 그대로
 # v2.2.11 (2026-11-20, 7번 이름 변경): 표시 이름 '7번 메리츠 속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기' (HEAD·상황판 제목). 동작 변경 없음
@@ -79,6 +80,8 @@ SET_ITEMS = {
     "탑쌓기 간격 변경": dict(key="tower_gap_usd", name="탑쌓기 간격", unit="$", kind="int", lo=1, ex="예: 5 (1 이상 정수, 달러)"),
     "층 금액 변경": dict(key="tower_floor_usd", name="층 금액", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (한 층에 쌓을 달러, 정수)"),
     "층 수 변경": dict(key="tower_floors", name="층 수", unit="층", kind="int", lo=1, hi=100, ex="예: 10"),
+    "하루 매수 층 수 변경": dict(key="tower_max_buy_layers_per_day", name="하루 매수 층 수", unit="층", kind="int", lo=1, hi=3, ex="예: 2"),
+    "하루 매도 층 수 변경": dict(key="tower_max_sell_layers_per_day", name="하루 매도 층 수", unit="층", kind="int", lo=1, hi=3, ex="예: 2"),
     "환전 여유% 변경": dict(key="auto_fx_buffer_pct", name="환전 여유%", unit="%", kind="num", lo=0, hi=100, ex="예: 3 (모자란 달러보다 3% 더 환전)"),
     "환전 하루 상한 변경": dict(key="auto_fx_max_usd_per_day", name="환전 하루 상한", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 5000 (달러, 정수)"),
 }
@@ -92,6 +95,8 @@ MEANS = {
     "tower_gap_usd": ("탑쌓기 한 층의 칸 수이자 칸 사이 가격 간격(달러)이에요. 1 이상 정수만 돼요. 안 정하면 5예요.", "새로 만드는 층과 다시 채우는 칸의 가격이 달라져요"),
     "tower_floor_usd": ("탑쌓기 한 층에 쌓을 금액(달러)이에요. 안 정하면 15000이에요.", "새 층의 목표 금액과 총 한도(층 금액 × 층 수)가 달라져요"),
     "tower_floors": ("탑쌓기 층 수예요. 안 정하면 10이에요.", "총 한도(층 금액 × 층 수)가 달라져요"),
+    "tower_max_buy_layers_per_day": ("하루에 최대 몇 층까지 살지예요. 1~3 정수만 돼요. 안 정하면 1이에요 (지금처럼 하루에 한 층). 미완성 층을 위에서부터 차례로 채우고, 새 층은 하루에 하나만 만들어요.", "다음 주문일부터 하루에 사는 층 수가 달라져요 (현금·총 한도 안에서)"),
+    "tower_max_sell_layers_per_day": ("하루에 최대 몇 층까지 팔지예요. 1~3 정수만 돼요. 안 정하면 1이에요 (지금처럼 하루에 한 층). 같은 때 여러 층이 목표에 닿으면 번호가 큰 층(맨 위 층)부터 팔아요.", "다음 매도 확인부터 하루에 파는 층 수가 달라져요 (목표 이익률·매도 비중은 그대로)"),
     "auto_fx_buffer_pct": ("자동환전 때 부족분에 더해 환전하는 여유 비율이에요.", "다음 자동환전 금액이 달라져요"),
     "auto_fx_max_usd_per_day": ("자동환전을 하루에 최대 얼마까지 할지 정한 상한이에요.", "하루 환전 한도가 달라져요"),
 }
@@ -101,8 +106,10 @@ FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # �
 SET_POWER = "봇 켜기/끄기"
 SET_ROWS = [["시드 변경", "목표 이익률 변경"], ["매도 비중 변경", "탑쌓기 간격 변경"],
             ["1층 시작가 변경", "층 금액 변경"], ["층 수 변경", "환전 여유% 변경"],
+            ["하루 매수 층 수 변경", "하루 매도 층 수 변경"],
             ["환전 하루 상한 변경", SET_POWER], [BACK]]
-TOWER_DEFAULTS = {"tower_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_floors": _TW.FLOORS}   # 설정에 없으면 탑쌓기가 쓰는 기본값 (표시용)
+TOWER_DEFAULTS = {"tower_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_floors": _TW.FLOORS,
+                  "tower_max_buy_layers_per_day": 1, "tower_max_sell_layers_per_day": 1}   # 설정에 없으면 탑쌓기가 쓰는 기본값 (표시용)
 
 
 def cur_val(s, key):
@@ -391,6 +398,7 @@ class MenuBot:
                 f"· 목표 이익률 {v('sell_profit_pct')} · 매도 비중 {v('sell_fraction_pct')}",
                 f"· 탑쌓기 간격 {fmt_val(KEY_ITEM['tower_gap_usd'], cur_val(s, 'tower_gap_usd'))} · 층 금액 {fmt_val(KEY_ITEM['tower_floor_usd'], cur_val(s, 'tower_floor_usd'))} · 층 수 {fmt_val(KEY_ITEM['tower_floors'], cur_val(s, 'tower_floors'))}",
                 f"· 1층 시작가 {v('tower_floor1_start_usd') if s.get('tower_floor1_start_usd') else '안 정함 (평단 기준)'}",
+                f"· 하루 매수 {fmt_val(KEY_ITEM['tower_max_buy_layers_per_day'], cur_val(s, 'tower_max_buy_layers_per_day'))} · 하루 매도 {fmt_val(KEY_ITEM['tower_max_sell_layers_per_day'], cur_val(s, 'tower_max_sell_layers_per_day'))} (최대)",
                 f"· 당일 매도 확인 {self.intraday_text(s)}",
                 f"· 자동환전 {fx}"]
 

@@ -1,5 +1,9 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.15)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.17)
+# v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): 설정 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day (1~3 정수, 없으면 1 = 예전 동작 그대로). buy_layers(s)·sell_layers(s) 추가.
+#   make_plan 이 매수를 하루에 최대 N_buy 층까지 계획: 위에서부터 미완성 층을 차례로 최대 N개 (닫힌 층은 건너뛰고 N에 안 셈), 층마다 안 산 칸 전부 · 칸 금액·이월(carry)·반올림 이월(roll)·시초가 상한(cap_levels)은 층마다 따로.
+#   새 층은 하루 최대 1개 — 미완성 층이 하나도 없을 때만 만들고 그날은 그 새 층만 삼. 현금·총 한도(pool)는 사는 층 전체가 순서대로 같이 씀 (모자라 멈추면 그 뒤 층은 안 삼).
+#   info["tower"]["layers"] = 오늘 사는 층별 {id,new_floor,unit_usd,cells,levels,filled,open_cap}. 예전 키(active·new_floor·cells·info["unit_usd"]·info["open_cap"] 등)는 첫 층 기준 그대로. 매도 계산(make_plan 매도 부분)·체결 반영은 안 건드림
 # v2.2.15 (2026-11-20, 판 19 오늘 계획 미리보기에 탑 진행률): make_plan 이 info["tower"]["floors"] 각 층에 "target"(그 층 목표 금액) 키를 하나 더 실음 — 표시 전용 (main.plan_head 가 view_lines 와 같은 비율을 내려면 층 목표가 필요). 주문·장부·층 계산은 그대로
 # v2.2.14 (2026-11-20, 판 17 시초가 상한): 오늘 채우는 층의 안 산 칸 가격이 그날 시초가를 넘지 않게 함 — cap_levels(첫 칸 = min(시초가, 첫 계획 칸), 거기서 $1씩 아래로 안 산 칸 수만큼). make_plan(open_px=)·next_layer_cells(open_px=) 에 선택 인자 추가(0 이면 예전 그대로 = 시초가 확정 전).
 #   칸 수·칸당 금액(base_usd)·주식수 반올림 규칙은 그대로, 바뀐 가격으로 주식수만 다시 계산. 상한이 걸리면 주문에 cap_levels 를 실어 _apply_buy 가 체결 반영 때 그 층의 칸(levels)을 '이미 산 칸 + 상한 칸'으로 바꿈(안 그러면 산 칸이 원래 칸 목록에 없어 같은 칸이 또 계획됨). 이미 산 칸(settled)·_new_floor_band·매도·간격·금액·층 수는 안 건드림
@@ -71,6 +75,28 @@ def params(s):
     g = _f(s.get("tower_gap_usd"))
     g = int(g) if g >= 1 and g == int(g) else GAP_USD
     return (fu if fu > 0 else FLOOR_USD), (fl if fl >= 1 else FLOORS), g
+
+
+LAYERS_MAX = 3             # v2.2.17: 하루 매수·매도 층 수 설정의 상한 (1 ~ LAYERS_MAX 정수만)
+
+
+def _layers_setting(s, key):
+    """하루 층 수 설정 → 1 ~ LAYERS_MAX 정수. 설정에 없거나(None) 이상하면(0·4 이상·소수·글자·bool) 1 = 예전 동작 (이상한 값은 validate_settings 가 주문 전에 막음)"""
+    v = (s or {}).get(key)
+    if v is None or isinstance(v, bool):
+        return 1
+    x = _f(v)
+    return int(x) if 1 <= x <= LAYERS_MAX and x == int(x) else 1
+
+
+def buy_layers(s):
+    """하루에 살 최대 층 수 (tower_max_buy_layers_per_day, 기본 1)"""
+    return _layers_setting(s, "tower_max_buy_layers_per_day")
+
+
+def sell_layers(s):
+    """하루에 팔 최대 층 수 (tower_max_sell_layers_per_day, 기본 1)"""
+    return _layers_setting(s, "tower_max_sell_layers_per_day")
 
 
 # ---------------------------------------------------------------- 상태 기본 동작
@@ -210,7 +236,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     fu, nfl, gap = params(s)
     avg = round(principal / qty, 4) if qty > 0 else 0.0
     pct, frac = _f(s.get("sell_profit_pct")), _f(s.get("sell_fraction_pct"))
-    otype = s.get("order_type")   # v2.2.8: 탑쌓기는 하루에 한 층(안 산 칸 전부)을 삼 — max_rounds_per_day(사다리 회차)는 탑쌓기 매수 칸 수에 안 씀
+    otype = s.get("order_type")   # v2.2.8: 탑쌓기는 하루에 한 층(안 산 칸 전부)을 삼 — v2.2.17: 설정 tower_max_buy_layers_per_day 만큼 층 수 (기본 1). max_rounds_per_day(사다리 회차)는 탑쌓기 매수 칸 수에 안 씀
     st = ensure_state(copy.deepcopy(st))                              # 상태·장부를 바꾸지 않음 (사본으로 계산)
     notes, orders = [], []
     profit_pct = round((price / avg - 1) * 100, 2) if avg > 0 and price > 0 else None
@@ -261,11 +287,14 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
         notes.append("환율 없음 — 매수 계획 불가 (매도만)")
         return {"orders": orders, "notes": notes, "info": info}
 
-    # ---------------- 지금 채울 층 찾기 (위에서부터 처음 미완성 층). 범위를 벗어난 층은 닫힌 것으로 침
+    # ---------------- 오늘 채울 층 찾기 (v2.2.17: 위에서부터 미완성 층을 차례로 최대 N_buy 개). 범위를 벗어난 층·칸을 다 쓴 층은 닫힌 것으로 치고 건너뜀 — N 에 안 셈
     cap_total = fu * nfl
     floors = top_down(st)
-    closes, active = [], None
+    n_buy = buy_layers(s)
+    closes, actives = [], []
     for f in floors:
+        if len(actives) >= n_buy:
+            break
         if int(_f(f.get("qty"))) <= 0 or is_complete(f) or f.get("closed"):
             continue
         unset = [p for p in f.get("levels") or [] if p not in set(f.get("settled") or [])]
@@ -276,11 +305,10 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             closes.append(f["id"])                                   # 가격이 층 범위를 한 간격 넘게 벗어남 → 미완성 층으로 닫음
             notes.append(f"{f['id']}층: 현재가 ${price:.2f} 가 층 범위(맨 아래 ${min(f['levels']):.2f})를 벗어나 미완성 층으로 둠 (부족분 ${max(_f(f['target']) - _f(f['cost']), 0):,.0f} 그대로)")
             continue
-        active = f
-        break
+        actives.append(f)
     new_floor, new_floor_blocked = None, None
     room = cap_total - principal
-    if active is None:
+    if not actives:                                                  # v2.2.17: 새 층은 미완성 층이 하나도 없을 때만, 하루 최대 1개 (새 층 평단이 없어 그날 다음 층을 또 만들 수 없음)
         have = [f for f in floors if int(_f(f.get("qty"))) > 0]
         if not have:
             notes.append("층 없음 (보유 0주) — 탑쌓기는 기존 보유분을 1층으로 시작해야 해요 (장부 시작 필요)")
@@ -297,79 +325,97 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             else:
                 nid = max(int(_f(st.get("next_id"))), max(int(_f(f.get("id"))) for f in floors) + 1)
                 new_floor = {"id": nid, "anchor": anchor, "levels": lv, "base_usd": base, "target": tgt}
-                active = {"id": nid, "qty": 0, "cost": 0.0, "target": tgt, "levels": lv, "settled": [], "base_usd": base, "carry_usd": 0.0}
-    cand = []
-    cap_levels_out = None                                            # v2.2.14: 상한이 걸렸을 때만 채움 (주문에 실어 체결 반영이 층 칸을 바꿈)
-    info["open_cap"] = {"open": (round(_f(open_px), 4) if _f(open_px) > 0 else None), "applied": False, "planned_first": None, "first": None}
-    if active is not None:
+                actives = [{"id": nid, "qty": 0, "cost": 0.0, "target": tgt, "levels": lv, "settled": [], "base_usd": base, "carry_usd": 0.0}]
+
+    # ---------------- 층마다 안 산 칸 (v2.2.14 시초가 상한은 오늘 사는 각 층의 안 산 칸에만 — 산 칸·다른 층은 그대로)
+    layers = []
+    for active in actives:
         settled = set(active.get("settled") or [])
         cand = [p for p in active["levels"] if p not in settled]
-        info["levels"], info["filled"] = list(active["levels"]), sorted(settled, reverse=True)
-        info["unit_usd"] = active["base_usd"]
+        oc = {"open": (round(_f(open_px), 4) if _f(open_px) > 0 else None), "applied": False, "planned_first": None, "first": None}
+        lv_all, filled = list(active["levels"]), sorted(settled, reverse=True)
         if cand:
-            info["open_cap"]["planned_first"] = max(cand)
-        cand, capped = cap_levels(cand, open_px)                     # v2.2.14 시초가 상한 (오늘 채우는 층의 안 산 칸만 — 산 칸·다른 층은 그대로)
+            oc["planned_first"] = max(cand)
+        cand, capped = cap_levels(cand, open_px)
+        cap_out = None                                               # v2.2.14: 상한이 걸렸을 때만 채움 (주문에 실어 체결 반영이 층 칸을 바꿈)
+        is_new = bool(new_floor) and int(_f(active["id"])) == int(new_floor["id"])
         if capped:
-            cap_levels_out = list(cand)
-            if new_floor:
+            cap_out = list(cand)
+            if is_new:
                 new_floor["levels"] = list(cand)                     # 새 층도 같은 칸으로 만들어짐 (_new_floor_band 자체는 그대로)
-            info["levels"] = sorted(settled | set(cand), reverse=True)
-            info["open_cap"]["applied"] = True
+            lv_all = sorted(settled | set(cand), reverse=True)
+            oc["applied"] = True
         if cand:
-            info["open_cap"]["first"] = max(cand)
-    info["tower"] = {"gap": gap, "floor_usd": fu, "floors_max": nfl, "cap_usd": cap_total, "active": (active or {}).get("id"),
-                     "new_floor": bool(new_floor), "new_floor_blocked": new_floor_blocked, "floors": [{"id": f["id"], "qty": f["qty"], "cost": round(_f(f["cost"]), 2), "avg": floor_avg(f),
-                                                              "complete": is_complete(f), "target": _f(f.get("target") or FLOOR_USD), "closed": bool(f.get("closed")) or f["id"] in closes,
-                                                              "rebuy_pending": bool(f.get("rebuy_pending"))} for f in floors]}
+            oc["first"] = max(cand)
+        layers.append({"f": active, "cand": cand, "cap_out": cap_out, "oc": oc, "levels": lv_all, "filled": filled, "new": is_new,
+                       "tgt": _f(active.get("target") or fu)})
+    first = layers[0] if layers else None
+    info["open_cap"] = first["oc"] if first else {"open": (round(_f(open_px), 4) if _f(open_px) > 0 else None), "applied": False, "planned_first": None, "first": None}
+    if first:                                                        # 예전 키(levels·filled·unit_usd·open_cap)는 첫 층(맨 위) 기준 그대로
+        info["levels"], info["filled"], info["unit_usd"] = first["levels"], first["filled"], first["f"]["base_usd"]
+    info["tower"] = {"gap": gap, "floor_usd": fu, "floors_max": nfl, "cap_usd": cap_total, "active": (first["f"]["id"] if first else None),
+                     "new_floor": bool(new_floor), "new_floor_blocked": new_floor_blocked, "buy_layers": n_buy,
+                     "floors": [{"id": f["id"], "qty": f["qty"], "cost": round(_f(f["cost"]), 2), "avg": floor_avg(f),
+                                 "complete": is_complete(f), "target": _f(f.get("target") or FLOOR_USD), "closed": bool(f.get("closed")) or f["id"] in closes,
+                                 "rebuy_pending": bool(f.get("rebuy_pending"))} for f in floors]}
 
-    # ---------------- 칸 금액 (칸당 금액 반올림 · 주식수 반올림 · 못 산 금액은 같은 층 다음 칸에 더함)
+    # ---------------- 칸 금액 (칸당 금액 반올림 · 주식수 반올림 · 못 산 금액은 같은 층 다음 칸에 더함). v2.2.17: 층마다 따로 계산(carry·roll·planned 가 층끼리 새지 않음), 현금·총 한도(pool)만 층 전체가 순서대로 같이 씀
     auto_fx = bool(s.get("auto_fx_enabled")) and not ignore_auto_fx
     pool = max(0.0, room if auto_fx else min(_f(usd_cash), room))
     cash_binds = (not auto_fx) and _f(usd_cash) <= room + 1e-9
     info.update({"unit_usd": info.get("unit_usd", 0.0), "cap_usd": round(cap_total, 2), "pool_usd": round(pool, 2)})
-    spent, planned, roll = 0.0, 0.0, 0.0
-    tgt_active = _f((active or {}).get("target") or fu)
-    if active is not None:
-        info["tower"]["cells"] = next_layer_cells(active, tgt_active, open_px)   # v2.2.3: 다음 회차 가격별 배정 미리보기 (v2.2.14: 시초가 확정이면 상한 적용)
-    for n, p in enumerate(cand):   # v2.2.8: 안 산 칸 전부 (하루에 한 층)
-        is_last = (p == cand[-1])
-        carry = _f(active.get("carry_usd")) if n == 0 else 0.0
-        if is_last:                                                  # 마지막 칸 = 층에 모자란 만큼 전부 (그날 앞 칸 계획분 제외)
-            amount = max(0.0, tgt_active - _f(active.get("cost")) - planned)
-        else:
-            amount = max(0.0, _f(active["base_usd"]) + carry + roll)
-            amount = min(amount, max(0.0, tgt_active - _f(active.get("cost")) - planned))     # v2.2.6 B4: 층 목표를 못 넘게
-        q = rnd(amount / p) if amount > 0 and p > 0 else 0
-        if q < 1:
-            notes.append(f"{active['id']}층 ${p:.2f} 칸 금액 ${amount:,.2f} < 0.5주 — 생략 (금액은 다음 칸으로 넘김)")
-            roll += amount
+    spent, stop = 0.0, False
+    for ly in layers:
+        active, cand, tgt_active = ly["f"], ly["cand"], ly["tgt"]
+        ly["cells"] = next_layer_cells(active, tgt_active, open_px)   # v2.2.3: 다음 회차 가격별 배정 미리보기 (v2.2.14: 시초가 확정이면 상한 적용) — 층마다
+        meta_nf = new_floor if ly["new"] else None
+        planned, roll = 0.0, 0.0
+        if stop:
             continue
-        roll = 0.0
-        cost = q * p
-        desc = (f"탑쌓기 {active['id']}층 ${p:.2f} 칸 (칸당 ${_f(active['base_usd']):,.0f}"
-                + (f" + 이월 ${carry:,.0f}" if carry > 0.5 else "") + (", 마지막 칸" if is_last else "") + ")")
-        meta = {"floor_id": active["id"], "new_floor": new_floor, "closes": list(closes), "plan_usd": round(amount, 2), "carry_used": round(carry, 2)}
-        if cap_levels_out is not None:
-            meta["cap_levels"] = list(cap_levels_out)                # v2.2.14: 체결 반영 때 이 층의 칸을 (산 칸 + 상한 칸) 으로 바꿈
-        if spent + cost > pool + 1e-9:
-            left = pool - spent
-            if cash_binds:                                           # 현금으로 살 수 있는 만큼만 (정수 주 내림) — v2.0.4 부분 매수와 같은 규칙
-                pq = int(math.floor(left / p + 1e-9)) if left > 0 else 0
-                if pq >= 1:
-                    orders.append(dict({"side": "BUY", "type": otype, "qty": pq, "price": p, "kind": "buy_tower", "level": p, "idx": None, "credit": 0.0,
-                                        "partial": True, "full_qty": q, "desc": desc + f" · 현금만큼 부분 매수 (원래 {q}주)"}, **meta))
-                    spent += pq * p
-                    info["partial"] = {"price": p, "qty": pq, "full_qty": q}
-                    notes.append(f"현금 부족 — ${p:.2f} 칸 {q}주 중 {pq}주만 부분 매수 (필요 ${cost:,.2f} > 가용 ${left:,.2f}, 나머지는 다음 칸에 이월)")
-                else:
-                    notes.append(f"현금 부족 — 가용 ${max(left, 0):,.2f} < 1주(${p:.2f}) — 이 칸 안 삼")
+        for n, p in enumerate(cand):   # v2.2.8: 이 층의 안 산 칸 전부
+            is_last = (p == cand[-1])
+            carry = _f(active.get("carry_usd")) if n == 0 else 0.0
+            if is_last:                                                  # 마지막 칸 = 층에 모자란 만큼 전부 (그날 앞 칸 계획분 제외)
+                amount = max(0.0, tgt_active - _f(active.get("cost")) - planned)
             else:
-                notes.append(f"{'한도' if auto_fx else '달러 또는 한도'} 부족 (필요 ${spent + cost:,.2f} > 가용 ${pool:,.2f}) — ${p:.2f} 칸부터 생략")
-            break
-        spent += cost
-        planned += amount
-        orders.append(dict({"side": "BUY", "type": otype, "qty": q, "price": p, "kind": "buy_tower", "level": p, "idx": None, "credit": 0.0, "desc": desc}, **meta))
-    if not cand and active is None and not notes:
+                amount = max(0.0, _f(active["base_usd"]) + carry + roll)
+                amount = min(amount, max(0.0, tgt_active - _f(active.get("cost")) - planned))     # v2.2.6 B4: 층 목표를 못 넘게
+            q = rnd(amount / p) if amount > 0 and p > 0 else 0
+            if q < 1:
+                notes.append(f"{active['id']}층 ${p:.2f} 칸 금액 ${amount:,.2f} < 0.5주 — 생략 (금액은 다음 칸으로 넘김)")
+                roll += amount
+                continue
+            roll = 0.0
+            cost = q * p
+            desc = (f"탑쌓기 {active['id']}층 ${p:.2f} 칸 (칸당 ${_f(active['base_usd']):,.0f}"
+                    + (f" + 이월 ${carry:,.0f}" if carry > 0.5 else "") + (", 마지막 칸" if is_last else "") + ")")
+            meta = {"floor_id": active["id"], "new_floor": meta_nf, "closes": list(closes), "plan_usd": round(amount, 2), "carry_used": round(carry, 2)}
+            if ly["cap_out"] is not None:
+                meta["cap_levels"] = list(ly["cap_out"])             # v2.2.14: 체결 반영 때 이 층의 칸을 (산 칸 + 상한 칸) 으로 바꿈
+            if spent + cost > pool + 1e-9:
+                left = pool - spent
+                if cash_binds:                                           # 현금으로 살 수 있는 만큼만 (정수 주 내림) — v2.0.4 부분 매수와 같은 규칙
+                    pq = int(math.floor(left / p + 1e-9)) if left > 0 else 0
+                    if pq >= 1:
+                        orders.append(dict({"side": "BUY", "type": otype, "qty": pq, "price": p, "kind": "buy_tower", "level": p, "idx": None, "credit": 0.0,
+                                            "partial": True, "full_qty": q, "desc": desc + f" · 현금만큼 부분 매수 (원래 {q}주)"}, **meta))
+                        spent += pq * p
+                        info["partial"] = {"price": p, "qty": pq, "full_qty": q}
+                        notes.append(f"현금 부족 — ${p:.2f} 칸 {q}주 중 {pq}주만 부분 매수 (필요 ${cost:,.2f} > 가용 ${left:,.2f}, 나머지는 다음 칸에 이월)")
+                    else:
+                        notes.append(f"현금 부족 — 가용 ${max(left, 0):,.2f} < 1주(${p:.2f}) — 이 칸 안 삼")
+                else:
+                    notes.append(f"{'한도' if auto_fx else '달러 또는 한도'} 부족 (필요 ${spent + cost:,.2f} > 가용 ${pool:,.2f}) — ${p:.2f} 칸부터 생략")
+                stop = True                                              # v2.2.17: 현금·한도가 모자라 멈추면 이 층의 남은 칸도, 그 뒤 층도 안 삼
+                break
+            spent += cost
+            planned += amount
+            orders.append(dict({"side": "BUY", "type": otype, "qty": q, "price": p, "kind": "buy_tower", "level": p, "idx": None, "credit": 0.0, "desc": desc}, **meta))
+    info["tower"]["layers"] = [{"id": ly["f"]["id"], "new_floor": ly["new"], "unit_usd": ly["f"]["base_usd"], "cells": ly["cells"], "levels": ly["levels"],
+                                "filled": ly["filled"], "open_cap": ly["oc"]} for ly in layers]
+    if first:
+        info["tower"]["cells"] = first["cells"]                      # 예전 키: 첫 층(맨 위)의 칸별 배정
+    if not layers and not notes:
         notes.append("살 칸 없음")
     info["need_usd"] = round(spent, 2)
     info["usd_cash"] = round(_f(usd_cash), 2)

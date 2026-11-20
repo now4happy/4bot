@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.6)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.17)
+# v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): validate_settings 에 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day 검사 추가 — 없으면 통과(기본 1), 있으면 1~3 정수만 (0·4 이상·소수·글자·true/false 는 문제 목록에 넣어 주문 전에 막음). DEFAULTS 에는 안 넣음(없을 때 코드가 1 로 읽음). 나머지는 그대로
 # v2.2.9 (2026-11-20, audit-fix 7번 3차 — 풀이님 결정 10:14): 사다리 삭제로 탑쌓기 전용 — credit_problems·CHOICES(unit_base·first_buy_mode)·ladder_levels·적립 상태(accum_state.json: get_accum/save_accum/accum_or_start)·사다리 설정 키·start.mode/filled_levels/rebuy_*/first_round_credit_usd 제거. validate_settings(s) 는 사다리 값을 안 보고, tower_gap_usd(1 이상 정수)·tower_floor_usd(>0)·tower_floors(1 이상 정수) 와 strategy("tower" 가 아니면 차단)를 검사. order_type(LOC|LIMIT) 검사는 그대로
 # v2.2.6 (2026-11-20, 판 16 본격): ① intraday_sell_check_sec 기본 120 → 30 (코드 검증 하한 — 체결 알림 간격과 같게) ② apply_fill: 같은 체결(exec_id)을 장부 파일(position.json)의 applied_ids 로도 막고(원금·수량이 먼저 저장돼 중복·누락이 안 생김),
 #   매도 때 층별 매도의 '뺀 원가'(cost_removed)를 받으면 평단 비례 대신 그 값을 씀 (층 합계와 장부 원금이 어긋나지 않게). 호출 형식은 그대로(새 인자는 선택)
@@ -194,6 +195,10 @@ def validate_settings(s):
     fl = s.get("tower_floors")
     if fl is not None and (isinstance(fl, bool) or _f(fl) < 1 or _f(fl) != int(_f(fl))):
         bad.append("tower_floors 는 1 이상 정수 (층 수)")
+    for k, nm in (("tower_max_buy_layers_per_day", "하루 매수 층 수"), ("tower_max_sell_layers_per_day", "하루 매도 층 수")):      # v2.2.17: 없으면 기본 1, 있으면 1~3 정수만
+        v = s.get(k)
+        if v is not None and (isinstance(v, bool) or not (1 <= _f(v) <= 3) or _f(v) != int(_f(v))):
+            bad.append(f"{k} 는 1~3 정수 ({nm})")
     if not (0 < _f(s.get("sell_fraction_pct")) < 100):
         bad.append("sell_fraction_pct 는 0 초과 100 미만")
     if s.get("order_type") not in ("LOC", "LIMIT"):
