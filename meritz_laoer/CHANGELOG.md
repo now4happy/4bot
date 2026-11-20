@@ -1,4 +1,9 @@
-# 7번 메리츠 SOXL 듀얼모드 변경 기록
+# 7번 메리츠 SOXL 탑쌓기 변경 기록
+
+## v1.2.7 · 2026-11-21 04:46 (KST)
+- 파일: config.py, main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer CHANGELOG 중복 v1.2.6 항목 1개 제거 (판 22 리베이스 때 버전 기록 커밋과 겹침, 문서만)
+- 브랜치: staging
 
 ## v1.2.7 · 2026-11-21 (KST)
 - 파일: sniper_mode.py(새 파일), tower_strategy.py, config.py, main.py, tg_menu.py, notifier.py, README.md
