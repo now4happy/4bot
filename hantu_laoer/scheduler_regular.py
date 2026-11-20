@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: scheduler_regular.py
 # ==========================================================
+# 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-3·1-5] 시세(현재가/전일종가) 0 이하면 계획 없이 다음 재시도로 넘김 · 달력 폴백은 휴장 처리(Fail-Closed)
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 39대 엣지 케이스 완벽 결속 교차 검증 완료.
 # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 await asyncio.sleep(0.06) 땜질을 무려 24개소에서 전면 삭제.
 # 🚨 MODIFIED: [중앙 통제소 위임] 모든 API 지연을 GlobalThrottle(중앙 통제소)로 100% 위임하여 비동기 이벤트 루프 마비 및 교착 상태 완벽 방어.
@@ -86,14 +87,14 @@ async def scheduled_early_regular_trade(context):
             break
         except asyncio.TimeoutError:
             if attempt == 2:
-                logging.error("⚠️ is_market_open 달력 API 타임아웃. 평일이므로 강제 개장 처리합니다.")
+                logging.error("⚠️ is_market_open 달력 API 타임아웃. 이번 회차 주문 보류(audit-fix 1-5).")
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
         except Exception:
             if attempt == 2:
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
@@ -237,6 +238,15 @@ async def scheduled_early_regular_trade(context):
                         except Exception:
                             pass
                         await asyncio.sleep(1.0 * (2**_api_retry))
+
+                    # audit-fix 1-3: 현재가·전일종가 조회 실패(0)로 빈 계획을 만들어 '성공' 처리하지 않는다 — 실패로 기록, 바깥 재시도 루프가 다시 시도
+                    if curr_p <= 0 or prev_c <= 0:
+                        logging.error(f"🚨 [{t}] 시세 조회 실패 (현재가={curr_p}, 전일종가={prev_c}) — 주문 계획 생성 중단")
+                        msgs[t] += f"🚨 <b>[{t}] 시세 조회 실패 (현재가/전일종가). 주문 계획을 만들지 않았습니다.</b>\n"
+                        all_success_map[t] = False
+                        loop_fully_successful = False
+                        loop_fail_reason = f"[{t}] 시세 조회 실패"
+                        continue
 
                     ma_5day = 0.0
                     for attempt in range(3):
@@ -444,12 +454,12 @@ async def scheduled_regular_trade_delayed(context):
         except asyncio.TimeoutError:
             if attempt == 2:
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
         except Exception:
             if attempt == 2:
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
@@ -642,6 +652,15 @@ async def scheduled_regular_trade_delayed(context):
                         except Exception:
                             pass
                         await asyncio.sleep(1.0 * (2**_api_retry))
+
+                    # audit-fix 1-3: 현재가·전일종가 조회 실패(0)로 빈 계획을 만들어 '성공' 처리하지 않는다 — 실패로 기록, 바깥 재시도 루프가 다시 시도
+                    if curr_p <= 0 or prev_c <= 0:
+                        logging.error(f"🚨 [{t}] 시세 조회 실패 (현재가={curr_p}, 전일종가={prev_c}) — 주문 계획 생성 중단")
+                        msgs[t] += f"🚨 <b>[{t}] 시세 조회 실패 (현재가/전일종가). 주문 계획을 만들지 않았습니다.</b>\n"
+                        all_success_map[t] = False
+                        loop_fully_successful = False
+                        loop_fail_reason = f"[{t}] 시세 조회 실패"
+                        continue
 
                     ma_5day = 0.0
                     for attempt in range(3):

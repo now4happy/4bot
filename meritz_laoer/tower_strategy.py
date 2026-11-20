@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.6)
+# v2.2.9 (2026-11-20, audit-fix 7-4·새 층 규칙, 3차): ① 1주 층은 자동 매도에서 뺌 (floor_sell_qty(1,·)=0, info["sell_excluded"]) — 풀이님 결정 10:03 ② 새 층을 못 만들면(총 한도 도달·가격 칸 없음) 만들지 않고 info["tower"]["new_floor_blocked"] 로 알림 — 자동으로 늘리거나 멈추지 않음 (풀이님 결정 09:59). 사다리(accum_strategy.py) 삭제로 탑쌓기 전용. 간격 기본값 GAP_USD=5 그대로
 # v2.2.6 (2026-11-20, 판 16 본격): ① 층별 매도(각 층 자기 평단 +10% 에 그 층 50%, 주문마다 floor_id·floor_avg 기록, 1주 층은 1주) ② 전역 sell_block → 층별 rebuy_pending (그 층 매수 체결·층 닫힘 때 해제)
 #   ③ 반영한 주문번호 맵(st["applied"]) — 같은 체결 두 번 반영 방지(누적 체결 기준 증분만 반영) ④ sort_fills: 시간순(없으면 매도 먼저)·새 층 계획 매수는 그날 매도 반영 뒤로 (B1)
 #   ⑤ 새 층 계획 매수의 1층 빈칸 판정은 체결 평균가 기준 ±0.01 (B2) · closes 층은 건너뜀 (B3) · 층 시드 상한·base_usd 재계산 (B4) · 흡수한 가격은 새 층 settled (B5)
@@ -8,8 +9,8 @@
 # v2.2.4 (2026-11-19, 1층 시작가 메뉴): _topup_setup·apply_fill·apply_fill_to_state·normalize·reconcile 에 start_usd 전달 — 1층 시작가가 정해졌으면 1층 칸이 시작가 기준
 # v2.2.3 (2026-11-19, 판 14 색상 고침): 층 칸을 층별 색상 네모로 바꿈 (1층 🟩 시작). 흰색 █ 한 가지라 층 구분이 안 된다는 사용자 지적. 완성/쌓는 중 구분은 상세 줄 글자로만.
 # v2.2.2 (2026-11-19, 판 14): 표시용 view_lines · floor_status 추가 (층 상태를 글자 줄로 바꾸는 순수 계산 — 상태·주문 계산은 안 건드림). 텔레그램 현상태(상황판)에서 tg_menu.py 가 부름
-# v2.2.0 (2026-11-19, 판 13): 새 파일 — 탑쌓기(동적 층 시스템) 계산부. 순수 계산 (파일·네트워크·시계 없음). accum_strategy.py(사다리)는 안 건드림 (롤백용)
-#   main.py 는 settings["strategy"] == "tower" 일 때만 이 모듈을 씀 (기본 "ladder")
+# v2.2.0 (2026-11-19, 판 13): 새 파일 — 탑쌓기(동적 층 시스템) 계산부. 순수 계산 (파일·네트워크·시계 없음). 사다리는 v2.2.9 에서 삭제됨
+#   (v2.2.9: 7번은 탑쌓기만 씀 — 전환 설정 strategy 없음)
 # 설계 (판 13 지시):
 #   - 10층 · 한 층 $15,000 · 총 $150,000 · 층 간격 $5 (조정 가능: settings tower_gap_usd / tower_floor_usd / tower_floors, 없으면 기본값)
 #   - 한 층 = 간격(달러) 칸. 칸마다 1달러씩 내려가며 분산 매수. 칸당 금액 = 층 금액 ÷ 간격 (반올림). 주식수도 반올림(0.5 는 올림)
@@ -52,12 +53,10 @@ def rnd(x):
 
 
 def floor_sell_qty(q, frac):
-    """한 층의 매도 수량: 보유 q 의 frac% (반올림, 0.5 는 올림). 2주 이상이면 1주는 남김. 1주 층은 0주가 아니라 1주를 판다 (v2.2.6 — 예전엔 '1주 남김' 상한 때문에 1주 층이 영영 안 팔렸음)"""
+    """한 층의 매도 수량: 보유 q 의 frac% (반올림, 0.5 는 올림). 2주 이상이면 1주는 남김. 1주 층은 0주 — 자동 매도에서 빼고 보류 (v2.2.9 audit-fix 7-4, 풀이님 결정 2026-11-20 10:03: 1주 남으면 '1주 남음' 메시지만, 팔려면 직접 매도. v2.2.6 의 '1주 층 1주 판매' 를 되돌림)"""
     q = int(_f(q))
-    if q <= 0 or _f(frac) <= 0:
+    if q <= 1 or _f(frac) <= 0:
         return 0
-    if q == 1:
-        return 1
     return max(0, min(rnd(q * _f(frac) / 100.0), q - 1))
 
 
@@ -185,7 +184,7 @@ def next_layer_cells(active, tgt_active):
 
 # ---------------------------------------------------------------- 계획
 def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_fx=False):
-    """오늘 낼 주문 계산 → {"orders", "notes", "info"} (accum_strategy.make_plan 과 같은 모양). 상태·장부를 바꾸지 않음.
+    """오늘 낼 주문 계산 → {"orders", "notes", "info"}. 상태·장부를 바꾸지 않음.
     s: 설정, st: 탑쌓기 상태, qty/principal: 장부(주·달러), price: 현재가, fx: 메리츠 적용환율(원/달러), usd_cash: USD 예수금, sellable: 매도가능 수량"""
     qty, principal, price = int(_f(qty)), _f(principal), _f(price)
     fu, nfl, gap = params(s)
@@ -204,6 +203,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
 
     # ---------------- 매도 (v2.2.6 층별): 각 층이 자기 평단 +pct% 에 닿으면 그 층 보유의 frac%. 여러 층이 같은 날 닿으면 모두 판다.
     # 주문마다 층 id(floor_id)·매도 시점 층 평단(floor_avg) 기록. 층당 하루 1건은 호출한 쪽(main)이 지킴. 총 매도가능 검사는 층 합계 기준
+    one_floors = []
     if qty > 0:
         cap_q, taken = min(int(_f(sellable)), qty), 0
         for f in top_down(st):
@@ -218,6 +218,10 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             info["sells"].append(row)
             if f.get("rebuy_pending") and not s.get("allow_consecutive_sell"):
                 notes.append(f"매도 보류: {row['id']}층은 직전 매도 뒤 이 층 재매수(탑업) 체결이 아직 없음 (allow_consecutive_sell=false)")
+            elif fq == 1:                                                  # v2.2.9 audit-fix 7-4: 1주 층은 자동 매도 제외 (알림은 main 이 하루 한 번)
+                row["held_one"] = True
+                one_floors.append(row["id"])
+                notes.append(f"매도 {row['id']}층 보유 1주 — 자동 매도 제외 (보류, 직접 매도해야 팔려요)")
             elif sq < 1:
                 notes.append(f"매도 {row['id']}층 {frac:g}% = 0주 (층 보유 {fq}주) — 매도 안 함")
             elif taken + sq > cap_q:
@@ -227,6 +231,8 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
                 row["ordered"] = True
                 orders.append({"side": "SELL", "type": otype, "qty": sq, "price": tf, "kind": "sell", "level": None, "floor_id": row["id"], "floor_avg": fa,
                                "reached": row["reached"], "desc": f"{row['id']}층 평단 ${fa:.2f} +{pct:g}% 매도 {frac:g}%"})
+        if one_floors:
+            info["sell_excluded"] = {"why": "one_share", "floors": list(one_floors), "qty": 1}
         if info["sells"]:
             info["sell_target"] = min(r["target"] for r in info["sells"])          # 가장 낮은 층의 목표 (제일 먼저 닿음)
             info["profit_reached"] = any(r["reached"] for r in info["sells"])
@@ -252,7 +258,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             continue
         active = f
         break
-    new_floor = None
+    new_floor, new_floor_blocked = None, None
     room = cap_total - principal
     if active is None:
         have = [f for f in floors if int(_f(f.get("qty"))) > 0]
@@ -260,13 +266,18 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             notes.append("층 없음 (보유 0주) — 탑쌓기는 기존 보유분을 1층으로 시작해야 해요 (장부 시작 필요)")
         elif room < TOL_USD:
             notes.append(f"총 한도 ${cap_total:,.0f} 도달 (보유 원가 ${principal:,.0f}) — 새 층 없음")
+            new_floor_blocked = {"why": "limit", "text": f"총 한도 ${cap_total:,.0f} 에 닿았어요 (보유 원가 ${principal:,.0f})"}
         else:
             anchor = min(floor_avg(f) for f in have)
             tgt = min(fu, room)
             lv, base = _new_floor_band(anchor, gap, tgt)
-            nid = max(int(_f(st.get("next_id"))), max(int(_f(f.get("id"))) for f in floors) + 1)
-            new_floor = {"id": nid, "anchor": anchor, "levels": lv, "base_usd": base, "target": tgt}
-            active = {"id": nid, "qty": 0, "cost": 0.0, "target": tgt, "levels": lv, "settled": [], "base_usd": base, "carry_usd": 0.0}
+            if not lv:                                                   # v2.2.9 (풀이님 결정 09:59): 새 층 가격 칸이 하나도 안 나오면 만들지 않고 멈춤 — 알아서 늘리거나 봇을 멈추지 않음
+                notes.append(f"새 층을 만들 수 없음 — 기준 평단 ${anchor:.2f} − 간격 ${gap} 아래에 살 수 있는 가격(0 초과)이 없음")
+                new_floor_blocked = {"why": "no_price", "text": f"새 층 가격 칸이 없어요 (기준 평단 ${anchor:.2f}, 간격 ${gap} — 모든 칸이 0달러 이하)"}
+            else:
+                nid = max(int(_f(st.get("next_id"))), max(int(_f(f.get("id"))) for f in floors) + 1)
+                new_floor = {"id": nid, "anchor": anchor, "levels": lv, "base_usd": base, "target": tgt}
+                active = {"id": nid, "qty": 0, "cost": 0.0, "target": tgt, "levels": lv, "settled": [], "base_usd": base, "carry_usd": 0.0}
     cand = []
     if active is not None:
         settled = set(active.get("settled") or [])
@@ -274,7 +285,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
         info["levels"], info["filled"] = list(active["levels"]), sorted(settled, reverse=True)
         info["unit_usd"] = active["base_usd"]
     info["tower"] = {"gap": gap, "floor_usd": fu, "floors_max": nfl, "cap_usd": cap_total, "active": (active or {}).get("id"),
-                     "new_floor": bool(new_floor), "floors": [{"id": f["id"], "qty": f["qty"], "cost": round(_f(f["cost"]), 2), "avg": floor_avg(f),
+                     "new_floor": bool(new_floor), "new_floor_blocked": new_floor_blocked, "floors": [{"id": f["id"], "qty": f["qty"], "cost": round(_f(f["cost"]), 2), "avg": floor_avg(f),
                                                               "complete": is_complete(f), "closed": bool(f.get("closed")) or f["id"] in closes,
                                                               "rebuy_pending": bool(f.get("rebuy_pending"))} for f in floors]}
 
@@ -551,7 +562,7 @@ def sort_fills(st, items):
 
 
 def apply_fill_to_state(st, order, avg_before=0.0, allow_consecutive_sell=False, fill=None, gap=GAP_USD, start_usd=0.0):
-    """accum_strategy.apply_fill_to_state 와 같은 모양의 입구. fill = (체결 수량, 체결 금액). fill 이 없으면 반영 안 함 (탑쌓기는 실제 체결로만 계산).
+    """반영 입구. fill = (체결 수량, 체결 금액). fill 이 없으면 반영 안 함 (탑쌓기는 실제 체결로만 계산).
     (v2.2.6: 주문번호가 있으면 누적 체결 기준으로 증분만 반영 — 같은 체결을 두 번 넣어도 층이 안 바뀜)"""
     if fill is None:
         return st

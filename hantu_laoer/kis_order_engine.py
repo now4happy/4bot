@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: kis_order_engine.py
 # ==========================================================
+# 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-4] MOC 거절은 시간 사유일 때만 LIMIT 대체, 수량·원인 불명은 대체 없이 실패 반환(reject_kind)
 # 🚨 MODIFIED: [파사드 패턴 3단계] 주문 전송, 취소, 미체결 및 원장 제어 도메인 분리
 # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 time.sleep(0.06) 땜질 코드를 전면 삭제하고, 내부 _api_request 의 GlobalThrottle 중앙 통제로 100% 위임하여 이벤트 루프 교착 상태 완벽 방어.
 # 🚨 MODIFIED: [선형 상속 락온] MarketDataProvider를 상속하여 API 클라이언트와 시세 연산 기능까지 풀 패키지 상속
@@ -20,6 +21,19 @@ import math
 import logging
 from zoneinfo import ZoneInfo
 from market_data_provider import MarketDataProvider
+
+# audit-fix 1-4: MOC 거절 사유 분류. 키워드는 코드 내 근거 문구(V14.8 '주문 불가 시간')와 일반 어휘 기준이며 KIS 실제 거절 문구 전수는 미확인.
+#   QTY  = 수량·잔고 계열 거절 → 같은 수량의 지정가도 거절되므로 폴백 금지
+#   TIME = 시간대 거절 → 지정가 폴백 허용
+#   UNKNOWN = 분류 불가 → 보수적으로 폴백 금지(실패 반환, 알림)
+_MOC_QTY_KEYWORDS = ("수량", "잔고", "보유", "qty", "quantity", "insufficient")
+_MOC_TIME_KEYWORDS = ("시간", "마감", "장종료", "장마감", "time", "session", "closed")
+
+def classify_moc_reject(msg):
+    m = str(msg or "").lower()
+    if any(k in m for k in _MOC_QTY_KEYWORDS): return "QTY"
+    if any(k in m for k in _MOC_TIME_KEYWORDS): return "TIME"
+    return "UNKNOWN"
 
 class KisOrderEngine(MarketDataProvider):
     
@@ -305,7 +319,12 @@ class KisOrderEngine(MarketDataProvider):
                 
                 # 🚨 MODIFIED: [Case 36 절대 방어망 팩트 교정] MOC 덤핑 시 단순 -5% 하향 로직을 소각하고, 매수 1호가(Bid Price) 팩트 타격으로 교정
                 if order_type == "MOC":
-                    logging.warning(f"🚨 [Case 36 방어망] KIS MOC 주문 리젝 감지 ({safe_msg}). 매수 1호가 덤핑 폴백 가동!")
+                    # audit-fix 1-4: 거절 사유별 분기 — 시간대 거절만 지정가 폴백, 수량 거절·미분류는 폴백하지 않고 실패로 반환
+                    reject_kind = classify_moc_reject(safe_msg)
+                    if reject_kind != "TIME":
+                        logging.error(f"🚨 [{ticker}] MOC 거절 ({reject_kind}): {safe_msg} — 지정가 덤핑 폴백 안 함, 실패 반환")
+                        return {'rt_cd': str(res.get('rt_cd') or '999'), 'msg1': f"[MOC 거절:{reject_kind}] {safe_msg}" if safe_msg else f"[MOC 거절:{reject_kind}]", 'odno': '', 'reject_kind': reject_kind}
+                    logging.warning(f"🚨 [Case 36 방어망] KIS MOC 시간대 거절 감지 ({safe_msg}). 매수 1호가 덤핑 폴백 가동!")
                     bid_p = self.get_bid_price(ticker)
                     if bid_p > 0:
                         dump_price = bid_p

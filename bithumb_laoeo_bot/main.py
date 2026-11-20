@@ -276,6 +276,9 @@ def telegram_polling_loop():
             if not getattr(pe, "_rl_logged", False): RL.err("tg_poll", pe)
             time.sleep(3)
 
+METHOD2_PENDING_MAX_TRIES = 10     # audit-fix 3-6: 보류 SMA 매수 신호 시도 횟수 상한 (풀이님 결정 09:22)
+
+
 def method2_daily_step(coin, krw_bal, acc, today_str):
     """One decision per completed candle; method 2 never falls through to method 1.
     The draft is non-trading until user assumptions and review are confirmed.
@@ -309,6 +312,17 @@ def method2_daily_step(coin, krw_bal, acc, today_str):
         save_json(STATE_FILE, state)
         _decide(coin, "method2", "skipped", "baseline_initialized", daily=True)
         return krw_bal
+    # audit-fix 3-6: 확정된 교차 신호가 실행되기 전에 사라지지 않게 보관한다.
+    # 새 교차(up/down)는 이전 보류를 덮어쓰고, 교차가 없는 날은 보류 신호를 이어 쓴다. 주문을 보낸 뒤에만 지운다.
+    _pend = state.setdefault("method2_pending", {})
+    if direction in ("up", "down"):
+        _cur_pend = _pend.get(coin)
+        if not (isinstance(_cur_pend, dict) and _cur_pend.get("direction") == direction and _cur_pend.get("date") == today_str):
+            _pend[coin] = {"direction": direction, "date": today_str, "tries": 0}     # 같은 날 같은 신호는 시도 횟수(tries)를 이어 씀
+            save_json(STATE_FILE, state)
+    elif direction == "none" and isinstance(_pend.get(coin), dict) and _pend[coin].get("direction") in ("up", "down"):
+        direction = _pend[coin]["direction"]
+        _decide(coin, "method2", "ok", "pending_signal_kept", daily=True, signal_date=_pend[coin].get("date"))
     if direction == "none":
         state["method2_last_processed"][coin] = today_str
         save_json(STATE_FILE, state)
@@ -319,6 +333,20 @@ def method2_daily_step(coin, krw_bal, acc, today_str):
     if direction == "up":
         size = sma_buy_amount(coin)  # User-entered SMA법 amount ONLY; never seed or method-1 multiplier
         if krw_bal < size:
+            # audit-fix 3-6 (풀이님 결정 2026-11-20 09:22): 원화가 모자라 못 사면 1분마다(메인 루프 주기) 다시 해 보고, 10번까지 안 되면 중지 + 메시지
+            _p = _pend.get(coin) if isinstance(_pend.get(coin), dict) else {}
+            _tries = int(_p.get("tries", 0)) + 1
+            if _tries >= METHOD2_PENDING_MAX_TRIES:
+                _pend.pop(coin, None)
+                state["method2_last_processed"][coin] = today_str
+                save_json(STATE_FILE, state)
+                _decide(coin, "method2", "skipped", "pending_signal_expired", daily=True, tries=_tries)
+                _msg = f"{coin} SMA법 매수 신호를 {METHOD2_PENDING_MAX_TRIES}번 시도했지만 원화가 모자라 중지했어요. 주문하지 않았습니다."
+                send_panel(_msg); _hub_alert("3번 빗썸 적립", "warning", _msg)
+                return krw_bal
+            if _p:
+                _p["tries"] = _tries
+                save_json(STATE_FILE, state)
             _decide(coin, "method2", "skipped", "krw_insufficient", daily=True)
             return krw_bal
         side, quantity, ord_type = "bid", size, "price"
@@ -335,6 +363,7 @@ def method2_daily_step(coin, krw_bal, acc, today_str):
             return krw_bal
         side, ord_type = "ask", "market"
     # Mark BEFORE sending to avoid reorders after timeout/restart.
+    _pend.pop(coin, None)   # audit-fix 3-6: 주문을 보내는 순간 보류 신호 해제 (재주문 금지 정책 유지)
     state["method2_last_processed"][coin] = today_str
     state.setdefault("last_action_date", {})[coin] = today_str
     state.setdefault("last_action_type", {})[coin] = "확인필요"
@@ -342,6 +371,7 @@ def method2_daily_step(coin, krw_bal, acc, today_str):
     _decide(coin, "method2", "ok", None, _snap(coin, quantity=quantity, direction=direction))
     ok, result = place_order(coin, side, quantity, ord_type)
     if ok:
+        fill_warning(coin, "SMA법 " + ("매수" if direction == "up" else "매도"), result)   # audit-fix 3-7
         state["last_action_type"][coin] = "SMA매수" if direction == "up" else "SMA매도"
         save_json(STATE_FILE, state)
         send_panel(f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수"); _hub_alert("3번 빗썸 적립", "info", f"{coin} SMA법 {('매수' if direction == 'up' else '매도')} 접수")
@@ -407,23 +437,48 @@ def trading_monitor_loop():
                         if sell_vol * cur_p < 5000: _decide(coin, "take_profit", "skipped", "below_min_order", daily=True, stage=target_stg)
                         if sell_vol * cur_p >= 5000:
                             _decide(coin, "take_profit", "ok", None, _snap(coin, cur_price=cur_p, avg_price=avg_p, balance=bal, profit_pct=prof_pct, sell_volume=sell_vol), stage=target_stg)
+                            _t_sell = time.time()
                             ok, sell_res = place_order(coin, "ask", sell_vol, "market")
-                            if not ok and isinstance(sell_res, str):
+                            ok_resp = sell_res
+                            # audit-fix 3-3: 응답이 5xx 등 불확실하면 재주문 전에 거래소 조회로 이미 접수됐는지 확인 (모르면 재주문 금지)
+                            _sell_unsure = (not ok) and (isinstance(sell_res, str) or verify_order_after_failure(coin, "ask", _t_sell, sell_res) != "not_sent")
+                            if _sell_unsure and not isinstance(sell_res, str):
+                                sell_res = f"HTTP {sell_res.get('_http') if isinstance(sell_res, dict) else '?'} · 접수 여부 불명(조회 확인)"
+                            if _sell_unsure:
                                 # 통신 오류(응답 없음)는 체결됐을 수 있으므로 같은 단계를 다시 매도하지 않음
                                 state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = "확인필요"
                                 save_json(STATE_FILE, state); add_history(coin, f"{target_stg}차익절 응답없음", sell_res[:60])
                                 send_panel(f"[{coin} {target_stg}차 익절 주문 응답 없음]\n• 체결됐을 수 있어 다시 주문하지 않습니다.\n• 빗썸 앱에서 체결 여부를 확인해 주세요.\n• 사유: {sell_res[:120]}"); _hub_alert("3번 빗썸 적립", "critical", f"{coin} {target_stg}차 익절 주문 응답 없음"); continue
+                            if not ok:
+                                # audit-fix 3-2: 매도 거절(dict 응답)을 실패로 처리 — 조용히 매수 경로로 넘어가 매분 재시도하지 않는다.
+                                _decide(coin, "take_profit_order", "failed", "order_rejected", daily=True, stage=target_stg)
+                                _fk = f"sellfail_{today_str}_{coin}_{target_stg}"
+                                if not state.get(_fk):
+                                    state[_fk] = True; save_json(STATE_FILE, state); add_history(coin, f"{target_stg}차익절 실패", str(sell_res)[:60])
+                                    send_panel(f"[{coin} {target_stg}차 익절 매도 실패]\n• 주문이 거절됐습니다. 이번 회차 매수는 건너뜁니다. 다음 회차에 매도를 다시 시도합니다.\n• 사유: {str(sell_res)[:120]}"); _hub_alert("3번 빗썸 적립", "critical", f"{coin} {target_stg}차 익절 매도 실패(거절)")
+                                continue
                             if ok:
+                                fill_warning(coin, f"{target_stg}차 익절", ok_resp)   # audit-fix 3-7
                                 state["sold_stage"][coin] = target_stg; state["last_action_date"][coin] = today_str; state["last_action_type"][coin] = f"{target_stg}차익절"
                                 save_json(STATE_FILE, state); add_history(coin, f"{target_stg}차익절", f"{prof_pct:+.2f}% ({sr:.0f}% 매도)")
                                 send_panel(f"[{coin} {target_stg}차 익절 완료] {prof_pct:+.2f}%"); _hub_alert("3번 빗썸 적립", "info", f"{coin} {target_stg}차 익절 완료 {prof_pct:+.2f}%"); continue
                     if state["last_action_date"].get(coin) == today_str: _decide(coin, "buy", "skipped", "done_today", daily=True)
                     elif now.hour < config.get("buy_hour", 19): _decide(coin, "buy", "skipped", "before_buy_hour", daily=True, buy_hour=config.get("buy_hour", 19))
                     if state["last_action_date"].get(coin) != today_str and now.hour >= config.get("buy_hour", 19):
+                        if base_amt < 5000:
+                            # audit-fix 3-5: 시드가 최소 주문액(5,000원)보다 작으면 최소액으로 올려 사지 않고 건너뛴다 + 경고(하루 1회)
+                            _decide(coin, "buy", "skipped", "seed_below_min_order", daily=True)
+                            _fk = f"seedmin_{today_str}_{coin}"
+                            if not state.get(_fk):
+                                state[_fk] = True; save_json(STATE_FILE, state)
+                                send_panel(f"[{coin} 매수 건너뜀] 시드 {base_amt:,.0f}원이 최소 주문액 5,000원보다 작습니다. 시드를 올려 주세요."); _hub_alert("3번 빗썸 적립", "warning", f"{coin} 시드가 최소 주문액보다 작아 매수 건너뜀")
+                            continue
                         buy_amt = max(5000, base_amt if (avg_p == 0 or bal == 0) else (int(base_amt / 2) if prof_pct >= 1.0 else base_amt))
                         if krw_bal >= buy_amt:
                             _decide(coin, "buy", "ok", None, _snap(coin, cur_price=cur_p, avg_price=avg_p, balance=bal, profit_pct=prof_pct, buy_krw=buy_amt, krw_balance=krw_bal), half=buy_amt < base_amt)
+                            _t_buy = time.time()
                             ok, res_json = place_order(coin, "bid", buy_amt, "price")
+                            if ok: fill_warning(coin, "정기매수", res_json)   # audit-fix 3-7
                             if ok:
                                 krw_bal -= buy_amt; state["last_action_date"][coin], state["last_action_type"][coin] = today_str, "매수완료"
                                 state.setdefault("buy_days", {})[coin] = int(state.get("buy_days", {}).get(coin, 0)) + 1
@@ -438,8 +493,11 @@ def trading_monitor_loop():
                                 save_json(STATE_FILE, state); add_history(coin, "정기매수", f"{buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
                                 RL.ev("state_change", "buy_day", "ok", None, actor="scheduler", coin_ref=RL.ref(coin), day_after=state["buy_days"][coin], cycle_day_after=s_days[coin])
                                 send_panel(f"[{coin} 19:00 정기매수 완료 ({state['buy_days'][coin]}일차)] {buy_amt:,.0f}원 ({prof_pct:+.2f}%)"); _hub_alert("3번 빗썸 적립", "info", f"{coin} 19:00 정기매수 완료 {buy_amt:,.0f}원 ({prof_pct:+.2f}%)")
-                            elif isinstance(res_json, str):
-                                # 통신 오류(응답 없음)는 체결됐을 수 있으므로 오늘은 다시 매수하지 않음 (중복 매수 방지)
+                            elif isinstance(res_json, str) or verify_order_after_failure(coin, "bid", _t_buy, res_json) != "not_sent":
+                                # 통신 오류(응답 없음)·5xx 는 체결됐을 수 있으므로 오늘은 다시 매수하지 않음 (중복 매수 방지)
+                                # audit-fix 3-3: 5xx 등 불확실한 실패 응답도 거래소 조회로 접수 여부를 확인하기 전엔 재매수하지 않는다
+                                if not isinstance(res_json, str):
+                                    res_json = f"HTTP {res_json.get('_http') if isinstance(res_json, dict) else '?'} · 접수 여부 불명(조회 확인)"
                                 state["last_action_date"][coin], state["last_action_type"][coin] = today_str, "확인필요"
                                 save_json(STATE_FILE, state); add_history(coin, "정기매수 응답없음", f"{buy_amt:,.0f}원 · {res_json[:60]}")
                                 RL.ev("state_change", "no_reorder_today", "ok", None, actor="scheduler", coin_ref=RL.ref(coin), why="order_no_response")

@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.6)
+# v2.2.9 (2026-11-20, audit-fix 7번 3차 — 풀이님 결정 10:14): 사다리 삭제로 탑쌓기 전용 — credit_problems·CHOICES(unit_base·first_buy_mode)·ladder_levels·적립 상태(accum_state.json: get_accum/save_accum/accum_or_start)·사다리 설정 키·start.mode/filled_levels/rebuy_*/first_round_credit_usd 제거. validate_settings(s) 는 사다리 값을 안 보고, tower_gap_usd(1 이상 정수)·tower_floor_usd(>0)·tower_floors(1 이상 정수) 와 strategy("tower" 가 아니면 차단)를 검사. order_type(LOC|LIMIT) 검사는 그대로
 # v2.2.6 (2026-11-20, 판 16 본격): ① intraday_sell_check_sec 기본 120 → 30 (코드 검증 하한 — 체결 알림 간격과 같게) ② apply_fill: 같은 체결(exec_id)을 장부 파일(position.json)의 applied_ids 로도 막고(원금·수량이 먼저 저장돼 중복·누락이 안 생김),
 #   매도 때 층별 매도의 '뺀 원가'(cost_removed)를 받으면 평단 비례 대신 그 값을 씀 (층 합계와 장부 원금이 어긋나지 않게). 호출 형식은 그대로(새 인자는 선택)
 # v2.2.1 (2026-11-19, audit-fix 7-1): credit_problems 추가 + validate_settings(s, fx=None) — 환율을 알면 start.first_round_credit_usd < 1회차 단위액(total_krw÷split_count÷환율) 검사. 그 외 검증은 그대로
@@ -27,7 +28,6 @@ import tempfile
 from zoneinfo import ZoneInfo
 
 from global_throttle import GlobalThrottle
-from accum_strategy import CHOICES, ladder_levels, state_from_start
 
 SETTINGS_PATH = os.environ.get("MERITZ_LAOER_SETTINGS", "/etc/meritz-laoer/settings.json")
 EST = ZoneInfo("America/New_York")
@@ -45,15 +45,9 @@ SAFE_DEFAULTS = {
     "seed_usd": None,                      # (V14 용, 적립봇은 안 씀)
     # ---- 적립봇 (노션 '메리츠 속쓸 적립봇' 2026-11-18)
     "total_krw": None,                     # 총 투자금(원). 금액은 기본값 없음 — 설정 필수
-    "ladder_top_usd": 50,                  # 매수 시작가
     "tower_floor1_start_usd": 0,           # 탑쌓기 1층 시작가 (v2.2.4). 0 = 안 정함 — 평단 기준. 정하면 1층 칸이 시작가 기준
-    "ladder_step_usd": 5,                  # 내려갈 때마다 1회차 ($50~$5 10회)
     "sell_profit_pct": 10,                 # 평단 대비 평가 이익 이 % 에 매도
     "sell_fraction_pct": 50,               # 보유의 이 % 매도 (정수 주 내림)
-    "rebuy_drop_usd": 5,                   # 매도 뒤 평단 대비 이만큼 내려갈 때마다 재매수
-    "unit_base": None,                     # 노션 Q2: total | cash — 비어 있으면 주문 안 함
-    "first_buy_mode": None,                # 노션 Q1: now | wait_top — 비어 있으면 주문 안 함
-    "max_rounds_per_day": None,            # 노션 Q4: 하루 최대 회차 수(정수 1 이상) — 비어 있으면 주문 안 함
     "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
     "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
     "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
@@ -66,9 +60,7 @@ SAFE_DEFAULTS = {
     # 복리 %: hantu_laoer/config.py DEFAULT_COMPOUND["SOXL"] (익절 이익 중 다음 시드에 더하는 비율)
     "compound_rate_pct": 70.0,
     "fee_pct": 0.07,                       # Super365 미국주식 0.07%
-    "start": {"qty": None, "principal_usd": None, "avg_usd": None,
-              "mode": None, "filled_levels": None, "rebuy_anchor_usd": None, "rebuy_k": 0,
-              "first_round_credit_usd": None},   # 노션 Q3: 기존 보유를 사다리에 어떻게 칠지 (사람이 정함)
+    "start": {"qty": None, "principal_usd": None, "avg_usd": None},
     "key_file": "/etc/meritz-laoer/meritz_keys.json",      # 새 메리츠 3번 계좌 키 (P·VR6 키 재사용 금지)
     "expected_key_fp": "",                 # main.py --fingerprint 로 확인한 지문. 다르면 정지
     "forbid_key_files": ["/etc/bot-office/meritz.json", "/etc/bot-office/meritz_vr6.json"],
@@ -181,43 +173,31 @@ def update_settings(changes, path=None, dry=False):
         return result
 
 
-def credit_problems(s, fx):
-    """v2.2.1 (audit-fix 7-1): start.first_round_credit_usd 가 1회차 단위액(= total_krw ÷ split_count ÷ 환율, 달러) 이상이면 문제.
-    크레딧이 단위액 이상이면 1회차가 0주가 되고 크레딧이 남아 다음 날도 생략이 반복됨. 환율(fx)을 모르면(None·0 이하) 비교할 수 없어 검사하지 않음."""
-    st = s.get("start") or {}
-    credit = _f(st.get("first_round_credit_usd"))
-    rounds, total = _f(s.get("split_count")), _f(s.get("total_krw"))
-    if credit <= 0 or rounds < 2 or total <= 0 or fx is None or _f(fx) <= 0:
-        return []
-    unit = (total / rounds) / _f(fx)
-    if credit >= unit - 1e-9:
-        return [f"start.first_round_credit_usd ${credit:,.2f} 가 1회차 단위액 ${unit:,.2f} 이상 — 1회차가 0주가 되어 매일 생략됨 (단위액보다 작게 고쳐 주세요)"]
-    return []
-
-
-def validate_settings(s, fx=None):
-    """주문 전에 꼭 있어야 하는 값 검사 → 문제 목록 (빈 목록이면 통과). fx(원/달러, 선택)를 주면 1회차 크레딧 상한도 검사 (v2.2.1)"""
+def validate_settings(s):
+    """주문 전에 꼭 있어야 하는 값 검사 → 문제 목록 (빈 목록이면 통과). v2.2.9: 탑쌓기 전용 — 사다리 값(회차·시작가·간격·재매수·하루 회차 등)은 검사하지 않음"""
     bad = []
-    sc = s.get("split_count")
-    if sc is None or _f(sc) < 2 or _f(sc) != int(_f(sc)):
-        bad.append("split_count 없음 또는 정수 아님 (적립봇은 10)")
+    if str(s.get("strategy") or "").strip().lower() not in ("", "tower"):
+        bad.append("strategy 값이 남아 있음 — 7번은 탑쌓기만 써요 (사다리 삭제). 설정 파일에서 strategy 를 지우거나 \"tower\" 로 고쳐 주세요")
     if s.get("total_krw") is None or _f(s.get("total_krw")) <= 0:
         bad.append("total_krw 없음 (총 투자금, 원)")
     if _f(s.get("tower_floor1_start_usd")) < 0:
         bad.append("tower_floor1_start_usd 는 0 이상 (0 = 안 정함)")
-    for k in ("ladder_top_usd", "ladder_step_usd", "rebuy_drop_usd", "sell_profit_pct"):
+    for k in ("sell_profit_pct",):
         if _f(s.get(k)) <= 0:
             bad.append(f"{k} 0 이하 또는 없음")
+    g = s.get("tower_gap_usd")      # v2.2.9: 탑쌓기 층 간격 — 없으면 기본값 $5, 있으면 1 이상 정수 (메뉴·설정 파일 같은 조건)
+    if g is not None and (isinstance(g, bool) or _f(g) < 1 or _f(g) != int(_f(g))):
+        bad.append("tower_gap_usd 는 1 이상 정수 (층 간격, 달러)")
+    fu = s.get("tower_floor_usd")
+    if fu is not None and (isinstance(fu, bool) or _f(fu) <= 0):
+        bad.append("tower_floor_usd 는 0 보다 큰 숫자 (한 층 금액, 달러)")
+    fl = s.get("tower_floors")
+    if fl is not None and (isinstance(fl, bool) or _f(fl) < 1 or _f(fl) != int(_f(fl))):
+        bad.append("tower_floors 는 1 이상 정수 (층 수)")
     if not (0 < _f(s.get("sell_fraction_pct")) < 100):
         bad.append("sell_fraction_pct 는 0 초과 100 미만")
-    if sc is not None and _f(sc) >= 2 and len(ladder_levels(s.get("ladder_top_usd"), s.get("ladder_step_usd"), _f(sc))) != int(_f(sc)):
-        bad.append("사다리 가격이 0 이하로 내려감 — ladder_top_usd·ladder_step_usd·split_count 확인")
-    for k, opts in CHOICES.items():
-        if s.get(k) not in opts:
-            bad.append(f"{k} 미정 ({' | '.join(opts)} 중 Muse 결정 필요 — 노션 질문)")
-    mr = s.get("max_rounds_per_day")
-    if mr is None or isinstance(mr, bool) or _f(mr) < 1 or _f(mr) != int(_f(mr)):
-        bad.append("max_rounds_per_day 미정 (1 이상 정수, Muse 결정 필요 — 노션 질문)")
+    if s.get("order_type") not in ("LOC", "LIMIT"):
+        bad.append("order_type 미정 (LOC | LIMIT 중 Muse 결정 필요 — 노션 질문)")
     if not isinstance(s.get("allow_consecutive_sell"), bool):
         bad.append("allow_consecutive_sell 미정 (true | false, Muse 결정 필요 — 노션 질문)")
     isec = s.get("intraday_sell_check_sec")
@@ -241,15 +221,6 @@ def validate_settings(s, fx=None):
     if q and pr and av is not None and _f(av) > 0 and int(_f(q)) > 0:
         if abs(_f(pr) / int(_f(q)) - _f(av)) > 0.01:
             bad.append("start.avg_usd 가 principal_usd ÷ qty 와 0.01 넘게 다름 — 숫자 확인")
-    if not isinstance(st.get("filled_levels"), list):
-        bad.append("start.filled_levels 없음 (이미 산 걸로 칠 회차 목록, 없으면 [] — 노션 질문 Q3)")
-    if st.get("mode") not in ("ladder", "rebuy"):
-        bad.append("start.mode 미정 (ladder | rebuy — 노션 질문 Q3)")
-    elif st.get("mode") == "rebuy" and _f(st.get("rebuy_anchor_usd")) <= 0:
-        bad.append("start.mode=rebuy 인데 start.rebuy_anchor_usd 없음")
-    if st.get("first_round_credit_usd") is not None and _f(st.get("first_round_credit_usd")) < 0:
-        bad.append("start.first_round_credit_usd 는 0 이상 (1회차 매수 때 한 번 차감할 달러, 없으면 생략)")
-    bad += credit_problems(s, fx)      # v2.2.1 audit-fix 7-1: 환율을 알 때만 비교
     if str(s.get("symbol", "")).upper() != "SOXL":
         bad.append("이 봇은 SOXL 전용")
     return bad
@@ -267,7 +238,6 @@ class ConfigManager:
             "HISTORY": "data/manual_history.json",
             "POSITION": "data/position.json",
             "HALT": "data/halt.json",
-            "ACCUM": "data/accum_state.json",
         }
         os.makedirs("data", exist_ok=True)
 
@@ -446,22 +416,7 @@ class ConfigManager:
                    "cycle_buy_total": principal, "cycle_sell_total": 0.0, "cycle_start": datetime.datetime.now(EST).strftime('%Y-%m-%d'),
                    "source": "settings.start (입고 평단 미사용)"}
             self._save_json(self.FILES["POSITION"], pos)
-            self._save_json(self.FILES["ACCUM"], state_from_start(st))
             return pos, True
-
-    # ---------------- 적립 상태 (모드·채운 회차·재매수 기준). 장부와 별도 파일
-    def get_accum(self):
-        """저장된 적립 상태. 없으면 None"""
-        d = self._load_json(self.FILES["ACCUM"], None)
-        return d if isinstance(d, dict) else None
-
-    def save_accum(self, st):
-        with GlobalThrottle.get_file_lock(self.FILES["ACCUM"]):
-            self._save_json(self.FILES["ACCUM"], st)
-
-    def accum_or_start(self):
-        """저장된 상태, 없으면 설정 start 로 만든 값(저장하지 않음 — 모의·미리보기용)"""
-        return self.get_accum() or state_from_start(self.s.get("start"))
 
     def add_shares(self, qty, avg, date_et):
         """사용자가 직접 추가한 주식을 지정 평단으로 장부에 더함 → (변경 전, 변경 후).

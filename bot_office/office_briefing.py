@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-20, audit-fix-v2 8-1·8-2·8-3): SGOV 필요 달러에 wait_usd 반영 · None 방어(_num) · 휴장일 표 범위 밖이면 need.json warnings
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.0 (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """사무실 비서 필요 금액 JSON 발행 (평일 09:00 · 16:30 KST, systemd timer)
@@ -1420,6 +1421,21 @@ def is_trading_day(d):
     return d.strftime("%m-%d") not in US_CLOSED.get(d.year, "").split()
 
 
+def calendar_known(d):
+    """audit-fix 8-3: US_CLOSED 표에 그 연도가 있는가. 없으면 is_trading_day 는 주말만 걸러 휴장일을 모름 (평일=거래일로 계산 → 필요 달러를 적게 잡는 쪽은 아님).
+    판정은 그대로 두고, 범위 밖이면 need.json 'warnings' 로 알림."""
+    return d.year in US_CLOSED
+
+
+def _num(v):
+    """audit-fix 8-2: None·빈 값·숫자 아님 → 0.0 (float(None) TypeError 로 브리핑이 멈추지 않게)"""
+    try:
+        x = float(str(v).replace(",", "")) if v not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    return x if x == x and abs(x) != float("inf") else 0.0
+
+
 def _meritz_dca_need_detail(now=None):
     """Read-only 3번 need + 당일 매수 불가 종목. (total, skipped) 반환.
     skipped: 오늘 살 수량이 0주로 나온 종목 (1주 값 > 오늘 쓸 돈). need 합계 계산은 그대로.
@@ -1552,9 +1568,10 @@ def _sgov_need_line(now, holding, auto_fx):
     today = now.date()
     if today < show_from or today > due:
         return None
-    amount = float(sg.get("first_tranche_usd") if done == 0 else sg.get("tranche_usd") or 0)
+    amount = _num(sg.get("first_tranche_usd") if done == 0 else sg.get("tranche_usd"))      # audit-fix 8-2: None 방어
     if amount <= 0:
         return None
+    amount += max(0.0, _num(sg.get("wait_usd")))    # audit-fix 8-1: 분배금 등 SGOV 대기 달러는 다음 회차에 함께 쓰므로 필요 달러에 더함 (meritz_dca_bot sgov_fx_need 와 같은 구성)
     return _need_line("USD", holding, amount, auto_fx, label="SGOV " + due.strftime("%m/%d"))
 
 
@@ -1624,9 +1641,12 @@ def need_data(now=None):
         for line in account["lines"]:
             if line["need"] is not None:
                 totals[line["currency"]] += line["need"]
-    return {"ok": True, "as_of_kst": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "accounts": accounts, "total_need_usd": totals["USD"],
-            "total_need_krw": totals["KRW"]}
+    out = {"ok": True, "as_of_kst": now.strftime("%Y-%m-%d %H:%M:%S"),
+           "accounts": accounts, "total_need_usd": totals["USD"],
+           "total_need_krw": totals["KRW"]}
+    if not calendar_known(now.date()):      # audit-fix 8-3: 휴장일 표 범위 밖 → 휴장일을 모르고 계산했음을 알림 (값은 그대로, 키만 추가)
+        out["warnings"] = [f"미국 휴장일 표(US_CLOSED)에 {now.year}년이 없어 평일을 모두 거래일로 계산했어요 — 휴장일 표 갱신 필요"]
+    return out
 
 
 def write_need_json(now=None):

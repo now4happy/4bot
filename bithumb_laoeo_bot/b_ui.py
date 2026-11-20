@@ -13,7 +13,7 @@ def calc_today_required_krw(accs):
     today_str = datetime.now(KST).strftime("%Y-%m-%d")
     total_req, details = 0, []
     for coin, base_amt in config.get("coins", {}).items():
-        if base_amt <= 0 or coin_method(coin) == 2 or state["last_action_date"].get(coin) == today_str: continue
+        if base_amt <= 0 or base_amt < 5000 or coin_method(coin) == 2 or state["last_action_date"].get(coin) == today_str: continue   # audit-fix 3-5: 시드 < 최소 주문액 코인은 매수 건너뜀 → 필요액에서도 제외
         t = get_ticker(coin); cur_p = float(t["trade_price"]) if t else 0
         acc = accs.get(coin, {}); bal, avg_p = float(acc.get("balance", 0)), float(acc.get("avg_buy_price", 0))
         prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 and cur_p > 0 else 0.0

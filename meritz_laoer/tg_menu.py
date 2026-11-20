@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.8)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.10)
+# v2.2.9 (2026-11-20, 3차 — 풀이님 결정 10:06·10:14): 설정 메뉴를 탑쌓기 전용으로 개편 — 추가: 탑쌓기 간격 변경(tower_gap_usd, 1 이상 정수)·층 금액 변경(tower_floor_usd)·층 수 변경(tower_floors). 삭제: 회차·사다리 시작가·사다리 간격·재매수 하락폭·하루 최대 회차 버튼, '차감'(--credit) 입력, 사다리 채운 회차 경고(fill_warn). 상황판 전략 줄은 항상 탑쌓기. 시드·목표 이익률·매도 비중·1층 시작가·환전·봇 켜기/끄기는 그대로
 # v2.2.6 (2026-11-20, 판 16 본격): 상황판 장부 줄의 매도 목표가 탑쌓기면 '가장 낮은 층 기준'(층별 매도라 전체 평단 목표는 의미 없음) 1곳만 고침. 층 표시(반칸·미완성 글자)는 tower_strategy.view_lines, 장중 확인 간격 표시(30초마다)는 기존 intraday_text 가 설정값을 그대로 보여 줌. 매매 동작 변경 없음
 # v2.2.5 (2026-11-20, 판 16 1층 채우기 매수): 버전 표기만 올림 (1층 채우기 매수 로직은 tower_strategy.py)
 # v2.2.4 (2026-11-19, 1층 시작가 메뉴): 설정 메뉴에 "1층 시작가 변경" 추가 (기본값 0 = 안 정함, 평단 기준)
@@ -44,6 +45,7 @@ import time
 import urllib.request
 
 from config import update_settings
+import tower_strategy as _TW
 from global_throttle import GlobalThrottle
 from notifier import Notifier, to_korean
 
@@ -68,29 +70,25 @@ FX_ON, FX_OFF = "자동환전 켜기", "자동환전 끄기"
 # 설정 변경 버튼 → 설정 키·이름·단위·종류. kind: krw(원, 억·만 가능) | int | num(소수 가능). lo/hi: 허용 범위 (lo_incl/hi_incl 로 경계 포함 여부)
 SET_ITEMS = {
     "시드 변경": dict(key="total_krw", name="시드", unit="원", kind="krw", lo=0, lo_incl=False, ex="예: 2억, 20000000, 1억5000만"),
-    "회차 변경": dict(key="split_count", name="회차 수", unit="회", kind="int", lo=2, hi=100, ex="예: 10"),
     "목표 이익률 변경": dict(key="sell_profit_pct", name="목표 이익률", unit="%", kind="num", lo=0, lo_incl=False, hi=500, ex="예: 10 (평단보다 10% 오르면 매도)"),
     "매도 비중 변경": dict(key="sell_fraction_pct", name="매도 비중", unit="%", kind="num", lo=0, lo_incl=False, hi=100, hi_incl=False, ex="예: 50 (보유의 절반을 매도)"),
-    "사다리 시작가 변경": dict(key="ladder_top_usd", name="사다리 시작가", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 50"),
     "1층 시작가 변경": dict(key="tower_floor1_start_usd", name="1층 시작가", unit="$", kind="num", lo=0, lo_incl=True, ex="예: 50 (0이면 안 정함 — 평단 기준)"),
-    "사다리 간격 변경": dict(key="ladder_step_usd", name="사다리 간격", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 5"),
-    "재매수 하락폭 변경": dict(key="rebuy_drop_usd", name="재매수 하락폭", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 5"),
-    "하루 최대 회차 변경": dict(key="max_rounds_per_day", name="하루 최대 회차", unit="회", kind="int", lo=1, hi=100, ex="예: 1"),
+    "탑쌓기 간격 변경": dict(key="tower_gap_usd", name="탑쌓기 간격", unit="$", kind="int", lo=1, ex="예: 5 (1 이상 정수, 달러)"),
+    "층 금액 변경": dict(key="tower_floor_usd", name="층 금액", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (한 층에 쌓을 달러, 정수)"),
+    "층 수 변경": dict(key="tower_floors", name="층 수", unit="층", kind="int", lo=1, hi=100, ex="예: 10"),
     "환전 여유% 변경": dict(key="auto_fx_buffer_pct", name="환전 여유%", unit="%", kind="num", lo=0, hi=100, ex="예: 3 (모자란 달러보다 3% 더 환전)"),
     "환전 하루 상한 변경": dict(key="auto_fx_max_usd_per_day", name="환전 하루 상한", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 5000 (달러, 정수)"),
 }
 KEY_ITEM = {i["key"]: i for i in SET_ITEMS.values()}
-# v2.1.0 (2026-11-19): 값 바꾸기 화면에 '넣을 수 있는 값 · 무슨 뜻 · 바꾸면' 설명 추가 (값 범위·검사·확인 단계는 그대로, 어려운 말은 시드·사다리·평단·분할매도·자동환전·장부만 씀)
+# v2.1.0 (2026-11-19): 값 바꾸기 화면에 '넣을 수 있는 값 · 무슨 뜻 · 바꾸면' 설명 추가 (값 범위·검사·확인 단계는 그대로, 어려운 말은 시드·평단·분할매도·자동환전·장부만 씀)
 MEANS = {
-    "total_krw": ("이 봇이 쓸 총 투자금(시드)이에요.", "회차 금액과 사다리 계산이 달라져요"),
-    "split_count": ("총 투자금을 나눠 사는 횟수예요.", "1회 금액과 사다리 칸 수가 달라져요"),
+    "total_krw": ("이 봇이 쓸 총 투자금(시드)이에요.", "화면에 보이는 시드 값이 달라져요"),
     "sell_profit_pct": ("이익률이 이 %에 닿으면 파는 기준이에요.", "다음 판단부터 파는 시점이 달라져요"),
     "sell_fraction_pct": ("목표 이익률에 닿았을 때 가진 수량 중 파는 비중(분할매도)이에요.", "다음 매도부터 파는 양이 달라져요"),
-    "ladder_top_usd": ("사다리(가격대별 매수 칸)의 맨 위 매수 가격이에요.", "사다리 칸 가격이 모두 달라져요"),
     "tower_floor1_start_usd": ("탑쌓기 1층의 칸 기준 가격이에요. 0이면 안 정한 거라 평단 기준으로 칸을 정해요.", "1층 칸 가격이 달라져요 (2층 이상은 평단 기준 그대로)"),
-    "ladder_step_usd": ("사다리 칸과 칸 사이 가격 간격이에요.", "사다리 칸 가격이 달라져요"),
-    "rebuy_drop_usd": ("판 뒤 다시 사려면 가격이 이만큼 내려와야 해요.", "다시 사는 시점이 달라져요"),
-    "max_rounds_per_day": ("하루에 최대 몇 회차까지 살지 정해요.", "하루에 사는 횟수 상한이 달라져요"),
+    "tower_gap_usd": ("탑쌓기 한 층의 칸 수이자 칸 사이 가격 간격(달러)이에요. 1 이상 정수만 돼요. 안 정하면 5예요.", "새로 만드는 층과 다시 채우는 칸의 가격이 달라져요"),
+    "tower_floor_usd": ("탑쌓기 한 층에 쌓을 금액(달러)이에요. 안 정하면 15000이에요.", "새 층의 목표 금액과 총 한도(층 금액 × 층 수)가 달라져요"),
+    "tower_floors": ("탑쌓기 층 수예요. 안 정하면 10이에요.", "총 한도(층 금액 × 층 수)가 달라져요"),
     "auto_fx_buffer_pct": ("자동환전 때 부족분에 더해 환전하는 여유 비율이에요.", "다음 자동환전 금액이 달라져요"),
     "auto_fx_max_usd_per_day": ("자동환전을 하루에 최대 얼마까지 할지 정한 상한이에요.", "하루 환전 한도가 달라져요"),
 }
@@ -98,10 +96,16 @@ _EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A
 BOOL_NAME = {"enabled": "봇", "auto_fx_enabled": "자동환전"}
 FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # 값 없이 켜기를 눌렀을 때 이 글자만
 SET_POWER = "봇 켜기/끄기"
-SET_ROWS = [["시드 변경", "회차 변경"], ["목표 이익률 변경", "매도 비중 변경"],
-            ["사다리 시작가 변경", "사다리 간격 변경"], ["재매수 하락폭 변경", "하루 최대 회차 변경"],
-            ["환전 여유% 변경", "환전 하루 상한 변경"], [SET_POWER, BACK]]
-LADDER_KEYS = ("total_krw", "split_count", "ladder_top_usd", "ladder_step_usd")   # 이미 채운 회차가 있으면 경고
+SET_ROWS = [["시드 변경", "목표 이익률 변경"], ["매도 비중 변경", "탑쌓기 간격 변경"],
+            ["1층 시작가 변경", "층 금액 변경"], ["층 수 변경", "환전 여유% 변경"],
+            ["환전 하루 상한 변경", SET_POWER], [BACK]]
+TOWER_DEFAULTS = {"tower_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_floors": _TW.FLOORS}   # 설정에 없으면 탑쌓기가 쓰는 기본값 (표시용)
+
+
+def cur_val(s, key):
+    """설정값, 없으면 탑쌓기 기본값 (표시용)"""
+    v = (s or {}).get(key)
+    return TOWER_DEFAULTS.get(key) if v is None else v
 PARENT = {"fund": "main", "tact": "main", "stat": "main", "etc": "main", "settings": "tact", "fx": "fund", "power": "settings"}
 HEADS = {"main": "아래 버튼을 눌러 주세요", "fund": "자금", "tact": "전술", "stat": "현상태", "etc": "기타 · 가끔 쓰는 기능이에요",
          "settings": "설정 · 바꿀 값을 눌러 주세요 (값만 바뀌고 주문은 안 나가요)"}
@@ -130,7 +134,7 @@ def fmt_val(item, v, none="미정"):
     if item["kind"] == "krw":
         return fmt_krw(v)
     if item["unit"] == "$":
-        return f"${v:,}" if item["kind"] == "int" else f"${float(v):,.2f}"    # 달러 설정은 전부 속쓸 가격(사다리·재매수 하락폭) → 소수 2자리
+        return f"${v:,}" if item["kind"] == "int" else f"${float(v):,.2f}"    # 달러 설정 중 소수 허용 항목(1층 시작가 등)은 소수 2자리
     return f"{v:g}{item['unit']}"
 
 
@@ -304,8 +308,8 @@ class MenuBot:
             cfg = o.ConfigManager(s)
             pos, halt = cfg.get_position(), cfg.get_halt()
             avg = cfg.avg_price(pos) if pos else 0.0
-            tv, tgt = o.sell_target(s, cfg, pos) if pos else (None, None)
-        return pos, halt, avg, tv, tgt
+            tgt = o.sell_target(s, cfg, pos) if pos else None
+        return pos, halt, avg, tgt
 
     def _api_ok(self, s):
         """cmd_check 와 같은 조건: 설정 문제·키 파일 없음·키 형식 오류면 메리츠 조회 안 함 → 문제 목록"""
@@ -316,9 +320,9 @@ class MenuBot:
     def board(self, s):
         """B1 상황판 값 (조회만 — 주문·장부·설정을 바꾸지 않음). cmd_check 와 같은 입력으로 오늘 계획 미리보기"""
         o = self.o
-        d = {"pos": None, "halt": None, "avg": 0.0, "t": None, "target": None, "api_bad": [], "hold": None, "sellable": None,
+        d = {"pos": None, "halt": None, "avg": 0.0, "target": None, "api_bad": [], "hold": None, "sellable": None,
              "price": None, "prev": None, "fx": None, "cash": None, "plan": None, "orders": [], "notes": [], "plan_err": None}
-        d["pos"], d["halt"], d["avg"], d["t"], d["target"] = self._local(s)
+        d["pos"], d["halt"], d["avg"], d["target"] = self._local(s)
         d["api_bad"] = self._api_ok(s)
         if d["api_bad"]:
             return d
@@ -350,14 +354,11 @@ class MenuBot:
                 f"· 정지 표시: {(halt or {}).get('reason') if halt else '없음'}")
 
     def strategy_text(self, s):
-        """v2.2.0: 현재 전략 글자 (사다리 | 탑쌓기). 전환 설정은 설정 파일의 strategy 값 — 메뉴 버튼은 아직 없음"""
-        fn = getattr(self.o, "strategy_ko", None)
-        return fn(s) if fn else "사다리"
+        """현재 전략 글자 — 7번은 탑쌓기만 씀 (v2.2.9)"""
+        return self.o.strategy_ko(s)
 
     def tower_lines(self, s, d):
-        """v2.2.2 (판 14): 탑쌓기면 층 시각화 줄 (층 칸 + N/10층 + 층별 상세). 층 상태 파일을 읽기만 함 — 파일이 없으면 지금 장부를 1층으로 본 값(저장 안 함). 사다리면 빈 목록"""
-        if self.strategy_text(s) != "탑쌓기":
-            return []
+        """v2.2.2 (판 14): 층 시각화 줄 (층 칸 + N/10층 + 층별 상세). 층 상태 파일을 읽기만 함 — 파일이 없으면 지금 장부를 1층으로 본 값(저장 안 함)"""
         o, pos = self.o, d.get("pos")
         try:
             with o.in_dir(s["state_dir"]):
@@ -381,11 +382,11 @@ class MenuBot:
         fx = "켜짐" if s.get("auto_fx_enabled") else "꺼짐"
         fx += f" (여유 {v('auto_fx_buffer_pct')} · 하루 상한 {v('auto_fx_max_usd_per_day')})" if fx_values_ready(s) else " (여유%·하루 상한 입력 전)"
         return ["설정값",
-                f"· 시드 {v('total_krw')} · 회차 {v('split_count')}",
+                f"· 시드 {v('total_krw')}",
                 f"· 목표 이익률 {v('sell_profit_pct')} · 매도 비중 {v('sell_fraction_pct')}",
-                f"· 사다리 시작가 {v('ladder_top_usd')} · 간격 {v('ladder_step_usd')} · 재매수 하락폭 {v('rebuy_drop_usd')}",
+                f"· 탑쌓기 간격 {fmt_val(KEY_ITEM['tower_gap_usd'], cur_val(s, 'tower_gap_usd'))} · 층 금액 {fmt_val(KEY_ITEM['tower_floor_usd'], cur_val(s, 'tower_floor_usd'))} · 층 수 {fmt_val(KEY_ITEM['tower_floors'], cur_val(s, 'tower_floors'))}",
                 f"· 1층 시작가 {v('tower_floor1_start_usd') if s.get('tower_floor1_start_usd') else '안 정함 (평단 기준)'}",
-                f"· 하루 최대 회차 {v('max_rounds_per_day')} · 당일 매도 확인 {self.intraday_text(s)}",
+                f"· 당일 매도 확인 {self.intraday_text(s)}",
                 f"· 자동환전 {fx}"]
 
     def board_text(self, s):
@@ -395,9 +396,9 @@ class MenuBot:
         lines.append(f"· 전략: {self.strategy_text(s)}")
         if pos:
             tw = ((d.get("plan") or {}).get("info") or {}).get("tower")
-            fill_txt = (f"층 {len(tw['floors'])}개" if tw else "층 미확인") if self.strategy_text(s) == "탑쌓기" else f"채운 회차 {d['t']}"
-            tgt = (((d.get("plan") or {}).get("info") or {}).get("sell_target") or d["target"]) if self.strategy_text(s) == "탑쌓기" else d["target"]     # v2.2.6: 탑쌓기는 층별 매도라 가장 낮은 층의 목표 (제일 먼저 닿는 값)
-            lines.append(f"· 장부: {pos['qty']}주 · 평단 ${d['avg']:.2f} · {fill_txt} · 매도 목표 ${tgt:.2f}" + (" (가장 낮은 층 기준)" if self.strategy_text(s) == "탑쌓기" else ""))
+            fill_txt = f"층 {len(tw['floors'])}개" if tw else "층 미확인"
+            tgt = ((d.get("plan") or {}).get("info") or {}).get("sell_target") or d["target"]     # v2.2.6: 탑쌓기는 층별 매도라 가장 낮은 층의 목표 (제일 먼저 닿는 값)
+            lines.append(f"· 장부: {pos['qty']}주 · 평단 ${d['avg']:.2f} · {fill_txt} · 매도 목표 ${tgt:.2f} (가장 낮은 층 기준)")
         else:
             lines.append("· 장부: 시작 전 (기타 → 장부 시작)")
         lines += self.tower_lines(s, d)
@@ -463,7 +464,7 @@ class MenuBot:
             today = fmt_krw(i["unit_usd"] * i["fx"]) if i.get("fx") else "미확인"
             need = (f"· 오늘 필요 달러 ${i['need_usd']:,.0f} · " + (f"부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "부족 없음")
                     + f" · 자동환전 {'켜짐 (한국시간 09:00~주문 시간, 환전 시간 안에서만)' if i.get('auto_fx') else '꺼짐'}"
-                    + (f"\n· 현금 부족 → ${i['partial']['price']:.2f} 회차 {i['partial']['qty']}주만 부분 매수 (원래 {i['partial']['full_qty']}주)" if i.get("partial") else ""))
+                    + (f"\n· 현금 부족 → ${i['partial']['price']:.2f} 칸 {i['partial']['qty']}주만 부분 매수 (원래 {i['partial']['full_qty']}주)" if i.get("partial") else ""))
         else:
             today, need = "미확인", f"· 오늘 필요 달러: 미확인 ({d['plan_err']})"
         lines += [f"· 시드 {seed} · 당일 시드 {today}",
@@ -528,20 +529,8 @@ class MenuBot:
             if k in BOOL_NAME:
                 out.append(f"{BOOL_NAME[k]}: {'켜짐' if old else '꺼짐'} → {'켜짐' if new else '꺼짐'}")
             else:
-                out.append(f"{KEY_ITEM[k]['name']}: {fmt_val(KEY_ITEM[k], old)} → {fmt_val(KEY_ITEM[k], new)}")
+                out.append(f"{KEY_ITEM[k]['name']}: {fmt_val(KEY_ITEM[k], cur_val({k: old}, k))} → {fmt_val(KEY_ITEM[k], new)}")
         return "\n".join("· " + x for x in out)
-
-    def fill_warn(self, s, changes):
-        """사다리 값을 바꾸는데 이미 장부·채운 회차가 있으면 경고 글자"""
-        if not any(k in LADDER_KEYS for k in changes):
-            return ""
-        pos = self._local(s)[0]
-        with self.o.in_dir(s["state_dir"]):
-            n = len((self.o.ConfigManager(s).get_accum() or {}).get("filled_levels") or [])
-        if pos or n:
-            return (f"\n이미 장부 {pos['qty'] if pos else 0}주 · 채운 회차 {n}개가 있어요. "
-                    "사다리 값을 바꾸면 이미 채운 회차와 어긋날 수 있어요.")
-        return ""
 
     def propose(self, s, say, changes, extra=""):
         """검사만 하고(쓰지 않음) 이전 → 새 값을 보여 준 뒤 [변경 확인] 을 기다림"""
@@ -556,7 +545,7 @@ class MenuBot:
         self.pending = {"changes": changes}
         self.confirm[CHG_OK] = time.time() + CONFIRM_SEC
         self.in_prompt = True
-        return say(self._desc(changes, res) + self.fill_warn(s, changes) + (("\n" + extra) if extra else "")
+        return say(self._desc(changes, res) + (("\n" + extra) if extra else "")
                    + f"\n{CONFIRM_SEC}초 안에 [{CHG_OK}] 를 눌러 주세요. 주문은 안 나가고 값만 바뀌어요.", [[CHG_OK, BACK]])
 
     def apply(self, s, say, changes):
@@ -609,13 +598,12 @@ class MenuBot:
                 avg = float(parts[1]) if len(parts) >= 2 else None
             except ValueError:
                 avg = None
-            credit = len(parts) >= 3 and parts[2] in ("차감", "credit")
             if qty is None or qty < 1 or avg is None or not (avg > 0) or avg == float("inf"):
                 self.wait, self.in_prompt = {"kind": "add", "ts": time.time()}, True
                 return say("수량은 1 이상 정수, 평단은 0보다 큰 달러 숫자로 띄어 써 주세요. 예: 3 52.10", [[BACK]])
-            self.add_args = (qty, avg, credit)
+            self.add_args = (qty, avg)
             self.confirm[ADD_OK], self.in_prompt = time.time() + CONFIRM_SEC, True
-            return say(f"장부에 넣을까요?\n지금 값 → 새 값\n· 장부 추가: 없음 → {qty}주 · 평단 ${avg:g}" + (" · 1회차 매수 때 원가 한 번 차감" if credit else "") +
+            return say(f"장부에 넣을까요?\n지금 값 → 새 값\n· 장부 추가: 없음 → {qty}주 · 평단 ${avg:g}" +
                        f"\n{CONFIRM_SEC}초 안에 [{ADD_OK}] 를 눌러 주세요. 주문은 안 나가요 (장부만 바뀌고, 메리츠 잔고가 장부 + 수량과 같을 때만 반영돼요).", [[ADD_OK, BACK]])
         if text not in ALL_LABELS:                      # 모르는 글자·/start·예전 버튼(메뉴 등) → 새 메인 메뉴
             return self.show("main", s, say, "메뉴가 바뀌었어요. 아래 4개 버튼으로 써 주세요.")
@@ -663,15 +651,14 @@ class MenuBot:
             it = SET_ITEMS[text]
             self.nav = self.nav if self.nav in ("settings", "fx") else ("fx" if it["key"].startswith("auto_fx") else "settings")
             self.wait, self.in_prompt = {"kind": "set", "label": text, "ts": time.time()}, True
-            return say(f"{text}\n· 지금: {fmt_val(it, s.get(it['key']))}\n· 넣을 수 있는 값: {self.range_text(it)}\n"
+            return say(f"{text}\n· 지금: {fmt_val(it, cur_val(s, it['key']))}\n· 넣을 수 있는 값: {self.range_text(it)}\n"
                        f"· 무슨 뜻: {MEANS.get(it['key'], ('', ''))[0]}\n· 바꾸면: {MEANS.get(it['key'], ('', ''))[1]} (주문은 바로 나가지 않아요)\n"
-                       f"· 새 값을 숫자로 보내 주세요. {it['ex']}"
-                       + self.fill_warn(s, {it["key"]: None}), [[BACK]])
+                       f"· 새 값을 숫자로 보내 주세요. {it['ex']}", [[BACK]])
         if text == ADD_OK:
             a, self.add_args = getattr(self, "add_args", None), None
             if not a or not self._ok_confirm(ADD_OK):
                 return say("확인 시간이 지났거나 넣을 주식이 없어요. 주식 넣기를 다시 눌러 주세요.")
-            rc, out = self._out(self.o.cmd_add_shares, s, a[0], a[1], None, a[2])
+            rc, out = self._out(self.o.cmd_add_shares, s, a[0], a[1])
             return say(("완료 · " if rc == 0 else "") + (out or "결과 없음"))
         if text == CHG_OK:
             p, self.pending = self.pending, None
@@ -690,7 +677,6 @@ class MenuBot:
         if text == T_ADD:
             self.wait, self.in_prompt = {"kind": "add", "ts": time.time()}, True
             return say("직접 산 주식 수량과 평단(달러)을 띄어 써서 보내 주세요. 예: 3 52.10\n"
-                       "• 1회차 매수 때 이 주식 원가를 한 번 차감하려면 끝에 '차감' 을 붙여요. 예: 63 61.50 차감\n"
                        "• 메리츠 잔고가 (장부 + 수량)과 같을 때만 반영돼요 · 봇이 켜져 있거나 미국장 주문 시간(미 동부 "
                        f"{s.get('order_time_et')}~{s.get('order_deadline_et')})이면 거부 · 주문은 안 나가요", [[BACK]])
         if text == T_STOP:

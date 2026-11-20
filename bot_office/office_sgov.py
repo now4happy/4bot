@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: /opt/bot-office/office_sgov.py   (OFFICE_SGOV — 새 파일)
+# 사무실 vNEXT (2026-11-20, audit-fix-v2 5-1·5-2·5-7): 총 회차 수 증가 문구·관문 출처 주의 문구·24시간 넘은 알림은 요약 재알림 1번(보낸 뒤에만 expired 표시)
 # 사무실 v1.8.3 (2026-11-14): 비서봇 SGOV 메뉴 (상황판·현황·자금·시드·분배금·건너뜀 모드·게이트 확인)
 #  - 읽기만: meritz_dca_bot 이 만든 상태 스냅샷 <bridge>/snapshot.json
 #  - 명령(시드 변경·건너뜀·분배금·게이트·자동환전)은 요청 파일만 씀: <bridge>/requests/req_<id>.json
@@ -196,6 +197,7 @@ def seed_text(snap, stale, age):
     lines = ["[시드 · SGOV — 입력만으로 주문·환전 없음]", _snap_line(snap, stale, age)]
     for k, label in SEED_LABELS.items():
         lines.append(f"• {label}: {sg.get(k) if snap else '미확인'}")
+    lines.append("총 회차 수: 환율 규칙으로 건너뛴 회차는 맨 뒤에 붙어서, 총 매수 횟수가 계획보다 늘어납니다 (건너뛸 때마다 총 회차 수 +1).")
     lines.append("바꿀 항목을 누르고 숫자를 보내 주세요. 메리츠 적립봇이 기존 검사(총 목표 99~101% 등)를 다시 하고 저장해요.")
     return "\n".join(lines)
 
@@ -217,7 +219,7 @@ def skip_text(snap, stale, age):
     x, mode = float(sg.get("skip_jump_pct") or 1.5), sg.get("skip_cap_mode", "review")
     cm = (snap or {}).get("cap_modes") or {}
     return "\n".join(["[환율 규칙 · 건너뜀 모드 — 다음 회차 판단부터 적용, 바꿔도 바로 사지 않음]", _snap_line(snap, stale, age),
-                      f" • (a) 회차 날 적용환율이 최근 {_i(sg.get('fx_avg_months') or 36)}개월 평균보다 낮아야 매수",
+                      f" • (a) 회차 날 적용환율이 최근 {_i(sg.get('fx_avg_months') or 36)}개월 평균보다 낮아야 매수 (적용환율=메리츠 API 값, 평균=FRED USD/KRW 일별 종가 평균 — 출처·기준이 달라 같은 잣대가 아님)",
                       f" • (b) 7일 전보다 {x:g}% 이상 오르면 건너뜀 (건너뜀 % = {x:g}%, 넣을 수 있는 값 0.5~3.0, 0.5 단위)",
                       f" • 연속 건너뜀: {cm.get(mode, mode)}",
                       " • 건너뛴 회차는 맨 뒤로 붙임 (다음 회차에 몰아 사지 않음)"])
@@ -485,9 +487,17 @@ def alerts_pass(tg, now=None):
         todo.append(a)
     todo.sort(key=lambda a: float(a["ts"]))
     sent = 0
+    # audit-fix 5-7: 24시간 넘은 알림을 말없이 버리지 않는다 — 요약 재알림 1번을 보낸 뒤에만 'expired' 표시 (못 보내면 다음 tick 에 다시)
+    stale = [a for a in todo if now - float(a["ts"]) > ALERT_MAX_AGE]
+    if stale:
+        kinds = ", ".join(sorted({str(a.get("kind") or "?") for a in stale}))
+        oldest = min(stale, key=lambda a: float(a["ts"]))
+        r = tg.send(_esc(f"[SGOV 알림 {len(stale)}건이 {int(ALERT_MAX_AGE // 3600)}시간 넘게 못 갔어요]\n• 종류: {kinds}\n• 가장 오래된 알림: {oldest.get('ts_kst') or '-'} KST\n"
+                         "• 원문은 이미 낡아서 보내지 않았어요. SGOV 현황·자금 화면에서 지금 상태를 확인해 주세요."))
+        if isinstance(r, dict) and r.get("message_id"):
+            for a in stale: _mark(a["id"], "expired", {"resent_summary": True})
+        todo = [a for a in todo if a not in stale]
     for a in todo:
-        if now - float(a["ts"]) > ALERT_MAX_AGE:
-            _mark(a["id"], "expired"); continue
         if sent >= ALERTS_PER_TICK:
             break
         r = tg.send(_esc(a["text"]))          # 알림 문구 그대로 (html.escape 만) · 버튼 없음 · 이 비서봇의 방

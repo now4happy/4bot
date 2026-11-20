@@ -4,7 +4,8 @@ from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from math import isfinite
 
-BOT_VERSION = "v4.4.0"
+BOT_VERSION = "v4.4.1"
+# v4.4.1 (2026-11-20, audit-fix-v2 3-2~3-7): 익절 매도 거절·응답불명 구분, 매수 재시도 전 주문 조회(중복 방지), 소수 지수표기 방지(plain_decimal), 시드 5,000원 미만 건너뜀+경고, SMA 대기 신호 유지, 체결 확인(confirm_fill)
 # v4.4.0 (2026-11-19): 메뉴 정리 — 하단 4칸(BTC 설정·ETH 설정·전체 상황판·도움말), 숫자 버튼 제거→입력창+범위 안내, 값 변경 전 지금→새 값 확인, 익절·매도비율 0 초과 100 이하 검사, 이모티콘 제거 (매매 동작 변경 없음)
 # v4.2.0 (draft rework): unified SMA법; separate per-coin buy amount and explicit approval.
 # v4.0.4 (2026-10-28): 재생 로그 추가 — 버튼·명령 / 매매 판단 / 빗썸 주문·조회 / 설정 변경 / 보낸 메시지를 logs/ 에 한 줄 JSON 으로.
@@ -253,18 +254,97 @@ def trend_line():
             parts.append(f"{coin} 확인불가")
     return " · ".join(parts)
 
+def plain_decimal(value):
+    """audit-fix 3-4: 수량을 과학 표기(1e-05) 없이 소수점 표기로 고정. 끝의 0은 제거."""
+    from decimal import Decimal
+    text = format(Decimal(str(value)), "f")
+    if "." in text: text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+def _http_get_json(path, params):
+    """조회 전용 GET. 성공(200) JSON 또는 None."""
+    try:
+        r = requests.get("https://api.bithumb.com" + path + "?" + urlencode(params), headers=bithumb_headers(params), timeout=10)
+        if r.status_code == 200: return r.json()
+    except Exception as e:
+        RL.err("bithumb_get" + path, e)
+    return None
+
+def parse_created_ts(created_at):
+    """빗썸 created_at(ISO8601, 예 2026-11-20T09:00:00+09:00) -> epoch 초. 실패 시 None."""
+    try:
+        text = str(created_at).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=KST)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+def lookup_recent_order(coin, side, since_ts, slack_sec=5):
+    """audit-fix 3-3: 재시도 전 조회 확인. since_ts 이후 같은 코인·같은 방향 주문이 거래소에 있는지 본다.
+    반환: True(있음) / False(없음, 조회 성공) / None(조회 실패 — 모름).
+    빗썸 문서: GET /v1/orders (market, state, limit, order_by). done·wait 둘 다 본다. 실서버 응답은 미실행."""
+    found = False
+    for st in ("done", "wait"):
+        data = _http_get_json("/v1/orders", {"market": f"KRW-{coin}", "state": st, "limit": 10, "order_by": "desc"})
+        if not isinstance(data, list): return None
+        for o in data:
+            if not isinstance(o, dict) or o.get("side") != side: continue
+            ts = parse_created_ts(o.get("created_at"))
+            if ts is not None and ts >= since_ts - slack_sec: found = True
+    return found
+
+def verify_order_after_failure(coin, side, since_ts, res):
+    """audit-fix 3-3: 주문 실패 응답 뒤 '다시 주문해도 되는가'.
+    'not_sent' = 안전하게 재시도 가능 / 'sent' = 이미 접수됨 / 'unknown' = 모름(재주문 금지).
+    HTTP 5xx 가 아닌 거절(4xx 등)은 접수되지 않은 것으로 본다. 5xx 이거나 상태코드를 모르면 조회로 확인한다."""
+    status = res.get("_http") if isinstance(res, dict) else None
+    if isinstance(status, int) and status < 500: return "not_sent"
+    seen = lookup_recent_order(coin, side, since_ts)
+    if seen is None: return "unknown"
+    return "sent" if seen else "not_sent"
+
+def confirm_fill(order_uuid, tries=3, delay=2.0):
+    """audit-fix 3-7: 주문 접수 뒤 체결 확인. 빗썸 문서: GET /v1/order?uuid= (state, executed_volume, remaining_volume).
+    반환 dict: state = done|wait|cancel|unknown, executed_volume(문자열|None)."""
+    if not order_uuid: return {"state": "unknown", "executed_volume": None}
+    last = {"state": "unknown", "executed_volume": None}
+    for i in range(tries):
+        data = _http_get_json("/v1/order", {"uuid": order_uuid})
+        if isinstance(data, dict):
+            last = {"state": str(data.get("state") or "unknown"), "executed_volume": data.get("executed_volume")}
+            if last["state"] in ("done", "cancel"): return last
+        if i < tries - 1: time.sleep(delay)
+    return last
+
 def place_order(coin, side, price_or_vol, ord_type):
     t0 = time.time(); chain = "ord-" + (RL.ref(f"{coin}|{side}|{t0}") or "x")
     try:
         body = {"market": f"KRW-{coin}", "side": side, "ord_type": ord_type}
-        body["price" if ord_type == "price" else "volume"] = str(int(price_or_vol) if ord_type == "price" else price_or_vol)
+        body["price" if ord_type == "price" else "volume"] = str(int(price_or_vol)) if ord_type == "price" else plain_decimal(price_or_vol)   # audit-fix 3-4
         r = requests.post("https://api.bithumb.com/v1/orders", headers=bithumb_headers(body), data=json.dumps(body), timeout=10)
-        out = (r.status_code in [200, 201], r.json())
+        resp = r.json()
+        if isinstance(resp, dict): resp["_http"] = r.status_code   # audit-fix 3-3: 상태코드 보존 (5xx 구분용)
+        out = (r.status_code in [200, 201], resp)
         _order_log(chain, coin, side, ord_type, price_or_vol, out[0], r.status_code, out[1], t0)
+        if out[0] and isinstance(resp, dict):
+            # audit-fix 3-7: 접수 뒤 체결 확인 (결과는 응답 dict 의 _fill 에 담고, 알림은 호출부가 한다)
+            resp["_fill"] = confirm_fill(resp.get("uuid"))
+            RL.ev("external_call", "order_fill_check", "ok" if resp["_fill"]["state"] == "done" else "unconfirmed", None, actor="scheduler",
+                  chain=chain, coin_ref=RL.ref(coin), fill_state=resp["_fill"]["state"])
         return out
     except Exception as e:
         _order_log(chain, coin, side, ord_type, price_or_vol, False, None, str(e), t0)
         return False, str(e)
+
+def fill_warning(coin, label, res):
+    """audit-fix 3-7: 접수는 됐지만 체결이 확인되지 않았으면 알림 한 번. done 이면 아무것도 안 함."""
+    fill = res.get("_fill") if isinstance(res, dict) else None
+    if not isinstance(fill, dict) or fill.get("state") == "done": return False
+    try:
+        send_panel(f"[{coin} {label} 접수됐으나 체결 미확인]\n• 상태: {fill.get('state')}\n• 빗썸 앱에서 체결 여부를 확인해 주세요.")
+    except Exception: pass
+    return True
 
 def _order_log(chain, coin, side, ord_type, size, ok, status, res, t0):
     """주문 1건 기록: 일반 로그엔 결과·이유·참조값만, 금액·코인·응답은 감사 로그에"""

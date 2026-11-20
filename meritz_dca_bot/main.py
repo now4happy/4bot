@@ -32,6 +32,7 @@
 #   python3 main.py --dry-reset       모의 장부 지우기 (다음 실행 때 실주문 장부/설정에서 다시 만듦)
 #   python3 main.py                   상시 실행 (서비스용)
 # =====================================================================
+# v1.3.3 (2026-11-20, audit-fix-v2 6-9): 익절 외 일차·이월(buy_carry)은 주문 접수가 아니라 전량 체결 확인(sync_fills) 때 올림 — 접수만 되고 체결 안 되면 일차 그대로(오늘 재주문은 막음). 6-10 은 미확인(기록만)
 import argparse, copy, os, re, signal, subprocess, sys
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
@@ -242,7 +243,7 @@ def _rejected(e) -> bool:
     """증권사가 거절한 주문(체결 안 됨)인지. 메리츠 오류는 'API 코드' 로 시작. 응답 끊김·시간초과는 False"""
     return isinstance(e, (GateBlocked, WarnNeeded)) or (isinstance(e, MeritzError) and str(e).startswith("API "))
 
-async def _order(kind, sym, side, size, ord_id, client, cur_p):
+async def _order(kind, sym, side, size, ord_id, client, cur_p, step=None):
     """주문 1건. 보내기 바로 전에 안전장치를 다시 봄. 모의면 주문 API 를 부르지 않고 현재가 체결로 가정.
     접수되면 체결 대기 목록(pending_orders)에 남김 → 체결 내역으로 장부 갱신."""
     chain = "ord-" + (RL.ref(ord_id) or "x"); t0 = time.time()
@@ -269,7 +270,8 @@ async def _order(kind, sym, side, size, ord_id, client, cur_p):
     fresh.setdefault("pending_orders", []).append({
         "oid": ord_id, "no": bid, "sym": sym, "side": "BUY" if side == "buy" else "SELL", "qty": float(size),
         "kind": kind, "date": datetime.now(EST_TZ).strftime("%Y-%m-%d"), "ts": time.time(),
-        "applied_q": 0.0, "applied_amt": 0.0, "dry_fill": res.get("dry_fill")})
+        "applied_q": 0.0, "applied_amt": 0.0, "dry_fill": res.get("dry_fill"),
+        **({"step": step} if step else {})})     # audit-fix 6-9: 일차·이월은 접수가 아니라 체결 확인(sync_fills) 때 올림
     await DcaConfigManager.save(fresh)
     return res
 
@@ -343,7 +345,7 @@ async def sync_fills(client):
         try: fills = await client.fills(d0, d1)
         except Exception as e:
             RL.err("fill_sync", e, event_type="external_call"); return 0
-    lines, keep, changed = [], [], False
+    lines, keep, changed, steps_done = [], [], False, []
     for p in pend:
         if str(p.get("no", "")).startswith("DRY-"):
             fq, famt = (p.get("dry_fill") or [0.0, 0.0])
@@ -364,8 +366,10 @@ async def sync_fills(client):
         expired = p["date"] < today or past_sync
         if done or expired:
             changed = True
+            if done and isinstance(p.get("step"), dict): steps_done.append(p)      # audit-fix 6-9: 전량 체결 확인 → 일차·이월 올림
             if not done:
                 lines.append(f"{p['sym']} {'매수' if p['side'] == 'BUY' else '매도'} 주문 {p['qty']:g}주 중 {float(p.get('applied_q', 0)):g}주만 체결 확인 — 앱에서 확인해 주세요")
+                if isinstance(p.get("step"), dict): lines.append(f"  ↳ {p['sym']} 일차·이월은 올리지 않았습니다 (체결 미완료). 체결분은 장부에 반영됨 — 관제탑에서 일차 확인·보정해 주세요")
             continue
         keep.append(p)
     if changed:
@@ -381,7 +385,24 @@ async def sync_fills(client):
         for p in fresh["pending_orders"]:
             for k in keep:
                 if k["oid"] == p["oid"]: p.update(applied_q=k["applied_q"], applied_amt=k["applied_amt"])
+        completed = []
+        for p in steps_done:                                            # audit-fix 6-9
+            fs = fresh.get("stocks", {}).get(p["sym"]); st = p["step"]
+            if fs is None: continue
+            if int(fs.get("s_day", 0)) != int(st["day_after"]) - 1:     # 그 사이 사람이 일차를 고쳤으면 건드리지 않음
+                lines.append(f"• {p['sym']} 체결 확인됐지만 일차가 그 사이 바뀌어 올리지 않았습니다 (현재 {fs.get('s_day')}일차) — 확인해 주세요"); continue
+            if "carry_after" in st: fs["buy_carry"] = float(st["carry_after"])
+            fs["s_day"] = int(st["day_after"])
+            RL.ev("state_change", "step_day", "ok", None, actor="scheduler", sym_ref=RL.ref(p["sym"]), day_before=fs["s_day"] - 1, day_after=fs["s_day"], basis="fill_confirmed")
+            lines.append(f"• {p['sym']} 체결 확인 → {fs['s_day']}/{int(st['target'])}일차")
+            if fs["s_day"] >= int(st["target"]):
+                fs["s_mode"] = "decision"; completed.append((p["sym"], f"{'분할매수' if p['side'] == 'BUY' else '분할매도'}({int(st['target'])}일) 완료"))
         await DcaConfigManager.save(fresh)
+        for c_sym, c_title in completed:
+            try:
+                t, kb = await build_stock_detail_view(client, c_sym)
+                send_panel(f"[{c_sym} {c_title} 및 자동 정지!]\n아래에서 다음 단계를 선택해 주세요!\n\n" + t, kb)
+            except Exception as e: RL.err("step_complete_panel", e)
     if lines:
         send_panel("[체결 반영 · 봇 장부]\n" + "\n".join(lines), [[{"text": "보유종목 확인", "callback_data": "stock_list"}, {"text": "관제탑", "callback_data": "panel"}]])
     return len(lines)
@@ -561,7 +582,7 @@ async def execute_us_step(client):
                     if buy_q > 0:
                         if not await stock_trade_allowed(sym): _decide(sym, "buy", "skipped", "trade_not_allowed", s); continue
                         _decide(sym, "buy", "ok", None, s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, buy_amount=buy_amt_today, buy_qty=buy_q, carry_before=s.get("buy_carry"), carry_after=new_carry), half=half_buy, n7_mult=n7m)
-                        await _order("buy", sym, "buy", buy_q, ord_id, client, cur_p)
+                        await _order("buy", sym, "buy", buy_q, ord_id, client, cur_p, step={"day_after": s_day + 1, "carry_after": new_carry, "target": s_target})
                         logs.append(f"{sym}: {buy_q}주 시장가 매수 (오늘 ${buy_amt_today:.2f}{'' if not s.get('buy_carry') else ' + 이월'} · {s_day+1}/{s_target}일차)" + (f" · 지수 {n7m:.1f}배" if n7m != 1.0 else ""))
                     else:
                         _decide(sym, "buy", "ok", "carry_no_order", s, _snap(sym, s, cur_price=cur_p, buy_amount=buy_amt_today, carry_after=new_carry))
@@ -578,6 +599,10 @@ async def execute_us_step(client):
                     RL.ev("state_change", "no_reorder_today", "ok", None, actor="scheduler", sym_ref=RL.ref(sym), why="order_no_response", day_unchanged=s_day)
                     send_panel(f"[{sym} 매수 주문 응답 없음]\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 메리츠 앱에서 체결 여부를 확인해 주세요. (일차·장부는 그대로 — 체결됐다면 관제탑에서 일차 보정, 장부는 Muse 확인)\n• 사유: {str(oe)[:120]}", [[{"text": "관제탑", "callback_data": "panel"}]])
                     continue
+                if buy_q > 0:     # audit-fix 6-9: 주문 접수만으론 일차·이월을 올리지 않음 → 전량 체결 확인 때 sync_fills 가 올림 (오늘 재주문은 막음)
+                    s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
+                    RL.ev("state_change", "step_wait_fill", "ok", None, actor="scheduler", sym_ref=RL.ref(sym), day_unchanged=s_day)
+                    await save_merged(cfg, sym); continue
                 s["buy_carry"] = new_carry
                 s["s_day"] = s_day + 1; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
                 if s["s_day"] >= s_target: s["s_mode"] = "decision"; completed_syms.append((sym, f"분할매수({s_target}일) 완료"))
@@ -590,12 +615,9 @@ async def execute_us_step(client):
                 if not await stock_trade_allowed(sym): _decide(sym, "split_sell", "skipped", "trade_not_allowed", s); continue
                 _decide(sym, "split_sell", "ok", None, s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, sell_qty=sq, remain_days=rem_days))
                 oid = f"s_{today_str}_{sym}"
-                await _order("split_sell", sym, "sell", sq, oid, client, cur_p)
-                s["s_day"] = s_day + 1; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
-                RL.ev("state_change", "step_day", "ok", None, actor="scheduler", sym_ref=RL.ref(sym), day_before=s_day, day_after=s["s_day"], mode_after=s["s_mode"] if s["s_day"] < s_target else "decision")
-                logs.append(f"{sym}: 분할매도 ({sq}주 / {s['s_day']}/{s_target}일차)")
-                if s["s_day"] >= s_target: s["s_mode"] = "decision"; completed_syms.append((sym, f"분할매도({s_target}일) 완료"))
-                await save_merged(cfg, sym)
+                await _order("split_sell", sym, "sell", sq, oid, client, cur_p, step={"day_after": s_day + 1, "target": s_target})
+                s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)   # audit-fix 6-9: 일차는 체결 확인 때 올림
+                logs.append(f"{sym}: 분할매도 주문 접수 ({sq}주 / 체결 확인 뒤 {s_day+1}/{s_target}일차)"); await save_merged(cfg, sym); continue
             elif s_mode == "sell": _decide(sym, "split_sell", "skipped", "no_holding", s, daily=True)
         except Exception as e:
             fail_reasons[sym] = str(e)[:200]
@@ -686,6 +708,7 @@ FX_RESULT_KO = {
     "ok": "환전 완료",
     "outside_hours": "낮 시간(09:00–15:30 KST)이 아니어서 환전하지 않았습니다",
     "us_holiday": "미국 휴장일이라 환전하지 않았습니다",
+    "kr_holiday": "한국 공휴일이라 환전하지 않았습니다 (메리츠 환전은 영업일만)",
     "disabled": "자동환전이 꺼져 있습니다",
     "key_bad": "메리츠 키 확인이 필요합니다",
     "gate_blocked": "실주문 안전장치로 환전하지 않았습니다",
@@ -1244,6 +1267,9 @@ async def maybe_auto_fx(client, now=None):
     if not is_trading_day(now.date()):
         RL.ev("decision", "auto_fx", "skipped", "us_holiday", actor="scheduler")
         return "us_holiday"
+    if not kr_fx_day(now.date()):          # audit-fix 6-10: 한국 공휴일은 메리츠 환전 불가 (7번과 같은 목록)
+        RL.ev("decision", "auto_fx", "skipped", "kr_holiday", actor="scheduler")
+        return "kr_holiday"
     if not SETTINGS.get("enabled") or not SETTINGS.get("auto_fx",{}).get("on",False): return "disabled"
     if not RUN.get("key_ok"): return "key_bad"
     if not RUN.get("dry") and live_gate(): return "gate_blocked"

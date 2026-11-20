@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.1.0)
+# v2.2.9 (2026-11-20, audit-fix 7번 3차): 화면 이름 표에서 사다리·재매수 항목 제거, 탑쌓기 이름(tower_gap_usd·tower_floor_usd·tower_floors·tower_floor1_start_usd) 추가. 글자 정리 규칙은 그대로
 # v2.1.0 (2026-11-19, 방 telegram-bot-menu-review 3차 v3): 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경은 그대로 둠, 매매 동작 변경 없음
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
 # v2.0.4 (2026-11-19): _read_chat 추가 (main.check_identity 가 chat_id 가 비었거나 숫자가 아니면 막는 데 씀). 알림 보내기·문구는 그대로
@@ -54,16 +55,14 @@ _NAME_KO = {
     "toss_sniper_stopped_confirmed": "토스 스나이퍼 정지 확인", "key_file": "키 파일", "telegram_file": "텔레그램 설정 파일",
     "expected_key_fp": "키 지문 기대값", "forbid_key_files": "사용 금지 키 파일", "forbid_telegram_files": "사용 금지 텔레그램 파일",
     "state_dir": "장부 폴더", "symbol": "종목", "price_market": "시세 거래소", "exch_id": "거래소 번호",
-    "split_count": "회차 수", "total_krw": "시드", "ladder_top_usd": "사다리 시작가", "ladder_step_usd": "사다리 간격",
-    "rebuy_drop_usd": "재매수 하락폭", "sell_profit_pct": "목표 이익률", "sell_fraction_pct": "매도 비중",
-    "unit_base": "재매수 기준", "first_buy_mode": "첫 매수 방식", "max_rounds_per_day": "하루 최대 회차",
+    "split_count": "회차 수", "total_krw": "시드", "tower_gap_usd": "탑쌓기 간격", "tower_floor_usd": "층 금액", "tower_floors": "층 수",
+    "tower_floor1_start_usd": "1층 시작가", "strategy": "전략", "sell_profit_pct": "목표 이익률", "sell_fraction_pct": "매도 비중",
     "order_type": "주문 방식", "allow_consecutive_sell": "연속 매도", "auto_fx_enabled": "자동환전",
     "auto_fx_buffer_pct": "환전 여유%", "auto_fx_max_usd_per_day": "환전 하루 상한",
     "intraday_sell_check_sec": "장중 매도 확인 간격", "order_time_et": "주문 시작 시각", "order_deadline_et": "주문 마감 시각",
     "sync_time_et": "체결 반영 시각", "seed_usd": "시드(달러)", "fee_pct": "수수료",
     "start.qty": "시작 수량", "start.principal_usd": "시작 원금", "start.avg_usd": "시작 평단",
-    "start.filled_levels": "이미 산 회차", "start.mode": "시작 방식", "start.rebuy_anchor_usd": "재매수 기준 평단",
-    "start.rebuy_k": "재매수 횟수", "start.first_round_credit_usd": "1회차 차감 금액", "make_plan": "계산",
+    "make_plan": "계산",
 }
 # 참/거짓 값이 붙은 이름 → 한국말 문장
 _BOOL_KO = {
@@ -73,16 +72,16 @@ _BOOL_KO = {
     "auto_fx_enabled": ("자동환전 켜짐", "자동환전 꺼짐"), "allow_consecutive_sell": ("연속 매도 허용", "연속 매도 금지"),
 }
 _FLAG_KO = {"--inject-start": "장부 시작", "--clear-halt": "정지 해제", "--overwrite": "덮어쓰기", "--add-shares": "주식 넣기",
-            "--credit": "차감", "--check": "점검", "--fingerprint": "키 확인", "--qty": "수량", "--avg": "평단"}
+            "--check": "점검", "--fingerprint": "키 확인", "--qty": "수량", "--avg": "평단"}
 _WORD_KO = {"BUY": "매수", "SELL": "매도", "LIMIT": "지정가", "LOC": "종가 조건", "MOC": "종가 시장가", "USD": "달러",
-            "ladder": "사다리", "rebuy": "재매수", "wait_top": "맨 위 확인 뒤", "total": "총 투자금", "cash": "남은 현금"}
+            "tower": "탑쌓기"}
 _NAME_RE = re.compile(r"(?<![A-Za-z0-9_.])(" + "|".join(sorted((re.escape(k) for k in _NAME_KO), key=len, reverse=True)) + r")(?![A-Za-z0-9_])")
 _BOOL_RE = re.compile(r"(?<![A-Za-z0-9_.])(" + "|".join(_BOOL_KO) + r")\s*=\s*(true|false)\b", re.I)
 _FLAG_RE = re.compile("|".join(re.escape(k) for k in sorted(_FLAG_KO, key=len, reverse=True)) + r"(?![A-Za-z-])")
 _WORD_RE = re.compile(r"(?<![A-Za-z0-9_.$])(" + "|".join(sorted(_WORD_KO, key=len, reverse=True)) + r")(?![A-Za-z0-9_])")
 _IDENT_RE = re.compile(r"(?<![A-Za-z0-9_.])[A-Za-z]+(?:_[A-Za-z0-9]+)+(?![A-Za-z0-9_])")
 # 속쓸 가격이 아닌 달러 금액(회차 금액·차감·필요·가용·부족…)은 소수점 없이. 가격(현재가·평단·1주·@)은 그대로 둠
-_AMT_RE = re.compile(r"(회차 금액 |차감 |= |필요 |가용 |부족 |예수금 |원금 |기존 보유 \u2212)\$([\d,]+(?:\.\d+)?)(?![\d,])")
+_AMT_RE = re.compile(r"(층 금액 |= |필요 |가용 |부족 |예수금 |원금 |기존 보유 \u2212)\$([\d,]+(?:\.\d+)?)(?![\d,])")
 
 
 def _int_amt(m):

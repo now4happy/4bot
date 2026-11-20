@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 v1.9.5 (2026-11-20, audit-fix-v2 9-1·9-2): ① CHANGELOG 기록 실패가 커밋·태그·푸시를 막지 않고 보고만(write_changelog) ② main 푸시가 성공했을 때만 staging 을 맞춤(push_main_then_staging)
 # 사무실 v1.9.4 (2026-11-20): 9번 브리핑(briefing/) 연결 — ① briefing/ 하위 폴더(sources/·systemd/)까지 9번 브리핑 소속으로 분류 (.py·.json·.service·.timer, tests/·test_* 제외) · 이름 '9번 브리핑'
 #                       ② 재시작 목록에서 BRIEFING_KEY 제외 (briefing 은 서비스가 아니라 one-shot 이라, 재시작하면 텔레그램 브리핑이 의도치 않게 발송됨)
 #                       ③ briefing/ 파일을 /opt/bot-office/briefing/ 으로 폴더 구조 그대로 복사 (briefing_deploy · 백업·되돌림은 사무실 파일과 같은 방식 · systemd/ 유닛은 복사 안 함=수동 설치) · CHANGELOG·태그는 briefing-vX.Y.Z · 전략·종목·금액·enabled 변경 없음
@@ -1535,6 +1536,44 @@ def _blob_ref_sha(br):
     return s if rc == 0 else ""
 
 
+def write_changelog(root, name, ver, now, files, msgs, br):
+    """audit-fix 9-1: 봇 폴더 CHANGELOG.md 맨 위에 한 건 추가 → 성공 None, 실패 '오류 글자'. 어떤 오류도 밖으로 안 던짐 (기록 실패가 커밋·태그·푸시를 막지 않게).
+    임시 파일에 쓴 뒤 바꿔치기 → 쓰다 실패해도 기존 CHANGELOG 가 잘리지 않음"""
+    tmp = None
+    try:
+        log = os.path.join(root, "CHANGELOG.md"); head = f"# {name} 변경 기록\n\n"
+        old = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
+        m_head = re.match(r"# [^\n]*변경 기록\n\n", old)   # v1.8.7: 이름이 바뀐 옛 제목 줄도 한 줄만 남게 (예: '# 5번 사무실 비서 변경 기록')
+        body = old[m_head.end():] if m_head else old
+        fl = ", ".join(os.path.basename(f) for f in files) or "문서"
+        tmp = log + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(head + f"## {ver} · {now} (KST)\n- 파일: {fl}\n- 내용: {msgs.splitlines()[0] if msgs else br}\n- 브랜치: {br}\n\n" + body)
+        os.chown(tmp, OWNER.pw_uid, OWNER.pw_gid)
+        os.replace(tmp, log); tmp = None
+        return None
+    except Exception as e:
+        print("CHANGELOG 기록 실패:", type(e).__name__, e, flush=True)
+        return f"{type(e).__name__}: {str(e)[:80]}"
+    finally:
+        if tmp:
+            try: os.unlink(tmp)
+            except OSError: pass
+
+
+def push_main_then_staging(tags, br, local, held, git_fn=None):
+    """audit-fix 9-2: main 푸시 → 성공했을 때만 (필요하면 옛 브랜치 삭제 +) staging 을 최신 main 기준으로 맞춤. → (rc, out, staging 밀었는지)
+    main 푸시가 실패하면 staging 은 건드리지 않음 (예전엔 실패해도 강제 푸시로 staging 을 덮었음)"""
+    g = git_fn or git
+    rc, out = g("push", "-q", "origin", "HEAD:main", *tags)
+    if rc != 0:
+        return rc, out, False
+    if br != "staging" and not local and not held:   # 보류한 봇이 남아 있으면 브랜치를 지우지 않음 (보류가 다 풀리면 정리)
+        g("push", "-q", "origin", "--delete", br)
+    g("push", "-q", "-f", "origin", "HEAD:staging")   # 다음 수정은 항상 최신 main 기준 staging 에서
+    return rc, out, True
+
+
 def apply(st, key):
     o = st.get("offers", {}).get(key)
     if not o:
@@ -1683,6 +1722,7 @@ def apply(st, key):
     # 버전 기록 (봇 폴더 CHANGELOG.md) → 커밋 → 태그 → main 업로드
     _, msgs = git("log", "--format=%s", f"{old_head}..{sha}", "-n", "8")
     tags, roots, now = [], targets(), datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+    changelog_failed = []
     for u in units:
         prefix = u.replace(".service", "")
         # 2번 스나이퍼: BOT_VERSION이 없어 태그 카운터(v1.2.3식)가 붙던 것을 코드 머리말 버전(v2.5.2식)으로 기록. 머리말 없으면 기존 방식 유지.
@@ -1692,13 +1732,9 @@ def apply(st, key):
         if git("rev-parse", "-q", "--verify", f"refs/tags/{prefix}-{ver}")[0] == 0:
             ver = next_tag(prefix)
         fill_vnext(units[u], ver, u == OFFICE_KEY)   # bot_office/ 파일은 /opt/bot-office 복사본에도 버전 채움 (office=True 유지)
-        log = os.path.join(roots[u], "CHANGELOG.md"); head = f"# {uname(u)} 변경 기록\n\n"
-        old = open(log, encoding="utf-8").read() if os.path.exists(log) else ""
-        m_head = re.match(r"# [^\n]*변경 기록\n\n", old)   # v1.8.7: 이름이 바뀐 옛 제목 줄도 한 줄만 남게 (예: '# 5번 사무실 비서 변경 기록')
-        body = old[m_head.end():] if m_head else old
-        fl = ", ".join(os.path.basename(f) for f in units[u]) or "문서"
-        open(log, "w", encoding="utf-8").write(head + f"## {ver} · {now} (KST)\n- 파일: {fl}\n- 내용: {msgs.splitlines()[0] if msgs else br}\n- 브랜치: {br}\n\n" + body)
-        os.chown(log, OWNER.pw_uid, OWNER.pw_gid)
+        err_cl = write_changelog(roots[u], uname(u), ver, now, units[u], msgs, br)   # audit-fix 9-1: 기록 실패는 배포(커밋·태그·푸시)를 막지 않고 보고만
+        if err_cl:
+            changelog_failed.append(f"{uname(u)}: {err_cl}")
         tags.append(f"{prefix}-{ver}")
     if units:   # 적용 전 작업 폴더가 깨끗했으므로, 바뀐 건 이번 수정·버전 올림·CHANGELOG 뿐
         git("add", "-u", "--", *{os.path.relpath(roots[u], REPO) for u in units})
@@ -1722,10 +1758,7 @@ def apply(st, key):
             git("commit", "-qm", msg_c)
     for t in tags:
         git("tag", t)
-    rc, out = git("push", "-q", "origin", "HEAD:main", *tags)
-    if rc == 0 and br != "staging" and not o.get("local") and not held:   # 보류한 봇이 남아 있으면 브랜치를 지우지 않음 (보류가 다 풀리면 정리)
-        git("push", "-q", "origin", "--delete", br)
-    git("push", "-q", "-f", "origin", "HEAD:staging")   # 다음 수정은 항상 최신 main 기준 staging 에서
+    rc, out, staging_pushed = push_main_then_staging(tags, br, bool(o.get("local")), bool(held))   # audit-fix 9-2: main 푸시가 성공했을 때만 staging 을 맞춤
     st.setdefault("seen", {}).pop(br, None)
     if held:   # D: 적용하지 않은 봇을 보류 목록에 적음 (staging 을 main 으로 맞춰도 내용은 서버에 남음)
         try:
@@ -1740,6 +1773,8 @@ def apply(st, key):
     say(f"<b>업데이트 완료</b>\n· {esc(done)}\n"
         + (f"· 사무실 파일 읽기 권한 고침: {esc(', '.join(perm_fixed))}\n" if perm_fixed else "")
         + f"· 재시작 정상 확인 · GitHub main {'업로드 완료' if rc == 0 else '업로드 실패(봇은 새 코드로 정상 실행 중): ' + esc(out[-150:])}"
+        + ("" if staging_pushed else "\n· staging 은 건드리지 않았습니다 (main 업로드가 안 돼서) — main 업로드를 다시 해결한 뒤 맞춰야 합니다")
+        + (("\n· <b>CHANGELOG 기록 실패</b> (배포는 계속했음): " + esc("; ".join(changelog_failed))) if changelog_failed else "")
         + held_msg
         + ("\n· 업데이트 비서 자신도 바뀌어 지금 새 버전으로 다시 시작합니다. (2분 안에 정상 신호가 없으면 자동으로 이전 버전 복구)" if self_update else ""))
     for unit in units:
