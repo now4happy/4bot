@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.17)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.20)
+# v2.2.20 (2026-11-21, 판 22 듀얼 모드): SAFE_DEFAULTS 에 trading_mode("tower" 기본 | "sniper") · sniper_tp_l1_pct(1.5) · sniper_tp_upper_pct(1.0) 추가. validate_settings 가 trading_mode 값(sniper|tower)·익절 % (0 초과 50 이하)를 검사하고, 스나이퍼 모드는 order_type=LIMIT · intraday_sell_check_sec>=30 이어야 통과(탑쌓기 모드는 예전 그대로). 나머지는 그대로
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): validate_settings 에 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day 검사 추가 — 없으면 통과(기본 1), 있으면 1~3 정수만 (0·4 이상·소수·글자·true/false 는 문제 목록에 넣어 주문 전에 막음). DEFAULTS 에는 안 넣음(없을 때 코드가 1 로 읽음). 나머지는 그대로
 # v2.2.9 (2026-11-20, audit-fix 7번 3차 — 풀이님 결정 10:14): 사다리 삭제로 탑쌓기 전용 — credit_problems·CHOICES(unit_base·first_buy_mode)·ladder_levels·적립 상태(accum_state.json: get_accum/save_accum/accum_or_start)·사다리 설정 키·start.mode/filled_levels/rebuy_*/first_round_credit_usd 제거. validate_settings(s) 는 사다리 값을 안 보고, tower_gap_usd(1 이상 정수)·tower_floor_usd(>0)·tower_floors(1 이상 정수) 와 strategy("tower" 가 아니면 차단)를 검사. order_type(LOC|LIMIT) 검사는 그대로
 # v2.2.6 (2026-11-20, 판 16 본격): ① intraday_sell_check_sec 기본 120 → 30 (코드 검증 하한 — 체결 알림 간격과 같게) ② apply_fill: 같은 체결(exec_id)을 장부 파일(position.json)의 applied_ids 로도 막고(원금·수량이 먼저 저장돼 중복·누락이 안 생김),
@@ -51,6 +52,9 @@ SAFE_DEFAULTS = {
     "sell_fraction_pct": 50,               # 보유의 이 % 매도 (정수 주 내림)
     "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
     "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
+    "trading_mode": "tower",               # v2.2.20 판 22: "tower"(탑쌓기, 기본) | "sniper"(스나이퍼). 바꾸면 다음 매매 판단부터 적용 (이미 낸 주문은 안 건드림). 층 장부는 두 모드가 같이 씀
+    "sniper_tp_l1_pct": 1.5,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 층) 익절 % (층 평단 +이 % 에 그 층 전량)
+    "sniper_tp_upper_pct": 1.0,            # v2.2.20 스나이퍼 상단층 익절 %
     "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
     "auto_fx_enabled": False,              # true 면 오늘 매수에 달러가 모자랄 때 원화→달러 환전 신청 (실주문 모드에서만)
@@ -208,6 +212,18 @@ def validate_settings(s):
     isec = s.get("intraday_sell_check_sec")
     if isinstance(isec, bool) or not isinstance(isec, (int, float)) or not (isec == 0 or 30 <= isec <= 3600):
         bad.append("intraday_sell_check_sec 는 0(끔) 또는 30~3600 (초)")
+    tm = s.get("trading_mode")      # v2.2.20: 없으면 탑쌓기 (예전 동작)
+    if tm is not None and str(tm).strip().lower() not in ("sniper", "tower"):
+        bad.append("trading_mode 는 sniper | tower")
+    for k in ("sniper_tp_l1_pct", "sniper_tp_upper_pct"):
+        v = s.get(k)
+        if v is not None and (isinstance(v, bool) or not (0 < _f(v) <= 50)):
+            bad.append(f"{k} 는 0 초과 50 이하 (익절 %)")
+    if str(tm or "tower").strip().lower() == "sniper":
+        if s.get("order_type") != "LIMIT":
+            bad.append("스나이퍼 모드는 order_type=LIMIT 이어야 해요 (장중 지정가 매매)")
+        if isinstance(isec, bool) or not isinstance(isec, (int, float)) or isec < 30:
+            bad.append("스나이퍼 모드는 intraday_sell_check_sec 30 이상이어야 해요 (0=끔 불가)")
     if not isinstance(s.get("auto_fx_enabled"), bool):
         bad.append("auto_fx_enabled 는 true | false")
     elif s.get("auto_fx_enabled"):

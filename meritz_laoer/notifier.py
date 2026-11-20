@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.2.11)
+# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.2.20)
+# v2.2.20 (2026-11-21, 판 22 듀얼 모드): 알림 머리말 '7번 메리츠 SOXL 탑쌓기' → '7번 메리츠 SOXL 듀얼모드' (스나이퍼·탑쌓기 두 모드 알림이 같이 나가서). 화면 이름 표에 trading_mode·sniper_tp_l1_pct·sniper_tp_upper_pct 추가. 글자 정리 규칙·전송은 그대로
 # v2.2.11 (2026-11-20, 7번 이름 변경): 알림 머리말 '7번 메리츠 속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기'. 동작 변경 없음
 # v2.2.9 (2026-11-20, audit-fix 7번 3차): 화면 이름 표에서 사다리·재매수 항목 제거, 탑쌓기 이름(tower_gap_usd·tower_floor_usd·tower_floors·tower_floor1_start_usd) 추가. 글자 정리 규칙은 그대로
 # v2.1.0 (2026-11-19, 방 telegram-bot-menu-review 3차 v3): 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경은 그대로 둠, 매매 동작 변경 없음
@@ -63,7 +64,7 @@ _NAME_KO = {
     "intraday_sell_check_sec": "장중 매도 확인 간격", "order_time_et": "주문 시작 시각", "order_deadline_et": "주문 마감 시각",
     "sync_time_et": "체결 반영 시각", "seed_usd": "시드(달러)", "fee_pct": "수수료",
     "start.qty": "시작 수량", "start.principal_usd": "시작 원금", "start.avg_usd": "시작 평단",
-    "make_plan": "계산",
+    "make_plan": "계산", "trading_mode": "매매 모드", "sniper_tp_l1_pct": "스나이퍼 1층 익절", "sniper_tp_upper_pct": "스나이퍼 상단층 익절",
 }
 # 참/거짓 값이 붙은 이름 → 한국말 문장
 _BOOL_KO = {
@@ -120,7 +121,7 @@ class Notifier:
             logging.warning(f"텔레그램 설정 없음/오류 → 로그로만 남김: {type(e).__name__}")
 
     def send(self, text):
-        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 SOXL 탑쌓기\n" + to_korean(text)
+        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 SOXL 듀얼모드\n" + to_korean(text)
         logging.info(msg.replace("\n", " | "))
         if not self.ok:
             return False

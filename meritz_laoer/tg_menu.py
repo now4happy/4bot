@@ -1,5 +1,8 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.18)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.20)
+# v2.2.20 (2026-11-21, 판 22 듀얼 모드): ① 첫 메뉴 맨 위에 [스나이퍼 모드] [탑쌓기 모드] 버튼 — 누르면 설정 trading_mode 가 바로 바뀜 (다음 매매 판단부터 적용, 이미 낸 주문·층은 그대로. 설정 검사가 막으면 이유를 보여 줌). 첫 화면 글자에 지금 모드 표시
+#   ② 상황판(현상태)을 스나이퍼 봇 형식 HTML 로 새로 씀 — 굵은 제목·이모티콘, 층마다 한 줄 ⚡ [N층: X주·$Y] $평단 ➔ $목표가 (+P%), 시드 배분 게이지(🟦🟨🟩), 구분선. 장부 파일뿐 아니라 오늘 체결(조회만, 메모리에서만 반영)까지 실시간으로 섞음. 스나이퍼 모드의 층 번호는 평단 낮은 층이 1층, 탑쌓기 모드는 예전 번호(평단 높은 층이 1층)
+#   ③ 설정 메뉴에 '스나이퍼 1층 익절 변경'(sniper_tp_l1_pct, 기본 1.5)·'스나이퍼 상단층 익절 변경'(sniper_tp_upper_pct, 기본 1.0). 탑쌓기 설정은 그대로. send 에 html 옵션 추가 (일반 알림·다른 화면은 예전처럼 글자만)
 # v2.2.18 (2026-11-20, 판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개(pos·halt·avg·tgt)를 돌려주는데 ledger_text·power_text 가 5개로 풀어서 ValueError 가 나던 것을 4개로 고침. 매매 로직·문구 변경 없음
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): 설정 메뉴에 "하루 매수 층 수 변경"(tower_max_buy_layers_per_day)·"하루 매도 층 수 변경"(tower_max_sell_layers_per_day) 버튼 추가 — 1~3 정수, 없으면 1 (TOWER_DEFAULTS). MEANS 설명 2개, 설정 화면 SET_ROWS 와 상황판 설정값 줄에 현재 값 표시. 다른 설정 버튼은 그대로
 # v2.2.14 (2026-11-20, 판 17 시초가 상한): 상황판 오늘 계획 미리보기가 저장된 시초가(main.load_open_price, 읽기만)를 build_plan 에 넘김 — 시초가가 아직 없으면 0 → 계획 배정 그대로. 메뉴·문구는 그대로
@@ -40,6 +43,8 @@
 #   - 처음 시작 때 쌓여 있던 예전 업데이트는 건너뜀 (재시작으로 옛 버튼이 다시 실행되지 않게) · 2분 넘은 메시지 무시
 # ==========================================================
 import contextlib
+import copy
+import html as _html
 import io
 import json
 import logging
@@ -51,12 +56,14 @@ import urllib.request
 
 from config import update_settings
 import tower_strategy as _TW
+import sniper_mode as _SN
 from global_throttle import GlobalThrottle
 from notifier import Notifier, to_korean
 
 # ---- v2.0.1 메뉴: 맨밑 4개가 곧 메인 (2x2). 카테고리 안 버튼은 카테고리마다 따로 보임
 M_FUND, M_TACT, M_STAT, M_ETC = "자금", "전술", "현상태", "기타"
-MAIN_ROWS = [[M_FUND, M_TACT], [M_STAT, M_ETC]]
+M_SNIPER, M_TOWER = "스나이퍼 모드", "탑쌓기 모드"          # v2.2.20: 첫 메뉴 맨 위 — 누르면 매매 모드가 바로 바뀜
+MAIN_ROWS = [[M_SNIPER, M_TOWER], [M_FUND, M_TACT], [M_STAT, M_ETC]]
 BACK = "뒤로"
 I_FUNDS, I_FX = "자금 현황", "자동환전"
 I_PLAN, I_SET = "오늘 계획", "설정"
@@ -83,6 +90,8 @@ SET_ITEMS = {
     "층 수 변경": dict(key="tower_floors", name="층 수", unit="층", kind="int", lo=1, hi=100, ex="예: 10"),
     "하루 매수 층 수 변경": dict(key="tower_max_buy_layers_per_day", name="하루 매수 층 수", unit="층", kind="int", lo=1, hi=3, ex="예: 2"),
     "하루 매도 층 수 변경": dict(key="tower_max_sell_layers_per_day", name="하루 매도 층 수", unit="층", kind="int", lo=1, hi=3, ex="예: 2"),
+    "스나이퍼 1층 익절 변경": dict(key="sniper_tp_l1_pct", name="스나이퍼 1층 익절", unit="%", kind="num", lo=0, lo_incl=False, hi=50, ex="예: 1.5 (1층 평단보다 1.5% 오르면 그 층 전량 매도)"),
+    "스나이퍼 상단층 익절 변경": dict(key="sniper_tp_upper_pct", name="스나이퍼 상단층 익절", unit="%", kind="num", lo=0, lo_incl=False, hi=50, ex="예: 1.0 (상단층 평단보다 1.0% 오르면 그 층 전량 매도)"),
     "환전 여유% 변경": dict(key="auto_fx_buffer_pct", name="환전 여유%", unit="%", kind="num", lo=0, hi=100, ex="예: 3 (모자란 달러보다 3% 더 환전)"),
     "환전 하루 상한 변경": dict(key="auto_fx_max_usd_per_day", name="환전 하루 상한", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 5000 (달러, 정수)"),
 }
@@ -98,6 +107,8 @@ MEANS = {
     "tower_floors": ("탑쌓기 층 수예요. 안 정하면 10이에요.", "총 한도(층 금액 × 층 수)가 달라져요"),
     "tower_max_buy_layers_per_day": ("하루에 최대 몇 층까지 살지예요. 1~3 정수만 돼요. 안 정하면 1이에요 (지금처럼 하루에 한 층). 미완성 층을 위에서부터 차례로 채우고, 새 층은 하루에 하나만 만들어요.", "다음 주문일부터 하루에 사는 층 수가 달라져요 (현금·총 한도 안에서)"),
     "tower_max_sell_layers_per_day": ("하루에 최대 몇 층까지 팔지예요. 1~3 정수만 돼요. 안 정하면 1이에요 (지금처럼 하루에 한 층). 같은 때 여러 층이 목표에 닿으면 번호가 큰 층(맨 위 층)부터 팔아요.", "다음 매도 확인부터 하루에 파는 층 수가 달라져요 (목표 이익률·매도 비중은 그대로)"),
+    "sniper_tp_l1_pct": ("스나이퍼 모드에서 1층(평단이 가장 낮은 공격 층)을 파는 기준이에요. 그 층 평단보다 이 %만큼 오르면 그 층 전량을 팔아요. 안 정하면 1.5예요.", "스나이퍼 모드의 다음 매도 판단부터 달라져요 (탑쌓기 모드는 그대로)"),
+    "sniper_tp_upper_pct": ("스나이퍼 모드에서 1층 위쪽 층(상단층)을 파는 기준이에요. 그 층 평단보다 이 %만큼 오르면 그 층 전량을 팔아요. 안 정하면 1.0이에요.", "스나이퍼 모드의 다음 매도 판단부터 달라져요 (탑쌓기 모드는 그대로)"),
     "auto_fx_buffer_pct": ("자동환전 때 부족분에 더해 환전하는 여유 비율이에요.", "다음 자동환전 금액이 달라져요"),
     "auto_fx_max_usd_per_day": ("자동환전을 하루에 최대 얼마까지 할지 정한 상한이에요.", "하루 환전 한도가 달라져요"),
 }
@@ -108,9 +119,11 @@ SET_POWER = "봇 켜기/끄기"
 SET_ROWS = [["시드 변경", "목표 이익률 변경"], ["매도 비중 변경", "탑쌓기 간격 변경"],
             ["1층 시작가 변경", "층 금액 변경"], ["층 수 변경", "환전 여유% 변경"],
             ["하루 매수 층 수 변경", "하루 매도 층 수 변경"],
+            ["스나이퍼 1층 익절 변경", "스나이퍼 상단층 익절 변경"],
             ["환전 하루 상한 변경", SET_POWER], [BACK]]
 TOWER_DEFAULTS = {"tower_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_floors": _TW.FLOORS,
-                  "tower_max_buy_layers_per_day": 1, "tower_max_sell_layers_per_day": 1}   # 설정에 없으면 탑쌓기가 쓰는 기본값 (표시용)
+                  "tower_max_buy_layers_per_day": 1, "tower_max_sell_layers_per_day": 1,
+                  "sniper_tp_l1_pct": _SN.TP_L1_DEFAULT, "sniper_tp_upper_pct": _SN.TP_UPPER_DEFAULT}   # 설정에 없으면 탑쌓기가 쓰는 기본값 (표시용)
 
 
 def cur_val(s, key):
@@ -123,8 +136,8 @@ HEADS = {"main": "아래 버튼을 눌러 주세요", "fund": "자금", "tact": 
 CONFIRM_SEC = 60            # 제안값: 확인 버튼 유효 시간
 WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
-HEAD = "7번 메리츠 SOXL 탑쌓기"
-ALL_LABELS = ({M_FUND, M_TACT, M_STAT, M_ETC, BACK, I_FUNDS, I_FX, I_PLAN, I_SET, I_BOARD, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
+HEAD = "7번 메리츠 SOXL 듀얼모드"
+ALL_LABELS = ({M_SNIPER, M_TOWER, M_FUND, M_TACT, M_STAT, M_ETC, BACK, I_FUNDS, I_FX, I_PLAN, I_SET, I_BOARD, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
                T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, SET_POWER} | set(SET_ITEMS))
 
 
@@ -247,11 +260,15 @@ class MenuBot:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
 
-    def send(self, c, text, rows=None, dry=True):
+    def send(self, c, text, rows=None, dry=True, html=False):
+        """html=True 면 text 를 텔레그램 HTML(굵게 등)로 보냄 — 이미 이스케이프한 글자여야 함 (v2.2.20 상황판). 아니면 예전처럼 글자만"""
         tok, chat = c
-        msg = (("[모의] " if dry else "") + HEAD + "\n" + to_korean(text)).replace(tok, "***")[:3900]
+        if html:
+            msg = (("[모의] " if dry else "") + HEAD + "\n" + text).replace(tok, "***")[:3900]
+        else:
+            msg = (("[모의] " if dry else "") + HEAD + "\n" + to_korean(text)).replace(tok, "***")[:3900]
         try:
-            self._call(tok, "sendMessage", {"chat_id": chat, "text": msg, "reply_markup": kb(rows or MAIN_ROWS)}, 15)
+            self._call(tok, "sendMessage", dict({"chat_id": chat, "text": msg, "reply_markup": kb(rows or MAIN_ROWS)}, **({"parse_mode": "HTML"} if html else {})), 15)
         except Exception as e:
             logging.warning(f"텔레그램 메뉴 전송 실패: {type(e).__name__}")
 
@@ -400,36 +417,109 @@ class MenuBot:
                 f"· 탑쌓기 간격 {fmt_val(KEY_ITEM['tower_gap_usd'], cur_val(s, 'tower_gap_usd'))} · 층 금액 {fmt_val(KEY_ITEM['tower_floor_usd'], cur_val(s, 'tower_floor_usd'))} · 층 수 {fmt_val(KEY_ITEM['tower_floors'], cur_val(s, 'tower_floors'))}",
                 f"· 1층 시작가 {v('tower_floor1_start_usd') if s.get('tower_floor1_start_usd') else '안 정함 (평단 기준)'}",
                 f"· 하루 매수 {fmt_val(KEY_ITEM['tower_max_buy_layers_per_day'], cur_val(s, 'tower_max_buy_layers_per_day'))} · 하루 매도 {fmt_val(KEY_ITEM['tower_max_sell_layers_per_day'], cur_val(s, 'tower_max_sell_layers_per_day'))} (최대)",
+                f"· 스나이퍼 익절 1층 {fmt_val(KEY_ITEM['sniper_tp_l1_pct'], cur_val(s, 'sniper_tp_l1_pct'))} · 상단층 {fmt_val(KEY_ITEM['sniper_tp_upper_pct'], cur_val(s, 'sniper_tp_upper_pct'))}",
                 f"· 당일 매도 확인 {self.intraday_text(s)}",
                 f"· 자동환전 {fx}"]
 
+    def live_state(self, s, d):
+        """v2.2.20 실시간 층 상태 → (층 상태, 안내 글자). 장부 파일(tower_state.json)에 오늘 체결을 메모리에서만 더함 (조회만 — 파일·장부·주문 안 건드림).
+        체결을 못 읽으면(키·조회 오류 등) 장부 기준 그대로 + 안내"""
+        o, pos = self.o, d.get("pos")
+        with o.in_dir(s["state_dir"]):
+            cfg = o.ConfigManager(s)
+            tst, _had = o.tower_state_for(cfg, int(pos["qty"]) if pos else 0, float(pos["principal"]) if pos else 0.0, s)
+            day = o.now_et().strftime("%Y-%m-%d")
+            m = cfg._load_json(f"data/{'dry_' if s.get('dry_run', True) else ''}orders_{day}.json", None)
+        tst = copy.deepcopy(tst)
+        if not (isinstance(m, dict) and (m.get("orders") or [])) or s.get("dry_run", True):
+            return tst, ""
+        if d.get("api_bad"):
+            return tst, "오늘 체결은 못 읽어서 장부 기준이에요"
+        try:
+            rows = o.fill_rows_for(self._api(s), s, day)
+            items = o.fill_items(m, rows)
+            with o.in_dir(s["state_dir"]):
+                o.apply_tower_fills(s, o.ConfigManager(s), day, items, tst, persist=False)
+            return tst, ("오늘 체결 반영됨 (조회만)" if items else "")
+        except Exception as e:
+            return tst, f"오늘 체결 조회 실패 ({type(e).__name__}) — 장부 기준이에요"
+
     def board_text(self, s):
+        """v2.2.20 상황판 (텔레그램 HTML). 스나이퍼 봇 레이더 형식: 굵은 제목·이모티콘 · 층마다 한 줄 · 시드 배분 게이지 · 구분선. 조회만"""
+        esc = _html.escape
         d = self.board(s)
-        pos = d["pos"]
-        lines = [f"[7번 메리츠 SOXL 탑쌓기 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
-        lines.append(f"· 전략: {self.strategy_text(s)}")
-        if pos:
-            tw = ((d.get("plan") or {}).get("info") or {}).get("tower")
-            fill_txt = f"층 {len(tw['floors'])}개" if tw else "층 미확인"
-            tgt = ((d.get("plan") or {}).get("info") or {}).get("sell_target") or d["target"]     # v2.2.6: 탑쌓기는 층별 매도라 가장 낮은 층의 목표 (제일 먼저 닿는 값)
-            lines.append(f"· 장부: {pos['qty']}주 · 평단 ${d['avg']:.2f} · {fill_txt} · 매도 목표 ${tgt:.2f} (가장 낮은 층 기준)")
+        pos, sniper = d["pos"], _SN.get_mode(s) == _SN.MODE_SNIPER
+        dry = s.get("dry_run", True)
+        o = self.o
+        st, live_note = self.live_state(s, d)
+        px = float(d["price"]) if d.get("price") else 0.0
+        fu, nfl, _gap = _TW.params(s)
+        cap_usd = fu * nfl
+        div = "──────────────"
+        with o.in_dir(s["state_dir"]):
+            ss = _SN.load_state(o.ConfigManager(s))
+        rsi = _SN.rsi_from_state(ss, time.time())[0]
+        lines = [f"📡 <b>[메리츠 SOXL 레이더]</b> ({'⚡스나이퍼 모드' if sniper else '🏗️탑쌓기 모드'} · {'모의' if dry else '실거래'} · {'봇 켜짐' if s.get('enabled') else '봇 꺼짐'} · {esc(o.BOT_VERSION)})"]
+        lines.append(f"🐂 <b>SOXL</b> 현재가 <b>${px:.2f}</b>" + (f" · RSI <b>{rsi:.1f}</b>" if sniper and rsi is not None else (" · RSI 모으는 중" if sniper else "")) if px else "🐂 <b>SOXL</b> 시세 미확인")
+        if d.get("halt"):
+            lines.append(f"🛑 정지 표시: {esc(str((d['halt'] or {}).get('reason') or ''))[:80]}")
+        lines.append(div)
+        fl = _SN.active_floors(st)
+        tq, tc = _TW.totals(st)
+        done_cost = sum(float(f.get("cost") or 0) for f in fl if _TW.is_complete(f))
+        part_cost = sum(float(f.get("cost") or 0) for f in fl if not _TW.is_complete(f))
+        gauge, pa, pb, pc = _SN.gauge(done_cost, part_cost, max(0.0, cap_usd - tc))
+        lines.append(f"🏛️ <b>[보유 층 : 총 {tq}주]</b> (${tc:,.0f} · 한도 ${cap_usd:,.0f} 중 {100 - pc:.0f}%)")
+        lines.append(f"{gauge} (완성{pa:.0f}%·진행{pb:.0f}%·시드{pc:.0f}%)")
+        pct_tower, frac_tower = float(s.get("sell_profit_pct") or 0), float(s.get("sell_fraction_pct") or 0)
+        if not fl:
+            lines.append("⚪ <b>[보유 층: 0주]</b> " + ("직전 익절가 대기 (기준가 없음)" if sniper else "다음 주문일에 1층을 만들어요"))
+        elif sniper:
+            rows = sorted(_SN.sell_rows(st, s, px), key=lambda r: r["no"])
+            for r in rows:
+                g = r["gain_pct"]
+                prog = "" if r["complete"] else f" ◧{int(round(r['cost'] / r['tgt_usd'] * 100)) if r['tgt_usd'] else 0}%"
+                lines.append(f"⚡ <b>[{r['no']}층: {r['qty']}주·${r['cost']:,.0f}]</b> <b>${r['avg']:.2f}</b> ➔ <b>${r['target']:.2f}</b> ({'+' if (g or 0) >= 0 else ''}{(g or 0):.2f}%){prog}")
+            lines.append(f"▫️ 1층 = 공격 층(평단 가장 낮은 층) 익절 +{_SN.tp_pcts(s)[0]:g}% · 상단층 +{_SN.tp_pcts(s)[1]:g}% · 층 전량")
         else:
-            lines.append("· 장부: 시작 전 (기타 → 장부 시작)")
-        lines += self.tower_lines(s, d)
+            for f in fl:
+                fa = _TW.floor_avg(f)
+                tg = _TW.ceil2(fa * (1 + pct_tower / 100.0))
+                g = (px / fa - 1) * 100 if px and fa else 0.0
+                prog = "" if _TW.is_complete(f) else f" ◧{int(round(_TW.fill_ratio(f) * 100))}%"
+                sq = _TW.floor_sell_qty(int(f["qty"]), frac_tower)
+                lines.append(f"⚡ <b>[{int(f['id'])}층: {int(f['qty'])}주·${float(f['cost']):,.0f}]</b> <b>${fa:.2f}</b> ➔ <b>${tg:.2f}</b> ({'+' if g >= 0 else ''}{g:.2f}%){prog}")
+            lines.append(f"▫️ 층별 매도: 평단 +{pct_tower:g}% 에 그 층의 {frac_tower:g}% (1층 = 평단 가장 높은 층)")
+        lines.append(div)
         if d["api_bad"]:
-            lines.append("· 메리츠 조회: 미확인 (" + "; ".join(d["api_bad"][:3]) + ")")
+            lines.append("🎯 메리츠 조회 미확인: " + esc("; ".join(d["api_bad"][:3])))
+        elif sniper:
+            lines.append("🎯 <b>[다음 매수 타점]</b>")
+            anchor, kind = _SN.anchor_info(st, ss)
+            cap = min((_TW.floor_avg(f) for f in fl), default=0.0)
+            late = _SN.is_late_cutoff(o.now_et())
+            sig = _SN.buy_signal(px, anchor, kind, cap, len(fl), rsi, late)
+            if anchor > 0:
+                brk = "돌파차단(15:30~)" if late else (f"돌파 <b>${sig['breakout_price']:.2f}</b> (RSI≤{_SN.BREAKOUT_MAX_RSI:g})" if sig["breakout_price"] else "돌파 없음")
+                lines.append(f"▫️ 눌림 <b>${sig['pullback_price']:.2f}</b> ({sig['drop_pct']:+.1f}%) / {brk} 시 매수")
+                lines.append(f"▫️ 기준 ${anchor:.2f}({esc({'exit': '직전 익절가', 'buy': '직전 매수가', 'avg': '낮은 층 평단'}.get(kind, kind))}) 대비 {sig['chg_pct']:+.2f}%" + (f" · 상한 ${cap:.2f}" if cap > 0 else ""))
+            else:
+                lines.append("▫️ 기준가 없음 — 첫 층은 직전 익절가가 생긴 뒤부터 감시해요")
+            lines.append(f"▫️ 신호: {esc(_SN.SIGNAL_KO.get(sig['signal_type'], sig['signal_type']))} · 한 층 ${fu:,.0f} (남은 몫만큼) · 60초마다 확인")
         else:
+            lines.append("🎯 <b>[오늘 계획]</b> (미리보기 · 주문 안 냄)")
+            if d["plan"] is None:
+                lines.append(f"▫️ 미확인 ({esc(str(d['plan_err']))})")
+            else:
+                lines += ["▫️ " + esc(x) for x in (o.plan_head(d["plan"], s).split("\n") + o.fmt_orders(d["orders"]).split("\n") + ["· " + n for n in d["notes"]]) if x.strip()]
+        lines.append(div)
+        if not d["api_bad"]:
             lq = int(pos["qty"]) if pos else None
-            lines.append(f"· 메리츠 잔고: {d['hold']}주 (매도가능 {d['sellable']}) · 장부 {lq if lq is not None else '시작 전'}주"
-                         + (" · 잔고 ≠ 장부" if lq is not None and d["hold"] != lq else ""))
-            lines.append(f"· 현재가 ${d['price']:.2f} · 전일종가 ${d['prev']:.2f} · 적용환율 {('{:,.0f}'.format(d['fx'])) if d['fx'] else '미확인'}")
-            lines.append(f"· 달러 예수금 ${d['cash']:,.0f}")
-            pi = (d["plan"] or {}).get("info") or {}
-            lines.append(f"· 시드 {fmt_krw(s['total_krw']) if s.get('total_krw') else '미정'} · 한층 금액 "
-                         + (fmt_krw(pi["unit_usd"] * pi["fx"]) if pi.get("fx") and pi.get("unit_usd") is not None else "미확인"))
-        lines += self.settings_lines(s)
-        lines.append("─────────────────")
-        lines += self.plan_lines(s, d)
+            lines.append(f"💵 달러 예수금 <b>${d['cash']:,.0f}</b> · 메리츠 잔고 {d['hold']}주 (장부 {lq if lq is not None else '시작 전'}주)" + (" · ⚠️잔고≠장부" if lq is not None and d["hold"] != lq else ""))
+        lines.append(f"⚙️ 층 ${fu:,.0f}×{nfl} · 당일 확인 {esc(self.intraday_text(s))}")
+        if live_note:
+            lines.append("ℹ️ " + esc(live_note))
+        lines.append(f"🕒 {o.now_et().strftime('%m-%d %H:%M:%S ET')}")
         return "\n".join(lines)
 
     def ledger_text(self, s):
@@ -534,7 +624,8 @@ class MenuBot:
 
     def show(self, name, s, say, text=None):
         self.nav, self.in_prompt = name, False
-        say(text or (self.fx_text(s) if name == "fx" else self.power_bot_text(s) if name == "power" else HEADS.get(name, HEADS["main"])))
+        say(text or (self.fx_text(s) if name == "fx" else self.power_bot_text(s) if name == "power" else
+                     (f"지금 모드: {_SN.mode_ko(s)} · " + HEADS["main"]) if name == "main" else HEADS.get(name, HEADS["main"])))
 
     # ---------------------------------------------------------- 설정 변경 (설정 파일 값만 바꿈)
     def _desc(self, changes, res):
@@ -620,12 +711,28 @@ class MenuBot:
             return say(f"장부에 넣을까요?\n지금 값 → 새 값\n· 장부 추가: 없음 → {qty}주 · 평단 ${avg:g}" +
                        f"\n{CONFIRM_SEC}초 안에 [{ADD_OK}] 를 눌러 주세요. 주문은 안 나가요 (장부만 바뀌고, 메리츠 잔고가 장부 + 수량과 같을 때만 반영돼요).", [[ADD_OK, BACK]])
         if text not in ALL_LABELS:                      # 모르는 글자·/start·예전 버튼(메뉴 등) → 새 메인 메뉴
-            return self.show("main", s, say, "메뉴가 바뀌었어요. 아래 4개 버튼으로 써 주세요.")
+            return self.show("main", s, say, f"메뉴가 바뀌었어요. 지금 모드: {_SN.mode_ko(s)} · 아래 버튼으로 써 주세요.")
         active, self.in_prompt, self.wait = self.in_prompt, False, None
         if text != CHG_OK:
             self.pending = None
         if text == BACK:
             return self.show(self.nav if active else PARENT.get(self.nav, "main"), s, say)
+        if text in (M_SNIPER, M_TOWER):      # v2.2.20 모드 버튼: 설정 trading_mode 를 바로 바꿈 (확인 단계 없음 — 다음 매매 판단부터 적용, 낸 주문·층은 그대로)
+            want = _SN.MODE_SNIPER if text == M_SNIPER else _SN.MODE_TOWER
+            self.nav = "main"
+            if _SN.get_mode(s) == want:
+                return say(f"이미 {_SN.MODE_KO[want]} 모드예요. 바뀐 것 없어요.")
+            try:
+                update_settings({"trading_mode": want})
+            except ValueError as e:
+                return say(f"{_SN.MODE_KO[want]} 모드로 바꿀 수 없어요: {e}")
+            except OSError:
+                return say("설정 파일을 쓰지 못했어요 — 바뀐 것 없음. 서버 파일 쓰기 권한을 확인해 주세요.")
+            try:
+                self._s = self.o.load_settings()
+            except Exception:
+                pass
+            return say(f"{_SN.MODE_KO[want]} 모드로 바꿨어요. 다음 매매 판단부터 적용돼요.\n· 이미 낸 주문은 취소하지 않고 그대로 둬요\n· 층(장부)은 두 모드가 같이 써요 — 닫거나 초기화하지 않아요")
         cat = {M_FUND: "fund", M_TACT: "tact", M_STAT: "stat", M_ETC: "etc"}
         if text in cat:
             return self.show(cat[text], s, say)
@@ -682,7 +789,9 @@ class MenuBot:
         # ---- 📈 현상태
         if text in (I_BOARD, I_LEDGER, I_POWER):
             self.nav = "stat"
-            return say(self.board_text(s) if text == I_BOARD else self.ledger_text(s) if text == I_LEDGER else self.power_text(s))
+            if text == I_BOARD:
+                return self.send(c, self.board_text(s), self.rows(self._s), dry, html=True)
+            return say(self.ledger_text(s) if text == I_LEDGER else self.power_text(s))
         # ---- 🛠 기타
         self.nav = "etc"
         if text == T_CHECK:

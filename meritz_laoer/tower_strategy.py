@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.17)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.20)
+# v2.2.20 (2026-11-21, 판 22 듀얼 모드): 스나이퍼 체결 반영 추가 — apply_fill 이 kind 'buy_sniper' 를 받음(_apply_sniper_buy: 지정 층에 수량·원가 더함, 새 층 가능), _apply_sell 은 주문 mode 가 'sniper' 면 남은 주식을 탑업·재매수 대기 없이 완성 층으로 둠. 탑쌓기 계산(make_plan·_apply_buy·탑쌓기 매도)은 그대로
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): 설정 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day (1~3 정수, 없으면 1 = 예전 동작 그대로). buy_layers(s)·sell_layers(s) 추가.
 #   make_plan 이 매수를 하루에 최대 N_buy 층까지 계획: 위에서부터 미완성 층을 차례로 최대 N개 (닫힌 층은 건너뛰고 N에 안 셈), 층마다 안 산 칸 전부 · 칸 금액·이월(carry)·반올림 이월(roll)·시초가 상한(cap_levels)은 층마다 따로.
 #   새 층은 하루 최대 1개 — 미완성 층이 하나도 없을 때만 만들고 그날은 그 새 층만 삼. 현금·총 한도(pool)는 사는 층 전체가 순서대로 같이 씀 (모자라 멈추면 그 뒤 층은 안 삼).
@@ -537,6 +538,28 @@ def _apply_buy(st, order, q, amt):
     _after_buy(f)
 
 
+def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
+    """v2.2.20 스나이퍼 매수 체결 반영: 주문의 floor_id 층(없으면 new_floor 로 새 층)에 수량·원가를 더함. 칸(levels) 계산은 안 씀.
+    층 원가가 목표에서 TOL_USD 이내로 모자라거나, 남은 몫(목표 − 원가)이 체결 평균가 1주보다 작으면 완성(done). 아니면 남은 시드를 다음 스나이퍼 매수가 채우도록 미완성으로 둠 (탑쌓기로 바꿔도 칸은 _topup_setup 이 준비)"""
+    f = _by_id(st, order.get("floor_id"))
+    nf = order.get("new_floor")
+    if f is None and isinstance(nf, dict):
+        f = _floor(nf["id"], 0, 0.0, nf["target"], "sniper")
+        st["floors"].append(f)
+        st["next_id"] = max(int(_f(st.get("next_id"))), int(nf["id"]) + 1)
+    if f is None:
+        return
+    f["qty"] = int(f["qty"]) + q
+    f["cost"] = round(_f(f["cost"]) + amt, 4)
+    f["rebuy_pending"], f["closed"] = False, False
+    need = _f(f.get("target") or FLOOR_USD) - _f(f["cost"])
+    if is_complete(f) or need < amt / q - 1e-9:
+        f["done"], f["levels"], f["settled"], f["base_usd"], f["carry_usd"] = True, [], [], 0.0, 0.0
+    else:
+        _topup_setup(f, gap, start_usd)
+        f["rebuy_pending"] = False
+
+
 def _apply_sell(st, order, q, amt, gap, start_usd):
     """매도 체결 반영. 주문에 floor_id 가 있으면 그 층만 (v2.2.6 층별 매도). 없으면(예전 주문) 예전처럼 층별 보유 비율대로.
     잔여 원가 계산에 쓴 '뺀 원가'는 st["_cost_removed"] 에 임시로 둠 (main 이 장부에 같은 값을 쓰고 지움 — 파일에 저장하지 않음)"""
@@ -573,6 +596,9 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
     st["floors"] = [f for f in st["floors"] if int(_f(f.get("qty"))) > 0]
     for f in sold:
         if int(_f(f.get("qty"))) > 0:
+            if order.get("mode") == "sniper":                        # v2.2.20 스나이퍼 부분 매도 잔여: 탑업 안 함·재매수 대기 안 함 (남은 주식은 그대로 한 층, 다시 안 채움)
+                f["done"], f["levels"], f["settled"], f["base_usd"], f["carry_usd"], f["rebuy_pending"] = True, [], [], 0.0, 0.0, False
+                continue
             _topup_setup(f, gap, start_usd)                          # 팔린 층만 탑업 준비 (v2.2.6)
             f["rebuy_pending"] = not f.get("done")                   # 다시 살 게 없는(완성) 층은 매도 금지를 걸지 않음 — 걸면 풀 매수가 영영 없음
     st["_cost_removed"] = removed
@@ -594,6 +620,8 @@ def apply_fill(st, order, fill_qty, fill_amount, gap=GAP_USD, start_usd=0.0):
     ensure_state(st)
     if kind == "buy_tower":
         _apply_buy(st, order, q, amt)
+    elif kind == "buy_sniper":
+        _apply_sniper_buy(st, order, q, amt, gap, start_usd)
     elif kind == "sell":
         _apply_sell(st, order, q, amt, gap, start_usd)
     return st
