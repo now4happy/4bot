@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT (2026-11-20, audit-fix-v2 8-1·8-2·8-3): SGOV 필요 달러에 wait_usd 반영 · None 방어(_num) · 휴장일 표 범위 밖이면 need.json warnings
+# 사무실 v1.9.5 (2026-11-20, audit-fix-v2 8-1·8-2·8-3): SGOV 필요 달러에 wait_usd 반영 · None 방어(_num) · 휴장일 표 범위 밖이면 need.json warnings
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
 # 사무실 v1.8.0 (2026-11-13): 3번 메리츠 적립 표시 및 서비스 연결 정리
 """사무실 비서 필요 금액 JSON 발행 (평일 09:00 · 16:30 KST, systemd timer)
@@ -44,7 +44,7 @@
 - 사무실 v1.7.4 (2026-11-13): 11:00 부족액 브리핑에 바벨 씨드 부족액 줄 추가 — 바벨 모드(BARBELL_60_30_10)일 때만 need.json 토스 계좌에 '바벨 씨드' 줄을 넣는다. need = 기준시드 − SOXL평가액(보유 주수 × 현재가), holding = 토스 USD 매수가능금액, 부족액 = max(0, need − holding). 바벨 OFF·씨드 없음·SOXL 조회 실패면 줄 없음 (합산 제외). 일일 매수 필요액 계산은 그대로.
 - 사무실 v1.7.8 (2026-11-13): 메리츠 4번에 SGOV 다음 회차 줄 추가 — 매수 3거래일(미국장) 전부터 보여준다. need = 다음 회차 금액(1회차면 first_tranche_usd, 이후 tranche_usd), holding = 메리츠 USD 추정잔고, 부족액 = max(0, need − holding). SGOV OFF·회차 없음·예정일 없음·3거래일 밖이면 줄 없음. 4번 적립(NKE/QLD) need는 그대로.
 - 사무실 v1.8.9 (2026-11-16): 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX) — QLD가 나스닥(OQ)·뉴욕(NY)에 없어 0으로 읽혀 need가 null(확인 불가)이 되던 문제. 첫 번째 0보다 큰 시세를 쓴다 (봇 v1.2.5와 같은 방식). 전부 0이면 그대로 null.
-- 사무실 vNEXT (2026-11-19): 4번 메리츠 need에 당일 매수 불가 종목 표시 — 0주로 나온 종목(1주 값 > 오늘 쓸 돈)을 need.json 3번 줄에 skipped로 함께 내보낸다. 아침 브리핑 표 표시용. need 합계 계산은 그대로.
+- 사무실 v1.9.5 (2026-11-19): 4번 메리츠 need에 당일 매수 불가 종목 표시 — 0주로 나온 종목(1주 값 > 오늘 쓸 돈)을 need.json 3번 줄에 skipped로 함께 내보낸다. 아침 브리핑 표 표시용. need 합계 계산은 그대로.
 """
 # 2026-10-30: 메리츠 P·VR6 2계좌 분리 조회 및 독립 토큰 캐시 (브리핑 전용, 버전은 업데이트 비서 부여)
 import base64, hashlib, hmac, html, json, math, os, pwd, subprocess, sys, tempfile, time, urllib.parse, urllib.request, uuid

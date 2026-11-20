@@ -1,5 +1,10 @@
 # 7번 메리츠 속쓸 적립봇 변경 기록
 
+## v1.2.0 · 2026-11-20 12:17 (KST)
+- 파일: accum_strategy.py, config.py, main.py, notifier.py, tg_menu.py, tower_strategy.py
+- 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)
+- 브랜치: staging
+
 ## v1.1.9 · 2026-11-20 06:39 (KST)
 - 파일: main.py, tg_menu.py, tower_strategy.py
 - 내용: meritz_laoer v2.2.8 (하루에 한 층 매수): 안 산 칸 전부 주문
