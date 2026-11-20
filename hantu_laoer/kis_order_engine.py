@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: kis_order_engine.py
 # ==========================================================
+# 🚨 v1.0.6 (2026-11-20): [audit-fix-v2 r4 질문 7] 원인 불명(UNKNOWN) MOC 거절이면 거절 내용만 따로 텔레그램 메시지 1개 더 (주문 결과 메시지 형식 그대로, 같은 거절 10분 안 중복 안 보냄, 전송 실패는 주문에 영향 없음)
 # 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-4] MOC 거절은 시간 사유일 때만 LIMIT 대체, 수량·원인 불명은 대체 없이 실패 반환(reject_kind)
 # 🚨 MODIFIED: [파사드 패턴 3단계] 주문 전송, 취소, 미체결 및 원장 제어 도메인 분리
 # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 time.sleep(0.06) 땜질 코드를 전면 삭제하고, 내부 _api_request 의 GlobalThrottle 중앙 통제로 100% 위임하여 이벤트 루프 교착 상태 완벽 방어.
@@ -19,6 +20,9 @@ import time
 import datetime
 import math
 import logging
+import os
+import json
+import urllib.request
 from zoneinfo import ZoneInfo
 from market_data_provider import MarketDataProvider
 
@@ -34,6 +38,41 @@ def classify_moc_reject(msg):
     if any(k in m for k in _MOC_QTY_KEYWORDS): return "QTY"
     if any(k in m for k in _MOC_TIME_KEYWORDS): return "TIME"
     return "UNKNOWN"
+
+# audit-fix-v2 r4 질문 7 (풀이님 결정 2026-11-20 11:47): 원인 불명(UNKNOWN) MOC 거절은 주문 결과 메시지(거절 내용 포함, 형식 그대로)에 더해
+# 거절 내용만 따로 메시지 1개를 더 보낸다. 전송은 봇이 쓰는 같은 텔레그램 봇·대화(환경변수 TELEGRAM_TOKEN·ADMIN_CHAT_ID, main.py 와 같은 값).
+# 전송 실패는 주문 결과에 영향 없음(로그만). 같은 거절(종목·방향·수량·문구)은 REJECT_NOTICE_WINDOW_SEC 안에는 한 번만 — 제안값(근거 없음).
+REJECT_NOTICE_WINDOW_SEC = 600
+_REJECT_SEEN = {}
+
+def _send_reject_notice(text):
+    token, chat = os.getenv("TELEGRAM_TOKEN"), os.getenv("ADMIN_CHAT_ID")
+    if not token or not chat:
+        raise RuntimeError("TELEGRAM_TOKEN/ADMIN_CHAT_ID 없음")
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                 data=json.dumps({"chat_id": chat, "text": text[:3900]}).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as r:
+        r.read()
+
+def _notify_unknown_reject(ticker, side, qty, rt_cd, msg):
+    """원인 불명 MOC 거절 내용만 따로 알림. 어떤 예외도 밖으로 내지 않음"""
+    try:
+        now = time.time()
+        key = (str(ticker), str(side), int(qty), str(msg))
+        for k in [k for k, t in _REJECT_SEEN.items() if now - t > REJECT_NOTICE_WINDOW_SEC]:
+            _REJECT_SEEN.pop(k, None)
+        if key in _REJECT_SEEN:
+            return
+        _REJECT_SEEN[key] = now
+        text = (f"🚨 [{ticker}] 시장가(MOC) 주문 거절 — 원인 불명\n"
+                f"· 주문: {side} {qty}주 MOC\n"
+                f"· 거절 코드(rt_cd): {rt_cd}\n"
+                f"· 거절 내용: {msg if msg else '(문구 없음)'}\n"
+                f"· 지정가로 바꿔 내지 않았고 주문은 나가지 않았어요. 확인이 필요해요.")
+        _send_reject_notice(text)
+    except Exception as e:
+        logging.error(f"🚨 [{ticker}] 거절 내용 별도 알림 전송 실패: {type(e).__name__}")
 
 class KisOrderEngine(MarketDataProvider):
     
@@ -323,6 +362,8 @@ class KisOrderEngine(MarketDataProvider):
                     reject_kind = classify_moc_reject(safe_msg)
                     if reject_kind != "TIME":
                         logging.error(f"🚨 [{ticker}] MOC 거절 ({reject_kind}): {safe_msg} — 지정가 덤핑 폴백 안 함, 실패 반환")
+                        if reject_kind == "UNKNOWN":      # r4 질문 7: 원인 불명 거절은 거절 내용만 따로 한 번 더 알림 (주문 결과 메시지는 그대로)
+                            _notify_unknown_reject(ticker, side, order_qty, str(res.get('rt_cd') or '999'), safe_msg)
                         return {'rt_cd': str(res.get('rt_cd') or '999'), 'msg1': f"[MOC 거절:{reject_kind}] {safe_msg}" if safe_msg else f"[MOC 거절:{reject_kind}]", 'odno': '', 'reject_kind': reject_kind}
                     logging.warning(f"🚨 [Case 36 방어망] KIS MOC 시간대 거절 감지 ({safe_msg}). 매수 1호가 덤핑 폴백 가동!")
                     bid_p = self.get_bid_price(ticker)

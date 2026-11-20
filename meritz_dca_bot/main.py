@@ -1323,6 +1323,40 @@ async def maybe_auto_fx(client, now=None):
         RL.err("auto_fx",e,event_type="decision")
         return "error"
 
+_NOTICED_RANGE = set()   # 이번 실행에서 이미 알린 표 (파일 기록과 함께 쓰는 메모리 캐시)
+
+def _table_notice_path(key, gap):
+    return Path(SETTINGS["state_dir"]) / ("table_range_notice_" + key + "_" + gap + ".json")
+
+async def maybe_table_range_notice(now=None):
+    """audit-fix-v2 r4 질문 6: 휴장일·공휴일 표 범위가 끝나기 1주일 전에 텔레그램으로 알리고 풀이님께 묻는다.
+    막지 않는다(주문·환전 동작은 그대로) — 알림만. 표·알림 시작일마다 한 번(파일 기록 → 재시작해도 다시 안 보냄).
+    전송이 실패하면 기록하지 않아 다음 반복에 다시 시도. 어떤 예외도 밖으로 내지 않음."""
+    try:
+        today = (now or datetime.now(FX_KST)).astimezone(FX_KST).date()
+        for key, name, gap, start in table_range_notices(today):
+            tag = key + "_" + gap
+            if tag in _NOTICED_RANGE: continue
+            path = _table_notice_path(key, gap)
+            if path.exists():
+                _NOTICED_RANGE.add(tag); continue
+            txt = (f"[표 범위 끝 임박 — 풀이님께 질문]\n"
+                   f"• {name}가 {gap} 부터 없습니다 (알림 시작일 {start}, 그 1주일 전).\n"
+                   f"• 그 날짜부터는 휴장일·공휴일 여부를 알 수 없습니다. 지금은 아무것도 막지 않았고 환전·주문 동작도 그대로입니다.\n"
+                   f"• 표를 새 연도로 늘릴지, {gap} 부터 환전을 막을지 정해 주세요. (정할 때까지 막지 않습니다)")
+            res = send_panel(txt, [])
+            if not (res and res.get("ok")):
+                RL.ev("decision", "table_range_notice", "failed", "send_failed", actor="scheduler", table=key, gap=gap, level="WARN")
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("x", encoding="utf-8") as f:
+                json.dump({"table": key, "gap": gap, "notice_date_kst": today.isoformat()}, f, ensure_ascii=False)
+            _NOTICED_RANGE.add(tag)
+            RL.ev("decision", "table_range_notice", "ok", None, actor="scheduler", table=key, gap=gap)
+            _hub_alert(HUB_NAME, "info", txt)
+    except Exception as e:
+        RL.err("table_range_notice", e, event_type="decision")
+
 # ---------------------------------------------------------------- v1.2.6 비서봇 요청·결과·상태 스냅샷 (bridge.py)
 # SGOV 설정·장부의 주인은 이 봇 하나. 비서봇은 요청 파일만 쓰고, 이 봇이 검증·실행해 결과 파일을 씀.
 BRIDGE_SNAPSHOT_SEC = 300    # 제안값(근거 없음): 상태 스냅샷을 다시 만드는 간격 (요청을 처리한 뒤에도 바로 다시 만듦)
@@ -1447,6 +1481,7 @@ async def scheduler_loop(client):
         try:
             refresh_settings()
             await maybe_auto_fx(client)
+            await maybe_table_range_notice()                     # r4 질문 6: 표 범위 끝 1주일 전 알림 (막지 않음)
             if SETTINGS.get("enabled", False) and RUN.get("key_ok"):
                 await SG.sgov_daily_refresh(client)            # 조회만: 공개 환율 자료 + 메리츠 적용환율 기록 (하루 1번)
             now_est = datetime.now(EST_TZ)

@@ -27,6 +27,7 @@
 # v1.3.2 (2026-11-19): audit-fix 6-7 int_sell_qty — 보유 전량이 되는 익절 매도(1주 보유 등)는 하지 않음 (0 반환). 그 외 BOT_VERSION.
 # v1.2.8 (2026-11-14): 봇 번호 정리 — 알림 허브 이름 HUB_NAME '메리츠 적립' → '6번 메리츠 적립' (매매 동작 변경 없음)
 # =====================================================================
+# v1.3.4 (2026-11-20, audit-fix-v2 r4 질문 6): 휴장일·공휴일 표 범위 끝 1주일 전 알림 — table_range_notices(d)·kr_calendar_known. 막지는 않음 (알림만, main.maybe_table_range_notice). 나머지는 BOT_VERSION 만
 # v1.3.3 (2026-11-20, audit-fix-v2 5-6·6-10): calendar_known — 휴장일 표(US_CLOSED) 연도 확인 + 2029·2030 추가(예상값) · KR_HOLIDAYS/kr_fx_day (한국 공휴일 환전 안 함). 나머지는 BOT_VERSION 만
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
@@ -34,7 +35,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.3.3"
+BOT_VERSION = "v1.3.4"
 BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -513,3 +514,27 @@ def calendar_known(d):
     """audit-fix 5-6: 휴장일 표(US_CLOSED)에 그 연도가 있는가. 없으면 is_trading_day 는 주말만 걸러 휴장일을 모른다."""
     return d.year in US_CLOSED
 
+
+# audit-fix-v2 r4 질문 6 (풀이님 결정 2026-11-20 11:28): 표 범위를 벗어나기 1주일 전에 알리고 물어본다 — 바로 막지 않는다.
+TABLE_NOTICE_DAYS = 7   # 풀이님 결정: 막기 1주일 전
+
+
+def kr_calendar_known(d):
+    """한국 공휴일 표(KR_HOLIDAYS)에 그 연도가 있는가. 없으면 kr_fx_day 는 주말만 걸러 공휴일을 모른다."""
+    return str(d.year) in {h[:4] for h in KR_HOLIDAYS}
+
+
+def table_range_notices(d, days=TABLE_NOTICE_DAYS):
+    """d(한국 날짜) 기준으로 '표 범위 밖이 days 일 안에 시작하거나 이미 시작한' 표 목록.
+    돌려줌 [(표 키, 표 이름, 표가 없는 첫 날짜 'YYYY-MM-DD', 알림 시작일 'YYYY-MM-DD')]. 표가 충분히 길면 빈 목록.
+    미국 표는 calendar_known(US_CLOSED 연도), 한국 표는 kr_calendar_known(KR_HOLIDAYS 연도)으로 판단한다."""
+    from datetime import date, timedelta
+    out = []
+    for key, name, known, years in (("us", "미국 휴장일 표(US_CLOSED)", calendar_known, set(US_CLOSED)),
+                                    ("kr", "한국 공휴일 표(KR_HOLIDAYS)", kr_calendar_known, {int(h[:4]) for h in KR_HOLIDAYS})):
+        if known(d + timedelta(days=days)): continue
+        y = min(years)
+        while y in years: y += 1                     # 표가 없는 첫 해
+        gap = date(y, 1, 1)
+        out.append((key, name, gap.isoformat(), (gap - timedelta(days=days)).isoformat()))
+    return out

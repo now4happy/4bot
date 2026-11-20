@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.11)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.13)
+# v2.2.13 (2026-11-20, audit-fix-v2 r4-fix): ① 하루에 한 층만 매도 (풀이님 결정) — 같은 확인에서 여러 층이 목표에 닿으면 번호가 가장 큰 층(맨 위 층)만 팔고 나머지는 알림만 (층마다 하루 한 번, run_intraday_sell). 첫 매도 뒤 새로 닿은 층 알림(2차)은 그대로 ② v2.0.5 주석 문구를 004·005 매도 동작에 맞게 고침 (주석만, 동작 변경 없음)
+# v2.2.12 (2026-11-20, audit-fix-v2 r4): ① 표시 문구 '당일 시드' → '한층 금액' (tg_menu.py·README) ② 2차 매도 조건 알림 — 오늘 첫 매도를 낸 뒤 다른 층이 +목표% 에 새로 닿으면 주문 없이 알림만 (층마다 하루 한 번, run_intraday_sell). 같은 확인에서 함께 닿은 층 처리는 v2.2.13 에서 '맨 위 층만 판다' 로 바뀜 ③ 장후 매도(판 15) — 장운영 코드 005 에서도 매도를 냄 (마감 시각 뒤에도 005 면 새 매도 허용). 메리츠가 장후 주문을 받는지는 미확인 — 거절·응답 없음은 메시지로 알리고 그 층은 오늘 다시 안 냄, 장부·층은 체결 반영 때만 바뀜. run_order_day(하루 주문)의 004 검사는 그대로
 # v2.2.11 (2026-11-20, 7번 이름 변경): 표시 이름 '속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기' (HEAD·상황판·알림·CLI·argparse·README·CHANGELOG·업데이터 NAMES·브리핑 라벨). 동작 변경 없음
 # v2.2.10 (2026-11-20, staging — 풀이님 결정 11:03): BOT_VERSION 만 (audit-fix-v2 r3 내용 그대로, 버전만 올림 — 사다리 삭제가 들어간 큰 변경이라 헷갈리지 않게 올림). 동작 변경 없음
 # v2.2.9 (2026-11-20, audit-fix 7-4·7-5, 3차): ① 7번은 탑쌓기만 씀 — 사다리 삭제 (accum_strategy.py 삭제, strategy 전환·사다리 상태 data/accum_state.json·재매수·1회차 차감(--credit)·사다리 설정 키·메뉴 버튼 제거). strategy 값이 "ladder" 로 남아 있으면 설정 검사가 막음 ② 탑쌓기 1주 층은 자동 매도에서 뺌 + 하루 한 번 '1주 남음' 메시지(run_one_share_notice) — 풀이님 결정 10:03 ③ 새 층을 못 만들면(총 한도·가격 칸 없음) 만들지 않고 하루 한 번 풀이님께 물어봄(run_new_floor_notice) — 자동으로 늘리거나 멈추지 않음(09:59) ④ 휴장일 목록 범위 밖(2030~)·마지막 해 12월에 하루 한 번 알림(run_holiday_range_notice) — 자동환전·알림 꺼짐 안전장치는 그대로 ⑤ 휴장일 목록 2028·2029 추가(HOLIDAY_YEARS). 7-3 은 풀이님 결정(달러 한도·원화 매매법 없음)으로 코드 변경 없음. 층 간격 기본값 $5 그대로(메뉴로 바꿈).
@@ -31,7 +33,7 @@
 #   안전장치는 auto_fx 그대로(적용환율 실패·원화 부족이면 안 함·신청 전 fx_<한국시간 날짜>.json 먼저 기록). 환전 뒤 90초 대기 없음.
 #   주문 시간(run_order_day)의 기존 auto_fx 호출은 그대로 — 오전 9시 기록(fx_<날짜>.json)이 있으면 건너뜀(= 다시 환전 안 함), 기록이 없을 때만 예전처럼 환전(대비용)
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
-# v2.0.5 (2026-11-19): 정규장 외(장전 003·장후 005) 장중 매도는 '004 아니면 건너뜀' 유지 — 공식 openapi.json 에 연장 시간 주문·체결 근거가 없어 미확인(주석·테스트만 추가, 동작 변경 없음). BOT_VERSION v2.0.5. 체결 내역 심볼 필드 수정은 meritz_api.py
+# v2.0.5 (2026-11-19): 정규장 외(장전 003·장후 005) 장중 매도 — 당시엔 '004 아니면 건너뜀'이었음(공식 openapi.json 에 연장 시간 주문·체결 근거가 없어 미확인). 현재는 v2.2.12 판 15 로 004·005 에 매도, 003·그 밖은 장 닫힘으로 건너뜀(005 접수 여부는 여전히 미확인). BOT_VERSION v2.0.5. 체결 내역 심볼 필드 수정은 meritz_api.py
 # v2.0.4 (2026-11-19, 판 5 점검 보완 + 판 6): ① 현금 부분 매수(accum_strategy.make_plan) — 계획·--check·텔레그램에 부분 매수 수량 표시
 #   ② 주문 응답 유실 자동처리: 주문 전에 '시도' 기록(attempts)을 먼저 저장 → 응답을 못 받으면(시간 초과·연결 끊김·주문번호 없음) 멈추지 않고
 #      그 주문을 다시 내지 않은 채 체결 내역(fills_rows)에서 같은 방향·수량·가격 조건의 주문번호를 찾아 이어 붙임(주문 직후 3번, 마감 뒤 체결 반영 때 한 번 더).
@@ -101,7 +103,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.11"
+BOT_VERSION = "v2.2.13"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -335,6 +337,7 @@ def plan_head(plan, s):
 
 # ---------------------------------------------------------------- v2.0.3 당일 매도
 _INTRA = {"last": 0.0, "err_day": ""}
+MKT_REGULAR, MKT_AFTER = "004", "005"    # 장운영 코드: 정규장 · 장후 (v2.2.12 판 15: 장후에도 매도를 냄. 005 가 장후인 근거는 v2.0.5 주석뿐 — 공식 문서 확인 안 됨)
 
 
 def intraday_on(s):
@@ -566,8 +569,16 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
         logging.warning(f"체결 알림 중 오류 {type(e).__name__}")
     if not cands:
         return "해당 없음"                            # 보유 없고 오늘 체결된 매수도 아직 없음 (체결 조회가 늦은 것일 수 있음 → 다음 확인 때 다시)
+    status = None
     if not allow_new_sells:
-        return "알림만"
+        # 주문 마감 시각 뒤: 장후(005) 면 새 매도를 냄 (판 15). 정규장(004) 막판·그 밖은 예전처럼 체결 반영·알림만
+        try:
+            status = str(api.us_market_status())
+        except MeritzError as e:
+            logging.warning(f"당일 매도 확인: 장운영 코드 조회 실패 {e}")
+            return "알림만"
+        if status != MKT_AFTER:
+            return "알림만"
     try:
         px = float(api.price(s["symbol"], s["price_market"])["price"])
     except MeritzError as e:
@@ -587,6 +598,28 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
     used = {int(x["floor_id"]) for x in (list(m["orders"]) + list(m.get("attempts") or []) + list(m.get("sell_attempts") or []))
             if isinstance(x, dict) and x.get("kind", "sell") == "sell" and x.get("floor_id") is not None and (x.get("side") in (None, "SELL"))}
     sells = [o for o in plan["orders"] if o.get("kind") == "sell" and o.get("reached") and not m.get("sell_attempt") and int(o["floor_id"]) not in used]
+    # v2.2.13 (풀이님 결정): 하루에 한 층만 판다. 같은 확인에서 여러 층이 함께 닿으면 번호가 가장 큰 층(맨 위 층)만 팔고 나머지는 알림만(아래 주문 뒤 발송)
+    held_back = []
+    if len(sells) > 1:
+        top = max(sells, key=lambda o: int(o["floor_id"]))
+        held_back = [o for o in sells if o is not top]
+        sells = [top]
+    # v2.2.12 (새 규칙): 오늘 첫 매도를 낸 뒤에 다른 층이 +목표% 에 새로 닿으면(2차 매도 조건) 팔지 않고 알림만. 층마다 하루 한 번.
+    # 같은 확인에서 함께 닿은 층은 맨 위 층만 팔고 나머지는 알림만(위 held_back, v2.2.13). 연속 매도는 안 함.
+    if used or m.get("sell_attempt"):
+        later = [o for o in plan["orders"] if o.get("kind") == "sell" and o.get("reached") and int(o["floor_id"]) not in used]
+        if later:
+            rows = {int(r["id"]): r for r in info.get("sells") or []}
+            for o in later:
+                fid = int(o["floor_id"])
+                r = rows.get(fid, {})
+                _warn_once(cfg, mark, m, f"second_sell_{fid}", note,
+                           f"2차 매도 조건이 생겼어요 (알림만 · 주문은 안 냈어요 — 오늘 첫 매도 뒤라 연속 매도는 안 해요)\n"
+                           f"· {fid}층 평단 ${float(o.get('floor_avg') or 0):.2f} +{pct:g}% → 매도 목표 ${float(o['price']):.2f} · 현재가 ${px:.2f}에서 닿음\n"
+                           f"· 매도하게 될 수량 {int(o['qty'])}주 (보유 {int(r.get('qty') or 0)}주)\n"
+                           f"· 오늘 이미 매도한 층: {', '.join(str(i) + '층' for i in sorted(used)) or '확인 못 함'}\n"
+                           f"오늘은 이 층 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요.")
+            return "2차 매도 조건 알림"
     if not sells and any(o.get("kind") == "sell" and o.get("reached") for o in plan["orders"]):
         return "오늘 매도 주문 있음"
     if not sells:
@@ -597,18 +630,25 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
     if not exch:
         _warn_once(cfg, mark, m, "exch", note, "거래소 번호를 알 수 없어 당일 매도를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
         return "거래소"
-    # v2.0.5: 정규장("004") 아니면 건너뜀을 유지. 003 프리마켓·005 애프터마켓에 지정가 매도가 접수·체결되는지는 공식 openapi.json 에 없음(주문 API 에 연장 시간 구분 필드 없음) → 미확인, 실거래 시험은 사용자 결정 필요
-    if str(api.us_market_status()) != "004":      # 조기폐장일(13:00 ET)·장 마감 뒤에는 장중 매도를 안 냄 (order_deadline_et 만으로는 못 거름)
+    # v2.0.5 → v2.2.12 판 15: 정규장("004")과 장후("005")에 매도를 내고, 프리마켓("003")·휴장 등 그 밖의 상태는 장 닫힘으로 건너뜀. 005 에 메리츠가 지정가 매도를 접수·체결하는지는 공식 openapi.json 에 없음(주문 API 에 연장 시간 구분 필드 없음) → 미확인(거절되면 아래에서 메시지로 알림)
+    # v2.2.12 판 15: 장후("005")에도 매도를 냄. 메리츠가 장후 주문을 받아줄지는 확인 안 됨 — 거절되면 아래에서 메시지로 알리고 그 층은 오늘 다시 안 냄 (장부·층은 체결 반영 때만 바뀜)
+    if status is None:
+        status = str(api.us_market_status())
+    if status not in (MKT_REGULAR, MKT_AFTER):     # 프리마켓(003)·휴장 등은 안 냄
         return "장 닫힘"
+    after_hours = status == MKT_AFTER
     if foreign_open_sells(api.open_orders_today(s["symbol"]), m, rows):
         _warn_once(cfg, mark, m, "open_sell", note, "이 계좌에 SOXL 매도 미체결 주문이 이미 있어 당일 매도를 안 냄 (수동 확인)")
         return "매도 미체결 있음"
     results, errs_all, placed = [], [], []
-    for sel in sells:                                                          # 층마다 1건씩 (여러 층이 같은 날 닿으면 모두)
+    rows_by_id = {int(r["id"]): r for r in info.get("sells") or []}
+    for sel in sells:                                                          # 하루 한 층만: sells 는 최대 1건 (v2.2.13)
         o = dict(sel, desc="당일 매도 · " + sel.get("desc", ""))
         o.pop("reached", None)
         att = {"at": now_et().isoformat(), "qty": o["qty"], "price": o["price"], "kind": "sell", "floor_id": o.get("floor_id"),
                "status": "접수 시도 (이 기록이 있으면 오늘 이 층은 다시 매도 주문을 내지 않음)"}
+        if after_hours:
+            att["market_status"] = status                 # 장후 주문 표시 (거절돼도 오늘 이 층은 다시 안 냄)
         m.setdefault("sell_attempts", []).append(att)
         cfg._save_json(mark, m)                          # 주문 전에 먼저 기록 → 응답이 불확실해도 중복 주문 없음
         errs = []
@@ -623,10 +663,18 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
         placed.append(o)
         if err:
             errs_all.append(err)
+    for o in held_back:                                  # v2.2.13: 같이 닿았지만 팔지 않은 층은 알림만 (층마다 하루 한 번)
+        fid = int(o["floor_id"])
+        _warn_once(cfg, mark, m, f"second_sell_{fid}", note,
+                   f"같은 확인에서 여러 층이 목표에 닿았어요 (알림만 · 주문은 안 냈어요 — 하루에 한 층만 팔고, 맨 위 층 {int(placed[0]['floor_id'])}층만 매도해요)\n"
+                   f"· {fid}층 평단 ${float(o.get('floor_avg') or 0):.2f} +{pct:g}% → 매도 목표 ${float(o['price']):.2f} · 현재가 ${px:.2f}에서 닿음\n"
+                   f"· 매도하게 될 수량 {int(o['qty'])}주 (보유 {int(rows_by_id.get(fid, {}).get('qty') or 0)}주)\n"
+                   f"· 오늘 이미 매도한 층: {int(placed[0]['floor_id'])}층\n"
+                   f"오늘은 이 층 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요.")
     ok_n = sum(1 for r in results if r == "ok")
-    head = (f"당일 매도 {'접수' if ok_n == len(results) else ('실패' if ok_n == 0 and all(r == 'rejected' for r in results) else '일부 접수 · 실패·응답 없음 있음')}\n"
+    head = (f"{'장후(' + status + ') ' if after_hours else ''}당일 매도 {'접수' if ok_n == len(results) else ('실패' if ok_n == 0 and all(r == 'rejected' for r in results) else '일부 접수 · 실패·응답 없음 있음')}\n"
             f"오늘 체결 반영 층별 평단 기준 · 현재가 ${px:.2f}\n")
-    note.send(head + fmt_orders(placed) + ("\n" + "\n".join(errs_all) + "\n오늘은 이 층 매도를 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if errs_all else ""))
+    note.send(head + fmt_orders(placed) + ("\n" + "\n".join(errs_all) + ("\n장후 주문을 메리츠가 받아주는지는 확인된 적이 없어요(미확인). 거절·응답 없음이면 이 메시지로 알려요 — 장부·층 상태는 체결이 확인될 때만 바뀌어서 그대로예요." if after_hours else "") + "\n오늘은 이 층 매도를 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if errs_all else ""))
     if ok_n:
         return "매도 접수"
     return "매도 실패" if all(r == "rejected" for r in results) else "매도 응답 유실"
