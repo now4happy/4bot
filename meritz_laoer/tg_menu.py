@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.12)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.14)
+# v2.2.14 (2026-11-20, 판 17 시초가 상한): 상황판 오늘 계획 미리보기가 저장된 시초가(main.load_open_price, 읽기만)를 build_plan 에 넘김 — 시초가가 아직 없으면 0 → 계획 배정 그대로. 메뉴·문구는 그대로
 # v2.2.12 (2026-11-20, audit-fix-v2 r4): 표시 문구 '당일 시드' → '한층 금액' (상황판·자금 화면 2곳 + 주석). 금액 형식·다른 문구는 그대로
 # v2.2.11 (2026-11-20, 7번 이름 변경): 표시 이름 '7번 메리츠 속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기' (HEAD·상황판 제목). 동작 변경 없음
 # v2.2.9 (2026-11-20, 3차 — 풀이님 결정 10:06·10:14): 설정 메뉴를 탑쌓기 전용으로 개편 — 추가: 탑쌓기 간격 변경(tower_gap_usd, 1 이상 정수)·층 금액 변경(tower_floor_usd)·층 수 변경(tower_floors). 삭제: 회차·사다리 시작가·사다리 간격·재매수 하락폭·하루 최대 회차 버튼, '차감'(--credit) 입력, 사다리 채운 회차 경고(fill_warn). 상황판 전략 줄은 항상 탑쌓기. 시드·목표 이익률·매도 비중·1층 시작가·환전·봇 켜기/끄기는 그대로
@@ -337,7 +338,9 @@ class MenuBot:
             q = int(pos["qty"]) if pos else int(float(st["qty"]))
             principal = float(pos["principal"]) if pos else float(st["principal_usd"])
             with o.in_dir(s["state_dir"]):
-                d["plan"] = o.build_plan(s, o.ConfigManager(s), d["price"], d["fx"], d["cash"], q, principal, d["sellable"])
+                lop = getattr(o, "load_open_price", None)
+                open_px = lop(s, o.now_et().strftime("%Y-%m-%d"), not s.get("dry_run", True)) if lop else 0.0      # v2.2.14: 저장된 값만 읽음 (여기서 시초가를 정하지 않음)
+                d["plan"] = o.build_plan(s, o.ConfigManager(s), d["price"], d["fx"], d["cash"], q, principal, d["sellable"], **({"open_px": open_px} if open_px > 0 else {}))      # 시초가 확정 전이면 예전 호출 그대로
             d["orders"], d["notes"] = d["plan"]["orders"], d["plan"]["notes"]
         except Exception as e:
             d["plan_err"] = type(e).__name__

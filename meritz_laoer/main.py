@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.13)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.14)
+# v2.2.14 (2026-11-20, 판 17 시초가 상한): ① 시초가 = 정규장(장운영 004) 09:30 ET 이후 처음 확인한 SOXL 현재가 (시세 API 의 시초가 필드는 근거 파일에 없어 미확인 → 첫 확인가 방식). 그날 한 번만 정해 data/open_price_<ET날짜>.json 에 저장(모의는 dry_ 접두), 재시작해도 저장값을 씀. 새 함수 load_open_price·ensure_open_price·run_open_capture, loop 가 주문 시각 전에도 09:30 부터 확인
+#   ② build_plan(open_px=) → tower_strategy.make_plan 이 오늘 채우는 층의 안 산 칸에 상한 적용. 주문 시간(run_order_day)은 저장값(없으면 그때 확인한 현재가)을 씀 ③ plan_head 에 시초가·첫 칸 한 줄. 상황판·--check 은 저장값만 읽음(없으면 계획 그대로 — 시초가를 만들지 않음) ④ 자동환전 아침 계산(_next_rounds_inputs)·체결 알림 '다음 매수'는 시초가 모름 → 계획 그대로. 새 층 생성·매도·간격·금액·층 수 규칙은 그대로
 # v2.2.13 (2026-11-20, audit-fix-v2 r4-fix): ① 하루에 한 층만 매도 (풀이님 결정) — 같은 확인에서 여러 층이 목표에 닿으면 번호가 가장 큰 층(맨 위 층)만 팔고 나머지는 알림만 (층마다 하루 한 번, run_intraday_sell). 첫 매도 뒤 새로 닿은 층 알림(2차)은 그대로 ② v2.0.5 주석 문구를 004·005 매도 동작에 맞게 고침 (주석만, 동작 변경 없음)
 # v2.2.12 (2026-11-20, audit-fix-v2 r4): ① 표시 문구 '당일 시드' → '한층 금액' (tg_menu.py·README) ② 2차 매도 조건 알림 — 오늘 첫 매도를 낸 뒤 다른 층이 +목표% 에 새로 닿으면 주문 없이 알림만 (층마다 하루 한 번, run_intraday_sell). 같은 확인에서 함께 닿은 층 처리는 v2.2.13 에서 '맨 위 층만 판다' 로 바뀜 ③ 장후 매도(판 15) — 장운영 코드 005 에서도 매도를 냄 (마감 시각 뒤에도 005 면 새 매도 허용). 메리츠가 장후 주문을 받는지는 미확인 — 거절·응답 없음은 메시지로 알리고 그 층은 오늘 다시 안 냄, 장부·층은 체결 반영 때만 바뀜. run_order_day(하루 주문)의 004 검사는 그대로
 # v2.2.11 (2026-11-20, 7번 이름 변경): 표시 이름 '속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기' (HEAD·상황판·알림·CLI·argparse·README·CHANGELOG·업데이터 NAMES·브리핑 라벨). 동작 변경 없음
@@ -103,9 +105,10 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.13"
+BOT_VERSION = "v2.2.14"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
+OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
 SHORT_ALERT_MIN = 60                  # v2.0.8 마감(주문 시간) 이 분 전에 '달러부족' 알림
 # v2.0.8 메리츠 환전 시간표 (사용자가 보낸 앱 '환전신청 유의사항' 2026-11-19 기준): 실시간 환전 평일 09:00 ~ 다음 날 02:00, 환전 불가 08:50~09:00·23:50~00:20, 시간외(02:00~08:50)는 안 씀
@@ -239,10 +242,62 @@ def tower_state_for(cfg, qty, principal, s=None):
     return TW.migrate_from_holdings(qty, principal, s), False
 
 
-def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx=False):
-    """오늘 계획 (장부·상태를 바꾸지 않음) → {"orders", "notes", "info"}. info 에 필요달러(need_usd)·부족달러(shortfall_usd)"""
+def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx=False, open_px=0.0):
+    """오늘 계획 (장부·상태를 바꾸지 않음) → {"orders", "notes", "info"}. info 에 필요달러(need_usd)·부족달러(shortfall_usd)
+    open_px: 오늘 시초가 (v2.2.14 — 0 이면 확정 전: 계획 배정 그대로)"""
     tst, _ = tower_state_for(cfg, qty, principal, s)
-    return defer_sell(s, TW.make_plan(s, tst, qty, principal, price, fx, cash, sellable, ignore_auto_fx))
+    return defer_sell(s, TW.make_plan(s, tst, qty, principal, price, fx, cash, sellable, ignore_auto_fx, open_px=open_px))
+
+
+# ---------------------------------------------------------------- v2.2.14 판 17 시초가 (그날 한 번만 정함)
+def open_price_path(s, d, live):
+    return os.path.join(s["state_dir"], "data", f"{'' if live else 'dry_'}open_price_{d}.json")
+
+
+def load_open_price(s, d, live):
+    """오늘(ET 날짜 d) 이미 정한 시초가 → 가격, 없거나 이상하면 0.0 (읽기만 — 정하지 않음)"""
+    try:
+        with open(open_price_path(s, d, live), "r", encoding="utf-8") as f:
+            r = json.load(f)
+        v = float(r.get("open") or 0)
+        return v if isinstance(r, dict) and r.get("date") == d and math.isfinite(v) and v > 0 else 0.0
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0.0
+
+
+def ensure_open_price(s, cfg, d, live, now, price, status):
+    """시초가: 이미 저장돼 있으면 그 값(그날 내내 같은 값 · 재시작해도 안 바뀜). 없으면 정규장(status "004") 이고 09:30 ET 이후일 때 지금 현재가를 처음으로 확인한 값으로 저장.
+    시초가를 예측하거나 전일종가로 대신하지 않음 — 아직 못 정하면 0.0. 시세 API 에 시초가 필드가 있는지는 근거 파일에 없어 미확인 → 첫 확인가 방식"""
+    saved = load_open_price(s, d, live)
+    if saved > 0:
+        return saved
+    try:
+        px = float(price)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (math.isfinite(px) and px > 0) or str(status) != "004" or now.time() < OPEN_TIME_ET:
+        return 0.0
+    cfg._save_json(open_price_path(s, d, live), {"date": d, "open": round(px, 4), "source": "first_price_seen_after_0930_ET",
+                                                  "seen_at_et": now.strftime("%Y-%m-%d %H:%M:%S")})
+    logging.info(f"시초가 확정 ${px:.2f} (09:30 ET 이후 처음 확인한 현재가, {d})")
+    return px
+
+
+def run_open_capture(s, api, live, now):
+    """loop 가 매번 부름 (평일 09:30 ET 이후). 오늘 시초가가 아직 없으면 시세를 한 번 읽어 정함. 저장돼 있으면 시세 조회 없이 바로 끝 → 가격 또는 0.0"""
+    d = now.strftime("%Y-%m-%d")
+    saved = load_open_price(s, d, live)
+    if saved > 0 or now.time() < OPEN_TIME_ET or now.time() >= datetime.time(16, 0):
+        return saved
+    try:
+        status = api.us_market_status()
+        if str(status) != "004":
+            return 0.0
+        px = float(api.price(s["symbol"], s["price_market"])["price"])
+    except MeritzError as e:
+        logging.warning(f"시초가 확인 실패(다시 시도): {e}")
+        return 0.0
+    return ensure_open_price(s, ConfigManager(s), d, live, now, px, status)
 
 
 def auto_fx(s, api, cfg, plan, live, d, fx_now=None):
@@ -328,6 +383,9 @@ def plan_head(plan, s):
         head += "\n다음 회차" + (f" {tw['active']}층" if tw.get("active") else "") + " 가격별 배정:"
         for c in cells:
             head += f"\n${c['price']:.2f} → ${c['amount']:,.0f} ({c['qty']}주)"
+    oc = i.get("open_cap") or {}
+    if oc.get("open") and oc.get("first"):      # v2.2.14: 시초가가 정해진 뒤에만 (정해지기 전엔 계획 배정 그대로, 시초가를 지어내 보이지 않음)
+        head += f"\n시초가 ${oc['open']:.2f} · 첫 칸 ${oc['first']:.2f}" + (" (상한 적용)" if oc.get("applied") else " (상한 안 걸림 · 계획 그대로)")
     if tw.get("new_floor_blocked"):
         head += "\n새 층 못 만듦: " + tw["new_floor_blocked"]["text"] + " — 풀이님 확인 필요"
     head += (f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "")
@@ -828,6 +886,7 @@ def run_order_day(s, api, note, live):
         _retry_later(note, d, "exch", "거래소 번호를 알 수 없음 — 설정에 거래소 번호를 넣어 주세요 (고치면 오늘도 5분 안에 다시 시도해요)")
         return "거래소"
     price, prev_close, fx = market_inputs(s, api)
+    open_px = ensure_open_price(s, cfg, d, live, now_et(), price, status)      # v2.2.14 판 17: 저장된 시초가(없으면 지금 확인한 현재가로 정함 — 정규장 09:30 ET 이후)
     if live and not (fx and fx > 0):      # 적용환율 일시 오류로 오늘 매수가 통째로 빠지지 않게 (market_inputs 는 실패를 0.0 으로 삼킴)
         _retry_later(note, d, "fx", "적용환율을 못 읽어 오늘 매수 계획을 못 세웠어요 — 5분 뒤 다시 시도해요")
         return "환율 실패"
@@ -838,7 +897,7 @@ def run_order_day(s, api, note, live):
         tst, tower_notes = TW.reconcile(tst, qty, float(pos["principal"]), TW.params(s)[2], s) if had else (tst, [f"탑쌓기 시작: 현재 보유분 {qty}주 · 평단 ${avg:.2f} 를 1층으로 만듦"])
         cfg._save_json(TOWER_FILE, tst)
     sell_q = sellable if live else qty
-    plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q)
+    plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q, open_px=open_px)
     fxres = auto_fx(s, api, cfg, plan, live, d, fx_now=now_et())      # 주문 시간 대비용 환전도 실시간 환전 시간일 때만 (v2.0.8)
     if live and s.get("auto_fx_enabled"):
         if fxres and fxres.get("done"):      # 환전 신청 직후엔 예수금 반영이 늦을 수 있어 잠깐 기다림 (환전은 다시 신청하지 않음)
@@ -848,7 +907,7 @@ def run_order_day(s, api, note, live):
                     break
                 time.sleep(FX_WAIT_SEC)
         cash = api.usd_cash()          # 환전 뒤(또는 안 한 뒤) 실제 예수금으로 다시 계획 — 모자라면 그만큼 매수가 줄어듦
-        plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q, ignore_auto_fx=True)
+        plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q, ignore_auto_fx=True, open_px=open_px)
     try:
         run_one_share_notice(s, note, plan, d, live)       # v2.2.9 audit-fix 7-4: 1주 남음 메시지 (실패해도 주문 흐름 계속)
     except Exception as e:
@@ -859,7 +918,7 @@ def run_order_day(s, api, note, live):
         logging.warning(f"새 층 못 만듦 알림 실패: {type(e).__name__}")
     orders, notes = plan["orders"], plan["notes"] + tower_notes
     errors, recovered = [], 0
-    m = {"date": d, "prev_close": prev_close, "price": price, "fx": fx, "auto_fx": fxres,
+    m = {"date": d, "prev_close": prev_close, "price": price, "open_price": open_px, "fx": fx, "auto_fx": fxres,
          "qty": qty, "avg": avg, "cash": round(cash, 2), "orders": [] if live else orders, "attempts": [],
          "errors": errors, "synced": False if live else True, "sell_deferred": bool(plan["info"].get("sell_deferred"))}
     if live:
@@ -1405,6 +1464,12 @@ def loop():
             n = now_et()
             api = run_fx_tasks(s, note, live)       # v2.0.8 자동환전 창·휴장 전날 알림·마감 60분 전 달러부족 알림 (실패해도 주문·체결 반영 흐름은 계속) → 만든 api 는 아래에서 재사용
             ot, dl = _hm(s["order_time_et"], datetime.time(10, 5)), _hm(s["order_deadline_et"], datetime.time(15, 40))
+            if n.weekday() < 5 and OPEN_TIME_ET <= n.time() < datetime.time(16, 0) and load_open_price(s, n.strftime("%Y-%m-%d"), live) <= 0:
+                try:      # v2.2.14 판 17: 주문 시각(기본 10:05)보다 일찍, 09:30 ET 이후 처음 확인한 현재가를 시초가로 저장 (실패해도 주문 흐름 계속 — 주문 시간에 다시 정함)
+                    api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
+                    run_open_capture(s, api, live, n)
+                except Exception as e:
+                    logging.warning(f"시초가 확인 중 오류: {type(e).__name__}")
             if n.weekday() < 5 and ot <= n.time() <= dl:
                 api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                 run_order_day(s, api, note, live)
@@ -1466,8 +1531,9 @@ def cmd_check(s):
     st = s["start"]
     q = int(pos["qty"]) if pos else int(float(st["qty"]))
     principal = float(pos["principal"]) if pos else float(st["principal_usd"])
+    open_px = load_open_price(s, now_et().strftime("%Y-%m-%d"), not s.get("dry_run", True))      # v2.2.14: 저장된 시초가만 읽음 (점검은 시초가를 정하지 않음)
     with in_dir(state):
-        plan = build_plan(s, ConfigManager(s), price, fx, cash, q, principal, sellable)
+        plan = build_plan(s, ConfigManager(s), price, fx, cash, q, principal, sellable, open_px=open_px)
     orders, notes = plan["orders"], plan["notes"]
     print("- 오늘 계획 (미리보기·주문 안 냄):\n  " + to_korean(plan_head(plan, s)).replace("\n", "\n  "))
     print("  " + to_korean(fmt_orders(orders)).replace("\n", "\n  "))
