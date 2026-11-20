@@ -1,0 +1,9 @@
+# 브리핑 코드 자체가 깨졌을 때의 마지막 안전망: 코드 import 없이 텔레그램 한 줄만 보낸다.
+# systemd 에서 % 는 지정자라 %% 로 적는다. 실행 계정이 /etc/bot-office/telegram.json 을 읽을 수 있는지는 미확인.
+[Unit]
+Description=Telegram briefing failure notice
+
+[Service]
+Type=oneshot
+User=gieokkim
+ExecStart=/usr/bin/python3 -c 'import json,urllib.request,urllib.parse;c=json.load(open("/etc/bot-office/telegram.json"));urllib.request.urlopen("https://api.telegram.org/bot%%s/sendMessage"%%c["token"],urllib.parse.urlencode({"chat_id":c["chat_id"],"text":"브리핑 서비스 실패"}).encode(),timeout=20)'

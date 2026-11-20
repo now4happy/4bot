@@ -59,6 +59,22 @@
 !/bot_office/*.py
 !/bot_office/*.html
 !/bot_office/*.md
+# 텔레그램 브리핑 봇 (9번 브리핑, v1.1.2): 패키지 코드·설정 기본값·유닛만 (장부·need.json·state는 절대 올리지 않음)
+!/bot_office/briefing/
+/bot_office/briefing/*
+!/bot_office/briefing/*.py
+!/bot_office/briefing/config.json
+!/bot_office/briefing/portfolio_targets.json
+!/bot_office/briefing/sources/
+/bot_office/briefing/sources/*
+!/bot_office/briefing/sources/*.py
+!/bot_office/briefing/systemd/
+/bot_office/briefing/systemd/*
+!/bot_office/briefing/systemd/*.service
+!/bot_office/briefing/systemd/*.timer
+!/bot_office/briefing/tests/
+/bot_office/briefing/tests/*
+!/bot_office/briefing/tests/test_*.py
 # 팬딩 가격표: 윈도우용 코드만 (config.json·브라우저 로그인·가격표 이미지는 절대 올리지 않음)
 !/fanding_windows/
 /fanding_windows/*

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# 사무실 v1.9.4 (2026-11-20): 9번 브리핑(briefing/) 연결 — ① briefing/ 하위 폴더(sources/·systemd/)까지 9번 브리핑 소속으로 분류 (.py·.json·.service·.timer, tests/·test_* 제외) · 이름 '9번 브리핑'
+#                       ② 재시작 목록에서 BRIEFING_KEY 제외 (briefing 은 서비스가 아니라 one-shot 이라, 재시작하면 텔레그램 브리핑이 의도치 않게 발송됨)
+#                       ③ briefing/ 파일을 /opt/bot-office/briefing/ 으로 폴더 구조 그대로 복사 (briefing_deploy · 백업·되돌림은 사무실 파일과 같은 방식 · systemd/ 유닛은 복사 안 함=수동 설치) · CHANGELOG·태그는 briefing-vX.Y.Z · 전략·종목·금액·enabled 변경 없음
 # 사무실 v1.9.3 (2026-11-19, 방 updater-redesign-sniper-separate 판 2): 업데이트 봇 재설계 1단계 — ① 2번 스나이퍼를 적용 대상에서 제외(classify 무시·두 전체 검사에서 경로 제외·병합 때 스나이퍼 파일 그대로 둠 · NAMES·원작 알림·매일 STATUS·sniper_tiers는 유지)
 #                       ② A: 저장 안 된 변경 검사를 이번에 바뀌는 봇 폴더 + 공용 파일로 한정 ③ B: 서버에만 있는 수정과 겹치는 봇만 '앞섬, 사람 승인 필요'로 보류
 #                       ④ D: 매매 중·일시중지 대기·앞섬인 봇만 보류하고 나머지는 적용 (보류 목록·경과일은 STATUS, 사유가 풀리면 자동 재시도)
@@ -124,13 +127,17 @@ SECRETARY_UNIT, FANDING_UNIT = "bot-office-secretary.service", "bot-office-fandi
 OFFICE_EXTRA = {SECRETARY_UNIT: ("office_secretary.py", "office_sgov.py", "gemini_usage.py", "meritz_client.py", "toss_token_share.py"),
                 FANDING_UNIT: ("fanding_trade.py", "fanding_vr6.py", "meritz_client.py", "gemini_usage.py")}
 OFFICE_EXT = (".py", ".html", ".css", ".js")
+# 9번 브리핑(briefing/ 패키지, one-shot): 서비스 유닛이 없어 재시작 대상 없음. 키는 systemd 서비스 이름이 아니다
+#   (briefing.service 는 타이머용 유닛이라, 키로 쓰면 '재시작'이 곧 텔레그램 발송이 된다).
+BRIEFING_KEY, BRIEFING_EXT = "briefing", (".py", ".json", ".service", ".timer")
 SYSTEMCTL = os.environ.get("U_SYSTEMCTL", "systemctl")
 TG_API = os.environ.get("U_TG_API", "https://api.telegram.org")
 CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
          "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립",
-         "meritz_laoer.service": "7번 메리츠 속쓸 적립봇"}
+         "meritz_laoer.service": "7번 메리츠 속쓸 적립봇",
+         BRIEFING_KEY: "9번 브리핑"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # --- 사무실 v1.9.3: 스나이퍼 제외 + 봇별 검사·보류 ---
 SNIPER_UNIT, SNIPER_DIR = "toss_sniper.service", "toss_sniper"
@@ -326,11 +333,20 @@ def classify(files):
             continue
         absf = os.path.realpath(os.path.join(REPO, f)); d = os.path.dirname(absf); name = os.path.basename(f)
         unit = next((u for u, r in roots.items() if r == d), None)
+        bdir = roots.get(BRIEFING_KEY)
+        if unit is None and bdir and d.startswith(bdir + os.sep):   # briefing/ 하위 폴더(sources/·systemd/·tests/)도 9번 브리핑 소속
+            unit = BRIEFING_KEY
         if name.endswith(".md"):
             if unit: units.setdefault(unit, [])
             continue
         if unit == OFFICE_KEY and name.endswith(OFFICE_EXT):   # 사무실 폴더: 예전과 같은 확장자 규칙 (삭제된 파일도 여기로 → /opt/bot-office 에서 지움)
             units.setdefault(unit, []).append(f)
+        elif unit == BRIEFING_KEY:   # 9번 브리핑: .py·.json·.service·.timer 만 (tests/·__pycache__/·test_* 는 제외) — 재시작 대상 없음
+            parts = os.path.relpath(absf, roots[BRIEFING_KEY]).split(os.sep)
+            if name.endswith(BRIEFING_EXT) and not {"tests", "__pycache__"} & set(parts) and not name.startswith("test_"):
+                units.setdefault(unit, []).append(f)
+            else:
+                skipped.append(f)
         elif unit and unit != OFFICE_KEY and name.endswith(".py") and not name.startswith(("bot_office_", "test_")):
             units.setdefault(unit, []).append(f)
         else:
@@ -955,8 +971,8 @@ SYNC_SUBJ_RE = re.compile(r"^sniper: upstream [0-9a-f]{7,40} direct sync$")   # 
 
 
 def health_units():
-    """매일 점검할 서비스: 대상 봇 서비스(사무실 폴더 키 제외) + 사무실 상시 서비스"""
-    return [u for u in targets() if u != OFFICE_KEY] + [u for u in EXTRA_UNITS if u not in targets()]
+    """매일 점검할 서비스: 대상 봇 서비스(사무실 폴더 키·9번 브리핑 제외 — 타이머 구동 one-shot 이라 평소 inactive) + 사무실 상시 서비스"""
+    return [u for u in targets() if u not in (OFFICE_KEY, BRIEFING_KEY)] + [u for u in EXTRA_UNITS if u not in targets()]
 
 
 def health_check(st, today):
@@ -1158,6 +1174,36 @@ def office_restore(saved):
             os.remove(dst)
  
  
+def briefing_deploy(files):
+    """9번 브리핑: 저장소 bot_office/briefing/ 의 바뀐 파일을 서버 /opt/bot-office/briefing/ 으로 폴더 구조(sources/ 등) 그대로 복사 → 백업 목록 반환(office_restore 로 되돌림).
+    systemd/ 유닛은 /etc/systemd/system 에 수동 설치하는 파일이라 복사하지 않는다. 재시작 없음 (one-shot 이라 다음 실행부터 새 코드)."""
+    root = targets().get(BRIEFING_KEY)
+    if not root or not files:
+        return []
+    bk_dir = os.path.join(OFFICE_DIR, "_backups", "updater_briefing_" + datetime.now(KST).strftime("%Y%m%d_%H%M%S"))
+    base, saved = os.path.join(OFFICE_DIR, "briefing"), []
+    for f in files:
+        src = os.path.join(REPO, f)
+        rel = os.path.relpath(os.path.realpath(src), root)
+        if rel.startswith("..") or rel.split(os.sep)[0] == "systemd":
+            continue
+        dst = os.path.join(base, rel)
+        existed = os.path.exists(dst)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        bk = None
+        if existed:
+            bk = os.path.join(bk_dir, rel); os.makedirs(os.path.dirname(bk), exist_ok=True)
+            subprocess.run(["cp", "-p", dst, bk], check=True)
+        saved.append((dst, bk))
+        if os.path.exists(src):
+            uid, gid, mode = _office_perm(dst if existed else None)
+            tmp = dst + ".updtmp"
+            subprocess.run(["cp", src, tmp], check=True); os.chmod(tmp, mode); os.chown(tmp, uid, gid); os.replace(tmp, dst)
+        elif existed:
+            os.remove(dst)
+    return saved
+
+
 def header_version(files):
     """올린 파일 머리말의 코드 자체 버전 (# 4bot N번 vX.Y.Z, 숫자만 · v1.5.6 제외).
     main.py 머리말을 우선, 없으면 바뀐 파일 중 처음 찾은 것. 없으면 None (기존 방식 유지)."""
@@ -1613,9 +1659,10 @@ def apply(st, key):
     vers = bump_versions([u for u in units if u != OFFICE_KEY], old_head)
     office_files = units.get(OFFICE_KEY, [])
     saved = office_deploy(office_files) if office_files else []
+    saved += briefing_deploy(units.get(BRIEFING_KEY, []))   # 9번 브리핑: /opt/bot-office/briefing/ 로 복사 (실패 시 아래 되돌림에 같이 포함)
     perm_fixed = office_perm_repair() if office_files else []
     self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py", "sniper_upstream.py") for f in office_files)
-    restart = [u for u in units if u != OFFICE_KEY]   # v1.8.7: 사무실 폴더 키는 서비스가 아니라 재시작하지 않음 (웹 사무실 삭제)
+    restart = [u for u in units if u not in (OFFICE_KEY, BRIEFING_KEY)]   # v1.8.7: 사무실 폴더 키는 서비스가 아니라 재시작하지 않음 (웹 사무실 삭제) · v1.9.4: 브리핑 키도 제외 (one-shot 재시작=텔레그램 발송)
     names_changed = {os.path.basename(f) for f in office_files}
     for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
         if names_changed & set(xfiles) and sh(SYSTEMCTL, "is-active", xu)[1].strip() == "active":   # 지금 실행 중인 것만 (비서는 disabled 지만 실행 중)
