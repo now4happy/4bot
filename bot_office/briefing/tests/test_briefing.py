@@ -304,7 +304,7 @@ def ok_result(h, mode=None):
 class Portfolio(unittest.TestCase):
     def snap(self, date, toss_h, laoer_h, kw=None, mode="fixed", prices=None, sha="aa"):
         res = {"toss": ok_result({"토스": toss_h}),
-               "meritz": ok_result({"메리츠 적립": {}, "메리츠 속쓸": laoer_h}),
+               "meritz": ok_result({"메리츠 적립": {}, "메리츠 탑쌓기": laoer_h}),
                "kiwoom": ok_result({"키움": kw or {"000001": 5.0}}, mode)}
         res["kiwoom"]["meta"]["fixed_sha"] = sha
         return res, portfolio.build_snapshot(date, "g", res, prices)
@@ -312,12 +312,12 @@ class Portfolio(unittest.TestCase):
     def test_diff_changes_and_incomparable(self):
         _, prev = self.snap("2026-11-18", {"AAA": 3.0}, {"SOXL": 63.0})
         res, _ = self.snap("2026-11-19", {"AAA": 5.0}, {"SOXL": 63.0})
-        res["meritz"]["accounts"]["메리츠 속쓸"] = {"status": "unavailable", "holdings": {}, "note": "x"}
+        res["meritz"]["accounts"]["메리츠 탑쌓기"] = {"status": "unavailable", "holdings": {}, "note": "x"}
         res["meritz"]["status"] = "partial"
         sec, snap = portfolio.collect(cfg(), "2026-11-19", "g", prev, res, None)
         self.assertEqual(sec["changes"], [{"account": "토스", "ticker": "AAA", "prev_qty": 3.0,
                                            "today_qty": 5.0, "delta": 2.0}])
-        self.assertEqual(sec["incomparable"], ["메리츠 속쓸"])
+        self.assertEqual(sec["incomparable"], ["메리츠 탑쌓기"])
         self.assertEqual(sec["status"], "degraded")
         msg = render.portfolio_message(sec, "t1")
         print("\n" + msg)
@@ -411,7 +411,7 @@ class EndToEnd(unittest.TestCase):
         self.cfgp = cfgp
         self.sent = []
         self.fetchers = {"toss": lambda: ok_result({"토스": {"AAA": 3.0}}),
-                         "meritz": lambda: ok_result({"메리츠 적립": {}, "메리츠 속쓸": {"SOXL": 1.0}}),
+                         "meritz": lambda: ok_result({"메리츠 적립": {}, "메리츠 탑쌓기": {"SOXL": 1.0}}),
                          "kiwoom": lambda: kiwoom.fetch(c, TODAY)}
         self.deps = {"send": lambda t: (self.sent.append(t) or True), "run_id": "abc123",
                      "sleep": lambda s: None, "reissue": lambda: (True, ""), "fetchers": self.fetchers}

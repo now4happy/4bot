@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.10)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.11)
+# v2.2.11 (2026-11-20, 7번 이름 변경): 표시 이름 '7번 메리츠 속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기' (HEAD·상황판 제목). 동작 변경 없음
 # v2.2.9 (2026-11-20, 3차 — 풀이님 결정 10:06·10:14): 설정 메뉴를 탑쌓기 전용으로 개편 — 추가: 탑쌓기 간격 변경(tower_gap_usd, 1 이상 정수)·층 금액 변경(tower_floor_usd)·층 수 변경(tower_floors). 삭제: 회차·사다리 시작가·사다리 간격·재매수 하락폭·하루 최대 회차 버튼, '차감'(--credit) 입력, 사다리 채운 회차 경고(fill_warn). 상황판 전략 줄은 항상 탑쌓기. 시드·목표 이익률·매도 비중·1층 시작가·환전·봇 켜기/끄기는 그대로
 # v2.2.6 (2026-11-20, 판 16 본격): 상황판 장부 줄의 매도 목표가 탑쌓기면 '가장 낮은 층 기준'(층별 매도라 전체 평단 목표는 의미 없음) 1곳만 고침. 층 표시(반칸·미완성 글자)는 tower_strategy.view_lines, 장중 확인 간격 표시(30초마다)는 기존 intraday_text 가 설정값을 그대로 보여 줌. 매매 동작 변경 없음
 # v2.2.5 (2026-11-20, 판 16 1층 채우기 매수): 버전 표기만 올림 (1층 채우기 매수 로직은 tower_strategy.py)
@@ -112,7 +113,7 @@ HEADS = {"main": "아래 버튼을 눌러 주세요", "fund": "자금", "tact": 
 CONFIRM_SEC = 60            # 제안값: 확인 버튼 유효 시간
 WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
-HEAD = "7번 메리츠 속쓸 적립봇"
+HEAD = "7번 메리츠 SOXL 탑쌓기"
 ALL_LABELS = ({M_FUND, M_TACT, M_STAT, M_ETC, BACK, I_FUNDS, I_FX, I_PLAN, I_SET, I_BOARD, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
                T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, SET_POWER} | set(SET_ITEMS))
 
@@ -392,7 +393,7 @@ class MenuBot:
     def board_text(self, s):
         d = self.board(s)
         pos = d["pos"]
-        lines = [f"[7번 메리츠 속쓸 적립봇 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
+        lines = [f"[7번 메리츠 SOXL 탑쌓기 상황판 ({self.o.BOT_VERSION})]", self.mode_line(s, d["halt"])]
         lines.append(f"· 전략: {self.strategy_text(s)}")
         if pos:
             tw = ((d.get("plan") or {}).get("info") or {}).get("tower")

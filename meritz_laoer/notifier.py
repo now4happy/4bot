@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.1.0)
+# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.2.11)
+# v2.2.11 (2026-11-20, 7번 이름 변경): 알림 머리말 '7번 메리츠 속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기'. 동작 변경 없음
 # v2.2.9 (2026-11-20, audit-fix 7번 3차): 화면 이름 표에서 사다리·재매수 항목 제거, 탑쌓기 이름(tower_gap_usd·tower_floor_usd·tower_floors·tower_floor1_start_usd) 추가. 글자 정리 규칙은 그대로
 # v2.1.0 (2026-11-19, 방 telegram-bot-menu-review 3차 v3): 텔레그램 메뉴 문구 정리를 v2.0.9(판 11) 기준 위에 다시 적용 — 이모티콘 제거(예전 이모티콘 키보드 글자도 같은 버튼으로 읽음)·값 설명(넣을 수 있는 값·뜻·바꾸면)·주식 넣기 확인 단계. 판 11 변경은 그대로 둠, 매매 동작 변경 없음
 # v2.0.6 (2026-11-19, 판 8): 버전 표기만 올림 — staging 에 빠진 v2.0.4 파일(notifier·tg_menu·accum_strategy)을 v2.0.5 main·meritz_api 와 한 묶음으로 맞춤 (ImportError 해소). 코드 로직 변경 없음
@@ -80,7 +81,7 @@ _BOOL_RE = re.compile(r"(?<![A-Za-z0-9_.])(" + "|".join(_BOOL_KO) + r")\s*=\s*(t
 _FLAG_RE = re.compile("|".join(re.escape(k) for k in sorted(_FLAG_KO, key=len, reverse=True)) + r"(?![A-Za-z-])")
 _WORD_RE = re.compile(r"(?<![A-Za-z0-9_.$])(" + "|".join(sorted(_WORD_KO, key=len, reverse=True)) + r")(?![A-Za-z0-9_])")
 _IDENT_RE = re.compile(r"(?<![A-Za-z0-9_.])[A-Za-z]+(?:_[A-Za-z0-9]+)+(?![A-Za-z0-9_])")
-# 속쓸 가격이 아닌 달러 금액(회차 금액·차감·필요·가용·부족…)은 소수점 없이. 가격(현재가·평단·1주·@)은 그대로 둠
+# 탑쌓기 가격이 아닌 달러 금액(회차 금액·차감·필요·가용·부족…)은 소수점 없이. 가격(현재가·평단·1주·@)은 그대로 둠
 _AMT_RE = re.compile(r"(층 금액 |= |필요 |가용 |부족 |예수금 |원금 |기존 보유 \u2212)\$([\d,]+(?:\.\d+)?)(?![\d,])")
 
 
@@ -119,7 +120,7 @@ class Notifier:
             logging.warning(f"텔레그램 설정 없음/오류 → 로그로만 남김: {type(e).__name__}")
 
     def send(self, text):
-        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 속쓸 적립봇\n" + to_korean(text)
+        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 SOXL 탑쌓기\n" + to_korean(text)
         logging.info(msg.replace("\n", " | "))
         if not self.ok:
             return False

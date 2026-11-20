@@ -1,4 +1,4 @@
-# 7번 메리츠 속쓸 적립봇 변경 기록
+# 7번 메리츠 SOXL 탑쌓기 변경 기록
 
 ## v1.2.0 · 2026-11-20 12:17 (KST)
 - 파일: accum_strategy.py, config.py, main.py, notifier.py, tg_menu.py, tower_strategy.py

@@ -1,12 +1,12 @@
 # briefing/sources/meritz.py — 메리츠 적립(MeritzDcaClient.get_all_holdings: NKE·QLD·SGOV)과
-# 속쓸(MeritzApi.holding("SOXL")) 을 따로 try 한다. 한쪽 실패가 다른 쪽을 막지 않는다.
+# 탑쌓기(MeritzApi.holding("SOXL")) 을 따로 try 한다. 한쪽 실패가 다른 쪽을 막지 않는다.
 # ※ 호출 간격(global_throttle.py) 규칙과 클래스 생성 인자는 미확인 → 어댑터는 가정 기반이며 실패 시 '비교 불가'.
 import sys
 
 from . import SourceError, acct_fail, acct_ok, normalize_holdings, overall
 
 DCA = "메리츠 적립"
-LAOER = "메리츠 속쓸"
+LAOER = "메리츠 탑쌓기"
 
 
 def _real_dca(cfg):
@@ -29,7 +29,7 @@ def _real_laoer(cfg):
         q = meritz_api.MeritzApi().holding("SOXL")
         return {"SOXL": q}
     except Exception as e:
-        raise SourceError("메리츠 속쓸 조회 실패: %s" % type(e).__name__)
+        raise SourceError("메리츠 탑쌓기 조회 실패: %s" % type(e).__name__)
 
 
 def fetch(cfg, dca=None, laoer=None):

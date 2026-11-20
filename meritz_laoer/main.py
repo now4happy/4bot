@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.10)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.11)
+# v2.2.11 (2026-11-20, 7번 이름 변경): 표시 이름 '속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기' (HEAD·상황판·알림·CLI·argparse·README·CHANGELOG·업데이터 NAMES·브리핑 라벨). 동작 변경 없음
 # v2.2.10 (2026-11-20, staging — 풀이님 결정 11:03): BOT_VERSION 만 (audit-fix-v2 r3 내용 그대로, 버전만 올림 — 사다리 삭제가 들어간 큰 변경이라 헷갈리지 않게 올림). 동작 변경 없음
 # v2.2.9 (2026-11-20, audit-fix 7-4·7-5, 3차): ① 7번은 탑쌓기만 씀 — 사다리 삭제 (accum_strategy.py 삭제, strategy 전환·사다리 상태 data/accum_state.json·재매수·1회차 차감(--credit)·사다리 설정 키·메뉴 버튼 제거). strategy 값이 "ladder" 로 남아 있으면 설정 검사가 막음 ② 탑쌓기 1주 층은 자동 매도에서 뺌 + 하루 한 번 '1주 남음' 메시지(run_one_share_notice) — 풀이님 결정 10:03 ③ 새 층을 못 만들면(총 한도·가격 칸 없음) 만들지 않고 하루 한 번 풀이님께 물어봄(run_new_floor_notice) — 자동으로 늘리거나 멈추지 않음(09:59) ④ 휴장일 목록 범위 밖(2030~)·마지막 해 12월에 하루 한 번 알림(run_holiday_range_notice) — 자동환전·알림 꺼짐 안전장치는 그대로 ⑤ 휴장일 목록 2028·2029 추가(HOLIDAY_YEARS). 7-3 은 풀이님 결정(달러 한도·원화 매매법 없음)으로 코드 변경 없음. 층 간격 기본값 $5 그대로(메뉴로 바꿈).
 # v2.2.8 (2026-11-20, 하루에 한 층 매수): 탑쌓기는 하루에 안 산 칸 전부 주문 (max_rounds_per_day는 사다리 회차만) — tower_strategy.py make_plan·main.py 다음 매수 표시만 바뀜
@@ -37,7 +38,7 @@
 #      못 찾으면 '체결 안 된 것'으로 두고 마지막 잔고=장부 확인이 안전망(어긋나면 예전처럼 정지). 서버가 오류 코드로 분명히 거절한 주문은 '안 들어감'으로 처리
 #   ③ 텔레그램 chat_id 필수: 비어 있거나 숫자가 아니면 점검(--check·--add-shares·주문 전 확인)에서 막음 — 하루 기록은 안 써서 고치면 같은 날 다시 시도
 #   ④ 판 5 보완 포함: 거래소 번호·적용환율 일시 오류는 하루 기록 없이 5분 뒤 재시도, 자동환전 뒤 달러 반영 최대 90초 대기, 장중 매도는 장이 열려 있을 때만
-# 메리츠 속쓸 적립봇 (SOXL 분할매수·부분매도) — 실행·안전장치
+# 7번 메리츠 SOXL 탑쌓기 (SOXL 분할매수·부분매도) — 실행·안전장치
 # v2.0.3 (2026-11-18): ① 당일 매도 — 오늘 산 주식이 평단(오늘 체결 반영) +목표% 에 닿으면 그날 바로 매도 비중만큼 매도.
 #     장중 intraday_sell_check_sec(기본 120초)마다 run_intraday_sell 이 확인 (실거래·LIMIT 주문일 때만). 매수는 하루 1회차 그대로(장중 재매수 없음),
 #     하루 매도 주문은 1건 (이미 오늘 매도 주문이 있으면 안 냄), 연속 매도 금지(sell_block)는 make_plan 규칙 그대로 (오늘 체결된 매수가 있으면 풀림).
@@ -100,7 +101,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.10"
+BOT_VERSION = "v2.2.11"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 FX_KST_TIME = datetime.time(9, 0)     # 자동환전 시작 시각 (한국시간) = 메리츠 실시간 환전 시작
@@ -1389,7 +1390,7 @@ def loop():
 
 
 def cmd_check(s):
-    print(f"속쓸 적립봇 {BOT_VERSION} 점검 (주문 없음)")
+    print(f"7번 메리츠 SOXL 탑쌓기 {BOT_VERSION} 점검 (주문 없음)")
     bad = validate_settings(s)
     idb, fp = check_identity(s)
     print(f"- 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'} · "
@@ -1531,7 +1532,7 @@ def cmd_diag_cash(s, api=None):
     api = api or MeritzApi(s["key_file"], os.path.join(s["state_dir"], "data", "meritz_token.json"))
     d = api._call("GET", "/accounts/v1/me/overseas/currencies")
     rows = d.get("data")
-    print(f"속쓸 적립봇 {BOT_VERSION} --diag-cash (읽기 전용 · 주문/환전 없음)")
+    print(f"7번 메리츠 SOXL 탑쌓기 {BOT_VERSION} --diag-cash (읽기 전용 · 주문/환전 없음)")
     print(f"- 응답 이어보기 표시(tr_cont): {d.get('tr_cont')!r} · 행 수: {len(rows) if isinstance(rows, list) else '목록 아님'}")
     usd = [r for r in rows if isinstance(r, dict) and str(r.get("crcd", "")).strip().upper() == "USD"] if isinstance(rows, list) else []
     print(f"- USD 행 {len(usd)}개 (1개여야 정상)")
@@ -1554,7 +1555,7 @@ def cmd_diag_cash(s, api=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="메리츠 속쓸 적립봇")
+    ap = argparse.ArgumentParser(description="7번 메리츠 SOXL 탑쌓기")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--fingerprint", action="store_true")
     g.add_argument("--check", action="store_true")

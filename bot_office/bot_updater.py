@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 v1.9.6 (2026-11-20, 7번 이름 변경): NAMES·텔레그램 표시 '7번 메리츠 속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기'. 동작 변경 없음
 # 사무실 v1.9.5 (2026-11-20, audit-fix-v2 9-1·9-2): ① CHANGELOG 기록 실패가 커밋·태그·푸시를 막지 않고 보고만(write_changelog) ② main 푸시가 성공했을 때만 staging 을 맞춤(push_main_then_staging)
 # 사무실 v1.9.4 (2026-11-20): 9번 브리핑(briefing/) 연결 — ① briefing/ 하위 폴더(sources/·systemd/)까지 9번 브리핑 소속으로 분류 (.py·.json·.service·.timer, tests/·test_* 제외) · 이름 '9번 브리핑'
 #                       ② 재시작 목록에서 BRIEFING_KEY 제외 (briefing 은 서비스가 아니라 one-shot 이라, 재시작하면 텔레그램 브리핑이 의도치 않게 발송됨)
@@ -137,7 +138,7 @@ CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
          "meritz_dca.service": "6번 메리츠 적립", "bithumb_bot.service": "3번 빗썸 적립",
-         "meritz_laoer.service": "7번 메리츠 속쓸 적립봇",
+         "meritz_laoer.service": "7번 메리츠 SOXL 탑쌓기",
          BRIEFING_KEY: "9번 브리핑"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # --- 사무실 v1.9.3: 스나이퍼 제외 + 봇별 검사·보류 ---
