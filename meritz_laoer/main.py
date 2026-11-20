@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.17)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.18)
+# v2.2.18 (2026-11-20, 판 21 거래 내역·봇 상태 버튼 오류 고침): BOT_VERSION 만 올림 (고침은 tg_menu.py — _local 4개 반환에 ledger_text·power_text 가 5개로 풀던 것을 4개로 고침). 매매 로직 변경 없음
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): ① 설정 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day (1~3, 없으면 1 = 예전 동작). 매수 계획은 tower_strategy.make_plan 이 하루 최대 N_buy 층 (층마다 floor_id) — 여기서는 표시(plan_head·next_trade_lines)가 오늘 사는 층을 전부 보여줌
 #   ② run_intraday_sell: 같은 확인에서 여러 층이 목표에 닿으면 번호가 큰 층부터 '오늘 남은 매도 횟수'(N_sell − 오늘 이미 판 층 수)까지 팔고 나머지는 알림만(pick_sells). v2.2.12 '첫 매도 뒤 2차는 알림만' 은 이 횟수 규칙으로 바뀜 (N_sell=1 이면 예전과 같음).
 #   예전 하루 1건 표시 m["sell_attempt"] 는 층 번호가 있으면 그 층, 없으면 층을 모르는 1건으로 셈. ③ 자동환전 아침 계산(_next_rounds_inputs)은 build_plan 이 돌려준 오늘 매수 주문 전부(최대 N_buy 층)로 필요 달러를 계산 — rounds(휴장 전날 extra)는 계획에 안 들어가 층 수와 곱해지지 않음(코드 확인, 변경 없음). 1주 층 제외·재매수 보류·매도 비중·목표 이익률·장운영 규칙은 그대로
@@ -112,7 +113,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.17"
+BOT_VERSION = "v2.2.18"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)

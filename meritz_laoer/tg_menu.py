@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.17)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.2.18)
+# v2.2.18 (2026-11-20, 판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개(pos·halt·avg·tgt)를 돌려주는데 ledger_text·power_text 가 5개로 풀어서 ValueError 가 나던 것을 4개로 고침. 매매 로직·문구 변경 없음
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): 설정 메뉴에 "하루 매수 층 수 변경"(tower_max_buy_layers_per_day)·"하루 매도 층 수 변경"(tower_max_sell_layers_per_day) 버튼 추가 — 1~3 정수, 없으면 1 (TOWER_DEFAULTS). MEANS 설명 2개, 설정 화면 SET_ROWS 와 상황판 설정값 줄에 현재 값 표시. 다른 설정 버튼은 그대로
 # v2.2.14 (2026-11-20, 판 17 시초가 상한): 상황판 오늘 계획 미리보기가 저장된 시초가(main.load_open_price, 읽기만)를 build_plan 에 넘김 — 시초가가 아직 없으면 0 → 계획 배정 그대로. 메뉴·문구는 그대로
 # v2.2.12 (2026-11-20, audit-fix-v2 r4): 표시 문구 '당일 시드' → '한층 금액' (상황판·자금 화면 2곳 + 주석). 금액 형식·다른 문구는 그대로
@@ -433,7 +434,7 @@ class MenuBot:
 
     def ledger_text(self, s):
         o = self.o
-        pos, halt, avg, _, _ = self._local(s)
+        pos, halt, avg, _ = self._local(s)
         lines = ["[거래 내역 — 조회만]"]
         lines.append(f"· 장부: {pos['qty']}주 · 원금 ${float(pos['principal']):,.0f} · 평단 ${avg:.2f}" if pos else "· 장부: 시작 전")
         lines.append(f"· 정지 표시: {halt.get('reason') if halt else '없음'}")
@@ -490,7 +491,7 @@ class MenuBot:
     def power_text(self, s):
         idb, fp = self.o.check_identity(s)
         exp = str(s.get("expected_key_fp") or "").strip()
-        _, halt, _, _, _ = self._local(s)
+        _, halt, _, _ = self._local(s)
         fp_txt = ("없음" if not fp else "있음 · " + ("기대값과 일치" if exp and fp == exp else ("기대값 없음" if not exp else "기대값과 다름")))
         return "\n".join(["[봇 상태 — 표시만]",
                           f"· 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'}",
