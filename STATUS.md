@@ -3,7 +3,7 @@
 > 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-20 19:00 (KST) · 계기: 업데이트 적용 (staging: meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sell): 설정 키 2개(tower_max_buy_layers_per_day·tower_max_sell_layers_per_day, 1~3, 없으면 1) + 텔레그램 버튼 2개, 매수 계획·장중 매도·아침 계획 매도가 그 층 수만큼 사고팔게 함. N=1은 기준 v2.2.15와 5,118 항목 동일.)
+- 갱신: 2026-11-20 19:09 (KST) · 계기: 업데이트 적용 (staging: meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개(pos·halt·avg·tgt)를 돌려주는데 ledger_text·power_text 가 5개로 풀어서 ValueError 가 나던 것을 4개로 고침. 매매 로직·문구 변경 없음. 회귀 시험 3개 통과(서버 실제 상태로 재현·확인), 기존 시험 38개 통과, test_v226 기존 실패 6개와 동일.)
 
 ## 봇별 현재 상태
 
@@ -13,7 +13,7 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 실행 중 (11-19 12:46 KST부터) | v1.2.8 | 2026-11-18 19:45 | toss: 공유 토큰 복원 (a) + 동기화 뒤 훅 자동 재적용 Q5 (방 room2-toss-sniper) |
 | 6번 메리츠 적립 | `meritz_dca` | 실행 중 (11-20 13:53 KST부터) | v1.3.4 | 2026-11-20 13:53 | audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6 |
 | 3번 빗썸 적립 | `bithumb_bot` | 실행 중 (11-20 12:16 KST부터) | v4.4.1 | 2026-11-20 12:17 | audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, |
-| 7번 메리츠 SOXL 탑쌓기 | `meritz_laoer` | 실행 중 (11-20 19:00 KST부터) | v1.2.5 | 2026-11-20 19:00 | meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sel |
+| 7번 메리츠 SOXL 탑쌓기 | `meritz_laoer` | 실행 중 (11-20 19:09 KST부터) | v1.2.6 | 2026-11-20 19:09 | meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개 |
 | 9번 브리핑 | `briefing` | 꺼짐 | v1.0.1 | 2026-11-20 12:26 | 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1 |
 | 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 파일 묶음 | v1.9.6 | 2026-11-20 12:26 | 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1 |
 
@@ -27,6 +27,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-20 19:09 · 7번 메리츠 SOXL 탑쌓기 v1.2.6 · main.py, tg_menu.py · meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개
 - 2026-11-20 19:00 · 7번 메리츠 SOXL 탑쌓기 v1.2.5 · config.py, main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sel
 - 2026-11-20 18:02 · 7번 메리츠 SOXL 탑쌓기 v1.2.4 · main.py, tower_strategy.py · meritz_laoer v2.2.15 (판 19 오늘 계획 미리보기에 탑 진행률): plan_head 한 곳
 - 2026-11-20 16:46 · 7번 메리츠 SOXL 탑쌓기 v1.2.3 · main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.14 (판 17 시초가 상한): 오늘 채우는 층의 안 산 칸이 시초가를 넘지
@@ -36,7 +37,6 @@
 - 2026-11-20 12:26 · 사무실 파일(bot_office) v1.9.6 · bot_updater.py · 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1
 - 2026-11-20 12:26 · 9번 브리핑 v1.0.1 · __init__.py, meritz.py · 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1
 - 2026-11-20 12:26 · 7번 메리츠 SOXL 탑쌓기 v1.2.1 · main.py, notifier.py, tg_menu.py · 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1
-- 2026-11-20 12:17 · 사무실 파일(bot_office) v1.9.5 · bot_updater.py, fanding_fetch_server.py, office_briefing.py, · audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10,
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 

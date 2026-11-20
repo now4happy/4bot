@@ -1,5 +1,10 @@
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v1.2.6 · 2026-11-20 19:09 (KST)
+- 파일: main.py, tg_menu.py
+- 내용: meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개(pos·halt·avg·tgt)를 돌려주는데 ledger_text·power_text 가 5개로 풀어서 ValueError 가 나던 것을 4개로 고침. 매매 로직·문구 변경 없음. 회귀 시험 3개 통과(서버 실제 상태로 재현·확인), 기존 시험 38개 통과, test_v226 기존 실패 6개와 동일.
+- 브랜치: staging
+
 ## v1.2.5 · 2026-11-20 19:00 (KST)
 - 파일: config.py, main.py, tg_menu.py, tower_strategy.py
 - 내용: meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sell): 설정 키 2개(tower_max_buy_layers_per_day·tower_max_sell_layers_per_day, 1~3, 없으면 1) + 텔레그램 버튼 2개, 매수 계획·장중 매도·아침 계획 매도가 그 층 수만큼 사고팔게 함. N=1은 기준 v2.2.15와 5,118 항목 동일.
