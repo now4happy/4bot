@@ -1,5 +1,10 @@
 # 사무실 파일(bot_office) 변경 기록
 
+## v1.9.4 · 2026-11-20 11:55 (KST)
+- 파일: bot_updater.py
+- 내용: 텔레그램 브리핑 봇 v1.1.2: 9번 브리핑 패키지 + 사무실 v1.9.4 (health_units briefing 제외)
+- 브랜치: staging
+
 ## v1.9.3 · 2026-11-19 17:40 (KST)
 - 파일: bot_updater.py, sniper_upstream.py
 - 내용: updater redesign pan2 v2: sniper sync via plugin_updater CLI --base-dir; record all-held to holds list
