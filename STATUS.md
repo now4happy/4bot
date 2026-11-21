@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-21 11:16 (KST) · 계기: 업데이트 적용 (captures/p-verify: update: main 기준으로 선택한 이전 변경 정리)
+- 갱신: 2026-11-21 11:17 (KST) · 계기: 업데이트 적용 (captures/meritz-sgov-v129-room3-meritz-accum: 메리츠 적립 v1.2.9 SGOV 수정 패키지 (room3-meritz-accum) — 지시문 + MANIFEST, 기준 파일 5개는 main과 동일)
 
 ## 봇별 현재 상태
 
@@ -42,7 +42,6 @@
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
 - `captures/honginki-daytrade-auto`: captures/honginki-daytrade-auto/honginki_bot_v1_honginki-daytrade-auto.zip, captures/honginki-daytrade-auto/honginki_collector_v2_honginki-daytrade-auto.zip
-- `captures/meritz-sgov-v129-room3-meritz-accum`: 01_instruction_meritz_sgov_fetch_buffer_fix_v129.md, MANIFEST.md
 - `captures/p-trading-soxl-sgov-profit-vault`: p-trading-soxl-sgov-profit-vault/VERIFY_v3.md, p-trading-soxl-sgov-profit-vault/backtest_v3.py
 
 ## AI·사람 작업 순서 (요약)
