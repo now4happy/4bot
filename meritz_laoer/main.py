@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.3.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.4.0)
+# v2.4.0 (2026-11-21, 판 24): ① 장부 바로잡기(run_ledger_migration, 일회성: 메리츠 실제 잔고 684주일 때만 → 장부 684주 · 두 층 373주 $40.29 / 311주 $48.14 · 잠금 · 지하층(빈 층), 주문·실제 잔고 안 건드림, 마커 파일로 한 번만, 이전 날 늦은 체결은 건너뜀)
+#   ② 스나이퍼 목표가에 닿으면 자동 매도 대신 텔레그램 버튼(스나이퍼/탑쌓기) 선택 (run_sniper_tick·apply_pick) ③ 잠긴 층은 탑 매도만 ④ 지하층부터 스나이퍼 매수. 업데이트 알림 판 번호는 bot_office/bot_updater.py
 # v2.3.0 수정1 (2026-11-21, 판 23 수정1 — 버전 그대로): 하루 매수 층 수 제한(buy_layer_limit_hit, 기존 설정 tower_max_buy_layers_per_day) · B3 미체결 조회 · B7 모의 스나이퍼(run_sniper_dry) · S3 사이클 최고 층수 잠금 · S1 16:10 뒤 체결 다음 날 반영(run_late_fills) · '목표 도달' 라벨 · 죽은 코드 defer_sell·limit_morning_sells 제거
 # v2.3.0 (2026-11-21, 판 23 하이브리드 — 스나이퍼 매수 + 탑 매도): 모드 선택(trading_mode) 삭제, 항상 하이브리드. 사기=스나이퍼(눌림·돌파)만, 층 시드(기본 $15,000)에 닿은 층은 '완성'이라 탑 매도(층 평단 +10% → 50%), 미완성 층(재매수 대기 포함)은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·층 전량).
 #   총 시드·층 수 한도 없음(total_krw 선택). 새 층 = 가장 낮은 층 평단 − tower_gap_usd(기본 5) 이하일 때. 탑 매도 체결도 스나이퍼 기준가(직전 익절) 갱신. 같은 날 한 층에 매도 주문이 이미 있었으면(탑 매도 일부 체결 뒤 남은 몫 포함) 그 층은 그날 다시 안 팖.
@@ -122,7 +124,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.3.0"
+BOT_VERSION = "v2.4.0"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)
@@ -1326,7 +1328,7 @@ def run_sniper_dry(s, api, note):
     done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None}
     out = []
     if n.time() < datetime.time(16, 10):
-        sells, _sn = SN.plan_sells(s, sim, px, q, skip_ids=done_sell, otype="LIMIT")
+        sells = []                                                     # v2.4.0: 스나이퍼 목표에 닿아도 자동 매도 안 함 (실거래는 텔레그램 선택, 모의는 기록 안 함)
         tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, q - sum(o["qty"] for o in sells)), skip_ids=done_sell)
         tw_pick, _held = pick_sells(tw_all, TW.sell_layers(s) - len({int(o["floor_id"]) for o in m["orders"] if o.get("mode") == "tower" and o.get("side") == "SELL"}))
         for o in sells + tw_pick:
@@ -1347,6 +1349,89 @@ def run_sniper_dry(s, api, note):
         note.send(f"모의 스나이퍼 — 주문은 안 냈어요 (시뮬레이션 기록만)\n현재가 ${px:.2f}\n" + fmt_orders(out))
         return "모의 기록"
     return "모의 신호 없음"
+
+
+PICK_TEXT = ("스나이퍼 목표가에 닿은 층이 있어요 — 자동으로 팔지 않아요. 선택해 주세요.\n"
+             "{no}층 평단 ${avg:.2f} ({qty}주) · 목표가 ${target:.2f} (평단 +{pct:g}%) · 현재가 ${price:.2f}\n"
+             "• 스나이퍼: 이 층은 그대로(안 팔고 안 바꿈) 두고, 목표가 ${target:.2f} 를 기준가로 하는 새 층을 만들어 스나이퍼 매매\n"
+             "• 탑쌓기: 이 층을 잠가 탑 매도(평단 +10% → 50%)로 넘김\n"
+             "답이 없으면 탑쌓기로 두고 기다려요 (그동안 스나이퍼 매수 신호가 오면 바로 새 층을 사요 — 다시 안 물어요).")
+
+
+def send_pick_prompts(s, note, asks):
+    """v2.4.0: 목표가에 닿은 층마다 텔레그램 버튼 2개(스나이퍼/탑쌓기)로 물음. 버튼 글자는 callback 'pk:<층 평단>:s|t'"""
+    for a in asks:
+        text = PICK_TEXT.format(**a)
+        btn = [[("스나이퍼", f"pk:{a['key']}:s"), ("탑쌓기", f"pk:{a['key']}:t")]]
+        fn = getattr(note, "send_buttons", None)
+        if fn is not None:
+            fn(text, btn)
+        else:
+            note.send(text)
+
+
+def apply_pick(s, key, choice):
+    """v2.4.0 텔레그램 버튼(스나이퍼/탑쌓기) 반영 → 안내 글자. 스나이퍼 상태·층 상태 파일을 같이 저장. 이미 처리됐거나 없어진 층이면 아무것도 안 바꿈. 실제 주문·장부는 안 건드림"""
+    cfg = ConfigManager(s)
+    if choice not in ("s", "t"):
+        return "알 수 없는 선택이에요"
+    pos = cfg.get_position()
+    if not pos:
+        return "장부가 없어 처리하지 않았어요"
+    tst, had = tower_state_for(cfg, int(pos["qty"]), float(pos["principal"]), s)
+    if not had:
+        return "층 상태 파일이 없어 처리하지 않았어요"
+    ss = SN.load_state(cfg)
+    msg = SN.pick_resolve(ss, tst, key, choice, TW.params(s)[0])
+    if msg is None:
+        return "이미 처리됐거나 없어진 층이에요 (아무것도 안 바꿨어요)"
+    cfg._save_json(TOWER_FILE, tst)
+    SN.save_state(cfg, ss)
+    return msg
+
+
+LEDGER_FIX_FILE = "data/ledger_fix_v240.json"        # 판 24 일회성 장부 바로잡기 완료 표시 (있으면 다시 안 함)
+LEDGER_FIX_SKIP_FILE = "data/ledger_fix_v240_skip.json"      # 잔고 불일치로 안 돌렸을 때 하루 한 번 알림용
+LEDGER_FIX_SHARES = 684                              # 실제 잔고가 이 값일 때만 실행
+LEDGER_FIX_FLOORS = ((373, 15028.0), (311, 14972.0))         # 판 24 지시문: (수량, 원가) → 평단 $40.29(약) · $48.14(약)
+
+
+def run_ledger_migration(s, api, note, today):
+    """판 24 장부 바로잡기 (일회성). 16:10 이후 장부에만 +69주가 늘어난 것(실제 체결 없음)을 바로잡음: 메리츠 실제 잔고가 684주일 때만 → 장부 684주·원금 $30,000 · 층 2개(373주 $15,028 · 311주 $14,972, 잠금) + 지하층(빈 층).
+    실제 잔고·주문은 안 건드림 (장부·층 상태 파일만). 반영한 주문번호(applied)는 그대로 → 늦은 체결이 가짜 69주를 되살리지 않음 + run_late_fills 는 이 날짜까지의 기록을 건너뜀. 정지 표시는 풀지 않음. 한 번 하면 마커 파일로 다시 안 함. → 상태 글자"""
+    cfg = ConfigManager(s)
+    if cfg._load_json(LEDGER_FIX_FILE, None):
+        return "이미 실행"
+    try:
+        hold = int(api.holding(s["symbol"])[0])
+    except Exception as e:
+        logging.warning(f"장부 바로잡기: 잔고 조회 실패 {type(e).__name__}")
+        return "잔고 조회 실패"
+    if hold != LEDGER_FIX_SHARES:
+        sk = cfg._load_json(LEDGER_FIX_SKIP_FILE, None)
+        if not (isinstance(sk, dict) and sk.get("day") == today and sk.get("hold") == hold):
+            cfg._save_json(LEDGER_FIX_SKIP_FILE, {"day": today, "hold": hold})
+            note.send(f"장부 바로잡기를 안 했어요 — 메리츠 실제 잔고 {hold}주 ≠ 기준 {LEDGER_FIX_SHARES}주. 장부·층은 그대로예요. Muse 확인 필요 (Notion [AI] 질문란에 적어 주세요).")
+        return "잔고 불일치"
+    pos = cfg.get_position()
+    if not pos:
+        return "장부 없음"
+    old_q, old_p = int(pos["qty"]), float(pos["principal"])
+    tst, had = tower_state_for(cfg, old_q, old_p, s)
+    new_p = round(sum(c for _q, c in LEDGER_FIX_FLOORS), 4)
+    TW.ledger_fix_state(tst, LEDGER_FIX_FLOORS, TW.params(s)[0])
+    pos["qty"], pos["principal"] = LEDGER_FIX_SHARES, new_p
+    if "cycle_buy_total" in pos:
+        pos["cycle_buy_total"] = round(max(0.0, float(pos.get("cycle_buy_total") or 0) - (old_p - new_p)), 4)
+    cfg._save_json(cfg.FILES["POSITION"], pos)
+    cfg._save_json(TOWER_FILE, tst)
+    cfg._save_json(LEDGER_FIX_FILE, {"done_at": now_et().isoformat(), "through": today, "before": {"qty": old_q, "principal": round(old_p, 4), "had_tower_file": bool(had)},
+                                     "after": {"qty": LEDGER_FIX_SHARES, "principal": new_p, "floors": [list(x) for x in LEDGER_FIX_FLOORS]}})
+    fl = sorted(tst["floors"], key=TW.floor_avg)
+    note.send(f"장부 바로잡기 완료 (일회성)\n이유: 16:10 이후 장부에만 +{old_q - LEDGER_FIX_SHARES}주가 늘어났고 실제 체결은 없었어요 (장부 {old_q}주 → 실제 잔고 {LEDGER_FIX_SHARES}주).\n"
+              + "\n".join(f"- {i}층 {int(f['qty'])}주 · 원가 ${f['cost']:,.0f} · 평단 ${TW.floor_avg(f):.2f} (잠금 · 탑 매도)" for i, f in enumerate(fl, 1))
+              + "\n- 지하층: 0주 · $0 (다음 스나이퍼 매수부터 채움)\n실제 잔고·주문은 안 건드렸어요. 정지 표시가 남아 있으면 확인한 뒤 직접 풀어 주세요.")
+    return "완료"
 
 
 def run_sniper_tick(s, api, note):
@@ -1425,7 +1510,11 @@ def run_sniper_tick(s, api, note):
         if r["id"] in rej and abs(rej[r["id"]] - r["target"]) < 1e-9:
             busy.add(r["id"])
     busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 층은 다시 안 냄 (한 층에 매도 둘이 겹치지 않게)
-    sells, _snotes = SN.plan_sells(s, sim, px, sellable, skip_ids=busy, otype="LIMIT")      # 미완성 층만 (스나이퍼 매도)
+    sells = []                                           # v2.4.0: 스나이퍼 목표에 닿아도 자동 매도 안 함 → 아래 선택 질문(스나이퍼/탑쌓기). 잠긴 층·완성 층은 탑 매도만
+    asks = SN.pick_scan(ss, sim, s, px)
+    if asks:
+        SN.save_state(cfg, ss)
+        send_pick_prompts(s, note, asks)
     tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy)      # 완성 층만 (탑 매도 +10% → 50%)
     tw_pick, tw_held = pick_sells([o for o in tw_all if not (int(o["floor_id"]) in rej and abs(rej[int(o["floor_id"])] - float(o["price"])) < 1e-9)],
                                   TW.sell_layers(s) - tower_sold_count_today(m, rows, open_rows))      # 하루 매도 층 수(N_sell) 적용 — 넘는 층은 알림만 (알림은 하루 한 번)
@@ -1974,6 +2063,11 @@ def run_late_fills(s, api, note, mp, today):
     if not isinstance(m, dict) or not m.get("synced") or m.get("late_done") or not m.get("orders") or str(m.get("date") or "") >= today:
         return "해당 없음"
     d = m["date"]
+    fix = cfg._load_json(LEDGER_FIX_FILE, None)
+    if isinstance(fix, dict) and str(d) <= str(fix.get("through") or ""):          # 판 24: 장부 바로잡기 날짜까지의 기록은 이미 실제 잔고에 들어 있음 → 다시 넣지 않음 (가짜 +69주 방지)
+        m["late_done"] = True
+        cfg._save_json(mp, m)
+        return "장부 바로잡기 이전 기록 — 건너뜀"
     try:
         rows = fill_rows_for(api, s, d)
     except MeritzError as e:
@@ -2055,6 +2149,12 @@ def loop():
                     run_open_capture(s, api, live, n)
                 except Exception as e:
                     logging.warning(f"시초가 확인 중 오류: {type(e).__name__}")
+            if live:                     # 판 24: 일회성 장부 바로잡기 (실제 잔고 684주일 때만) — 늦은 체결 반영·스나이퍼 틱보다 먼저
+                try:
+                    api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
+                    run_ledger_migration(s, api, note, n.strftime("%Y-%m-%d"))
+                except Exception as e:
+                    logging.warning(f"장부 바로잡기 중 오류: {type(e).__name__}")
             if live:                     # 판 23 수정1 S1: 어제 이전 기록 중 16:10 뒤에 체결된 몫을 다음 날 첫 확인에 장부·층에 반영 — 오늘 스나이퍼 틱(잔고=장부 확인)보다 먼저
                 for mp in pending_syncs(state):
                     try:

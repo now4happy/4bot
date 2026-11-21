@@ -5,6 +5,11 @@
 - 내용: meritz_laoer v2.3.0 (판 23 수정1: 장중 환전 고침 제외·하루 매수 층 수 제한·B3 미체결 조회·B7 모의 스나이퍼·S3 눌림 잠금·S1 16:10 뒤 체결 다음 날 반영·라벨 고침·죽은 코드 제거). 검증: 새 시험 43개 통과, 기존 시험 17개 통과·27개 실패(의도한 변경), 해시 전부 일치, 비밀 0건.
 - 브랜치: staging
 
+## v2.4.0 · 2026-11-21 (KST) — 판 24 (office 번호는 적용 때 확정, 미확인)
+- 파일: tower_strategy.py, sniper_mode.py, main.py, tg_menu.py, notifier.py, bot_office/bot_updater.py, README.md, CHANGELOG.md, VERIFY.md (+ 새 시험 test_hybrid_v240.py)
+- 내용: meritz_laoer v2.4.0 (판 24) — ① 일회성 장부 바로잡기(실제 잔고 684주일 때만, 층 373주 $40.29 · 311주 $48.14 잠금 + 지하층) ② 잠금=탑 매도 ③ 지하층부터 스나이퍼 매수 ④ 스나이퍼 목표 도달 시 자동 매도 대신 텔레그램 선택(스나이퍼/탑쌓기) ⑤ 업데이트 알림 맨 앞 판 번호 · 수동 확인이 대기 목록 표시
+- 브랜치: staging 에 올리기 전 (검토 대기)
+
 ## v1.2.8 수정1 · 2026-11-21 (KST) — 버전 v2.3.0 그대로 (판 23 수정1, 풀이님 정정 반영)
 - 파일: main.py, sniper_mode.py, tg_menu.py, README.md, CHANGELOG.md, test_hybrid_v230.py
 - 내용: ① (풀이님 결정으로 뺌) 장중 환전 고침 — auto_fx 마커·하루 한 번 환전은 v2.3.0 그대로, test_intraday_fx_exchanges_only_shortfall 도 그대로 ② 하루 매수 층 수 제한: 그날 매수 주문이 나간 층 수가 tower_max_buy_layers_per_day(기존 설정, 새 설정 없음)에 닿으면 새 층 매수는 안 하고 알림만(하루 한 번), 거절·취소 주문은 안 셈, 이미 산 층의 남은 시드 채우기는 계속 ③ B3 미체결 판단을 미체결 조회(open_orders_today)로 (앱에서 취소한 주문은 매수·매도 잠금에서 빠짐) ④ B7 모의에서도 스나이퍼 틱이 돌되 주문 없이 시뮬레이션 기록(dry_orders_<날짜>.json) ⑤ S3 눌림 깊이 = max(현재 층 수, 사이클 최고 층수) — sniper_state.json peak_layers, 0주면 초기화 ⑥ S1 16:10 동기화 뒤 체결은 다음 날 첫 확인 때 장부·층에 반영(최근 4일 기록, late_done 표시) ⑦ 정리: pyflakes 새 경고 5개, '목표 도달' 라벨, 죽은 코드 defer_sell·limit_morning_sells 제거

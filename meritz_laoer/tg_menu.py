@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.3.0)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.4.0)
+# v2.4.0 (2026-11-21, 판 24): 스나이퍼 가격 선택 버튼(callback 'pk:<층 평단>:s|t') 처리 · 층 줄에 '잠금·탑 매도'·지하층(빈 층) 표시.
 # v2.3.0 (2026-11-21, 판 23 하이브리드): 메뉴를 스나이퍼 봇(tg_ui_plugin) 형식으로 새로 만듦. 첫 화면(reply keyboard) 2행 4개: [🔫 스나이퍼 레이더][🔄 잔고 동기화] / [⚙️ 전술 제어반][💱 환전]. 모드 버튼·🚀 시스템 업데이트·자금/전술/현상태/기타 첫 화면 버튼 삭제 (기능은 아래 화면 인라인 버튼 안으로).
 #   레이더(굵은 제목·층마다 한 줄·상태 완성/탑업 중/재매수 대기·채움률·다음 매수 타점·구분선·기준 시각, 오늘 체결 실시간 반영) · 잔고 동기화(잔고=장부일 때만 층을 장부에 맞추고 층 상태를 같은 메시지에 보여줌) · 전술 제어반(가로 전체 인라인 버튼: 층 시드·층 간격·스나이퍼 익절 1층/상단·탑쌓기 매도%·매도 비중·하루 매수/매도 층 수·봇 켜기/끄기 — 누르면 값 입력 → 이전→새 값 확인) · 환전(오늘 환전액·남은 한도·자동환전 켜기/끄기·하루 상한·여유%).
 #   인라인 버튼은 callback_query 로 받음(getUpdates allowed_updates 에 callback_query 추가, answerCallbackQuery). 층 수·시드(total_krw)·1층 시작가 변경 버튼 삭제, 총 한도 표시 삭제. B8: 오늘 계획·자금 현황·레이더가 오늘 체결을 메모리에서 더한 층 상태로 계산, '잔고≠장부' 비교도 16:10 동기화 전엔 오늘 체결 반영 수량으로 비교, 영어 설정 이름 대신 한국어.
@@ -311,6 +312,18 @@ class MenuBot:
                         self._why("chat", "메뉴: 등록된 방이 아닌 곳의 버튼 누름은 무시 — telegram 파일 chat_id 확인", 60)
                         continue
                     data = str(cq.get("data") or "")
+                    if data.startswith("pk:"):          # v2.4.0 스나이퍼 가격 선택 버튼 ('pk:<층 평단>:s|t')
+                        try:
+                            parts = data.split(":")
+                            try:
+                                s = self.o.load_settings()
+                            except Exception:
+                                pass
+                            self.send(c, self.o.apply_pick(s, parts[1], parts[2]) if len(parts) == 3 else "알 수 없는 버튼이에요", dry=s.get("dry_run", True))
+                        except Exception as e:
+                            logging.warning(f"텔레그램 선택 처리 실패: {type(e).__name__}")
+                            self.send(c, "선택을 처리하지 못했어요. 다시 눌러 주세요.", dry=s.get("dry_run", True))
+                        continue
                     lab = LABEL_LIST[int(data[2:])] if data.startswith("c:") and data[2:].isdigit() and int(data[2:]) < len(LABEL_LIST) else ""
                     if not lab:
                         continue
@@ -483,13 +496,16 @@ class MenuBot:
             g = r["gain_pct"]
             ratio = (r["cost"] / r["tgt_usd"]) if r["tgt_usd"] else 0.0
             if r["complete"]:
-                tg, state, prog = _TW.ceil2(r["avg"] * (1 + pct_t / 100.0)), "완성·탑 매도", ""
+                tg, state, prog = _TW.ceil2(r["avg"] * (1 + pct_t / 100.0)), ("잠금·탑 매도" if r.get("locked") else "완성·탑 매도"), ""
             else:
                 tg = r["target"]
                 state = "재매수 대기" if r["rebuy"] else "탑업 중"
                 prog = f" ◧{int(round(ratio * 100))}%"
                 fill = fill or (r["no"], ratio, r["cost"], r["tgt_usd"], state)
             out.append(f"⚡ <b>[{r['no']}층: {r['qty']}주·${r['cost']:,.0f}]</b> <b>${r['avg']:.2f}</b> ➔ <b>${tg:.2f}</b> ({'+' if (g or 0) >= 0 else ''}{(g or 0):.2f}%) {esc(state)}{prog}")
+        for e in (st.get("empty") or []):          # v2.4.0 빈 층 (지하층 · 스나이퍼 선택 새 층) — 0주·$0, 번호는 채워진 뒤 평단 순으로 붙음
+            if isinstance(e, dict):
+                out.append("⚪ <b>[" + ("지하층" if e.get("kind") == "basement" else "새 층") + ": 0주·$0]</b>" + (f" 기준가 ${float(e.get('ref_px') or 0):.2f}" if float(e.get("ref_px") or 0) > 0 else " 스나이퍼 매수가 여기서 시작"))
         return out, fill
 
     def board_text(self, s):

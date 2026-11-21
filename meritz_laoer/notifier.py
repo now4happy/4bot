@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.2.20)
+# FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.4.0)
+# v2.4.0 (2026-11-21, 판 24): send_buttons 추가 (인라인 버튼 알림 — 스나이퍼 가격 선택용). 기존 send 는 그대로.
+# v2.3.0 (2026-11-21, 판 23 하이브리드): 알림 머리말 '7번 메리츠 SOXL 듀얼모드' → '7번 메리츠 SOXL 하이브리드'. 화면 이름 표에서 trading_mode 삭제. 글자 정리 규칙·전송은 그대로
 # v2.2.20 (2026-11-21, 판 22 듀얼 모드): 알림 머리말 '7번 메리츠 SOXL 탑쌓기' → '7번 메리츠 SOXL 듀얼모드' (스나이퍼·탑쌓기 두 모드 알림이 같이 나가서). 화면 이름 표에 trading_mode·sniper_tp_l1_pct·sniper_tp_upper_pct 추가. 글자 정리 규칙·전송은 그대로
 # v2.2.11 (2026-11-20, 7번 이름 변경): 알림 머리말 '7번 메리츠 속쓸 적립봇' → '7번 메리츠 SOXL 탑쌓기'. 동작 변경 없음
 # v2.2.9 (2026-11-20, audit-fix 7번 3차): 화면 이름 표에서 사다리·재매수 항목 제거, 탑쌓기 이름(tower_gap_usd·tower_floor_usd·tower_floors·tower_floor1_start_usd) 추가. 글자 정리 규칙은 그대로
@@ -64,7 +66,7 @@ _NAME_KO = {
     "intraday_sell_check_sec": "장중 매도 확인 간격", "order_time_et": "주문 시작 시각", "order_deadline_et": "주문 마감 시각",
     "sync_time_et": "체결 반영 시각", "seed_usd": "시드(달러)", "fee_pct": "수수료",
     "start.qty": "시작 수량", "start.principal_usd": "시작 원금", "start.avg_usd": "시작 평단",
-    "make_plan": "계산", "trading_mode": "매매 모드", "sniper_tp_l1_pct": "스나이퍼 1층 익절", "sniper_tp_upper_pct": "스나이퍼 상단층 익절",
+    "make_plan": "계산", "sniper_tp_l1_pct": "스나이퍼 1층 익절", "sniper_tp_upper_pct": "스나이퍼 상단층 익절",
 }
 # 참/거짓 값이 붙은 이름 → 한국말 문장
 _BOOL_KO = {
@@ -121,7 +123,7 @@ class Notifier:
             logging.warning(f"텔레그램 설정 없음/오류 → 로그로만 남김: {type(e).__name__}")
 
     def send(self, text):
-        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 SOXL 듀얼모드\n" + to_korean(text)
+        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 SOXL 하이브리드\n" + to_korean(text)
         logging.info(msg.replace("\n", " | "))
         if not self.ok:
             return False
@@ -132,4 +134,20 @@ class Notifier:
                 return r.status == 200
         except Exception as e:   # 알림 실패로 봇이 멈추지 않게
             logging.warning(f"텔레그램 전송 실패: {type(e).__name__}")
+            return False
+
+    def send_buttons(self, text, rows):
+        """v2.4.0: 인라인 버튼이 붙은 알림. rows = [[(버튼 글자, callback_data), ...], ...] (callback_data 는 64바이트 이하). 눌림은 tg_menu 가 받음. 못 보내면 False"""
+        msg = ("[모의] " if self.dry_run else "") + "7번 메리츠 SOXL 하이브리드\n" + to_korean(text)
+        logging.info(msg.replace("\n", " | "))
+        if not self.ok:
+            return False
+        try:
+            kb = {"inline_keyboard": [[{"text": t, "callback_data": d[:64]} for t, d in row] for row in rows]}
+            body = json.dumps({"chat_id": self.chat_id, "text": msg[:3900], "reply_markup": kb}).encode()
+            req = urllib.request.Request(f"https://api.telegram.org/bot{self.token}/sendMessage", data=body, headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return r.status == 200
+        except Exception as e:
+            logging.warning(f"텔레그램 버튼 전송 실패: {type(e).__name__}")
             return False

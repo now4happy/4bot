@@ -1,5 +1,8 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.2.20)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.4.0)
+# v2.4.0 (2026-11-21, 판 24): 층 상태에 locked(잠금=탑 매도)·st["empty"](빈 층: 지하층·스나이퍼 선택 새 층)·indep(합병 안 하는 층) 추가 — is_tower(잠금 또는 완성)·ledger_fix_state(일회성 장부 바로잡기용 층 목록 교체). 기본값이면 v2.3.0 동작 그대로.
+# v2.3.0 (2026-11-21, 판 23 하이브리드): make_plan 에 인자 2개 추가(기본값이면 v2.2.20 동작 그대로) — complete_only=True: 매도를 '완성 층'만 계산(탑 매도 +10% → 50%), sell_only=True: 매도 계산 뒤 매수 계획 없이 돌려줌(매수는 스나이퍼 몫).
+#   _apply_sell: 스나이퍼 부분 매도 잔여는 완성으로 만들지 않고 미완성으로 둠(스나이퍼가 계속 관리). view_lines: 총 층 수 한도 표시 없음('N층'). 한도(층 수·총 시드)는 하이브리드에서 안 씀(tower_floors 는 예전 탑쌓기 코드용으로만 남음).
 # v2.2.20 (2026-11-21, 판 22 듀얼 모드): 스나이퍼 체결 반영 추가 — apply_fill 이 kind 'buy_sniper' 를 받음(_apply_sniper_buy: 지정 층에 수량·원가 더함, 새 층 가능), _apply_sell 은 주문 mode 가 'sniper' 면 남은 주식을 탑업·재매수 대기 없이 완성 층으로 둠. 탑쌓기 계산(make_plan·_apply_buy·탑쌓기 매도)은 그대로
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): 설정 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day (1~3 정수, 없으면 1 = 예전 동작 그대로). buy_layers(s)·sell_layers(s) 추가.
 #   make_plan 이 매수를 하루에 최대 N_buy 층까지 계획: 위에서부터 미완성 층을 차례로 최대 N개 (닫힌 층은 건너뛰고 N에 안 셈), 층마다 안 산 칸 전부 · 칸 금액·이월(carry)·반올림 이월(roll)·시초가 상한(cap_levels)은 층마다 따로.
@@ -119,8 +122,11 @@ def ensure_state(st):
         st["applied"] = {}
     if not isinstance(st.get("absorbed"), dict):
         st["absorbed"] = {}
+    if not isinstance(st.get("empty"), list):
+        st["empty"] = []                                              # v2.4.0: 빈 층(지하층·스나이퍼 선택 새 층) 목록 — 0주라 floors 에 못 둠 (normalize 가 수량 0 층을 지움)
     legacy = bool(st.pop("sell_block", False))
     for f in st["floors"]:
+        f.setdefault("locked", False)                                 # v2.4.0: 잠금 = 탑쌓기 매도 (이 층은 스나이퍼 매도 안 함)
         if "rebuy_pending" not in f:
             f["rebuy_pending"] = bool(legacy and int(_f(f.get("qty"))) > 0 and not is_complete(f))
     return st
@@ -136,9 +142,31 @@ def is_complete(f, tol=TOL_USD):
     return bool(f.get("done")) or _f(f.get("cost")) >= _f(f.get("target") or FLOOR_USD) - tol - 1e-9
 
 
+def is_tower(f):
+    """v2.4.0: 탑 매도 층 = 잠긴 층 또는 완성 층 (스나이퍼 매도 대상이 아님)"""
+    return bool(f.get("locked")) or is_complete(f)
+
+
 def _floor(fid, qty, cost, target, kind):
     return {"id": int(fid), "qty": int(qty), "cost": round(_f(cost), 4), "target": float(target), "done": False, "closed": False,
-            "levels": [], "settled": [], "base_usd": 0.0, "carry_usd": 0.0, "kind": kind, "rebuy_pending": False}
+            "levels": [], "settled": [], "base_usd": 0.0, "carry_usd": 0.0, "kind": kind, "rebuy_pending": False, "locked": False}
+
+
+def ledger_fix_state(st, specs, fu):
+    """v2.4.0 장부 바로잡기 (일회성): 층 목록을 specs=[(수량, 원가), ...] 로 통째로 바꿈. 두 층 모두 잠금(탑쌓기 매도)·완성 표시, 지하층 1개(빈 층, 0주·$0) 추가.
+    applied(반영한 주문번호)·absorbed 는 그대로 둠 — 늦은 체결(run_late_fills)이 이미 반영한 것을 다시 넣지 않게. 실제 잔고·주문은 안 건드림 (상태만). → st"""
+    ensure_state(st)
+    fl = []
+    for i, (q, c) in enumerate(specs, 1):
+        f = _floor(i, int(q), float(c), fu, "ledger_fix")
+        f["done"], f["locked"] = True, True
+        fl.append(f)
+    st["floors"] = sorted(fl, key=floor_avg)
+    for i, f in enumerate(sorted(fl, key=lambda x: -floor_avg(x)), 1):
+        f["id"] = i
+    st["next_id"] = len(fl) + 1
+    st["empty"] = [{"kind": "basement", "ref_px": 0.0, "id": "b1"}]
+    return st
 
 
 def migrate_from_holdings(qty, principal, s=None):
@@ -229,7 +257,7 @@ def next_layer_cells(active, tgt_active, open_px=0.0):
 
 
 # ---------------------------------------------------------------- 계획
-def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_fx=False, open_px=0.0):
+def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_fx=False, open_px=0.0, complete_only=False, sell_only=False):
     """오늘 낼 주문 계산 → {"orders", "notes", "info"}. 상태·장부를 바꾸지 않음.
     open_px: 오늘 시초가 (v2.2.14 — 0 이면 아직 확정 전이라 계획 배정 그대로. 시초가를 여기서 지어내거나 전일종가로 대신하지 않음)
     s: 설정, st: 탑쌓기 상태, qty/principal: 장부(주·달러), price: 현재가, fx: 메리츠 적용환율(원/달러), usd_cash: USD 예수금, sellable: 매도가능 수량"""
@@ -256,6 +284,8 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
         for f in top_down(st):
             fq = int(_f(f.get("qty")))
             if fq <= 0:
+                continue
+            if complete_only and not is_tower(f):                          # v2.4.0: 잠긴 층도 탑 매도. v2.3.0: 하이브리드 — 탑 매도는 완성 층만 (미완성 층은 스나이퍼가 팖)
                 continue
             fa = floor_avg(f)
             tf = ceil2(fa * (1 + pct / 100.0))
@@ -284,6 +314,9 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
             info["sell_target"] = min(r["target"] for r in info["sells"])          # 가장 낮은 층의 목표 (제일 먼저 닿음)
             info["profit_reached"] = any(r["reached"] for r in info["sells"])
 
+    if sell_only:                                                    # v2.3.0: 하이브리드 — 매수는 스나이퍼 몫이라 여기서 안 계획
+        info["sell_only"] = True
+        return {"orders": orders, "notes": notes, "info": info}
     if not (fx and fx > 0):
         notes.append("환율 없음 — 매수 계획 불가 (매도만)")
         return {"orders": orders, "notes": notes, "info": info}
@@ -545,8 +578,12 @@ def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
     nf = order.get("new_floor")
     if f is None and isinstance(nf, dict):
         f = _floor(nf["id"], 0, 0.0, nf["target"], "sniper")
+        f["indep"] = bool(nf.get("indep"))                            # v2.4.0: 스나이퍼 선택으로 만든 층은 평단이 위 층보다 높아도 합병하지 않음
         st["floors"].append(f)
         st["next_id"] = max(int(_f(st.get("next_id"))), int(nf["id"]) + 1)
+        eid = order.get("empty_id")
+        if eid:
+            st["empty"] = [e for e in (st.get("empty") or []) if str(e.get("id")) != str(eid)]
     if f is None:
         return
     f["qty"] = int(f["qty"]) + q
@@ -596,8 +633,8 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
     st["floors"] = [f for f in st["floors"] if int(_f(f.get("qty"))) > 0]
     for f in sold:
         if int(_f(f.get("qty"))) > 0:
-            if order.get("mode") == "sniper":                        # v2.2.20 스나이퍼 부분 매도 잔여: 탑업 안 함·재매수 대기 안 함 (남은 주식은 그대로 한 층, 다시 안 채움)
-                f["done"], f["levels"], f["settled"], f["base_usd"], f["carry_usd"], f["rebuy_pending"] = True, [], [], 0.0, 0.0, False
+            if order.get("mode") == "sniper":                        # v2.3.0 스나이퍼 부분 매도 잔여: 완성으로 바꾸지 않음(미완성 층이었으니 그대로 미완성 — 스나이퍼가 계속 사고 팖). 탑업 칸 준비 안 함
+                f["done"], f["levels"], f["settled"], f["base_usd"], f["carry_usd"], f["rebuy_pending"] = False, [], [], 0.0, 0.0, False
                 continue
             _topup_setup(f, gap, start_usd)                          # 팔린 층만 탑업 준비 (v2.2.6)
             f["rebuy_pending"] = not f.get("done")                   # 다시 살 게 없는(완성) 층은 매도 금지를 걸지 않음 — 걸면 풀 매수가 영영 없음
@@ -717,6 +754,7 @@ def add_holdings(st, qty, avg, s=None):
 def _merge(a, b, gap, start_usd=0.0):
     m = _floor(min(int(a["id"]), int(b["id"])), int(a["qty"]) + int(b["qty"]), _f(a["cost"]) + _f(b["cost"]), max(_f(a["target"]), _f(b["target"])), "merged")
     _topup_setup(m, gap, start_usd)
+    m["locked"] = bool(a.get("locked") or b.get("locked"))                                     # v2.4.0: 잠금은 이어짐
     m["rebuy_pending"] = bool((a.get("rebuy_pending") or b.get("rebuy_pending")) and not m["done"])      # 합쳐도 금지는 이어짐 (다시 살 게 없으면 풂)
     return m
 
@@ -730,7 +768,7 @@ def normalize(st, gap=GAP_USD, start_usd=0.0):
     out = []
     for f in fl:
         cur = f
-        while out and floor_avg(cur) >= floor_avg(out[-1]) - 1e-9:
+        while out and floor_avg(cur) >= floor_avg(out[-1]) - 1e-9 and not (cur.get("indep") or out[-1].get("indep")):
             top = out.pop()
             notes.append(f"층 합병: {top['id']}층(평단 ${floor_avg(top):.2f}) + {cur['id']}층(평단 ${floor_avg(cur):.2f}) → 수량 {int(top['qty']) + int(cur['qty'])}주")
             cur = _merge(top, cur, gap, start_usd)
@@ -755,7 +793,7 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
     if qty <= 0:
         if st.get("floors"):
             notes.append("장부 0주 — 층 상태를 비움")
-        st["floors"], st["next_id"] = [], 1
+        st["floors"], st["next_id"], st["empty"] = [], 1, []
         return st, notes
     if not st.get("floors"):
         keep = st.get("applied") or {}
@@ -831,12 +869,11 @@ def view_lines(st, s=None):
     첫 줄: 층마다 한 칸 마커(완성 🟩 · 미완성 ◧ 사선, 색은 1층 🟩 · 2층 🟦 · 3층 🟨 · 4층 🟧 · 5층 🟥 · 6층 🟪 · 7층 🟫 · 8층 ⬛ · 9층 ⬜ · 10층 🟩) + 'N/최대층' (N은 채움 비율 합계, 1층 48%면 0.48).
     다음 줄들: 층별 '1층 · 평단 $48.59 · 149주 · 미완성 (48%)' (위에서부터, % = 원가 ÷ 층 목표).
     평단 = 층 투자금(실제 체결 합계) ÷ 수량 = 가중평균. 상태가 비었거나 이상하면 0층"""
-    _fu, nfl, _g = params(s)
     fl = [f for f in top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
     if not fl:
-        return [f"탑: 0/{nfl}층 (채운 층 없음)"]
+        return ["탑: 0층 (채운 층 없음)"]
     total = sum(1.0 if is_complete(f) else fill_ratio(f) for f in fl)
-    lines = [f"탑: {' '.join(layer_marker(f) for f in fl)}  {_fmt_layers(total)}/{nfl}층"]
+    lines = [f"탑: {' '.join(layer_marker(f) for f in fl)}  {_fmt_layers(total)}층"]
     for f in fl:
         lines.append(f"{int(_f(f.get('id')))}층 · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}"
                      + ("" if is_complete(f) else f" ({int(round(fill_ratio(f) * 100))}%)"))
