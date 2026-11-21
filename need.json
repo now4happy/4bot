@@ -1,28 +1,28 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-16 09:00:01",
+  "as_of_kst": "2026-11-20 16:30:00",
   "accounts": [
     {
       "name": "토스",
       "lines": [
         {
           "currency": "USD",
-          "holding": 7074.29,
-          "need": 1258.98,
+          "holding": 14064.71,
+          "need": 1589.05,
           "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
           "label": "바벨 씨드",
           "currency": "USD",
-          "holding": 7074.29,
-          "need": 11959.74,
+          "holding": 14064.71,
+          "need": 20000.0,
           "sufficient": false,
           "auto_fx": "unavailable"
         },
         {
           "currency": "KRW",
-          "holding": 1.0,
+          "holding": 0.0,
           "need": null,
           "sufficient": null,
           "auto_fx": "unavailable"
@@ -35,9 +35,9 @@
         {
           "label": "P",
           "currency": "USD",
-          "holding": 521.5,
-          "need": 566.0,
-          "sufficient": false,
+          "holding": 11.16,
+          "need": 0.0,
+          "sufficient": true,
           "auto_fx": "on"
         },
         {
@@ -51,18 +51,13 @@
         {
           "label": "3번",
           "currency": "USD",
-          "holding": 4660.35,
-          "need": null,
-          "sufficient": null,
-          "auto_fx": "on"
-        },
-        {
-          "label": "SGOV 11/16",
-          "currency": "USD",
-          "holding": 4660.35,
-          "need": 4600.0,
+          "holding": 670.3,
+          "need": 34.67,
           "sufficient": true,
-          "auto_fx": "on"
+          "auto_fx": "on",
+          "skipped": [
+            "QLD"
+          ]
         }
       ]
     },
@@ -71,14 +66,14 @@
       "lines": [
         {
           "currency": "USD",
-          "holding": 1396.99,
-          "need": 403.66499999999996,
-          "sufficient": true,
+          "holding": 38.18,
+          "need": 1506.875,
+          "sufficient": false,
           "auto_fx": "unavailable"
         },
         {
           "currency": "KRW",
-          "holding": 7057372.0,
+          "holding": 6057372.0,
           "need": null,
           "sufficient": null,
           "auto_fx": "unavailable"
@@ -90,7 +85,7 @@
       "lines": [
         {
           "currency": "KRW",
-          "holding": 970955.981857,
+          "holding": 730484.325407,
           "need": 60000.0,
           "sufficient": true,
           "auto_fx": "na"
@@ -98,6 +93,6 @@
       ]
     }
   ],
-  "total_need_usd": 18788.385000000002,
+  "total_need_usd": 23130.594999999998,
   "total_need_krw": 60000.0
 }

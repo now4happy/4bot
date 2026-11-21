@@ -15,10 +15,16 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+import math
 from barbell_plugin import (
+    BARBELL_SOXL_WEIGHT,
     PORTION_MODE_BARBELL,
+    ensure_barbell_ledger,
     evaluate_and_execute_barbell_guard30_or_injection,
+    execute_barbell_sgov_tick_plugin,
+    initialize_or_sync_barbell_on_mode_enter,
     is_barbell_mode,
+    is_sgov_regular_trading_window,
 )
 from quant_engine import (
     BASE_MAX_LOTS_8PCT,
@@ -29,6 +35,9 @@ from quant_engine import (
     MIN_DIP_VS_L1_RATIO,
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
+    PORTION_RATIO_LOCKED,
+    PRIMER_1SH_LOT_TAG,
+    PRIMER_1SH_VAC_LOT_TAG,
     REENTRY_BREAKOUT_MAX_RSI_50,
     REENTRY_BREAKOUT_RISE_PCT,
     ROUND_TRIP_FEE_RATE_PCT,
@@ -47,9 +56,13 @@ from quant_engine import (
     buckets_to_dicts,
     evaluate_guard30_and_reserve_injection,
     has_active_l1_bucket,
+    has_active_l2_bucket,
+    is_primer_1sh_tag,
     is_simple_income_mode,
     resolve_effective_round_trip_fee_rate_pct,
     resolve_portion_budget_base_equity,
+    resolve_smart_primer_policy,
+    safe_bucket_lot_count,
     summarize_stratum_portfolio,
     vrev_add_quota_lot_and_merge_2tier,
 )
@@ -65,6 +78,7 @@ from sniper_exit_plugin import (
 )
 import toss_api
 from toss_api import (
+    DEFAULT_INITIAL_SEED_USD,
     EST_TZ,
     TARGET_SYMBOL,
     safe_float,
@@ -718,6 +732,7 @@ async def _get_live_soxl_reentry_snapshot(
     last_warm_m = safe_float(getattr(context, "_last_rsi_warm_mono", 0.0), 0.0)
     if (
         not isinstance(base_met, dict)
+        or not bool(base_met.get("anchors_ready", False))
         or not bool(base_met.get("rsi_ready", False))
         or not bool(base_met.get("closed_ha_ready", False))
         or safe_float(base_met.get("prev_bar_close"), 0.0) <= 0.0
@@ -767,6 +782,40 @@ async def _get_live_soxl_reentry_snapshot(
         closed_ready,
         closed_mk,
     )
+
+
+def _get_cached_soxl_session_vwap(
+    context: Any,
+    live_price: float = 0.0,
+    now_est: Optional[datetime] = None,
+) -> float:
+    """
+    # NEW [Case 105 : 세션별 누적 VWAP O(1) 무부하 추출기]:
+    - 프리장(04:07 ~ 09:29 EST): 당일 프리마켓 누적 VWAP (premarket_vwap)
+    - 정규장(09:30 ~ 16:00 EST): 당일 정규장 누적 VWAP (regular_vwap)
+    """
+    _ = live_price
+    dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    hm_now = dt_now.hour * 100 + dt_now.minute
+    raw_cache = getattr(context, "candle_metrics_cache", None)
+    met = (
+        raw_cache.get(TARGET_SYMBOL)
+        if isinstance(raw_cache, dict)
+        else None
+    )
+    if not isinstance(met, dict):
+        return 0.0
+    if 407 <= hm_now <= 929:
+        v_pre = safe_float(met.get("premarket_vwap"), 0.0)
+        if v_pre <= 0.0:
+            v_pre = safe_float(met.get("vwap"), 0.0)
+        return round(max(0.0, v_pre), 4)
+    if 930 <= hm_now <= 1600:
+        v_reg = safe_float(met.get("regular_vwap"), 0.0)
+        if v_reg <= 0.0:
+            v_reg = safe_float(met.get("vwap"), 0.0)
+        return round(max(0.0, v_reg), 4)
+    return round(max(0.0, safe_float(met.get("vwap"), 0.0)), 4)
 
 
 async def _get_live_soxl_rsi_14(
@@ -1092,6 +1141,298 @@ async def _check_and_execute_guard30_or_reserve_injection(
         )
 
     return False, now_free_cash, eff_bp_for_order, guard_eval
+
+
+async def _check_and_prepare_primer_1sh_cash(
+    context: Any,
+    st_now: Dict[str, Any],
+    exec_order_p: float,
+    is_vacant_l1_rescue: bool,
+    trigger_desc: str,
+) -> Tuple[bool, float, float, Dict[str, Any]]:
+    """
+    # NEW [Case 110]: 1주 마중물 전용 경량 가용현금/수혈 검문기
+    - 30% 시드가드($240)를 면제하고 1주 실비용(지정가 * 수수료배수)만 충족되면 잔여 자투리 달러로 즉시 집행!
+    - 바벨 모드에서 코어 현금 부족 시 1순위 10% 현금버킷에서 1주 부족분만 정밀 수혈하되,
+      수혈 회차 분모는 정규 1회분(unit_8pct)을 그대로 유지하여 카운터 부풀림을 원천 차단한다.
+    """
+    now_free_cash = max(0.0, safe_float(st_now.get("free_cash_usd"), 0.0))
+    cur_used_res = max(0, safe_int(st_now.get("used_reserve_portions_cnt"), 0))
+    cur_inj_usd = max(0.0, safe_float(st_now.get("injected_reserve_usd"), 0.0))
+    init_seed = max(
+        100.0, safe_float(st_now.get("initial_seed_usd"), DEFAULT_INITIAL_SEED_USD)
+    )
+    eff_rt_pct = resolve_effective_round_trip_fee_rate_pct(state_dict=st_now)
+    fee_mult = 1.0 + (eff_rt_pct / 100.0)
+    clean_p = max(0.01, safe_float(exec_order_p, 0.01))
+    req_1sh_cash = round(clean_p * fee_mult, 4)
+
+    raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)
+    if raw_bp_usd <= 0.0 and now_free_cash >= req_1sh_cash:
+        await asyncio.sleep(0.25)
+        raw_bp_usd = await context.api.get_buying_power_usd(safety_buffer_pct=0.0)
+        if raw_bp_usd <= 0.0:
+            return (
+                False,
+                now_free_cash,
+                0.0,
+                {"action": "HOLD_PRIMER_TRANSIENT_BP_ZERO", "should_proceed": False},
+            )
+
+    raw_bp_safe = round(max(0.0, raw_bp_usd) * 0.998, 4)
+
+    if is_barbell_mode(st_now.get("portion_mode")):
+        unit_8pct = max(
+            1.0, round(init_seed * BARBELL_SOXL_WEIGHT * PORTION_RATIO_LOCKED, 4)
+        )
+        b_ledger = ensure_barbell_ledger(context)
+        bst = b_ledger.get_state()
+        if not bool(bst.get("is_initialized", False)):
+            bst = await initialize_or_sync_barbell_on_mode_enter(context)
+            st_now = context.ledger.get_state(TARGET_SYMBOL)
+            now_free_cash = max(0.0, safe_float(st_now.get("free_cash_usd"), 0.0))
+
+        vault_avail = max(0.0, safe_float(bst.get("vault_available_usd"), 0.0))
+        bp_excl_vault_safe = round(max(0.0, raw_bp_usd - vault_avail) * 0.998, 4)
+
+        # 0순위: SOXL 60% 코어 가용현금만으로 1주 매수가 가능한 경우 무수혈 즉시 승인
+        if (
+            now_free_cash >= req_1sh_cash - 1e-6
+            and bp_excl_vault_safe >= req_1sh_cash - 1e-6
+        ):
+            return (
+                True,
+                now_free_cash,
+                round(min(now_free_cash, bp_excl_vault_safe), 4),
+                {"action": "PRIMER_BARBELL_CORE_OK", "should_proceed": True},
+            )
+
+        # 1순위: 10% 현금버킷(미집행 SGOV 대기예산 포함)에서 1주 부족분만 소액 보충
+        shortfall_1sh = round(max(0.0, req_1sh_cash - now_free_cash), 4)
+        cash_bucket = max(0.0, safe_float(bst.get("cash_bucket_usd"), 0.0))
+        pending_sgov_buy = max(
+            0.0, safe_float(bst.get("pending_sgov_buy_budget_usd"), 0.0)
+        )
+        has_open_sgov_buy = bool(str(bst.get("sgov_buy_order_id") or "").strip())
+        if (not has_open_sgov_buy) and pending_sgov_buy > 0.0 and cash_bucket < shortfall_1sh:
+            shift_u = round(min(pending_sgov_buy, shortfall_1sh - cash_bucket), 4)
+            cash_bucket = round(cash_bucket + shift_u, 4)
+            pending_sgov_buy = round(max(0.0, pending_sgov_buy - shift_u), 4)
+
+        usable_shield = round(
+            min(cash_bucket, max(0.0, bp_excl_vault_safe - now_free_cash)), 4
+        )
+        if (
+            shortfall_1sh > 0.0
+            and usable_shield >= shortfall_1sh - 1e-6
+            and raw_bp_safe >= req_1sh_cash - 1e-6
+        ):
+            inj_1sh = shortfall_1sh
+            rem_cb = round(max(0.0, cash_bucket - inj_1sh), 4)
+            new_inj_usd = round(cur_inj_usd + inj_1sh, 4)
+            new_used_res = max(1, int(math.ceil((new_inj_usd - 1e-9) / unit_8pct)))
+            inc_cnt = max(0, new_used_res - cur_used_res)
+            await b_ledger.update_state(
+                cash_bucket_usd=rem_cb,
+                pending_sgov_buy_budget_usd=pending_sgov_buy,
+                cash_injected_to_soxl_usd=round(
+                    safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) + inj_1sh, 4
+                ),
+            )
+            updated_st = await context.ledger.update_state(
+                TARGET_SYMBOL,
+                used_reserve_portions_cnt=new_used_res,
+                injected_reserve_usd=new_inj_usd,
+                total_reserve_injected_cnt=safe_int(
+                    st_now.get("total_reserve_injected_cnt"), 0
+                )
+                + inc_cnt,
+                daily_reserve_injected_cnt=safe_int(
+                    st_now.get("daily_reserve_injected_cnt"), 0
+                )
+                + inc_cnt,
+            )
+            upd_free = max(
+                0.0, safe_float(updated_st.get("free_cash_usd"), now_free_cash + inj_1sh)
+            )
+            return (
+                True,
+                upd_free,
+                round(min(raw_bp_safe, upd_free), 4),
+                {
+                    "action": "PRIMER_BARBELL_SHIELD_MICRO_TOPUP",
+                    "should_proceed": True,
+                    "inject_usd": inj_1sh,
+                },
+            )
+
+        # MODIFIED [Case 110 · Audit-110-02]: 바벨 2~4순위에서도 30% 시드가드($144) 부활 및 8%($480) 과다 대여를 원천 차단하고 1주 부족분(shortfall_1sh)만 정밀 수혈(회차 분모는 unit_8pct 유지)
+        sgov_qty_p = max(0, safe_int(bst.get("sgov_held_qty"), 0))
+        if sgov_qty_p > 0:
+            next_sells_p = max(1, safe_int(bst.get("pending_sgov_tranche_sells"), 0))
+            await b_ledger.update_state(
+                cash_bucket_usd=cash_bucket,
+                pending_sgov_buy_budget_usd=pending_sgov_buy,
+                pending_sgov_tranche_sells=next_sells_p,
+                sgov_wait_alert_sent=True,
+            )
+            now_est_p = datetime.now(EST_TZ)
+            if is_sgov_regular_trading_window(now_est=now_est_p):
+                await execute_barbell_sgov_tick_plugin(context, now_est=now_est_p)
+            return (
+                False,
+                now_free_cash,
+                0.0,
+                {"action": "HOLD_PRIMER_BARBELL_WAIT_SGOV_LIQUIDATION", "should_proceed": False},
+            )
+
+        pooled_v_p = usable_shield + vault_avail
+        if (
+            vault_avail > 0.0
+            and raw_bp_safe >= req_1sh_cash - 1e-6
+            and (now_free_cash + pooled_v_p) >= req_1sh_cash - 1e-6
+        ):
+            take_cb_p = round(min(usable_shield, shortfall_1sh), 4)
+            rem_need_p = round(max(0.0, shortfall_1sh - take_cb_p), 4)
+            take_vt_p = round(min(vault_avail, rem_need_p), 4)
+            inj_vt_tot = round(take_cb_p + take_vt_p, 4)
+            if inj_vt_tot > 0.0:
+                v_tot_p = safe_float(bst.get("vault_realized_profit_usd"), 0.0)
+                new_v_inj_p = round(safe_float(bst.get("vault_injected_to_soxl_usd"), 0.0) + take_vt_p, 4)
+                new_v_av_p = round(max(0.0, v_tot_p - new_v_inj_p), 4)
+                new_inj_p = round(cur_inj_usd + inj_vt_tot, 4)
+                new_used_p = max(1, int(math.ceil((new_inj_p - 1e-9) / unit_8pct)))
+                inc_vt_p = max(0, new_used_p - cur_used_res)
+                await b_ledger.update_state(
+                    cash_bucket_usd=round(max(0.0, cash_bucket - take_cb_p), 4),
+                    pending_sgov_buy_budget_usd=pending_sgov_buy,
+                    cash_injected_to_soxl_usd=round(safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) + take_cb_p, 4),
+                    vault_injected_to_soxl_usd=new_v_inj_p,
+                    vault_available_usd=new_v_av_p,
+                    barbell_seed_exhausted=True,
+                )
+                upd_st_vp = await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    used_reserve_portions_cnt=new_used_p,
+                    injected_reserve_usd=new_inj_p,
+                    total_reserve_injected_cnt=safe_int(st_now.get("total_reserve_injected_cnt"), 0) + inc_vt_p,
+                    daily_reserve_injected_cnt=safe_int(st_now.get("daily_reserve_injected_cnt"), 0) + inc_vt_p,
+                )
+                upd_fc_vp = max(0.0, safe_float(upd_st_vp.get("free_cash_usd"), now_free_cash + inj_vt_tot))
+                return (
+                    True,
+                    upd_fc_vp,
+                    round(min(raw_bp_safe, upd_fc_vp), 4),
+                    {"action": "PRIMER_BARBELL_VAULT_MICRO_TOPUP", "should_proceed": True, "inject_usd": inj_vt_tot},
+                )
+
+        extra_bp_p = max(0.0, raw_bp_safe - (now_free_cash + cash_bucket + pending_sgov_buy + vault_avail))
+        if (
+            extra_bp_p > 0.0
+            and raw_bp_safe >= req_1sh_cash - 1e-6
+            and (now_free_cash + usable_shield + extra_bp_p) >= req_1sh_cash - 1e-6
+        ):
+            take_cb_e = round(min(usable_shield, shortfall_1sh), 4)
+            take_ex_e = round(min(extra_bp_p, max(0.0, shortfall_1sh - take_cb_e)), 4)
+            inj_ex_tot = round(take_cb_e + take_ex_e, 4)
+            if inj_ex_tot > 0.0:
+                new_inj_e = round(cur_inj_usd + inj_ex_tot, 4)
+                new_used_e = max(1, int(math.ceil((new_inj_e - 1e-9) / unit_8pct)))
+                inc_ex_e = max(0, new_used_e - cur_used_res)
+                await b_ledger.update_state(
+                    cash_bucket_usd=round(max(0.0, cash_bucket - take_cb_e), 4),
+                    pending_sgov_buy_budget_usd=pending_sgov_buy,
+                    cash_injected_to_soxl_usd=round(safe_float(bst.get("cash_injected_to_soxl_usd"), 0.0) + take_cb_e, 4),
+                    external_injected_to_soxl_usd=round(safe_float(bst.get("external_injected_to_soxl_usd"), 0.0) + take_ex_e, 4),
+                    barbell_seed_exhausted=True,
+                )
+                upd_st_ep = await context.ledger.update_state(
+                    TARGET_SYMBOL,
+                    used_reserve_portions_cnt=new_used_e,
+                    injected_reserve_usd=new_inj_e,
+                    total_reserve_injected_cnt=safe_int(st_now.get("total_reserve_injected_cnt"), 0) + inc_ex_e,
+                    daily_reserve_injected_cnt=safe_int(st_now.get("daily_reserve_injected_cnt"), 0) + inc_ex_e,
+                )
+                upd_fc_ep = max(0.0, safe_float(upd_st_ep.get("free_cash_usd"), now_free_cash + inj_ex_tot))
+                return (
+                    True,
+                    upd_fc_ep,
+                    round(min(raw_bp_safe, upd_fc_ep), 4),
+                    {"action": "PRIMER_BARBELL_EXTERNAL_MICRO_TOPUP", "should_proceed": True, "inject_usd": inj_ex_tot},
+                )
+
+        return (
+            False,
+            now_free_cash,
+            0.0,
+            {"action": "PRIMER_BARBELL_INSUFFICIENT_1SH_CASH", "should_proceed": False},
+        )
+
+    # [복리 / 단리 모드]: 격리수익 제외 실예수금 및 free_cash 가 1주 실비용 이상이면 즉시 집행
+    vault_locked = max(0.0, safe_float(st_now.get("vaulted_profit_locked_usd"), 0.0))
+    eff_raw_bp = max(0.0, raw_bp_usd - vault_locked)
+    eff_bp_safe = round(eff_raw_bp * 0.998, 4)
+
+    if now_free_cash >= req_1sh_cash - 1e-6 and eff_bp_safe >= req_1sh_cash - 1e-6:
+        return (
+            True,
+            now_free_cash,
+            round(min(now_free_cash, eff_bp_safe), 4),
+            {"action": "PRIMER_FREE_CASH_OK", "should_proceed": True},
+        )
+
+    if eff_bp_safe >= req_1sh_cash - 1e-6 and now_free_cash < req_1sh_cash:
+        buckets_tmp = buckets_from_dicts(st_now.get("buckets", []))
+        sub_tmp = buckets_from_dicts(st_now.get("sub_buckets", []))
+        inv_tot = sum(b.actual_cost_usd for b in buckets_tmp) + sum(
+            sb.actual_cost_usd for sb in sub_tmp
+        )
+        core_eq = max(init_seed, (now_free_cash + inv_tot) - cur_inj_usd)
+        base_eq = resolve_portion_budget_base_equity(
+            initial_seed_usd=init_seed,
+            core_equity_usd=core_eq,
+            portion_mode=str(st_now.get("portion_mode") or PORTION_MODE_COMPOUND),
+        )
+        unit_8pct_cs = max(1.0, round(base_eq * PORTION_RATIO_LOCKED, 4))
+        inj_1sh_cs = round(max(0.01, req_1sh_cash - now_free_cash), 4)
+        new_inj_cs = round(cur_inj_usd + inj_1sh_cs, 4)
+        new_used_cs = max(1, int(math.ceil((new_inj_cs - 1e-9) / unit_8pct_cs)))
+        inc_cs = max(0, new_used_cs - cur_used_res)
+        updated_st_cs = await context.ledger.update_state(
+            TARGET_SYMBOL,
+            used_reserve_portions_cnt=new_used_cs,
+            injected_reserve_usd=new_inj_cs,
+            total_reserve_injected_cnt=safe_int(
+                st_now.get("total_reserve_injected_cnt"), 0
+            )
+            + inc_cs,
+            daily_reserve_injected_cnt=safe_int(
+                st_now.get("daily_reserve_injected_cnt"), 0
+            )
+            + inc_cs,
+        )
+        upd_free_cs = max(
+            0.0, safe_float(updated_st_cs.get("free_cash_usd"), now_free_cash + inj_1sh_cs)
+        )
+        return (
+            True,
+            upd_free_cs,
+            round(min(eff_bp_safe, upd_free_cs), 4),
+            {
+                "action": "PRIMER_MICRO_RESERVE_INJECTED",
+                "should_proceed": True,
+                "inject_usd": inj_1sh_cs,
+            },
+        )
+
+    return (
+        False,
+        now_free_cash,
+        0.0,
+        {"action": "PRIMER_INSUFFICIENT_1SH_CASH", "should_proceed": False},
+    )
+
+
 # ---------------------------------------------------------------------------
 # [핵심 1] 매수 체결(FILLED) 커밋 · 비례 자투리 정산(Case 78) · 현재 사이클 자투리 절약금 누적 · Default-ON 3층 서브 그리드 SUB_L1_L3_MERGE(Case 88) · 1~7층 본 그리드 L2+L7 중간합병 및 최고도달회차 잠금(Case 87) · 매수 후 60초 타임쉴드 각인
 # ---------------------------------------------------------------------------
@@ -1143,7 +1484,11 @@ async def _commit_filled_buy_to_stratum_ledger(
         sub_tag = (
             "SUB_REENTRY_1FL"
             if raw_tag
-            in ("SUB_REENTRY_1FL_BREAKOUT", "SUB_REENTRY_1FL_PULLBACK")
+            in (
+                "SUB_REENTRY_1FL_BREAKOUT",
+                "SUB_REENTRY_1FL_PULLBACK",
+                "SUB_REENTRY_1FL_LOW_BREAK",
+            )
             else raw_tag
         )
         raw_sub_budget = safe_float(portion_budget, 0.0)
@@ -1359,8 +1704,13 @@ async def _commit_filled_buy_to_stratum_ledger(
                     f"{q_int}주 @ ${fill_p:.2f}"
                 )
             elif was_sub_l2_only and sub_tag == "SUB_REENTRY_1FL":
+                sub_re_lbl = (
+                    "최저가 돌파 재장전"
+                    if raw_tag == "SUB_REENTRY_1FL_LOW_BREAK"
+                    else "재장전"
+                )
                 title_str = (
-                    f"🛡️ [SOXL 서브그리드 1층 재장전 체결 ({new_sub_lots}/{SUB_MAX_TOTAL_LOTS_4}회분 · {new_sub_tiers}개층)] "
+                    f"🛡️ [SOXL 서브그리드 1층 {sub_re_lbl} 체결 ({new_sub_lots}/{SUB_MAX_TOTAL_LOTS_4}회분 · {new_sub_tiers}개층)] "
                     f"{q_int}주 @ ${fill_p:.2f}"
                 )
             else:
@@ -1402,8 +1752,24 @@ async def _commit_filled_buy_to_stratum_ledger(
     # -----------------------------------------------------------------------
     tag = (
         "REENTRY_1FL"
-        if raw_tag in ("REENTRY_1FL_BREAKOUT", "REENTRY_1FL_PULLBACK")
-        else raw_tag
+        if raw_tag
+        in (
+            "REENTRY_1FL_BREAKOUT",
+            "REENTRY_1FL_PULLBACK",
+            "REENTRY_1FL_LOW_BREAK",
+        )
+        else (
+            PRIMER_1SH_LOT_TAG
+            if is_primer_1sh_tag(raw_tag)
+            else ("DIP_1FL" if raw_tag == "DIP_1FL_LOW_BREAK" else raw_tag)
+        )
+    )
+    is_primer_fill = is_primer_1sh_tag(raw_tag)
+    was_vacant_primer_rescue = bool(raw_tag == PRIMER_1SH_VAC_LOT_TAG)
+    had_active_primer_l1 = bool(
+        old_buckets
+        and has_active_l1_bucket(old_buckets)
+        and is_primer_1sh_tag(old_buckets[0])
     )
     raw_portion_budget = safe_float(portion_budget, 0.0)
     if raw_portion_budget <= 0.0:
@@ -1445,10 +1811,25 @@ async def _commit_filled_buy_to_stratum_ledger(
         merge_mode=eff_merge_mode,
     )
 
+    did_absorb_primer = bool(
+        (not is_primer_fill)
+        and tag != "TOPUP_1FL"
+        and had_active_primer_l1
+        and new_buckets
+        and (not is_primer_1sh_tag(new_buckets[0]))
+    )
+    prev_primer_qty = (
+        old_buckets[0].qty if (did_absorb_primer and old_buckets) else 0
+    )
+
     raw_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     cur_l1_qty = new_buckets[0].qty if new_buckets else q_int
-    if tag == "TOPUP_1FL":
+    if is_primer_fill:
+        next_l1_target_q = cur_l1_qty
+    elif tag == "TOPUP_1FL":
         next_l1_target_q = max(cur_l1_qty, raw_target_q)
+    elif did_absorb_primer:
+        next_l1_target_q = max(cur_l1_qty, ord_q + prev_primer_qty)
     else:
         next_l1_target_q = max(cur_l1_qty, ord_q)
     rem_after_fill = max(0, next_l1_target_q - cur_l1_qty)
@@ -1459,7 +1840,7 @@ async def _commit_filled_buy_to_stratum_ledger(
 
     if was_empty or old_min_p <= 0.0:
         new_cycle_min_p = fill_p
-    elif pending_step_up_p > 0.0 and tag not in (
+    elif pending_step_up_p > 0.0 and (not is_primer_fill) and tag not in (
         "REENTRY_1FL",
         "TOPUP_1FL",
     ):
@@ -1468,7 +1849,7 @@ async def _commit_filled_buy_to_stratum_ledger(
     else:
         new_cycle_min_p = round(min(old_min_p, fill_p), 4)
 
-    new_held_lots = sum(b.lot_count for b in new_buckets)
+    new_held_lots = sum(safe_bucket_lot_count(b) for b in new_buckets)
     new_held_shares = sum(b.qty for b in new_buckets)
     new_held_tiers = len(new_buckets)
 
@@ -1481,13 +1862,34 @@ async def _commit_filled_buy_to_stratum_ledger(
     tot_buy_ev = safe_int(st.get("total_buy_events"), 0) + 1
     tot_buy_sh = safe_int(st.get("total_buy_shares"), 0) + q_int
     day_buy_ev = safe_int(st.get("daily_buy_events"), 0) + 1
-    day_main_buy_cnt = safe_int(st.get("daily_main_buy_cnt"), 0) + 1
+    # [Case 110]: 1주 마중물 진입은 정규 매수 카운터 및 서브 동결 카운터를 초기화하지 않음
+    day_main_buy_cnt = safe_int(st.get("daily_main_buy_cnt"), 0) + (
+        0 if is_primer_fill else 1
+    )
+    next_main_frozen_d = (
+        max(0, safe_int(st.get("main_consec_frozen_days"), 0))
+        if is_primer_fill
+        else 0
+    )
+    primer_buy_ev = safe_int(st.get("primer_1sh_buy_events"), 0) + (
+        1 if is_primer_fill else 0
+    )
+    day_primer_buy_cnt = safe_int(st.get("daily_primer_1sh_buy_cnt"), 0) + (
+        1 if is_primer_fill else 0
+    )
+    primer_abs_ev = safe_int(st.get("primer_1sh_absorbed_events"), 0) + (
+        1 if did_absorb_primer else 0
+    )
     unlock_inc = 1 if is_step_up_unlock_fill else 0
     cond_unlock_ev = safe_int(st.get("cond_unlock_buy_events"), 0) + unlock_inc
     day_unlock_ev = safe_int(st.get("daily_unlock_buy_events"), 0) + unlock_inc
     extra_13 = safe_int(st.get("extra_13plus_buy_events"), 0) + (
         1
-        if (tag != "TOPUP_1FL" and new_held_lots > BASE_MAX_LOTS_8PCT)
+        if (
+            (not is_primer_fill)
+            and tag != "TOPUP_1FL"
+            and new_held_lots > BASE_MAX_LOTS_8PCT
+        )
         else 0
     )
     cum_saved = round(
@@ -1534,8 +1936,11 @@ async def _commit_filled_buy_to_stratum_ledger(
         ratchet_anchor_price=new_buckets[0].book_price if new_buckets else fill_p,
         cycle_reanchor_credit_usd=0.0,
         l1_target_quota_qty=next_l1_target_q,
-        main_consec_frozen_days=0,
+        main_consec_frozen_days=next_main_frozen_d,
         daily_main_buy_cnt=day_main_buy_cnt,
+        primer_1sh_buy_events=primer_buy_ev,
+        daily_primer_1sh_buy_cnt=day_primer_buy_cnt,
+        primer_1sh_absorbed_events=primer_abs_ev,
         buy_order_id="",
         ordered_qty=0,
         buy_price=0.0,
@@ -1591,7 +1996,27 @@ async def _commit_filled_buy_to_stratum_ledger(
             if rem_after_fill > 0
             else ""
         )
-        if tag == "TOPUP_1FL":
+        absorb_note = (
+            f" · 🌱기존 1주마중물 무승격 1층흡수 합산(총 {cur_l1_qty}주)"
+            if did_absorb_primer
+            else ""
+        )
+        if is_primer_fill:
+            p_mode_lbl = (
+                "1층공석 쌍바닥 구제"
+                if was_vacant_primer_rescue
+                else f"역산 {abs(drop_req_p):.1f}%(-3.5%가드)"
+            )
+            title_str = (
+                f"🌱 [SOXL {p_mode_lbl} 1주 마중물 체결 ({new_held_tiers}개층·잠금{new_ratchet_max_lots}회차)] +{q_int}주 @ ${fill_p:.2f}"
+            )
+            body_str = (
+                f"실사용 ${actual_spent:,.2f} · 회차동결(lot=0 · 서브동결일 보존) · "
+                f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.5%) 익절 시 8% 정량 재장전 직결! · "
+                f"기억저가 ${new_cycle_min_p:.2f}(추매가 ${trig_buy_p:.2f} 도래 시 1층 자동흡수) · "
+                f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
+            )
+        elif tag == "TOPUP_1FL":
             done_badge = (
                 f"정량 {next_l1_target_q}주 완수!"
                 if rem_after_fill == 0
@@ -1607,15 +2032,31 @@ async def _commit_filled_buy_to_stratum_ledger(
                 f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
         elif was_l2_only and tag == "REENTRY_1FL" and len(new_buckets) >= 2:
+            if raw_tag == "REENTRY_1FL_LOW_BREAK":
+                re_mode_lbl = "1층공석 최저가 돌파"
+            elif raw_tag == "REENTRY_1FL_BREAKOUT":
+                re_mode_lbl = "1층공석 +1% 돌파"
+            else:
+                re_mode_lbl = "1층공석 -1% 눌림목"
             title_str = (
-                f"🔥 [SOXL 현재가 지정가 1층 재장전 체결] {q_int}주 @ ${fill_p:.2f} (상단 {u_cnt}개층 비병합)"
+                f"🔥 [SOXL {re_mode_lbl} 재장전 체결] {q_int}주 @ ${fill_p:.2f} (상단 {u_cnt}개층 비병합)"
             )
             body_str = (
                 f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
                 f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f}(+1.5%) 감시{rem_quota_note} · "
                 f"2~{new_held_tiers}층({u_qty}주) 이평 ${u_wma_p:.2f}(목표 ${u_wma_t:.2f}) 유지 · "
                 f"기억저가 ${new_cycle_min_p:.2f}{ratchet_note}(와이드 {drop_req_p:.1f}% 추매가 ${trig_buy_p:.2f}) · "
-                f"{mode_cash_lbl} ${free_cash_now:,.2f}"
+                f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
+            )
+        elif raw_tag == "DIP_1FL_LOW_BREAK":
+            title_str = (
+                f"🔥 [SOXL 2층공석 최저가 돌파매수 체결 ({new_held_lots}회차{ratchet_note}/{new_held_tiers}개층)] {q_int}주 @ ${fill_p:.2f}"
+            )
+            body_str = (
+                f"구기억저가 ${old_min_p:.2f} 하향돌파 ➔ 신규기억저가 ${new_cycle_min_p:.2f} 갱신(공석 2층 슬롯 충전 완료) · "
+                f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) · "
+                f"🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f} 감시{rem_quota_note} · 차기단차 {drop_req_p:.1f}%(${trig_buy_p:.2f}) · "
+                f"{mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
         elif is_step_up_unlock_fill:
             reb_m = (
@@ -1642,7 +2083,7 @@ async def _commit_filled_buy_to_stratum_ledger(
                 f"🔵 [SOXL {new_held_lots}회차{ratchet_note}({new_held_tiers}개층) 현재가 지정가 매수 체결] {q_int}주 @ ${fill_p:.2f}"
             )
             body_str = (
-                f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존) "
+                f"실사용 ${actual_spent:,.2f} (자투리 +${saved_from_portion:.2f} 시드보존){absorb_note} "
                 f"· 🛡️60초 타임쉴드 후 1층목표 ${l1_target:.2f} 감시{upper_note}{rem_quota_note} · 차기단차 {drop_req_p:.1f}%(${trig_buy_p:.2f}) "
                 f"· {mode_cash_lbl} ${free_cash_now:,.2f} (총 {new_held_shares}주)"
             )
@@ -1696,11 +2137,18 @@ async def sync_pending_buy_order_plugin(
         str(st.get("pending_lot_type") or "QUOTA_L1").upper().strip()
     )
     is_sub_lot = raw_lot_type.startswith("SUB_")
-    if raw_lot_type in ("REENTRY_1FL_BREAKOUT", "REENTRY_1FL_PULLBACK"):
+    if raw_lot_type in (
+        "REENTRY_1FL_BREAKOUT",
+        "REENTRY_1FL_PULLBACK",
+        "REENTRY_1FL_LOW_BREAK",
+    ):
         lot_type = "REENTRY_1FL"
+    elif raw_lot_type == "DIP_1FL_LOW_BREAK":
+        lot_type = "DIP_1FL"
     elif raw_lot_type in (
         "SUB_REENTRY_1FL_BREAKOUT",
         "SUB_REENTRY_1FL_PULLBACK",
+        "SUB_REENTRY_1FL_LOW_BREAK",
     ):
         lot_type = "SUB_REENTRY_1FL"
     else:
@@ -1709,9 +2157,17 @@ async def sync_pending_buy_order_plugin(
     buckets_now = buckets_from_dicts(st.get("buckets", []))
     has_active_l1_now = has_active_l1_bucket(buckets_now)
     is_vacant_l1_now = bool(len(buckets_now) > 0 and not has_active_l1_now)
+    is_vacant_l2_lowbrk_now = bool(
+        not is_sub_lot
+        and raw_lot_type == "DIP_1FL_LOW_BREAK"
+        and len(buckets_now) > 0
+        and not has_active_l2_bucket(buckets_now)
+    )
     cur_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     fallback_target_q_on_zero_cancel = (
-        max(buckets_now[0].qty, cur_target_q) if has_active_l1_now else 0
+        buckets_now[0].qty
+        if (has_active_l1_now and is_primer_1sh_tag(buckets_now[0]))
+        else (max(buckets_now[0].qty, cur_target_q) if has_active_l1_now else 0)
     )
 
     sub_buckets_now = buckets_from_dicts(st.get("sub_buckets", []))
@@ -1734,6 +2190,7 @@ async def sync_pending_buy_order_plugin(
         not is_sub_lot
         and is_vacant_l1_now
         and lot_type == "REENTRY_1FL"
+        and raw_lot_type != "REENTRY_1FL_LOW_BREAK"
         and (
             raw_lot_type == "REENTRY_1FL_BREAKOUT"
             or (
@@ -1755,6 +2212,7 @@ async def sync_pending_buy_order_plugin(
         is_sub_lot
         and is_sub_vacant_l1_now
         and lot_type == "SUB_REENTRY_1FL"
+        and raw_lot_type != "SUB_REENTRY_1FL_LOW_BREAK"
         and (
             raw_lot_type == "SUB_REENTRY_1FL_BREAKOUT"
             or (
@@ -1806,7 +2264,7 @@ async def sync_pending_buy_order_plugin(
                 filled_qty=eff_q,
                 avg_fill_price=eff_p,
                 portion_budget=portion_budget,
-                lot_type=lot_type,
+                lot_type=raw_lot_type,
                 settled_order_id=buy_oid,
                 ordered_qty=ordered_qty,
             )
@@ -1873,7 +2331,7 @@ async def sync_pending_buy_order_plugin(
                         filled_qty=filled_q,
                         avg_fill_price=eff_p,
                         portion_budget=portion_budget,
-                        lot_type=lot_type,
+                        lot_type=raw_lot_type,
                         settled_order_id=buy_oid,
                         ordered_qty=ordered_qty,
                     )
@@ -1889,7 +2347,10 @@ async def sync_pending_buy_order_plugin(
                 mark_reentry_monitor_60s_cycle_shield(
                     context=context, symbol=TARGET_SYMBOL, eval_price=ord_price
                 )
-                if (is_vacant_l1_now and not is_sub_lot)
+                if (
+                    (is_vacant_l1_now and not is_sub_lot)
+                    or is_vacant_l2_lowbrk_now
+                )
                 else safe_float(st.get("last_reentry_eval_ts"), 0.0)
             )
             sub_re_epoch = (
@@ -1983,7 +2444,7 @@ async def sync_pending_buy_order_plugin(
                     filled_qty=(f_qty if f_qty > 0 else ordered_qty),
                     avg_fill_price=(f_avg if f_avg > 0.0 else ord_price),
                     portion_budget=portion_budget,
-                    lot_type=lot_type,
+                    lot_type=raw_lot_type,
                     settled_order_id=buy_oid,
                     ordered_qty=ordered_qty,
                 )
@@ -1997,7 +2458,10 @@ async def sync_pending_buy_order_plugin(
             mark_reentry_monitor_60s_cycle_shield(
                 context=context, symbol=TARGET_SYMBOL, eval_price=ord_price
             )
-            if (is_vacant_l1_now and not is_sub_lot)
+            if (
+                (is_vacant_l1_now and not is_sub_lot)
+                or is_vacant_l2_lowbrk_now
+            )
             else safe_float(st.get("last_reentry_eval_ts"), 0.0)
         )
         sub_re_epoch = (

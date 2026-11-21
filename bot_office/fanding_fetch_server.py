@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""팬딩 서버 직접 수집기 — fanding_fetch_server.py  (VERSION v1.7.1)
+"""팬딩 서버 직접 수집기 — fanding_fetch_server.py  (VERSION v1.7.2)
 
 하는 일 (이것만 한다)
   서버(GCP)가 fanding.kr 작성자 페이지에서 최신 가격표 글을 찾아,
@@ -27,7 +27,7 @@
 비밀 규칙: 토큰·비밀번호를 코드·로그·상태 파일에 적지 않는다. 토큰은 fanding.json 에서 읽기만 한다.
 """
 
-VERSION = "v1.7.1"
+VERSION = "v1.7.2"
 
 import argparse
 import contextlib
@@ -57,6 +57,13 @@ DEFAULTS = {
     "poll_minutes": 5,            # 새 글 확인 간격 (지시문 §6-2)
     "min_image_pixels": 200000,   # 이보다 작은 이미지(아이콘·프로필)는 표 후보에서 뺀다
     "nav_timeout_s": 45,
+    # audit-fix 4-1: 최신 글·가격표 이미지 판정 강화. 기본값은 기존 동작(글 번호 최대 글, 가장 큰 이미지)을 바꾸지 않는다.
+    "candidate_posts": 3,         # 글 번호가 큰 순서대로 이만큼까지 판정해 통과한 첫 글을 쓴다 (판정 규칙이 비어 있으면 첫 글 그대로)
+    "post_title_regex": "",       # 비어 있으면 제목 검사 안 함. 값을 넣으면 제목이 맞는 글만 가격표 글로 인정 (실제 제목 형식은 미확인 → check 로 확인 후 설정)
+    "post_max_age_days": None,    # 숫자를 넣으면 글에서 읽은 날짜가 오늘(KST)보다 이만큼 이상 오래된 글은 건너뜀. 날짜를 못 읽으면 통과(기록만)
+    "image_aspect_min": None,     # 가격표 이미지 가로/세로 비율 범위 (넣으면 범위 밖 이미지는 후보에서 제외). 비어 있으면 검사 안 함
+    "image_aspect_max": None,
+    "ambiguous_ratio": 0.9,       # 둘째로 큰 이미지가 가장 큰 이미지의 이 비율 이상이면 '후보 모호' 경고만 남김 (선택은 그대로 가장 큰 것)
 }
 
 STATE_F = ft.HOME / "server_fetch_state.json"
@@ -198,6 +205,8 @@ def routine(st, *, now, sleep, fetch, send, note, paused, expected, deadline, re
             st["no_baseline_noted"] = exp
         return "no_baseline"
 
+    # audit-fix 4-3 (풀이님 결정 2026-11-20 09:22): '가격표 안 받는 날' 건너뛰기는 두지 않는다 — 판독이 100% 성공하고 있어서 모든 날 기존대로 접속한다.
+
     errors = 0
     while now() < deadline:
         try:
@@ -285,6 +294,65 @@ def _looks_login(url):
     return any(k in u for k in ("/login", "/signin", "/sign-in", "/auth"))
 
 
+# ── audit-fix 4-1/4-2: 판정 도우미 (브라우저와 분리 → 시험 가능) ──
+def looks_logged_out_text(text):
+    """audit-fix 4-2: 글 페이지 본문이 로그아웃(익명) 화면인지. fanding_fetch_win.looks_logged_out 과 같은 기준."""
+    t = (text or "")[:4000]
+    return ("로그인하고" in t or "익명의 팬" in t) and "로그아웃" not in t
+
+
+def parse_post_date(text, today):
+    """글 본문에서 날짜 하나를 읽는다 (YYYY.MM.DD / YYYY-MM-DD / M월 D일). 못 읽으면 None. today: date (연도 보충용)"""
+    from datetime import date
+    t = text or ""
+    m = re.search(r"(20\d{2})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})", t)
+    try:
+        if m:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        m = re.search(r"(\d{1,2})\s*월\s*(\d{1,2})\s*일", t)
+        if m:
+            return date(today.year, int(m.group(1)), int(m.group(2)))
+    except ValueError:
+        return None
+    return None
+
+
+def judge_post(title, body_text, sc, today):
+    """audit-fix 4-1: 이 글을 가격표 글로 인정할지. 반환 (ok, reason). 규칙이 비어 있으면 항상 통과."""
+    rx = (sc.get("post_title_regex") or "").strip()
+    if rx and not re.search(rx, title or ""):
+        return False, f"제목이 가격표 글 형식이 아님({(title or '')[:40]})"
+    age = sc.get("post_max_age_days")
+    if age is not None:
+        d = parse_post_date(body_text, today)
+        if d is not None and (today - d).days > int(age):
+            return False, f"글 날짜가 너무 오래됨({d.isoformat()})"
+    return True, ""
+
+
+def pick_price_image(cands, sc):
+    """audit-fix 4-1: 가격표 이미지 판정. 반환 (best, warn). 비율 범위 설정이 있으면 먼저 거른다. 후보가 모호하면 warn 문구를 돌려준다."""
+    lo, hi = sc.get("image_aspect_min"), sc.get("image_aspect_max")
+    pool = []
+    for i in cands:
+        if not i.get("h"):
+            continue
+        ratio = i["w"] / i["h"]
+        if lo is not None and ratio < float(lo):
+            continue
+        if hi is not None and ratio > float(hi):
+            continue
+        pool.append(i)
+    if not pool:
+        return None, ""
+    pool.sort(key=lambda i: i["w"] * i["h"], reverse=True)
+    warn = ""
+    if len(pool) > 1 and pool[1]["w"] * pool[1]["h"] >= float(sc.get("ambiguous_ratio", 0.9)) * pool[0]["w"] * pool[0]["h"]:
+        warn = (f"표 크기 이미지 후보가 {len(pool)}개이고 둘째({pool[1]['w']}x{pool[1]['h']})가 첫째({pool[0]['w']}x{pool[0]['h']})와 비슷해요. "
+                "가장 큰 것을 보냈지만 가격표가 맞는지 확인해 주세요.")
+    return pool[0], warn
+
+
 def find_posts(ctx, sc):
     """작성자 페이지 → {글번호: 주소}. 로그인 페이지로 가면 None."""
     rx = re.compile(sc["post_regex"])
@@ -328,6 +396,20 @@ def largest_image(ctx, sc, post):
         _settle(page)
         if _looks_login(page.url):
             return None, "login"
+        try:   # audit-fix 4-2: 주소는 그대로인데 본문이 로그아웃(익명) 화면인 경우도 잡는다
+            if looks_logged_out_text(page.inner_text("body")):
+                return None, "login"
+        except Exception:
+            pass
+        # audit-fix 4-1: 최신 글 판정 (제목·날짜). 규칙이 비어 있으면 통과
+        try:
+            _title = page.title()
+            _body = page.inner_text("body")[:6000]
+        except Exception:
+            _title, _body = "", ""
+        _ok, _why = judge_post(_title, _body, sc, ft.now_kst().date())
+        if not _ok:
+            return None, "skip:" + _why
         # lazy-load 이미지가 다 뜨도록 천천히 끝까지 스크롤한다.
         # (900px씩 250ms 간격은 느린 서버에서 이미지가 로딩을 시작하기 전에 지나쳐
         #  naturalWidth가 0으로 측정돼 표 이미지를 못 찾는 경우가 있다.)
@@ -353,7 +435,13 @@ def largest_image(ctx, sc, post):
                  and i["w"] * i["h"] >= sc["min_image_pixels"]]
         if not cands:
             return None, f"글 안에 표 크기 이미지가 없음 (이미지 {len(imgs)}개)"
-        best = max(cands, key=lambda i: i["w"] * i["h"])
+        best, warn = pick_price_image(cands, sc)
+        if best is None:
+            return None, f"가격표 이미지 비율 조건에 맞는 이미지가 없음 (후보 {len(cands)}개)"
+        if warn:
+            log(warn)
+            try: write_note(warn)
+            except Exception: pass
         resp = ctx.request.get(best["src"], headers={"Referer": post}, timeout=30000)
         if not resp.ok:
             return None, f"이미지 내려받기 실패 HTTP {resp.status}"
@@ -379,12 +467,19 @@ def fetch_once(known_id, sc=None):
             pid = max(posts)
             if known_id and pid <= int(known_id):
                 return {"kind": "no_new"}
-            data, err = largest_image(ctx, sc, posts[pid])
-            if err == "login":
-                return {"kind": "logged_out", "detail": "글 페이지에서 로그인으로 이동함"}
-            if data is None:
-                return {"kind": "error", "detail": err}
-            return {"kind": "ok", "post": posts[pid], "post_id": pid, "data": data}
+            # audit-fix 4-1: 글 번호 큰 순서로 후보를 판정 — 제목·날짜 규칙을 통과한 첫 글을 쓴다 (규칙이 비면 기존처럼 첫 글)
+            ids = [i for i in sorted(posts, reverse=True) if not known_id or i > int(known_id)][:max(1, int(sc.get("candidate_posts", 3)))]
+            skipped = []
+            for pid in ids:
+                data, err = largest_image(ctx, sc, posts[pid])
+                if err == "login":
+                    return {"kind": "logged_out", "detail": "글 페이지에서 로그인으로 이동함"}
+                if data is None and str(err).startswith("skip:"):
+                    skipped.append(f"{pid}: {err[5:]}"); continue
+                if data is None:
+                    return {"kind": "error", "detail": err}
+                return {"kind": "ok", "post": posts[pid], "post_id": pid, "data": data}
+            return {"kind": "error", "detail": "최신 글 후보가 가격표 글 판정을 통과하지 못함 (" + "; ".join(skipped)[:150] + ")"}
     except FetchError as e:
         return {"kind": "error", "detail": str(e)}
     except Exception as e:

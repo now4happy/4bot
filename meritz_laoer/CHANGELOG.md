@@ -1,4 +1,144 @@
-# 메리츠 SOXL 무매 변경 기록
+# 7번 메리츠 SOXL 탑쌓기 변경 기록
+
+## v1.2.9 · 2026-11-21 11:08 (KST)
+- 파일: main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·선택 버튼·업데이트 알림 판 번호). 검증: 새 시험 18개 통과, 기존 시험 40개 통과·3개 실패(의도한 변경), 해시 전부 일치, 비밀 0건.
+- 브랜치: staging
+
+## v1.2.8 · 2026-11-21 09:05 (KST)
+- 파일: main.py, sniper_mode.py, tg_menu.py
+- 내용: meritz_laoer v2.3.0 (판 23 수정1: 장중 환전 고침 제외·하루 매수 층 수 제한·B3 미체결 조회·B7 모의 스나이퍼·S3 눌림 잠금·S1 16:10 뒤 체결 다음 날 반영·라벨 고침·죽은 코드 제거). 검증: 새 시험 43개 통과, 기존 시험 17개 통과·27개 실패(의도한 변경), 해시 전부 일치, 비밀 0건.
+- 브랜치: staging
+
+## v2.4.0 · 2026-11-21 (KST) — 판 24 (office 번호는 적용 때 확정, 미확인)
+- 파일: tower_strategy.py, sniper_mode.py, main.py, tg_menu.py, notifier.py, bot_office/bot_updater.py, README.md, CHANGELOG.md, VERIFY.md (+ 새 시험 test_hybrid_v240.py)
+- 내용: meritz_laoer v2.4.0 (판 24) — ① 일회성 장부 바로잡기(실제 잔고 684주일 때만, 층 373주 $40.29 · 311주 $48.14 잠금 + 지하층) ② 잠금=탑 매도 ③ 지하층부터 스나이퍼 매수 ④ 스나이퍼 목표 도달 시 자동 매도 대신 텔레그램 선택(스나이퍼/탑쌓기) ⑤ 업데이트 알림 맨 앞 판 번호 · 수동 확인이 대기 목록 표시
+- 브랜치: staging 에 올리기 전 (검토 대기)
+
+## v1.2.8 수정1 · 2026-11-21 (KST) — 버전 v2.3.0 그대로 (판 23 수정1, 풀이님 정정 반영)
+- 파일: main.py, sniper_mode.py, tg_menu.py, README.md, CHANGELOG.md, test_hybrid_v230.py
+- 내용: ① (풀이님 결정으로 뺌) 장중 환전 고침 — auto_fx 마커·하루 한 번 환전은 v2.3.0 그대로, test_intraday_fx_exchanges_only_shortfall 도 그대로 ② 하루 매수 층 수 제한: 그날 매수 주문이 나간 층 수가 tower_max_buy_layers_per_day(기존 설정, 새 설정 없음)에 닿으면 새 층 매수는 안 하고 알림만(하루 한 번), 거절·취소 주문은 안 셈, 이미 산 층의 남은 시드 채우기는 계속 ③ B3 미체결 판단을 미체결 조회(open_orders_today)로 (앱에서 취소한 주문은 매수·매도 잠금에서 빠짐) ④ B7 모의에서도 스나이퍼 틱이 돌되 주문 없이 시뮬레이션 기록(dry_orders_<날짜>.json) ⑤ S3 눌림 깊이 = max(현재 층 수, 사이클 최고 층수) — sniper_state.json peak_layers, 0주면 초기화 ⑥ S1 16:10 동기화 뒤 체결은 다음 날 첫 확인 때 장부·층에 반영(최근 4일 기록, late_done 표시) ⑦ 정리: pyflakes 새 경고 5개, '목표 도달' 라벨, 죽은 코드 defer_sell·limit_morning_sells 제거
+- 브랜치: staging 에 올리기 전 (검토 대기)
+
+## v1.2.8 · 2026-11-21 (KST)
+- 파일: tower_strategy.py, sniper_mode.py, config.py, main.py, tg_menu.py, notifier.py, README.md, CHANGELOG.md (+ 새 시험 test_hybrid_v230.py)
+- 내용: meritz_laoer v2.3.0 (판 23 하이브리드 — 매수는 스나이퍼, 완성 층은 탑 매도): 모드 선택(trading_mode)·모드 버튼 삭제 · 사기=스나이퍼(눌림·돌파)만 · 층 시드에 닿은 층은 완성 → 탑 매도(평단 +10% → 50%), 미완성(재매수 대기 포함) 층은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·전량), 한 층에 매도 둘이 같은 날 겹치지 않음 · 총 시드·층 수 한도 없음(total_krw 선택·tower_floors 무시) · 새 층 = 가장 낮은 층 평단 − tower_gap_usd(기본 5) 이하일 때 · 탑 매도 체결도 스나이퍼 기준가 갱신 · 환전(아침 = 층 시드 × 하루 매수 층 수 · 장중 자동환전 · 달러부족 알림 · 휴장 전날 rounds · --check 부족 달러 표시 고침) · 텔레그램 메뉴를 스나이퍼 봇 형식(첫 화면 4개 · 레이더 · 잔고 동기화 · 전술 제어반 · 환전, 인라인 버튼)으로 새로 만듦, 시스템 업데이트 버튼 삭제 · 표시 고침(B8). 16:10 동기화·장부=잔고 정지·체결 중복 방지·주문 시간·스나이퍼 신호 숫자·매도 %는 그대로. 수정1 고침 중 B3·B7·S3·S1 은 수정1 원문이 이 판 자료에 없어 미반영(질문란)
+- 브랜치: staging 에 올리기 전 (검토 대기)
+
+## v1.2.7 · 2026-11-21 (KST)
+- 파일: sniper_mode.py(새 파일), tower_strategy.py, config.py, main.py, tg_menu.py, notifier.py, README.md
+- 내용: meritz_laoer v2.2.20 (판 22 듀얼 모드 — 스나이퍼 + 탑쌓기): 설정 trading_mode(tower 기본 | sniper) · 텔레그램 첫 메뉴 모드 버튼 · 스나이퍼 매매(눌림·돌파 재장전 / 층 전량 익절, 익절 % 는 설정 sniper_tp_l1_pct 1.5 · sniper_tp_upper_pct 1.0) · 층·장부 공유 · 스나이퍼 봇 형식 실시간 상황판. 탑쌓기 로직·주문 시간·16:10 동기화·장부=잔고 정지 규칙은 그대로
+- 브랜치: staging
+
+## v1.2.6 · 2026-11-20 19:09 (KST)
+- 파일: main.py, tg_menu.py
+- 내용: meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개(pos·halt·avg·tgt)를 돌려주는데 ledger_text·power_text 가 5개로 풀어서 ValueError 가 나던 것을 4개로 고침. 매매 로직·문구 변경 없음. 회귀 시험 3개 통과(서버 실제 상태로 재현·확인), 기존 시험 38개 통과, test_v226 기존 실패 6개와 동일.
+- 브랜치: staging
+
+## v1.2.5 · 2026-11-20 19:00 (KST)
+- 파일: config.py, main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sell): 설정 키 2개(tower_max_buy_layers_per_day·tower_max_sell_layers_per_day, 1~3, 없으면 1) + 텔레그램 버튼 2개, 매수 계획·장중 매도·아침 계획 매도가 그 층 수만큼 사고팔게 함. N=1은 기준 v2.2.15와 5,118 항목 동일.
+- 브랜치: staging
+
+## v1.2.4 · 2026-11-20 18:02 (KST)
+- 파일: main.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.15 (판 19 오늘 계획 미리보기에 탑 진행률): plan_head 한 곳에 탑 줄과 채우는 층 진행률 추가, 표시만 바꿈 (매매·주문·장부 그대로). make_plan이 floors 각 층에 target 키를 실음 (표시 전용)
+- 브랜치: staging
+
+## v1.2.3 · 2026-11-20 16:46 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.14 (판 17 시초가 상한): 오늘 채우는 층의 안 산 칸이 시초가를 넘지 않게 상한, 시초가는 09:30 ET 이후 첫 확인가로 그날 한 번만 정해 저장
+- 브랜치: staging
+
+## v1.2.2 · 2026-11-20 13:53 (KST)
+- 파일: main.py, tg_menu.py
+- 내용: audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
+- 브랜치: staging
+
+## v1.2.1 · 2026-11-20 12:26 (KST)
+- 파일: main.py, notifier.py, tg_menu.py
+- 내용: 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1.1
+- 브랜치: staging
+
+## v1.2.0 · 2026-11-20 12:17 (KST)
+- 파일: accum_strategy.py, config.py, main.py, notifier.py, tg_menu.py, tower_strategy.py
+- 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)
+- 브랜치: staging
+
+## v1.1.9 · 2026-11-20 06:39 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.8 (하루에 한 층 매수): 안 산 칸 전부 주문
+- 브랜치: staging
+
+## v1.1.8 · 2026-11-20 06:18 (KST)
+- 파일: config.py, main.py, meritz_api.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.6 (판 16 본격): 층별 매도·반칸 표시·체결 알림
+- 브랜치: staging
+
+## v1.1.7 · 2026-11-20 05:31 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.5: 1층 채우기 매수 (판 16 일부)
+- 브랜치: staging
+
+## v1.1.6 · 2026-11-19 21:53 (KST)
+- 파일: config.py, main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.4: 1층 시작가 설정 메뉴
+- 브랜치: staging
+
+## v1.1.5 · 2026-11-19 21:37 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.3: 층 칸 색상 + 다음 회차 가격별 배정
+- 브랜치: staging
+
+## v1.1.4 · 2026-11-19 21:23 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.2: tower layer visualization (pan 14) - tower_lines in status board, view_lines in tower_strategy, filled layers only
+- 브랜치: staging
+
+## v1.1.3 · 2026-11-19 20:54 (KST)
+- 파일: accum_strategy.py, config.py, main.py
+- 내용: fix(audit): 1번 보유 조회 실패 구분·타임아웃 중복 방지, 6번 v1.3.2, 7번 v2.2.1
+- 브랜치: staging
+
+## v1.1.2 · 2026-11-19 20:42 (KST)
+- 파일: main.py, tg_menu.py, tower_strategy.py
+- 내용: meritz_laoer v2.2.0: tower stacking (pan 13) - new tower_strategy.py module, strategy switch (default ladder), migration from holdings, slippage handling
+- 브랜치: staging
+
+## v1.1.1 · 2026-11-19 17:08 (KST)
+- 파일: main.py
+- 내용: meritz_laoer v2.1.0: merge pan 12 intraday sell gate fix onto menu 3rd v3
+- 브랜치: staging
+
+## v1.1.0 · 2026-11-19 16:49 (KST)
+- 파일: main.py, notifier.py, tg_menu.py
+- 내용: 텔레그램 매매봇 메뉴 정리 3차 v3: 7번 v2.0.9 기준 재적용 + 6번 문구 정리
+- 브랜치: staging
+
+## v1.0.9 · 2026-11-19 14:44 (KST)
+- 파일: main.py, meritz_api.py, tg_menu.py
+- 내용: meritz_laoer v2.0.9: usd_cash reads estm_frcr_amt (pan 11, Q27 fix)
+- 브랜치: staging
+
+## v1.0.8 · 2026-11-19 14:24 (KST)
+- 파일: main.py, tg_menu.py
+- 내용: meritz_laoer v2.0.8: auto FX in realtime window, shortage alert, holiday pre-FX, --diag-cash (pan 10)
+- 브랜치: staging
+
+## v1.0.7 · 2026-11-19 13:43 (KST)
+- 파일: main.py, tg_menu.py
+- 내용: meritz_laoer v2.0.7: auto FX at 09:00 KST, one round per day (pan 9)
+- 브랜치: staging
+
+## v1.0.6 · 2026-11-18 18:01 (KST)
+- 파일: config.py, main.py, tg_menu.py
+- 내용: meritz_laoer v2.0.1: 텔레그램 메뉴 정리 (메인 4개 카테고리, 전술 설정, 상황판 설정값 표시)
+- 브랜치: staging
+
+## v1.0.5 · 2026-11-18 16:53 (KST)
+- 파일: accum_strategy.py, config.py, main.py, meritz_api.py, notifier.py, tg_menu.py
+- 내용: meritz: SOXL 적립봇 v2.0.0 — 사다리·부분매도·재매수·자동환전 (방 meritz-soxl-dca-bot)
+- 브랜치: staging
 
 ## v1.0.4 · 2026-11-14 13:57 (KST)
 - 파일: main.py, notifier.py, tg_menu.py

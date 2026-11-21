@@ -47,6 +47,11 @@ except Exception:
     httpx = None  # type: ignore
     _HTTPX_KEEPALIVE_OK = False
 
+try:  # [🔗토스 토큰 공유 HOOK] 2번 스나이퍼·live_board·브리핑이 같은 토큰 1개를 같이 씀 (없으면 원작 그대로 직접 발급)
+    import toss_token_share as _TTS
+except Exception:
+    _TTS = None
+
 from toss_api_core import (
     ALLOWED_SYMBOLS,
     AssassinLedger,
@@ -78,6 +83,13 @@ from toss_api_core import (
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
+    PRIMER_1SH_LOT_TAG,
+    PRIMER_1SH_MAX_INV_DROP_PCT,
+    PRIMER_1SH_MIN_L1_GAP_PCT,
+    PRIMER_1SH_MIN_LOCKED_LOTS,
+    PRIMER_1SH_VAC_LOT_TAG,
+    PRIMER_MODE_AUTO_SMART,
+    PRIMER_MODE_OFF,
     REAL_ALLOWED_SYMBOLS,
     REANCHOR_NET_BUFFER_MULT,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
@@ -103,6 +115,7 @@ from toss_api_core import (
     TARGET_SYMBOL,
     TOSS_OPENAPI_BASE_URL,
     VALID_PORTION_MODES,
+    VALID_PRIMER_MODES,
     _HybridFileLock,
     _NonRetryableApiError,
     _load_env_files_into_environ,
@@ -114,9 +127,13 @@ from toss_api_core import (
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
     is_barbell_mode,
+    is_primer_1sh_tag,
     is_simple_income_mode,
     next_cycled_portion_mode,
     resolve_folder_isolated_ledger_paths,
+    resolve_smart_primer_policy,
+    resolve_trading_session_date_est,
+    safe_bucket_lot_count,
     safe_float,
     safe_int,
     set_runtime_round_trip_fee_rate_pct,
@@ -412,6 +429,7 @@ class TossApiClient:
 
         self._access_token: str = ""
         self._token_expires_mono: float = 0.0
+        self._tts_bad_token: str = ""  # [🔗토스 토큰 공유 HOOK] 401 로 거절된 토큰 (공유 토큰 재발급 판단용)
         self._token_lock: asyncio.Lock = asyncio.Lock()
 
         self.account_seq: Optional[int] = None
@@ -602,18 +620,47 @@ class TossApiClient:
                 "Accept": "application/json",
             }
 
-            status_code, payload = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_http_sync,
-                    "POST",
-                    url,
-                    headers,
-                    form_data,
-                    "AUTH",
-                    10.0,
-                ),
-                timeout=12.0,
-            )
+            # [🔗토스 토큰 공유 HOOK] 직접 발급하면 다른 곳(live_board·브리핑)의 토큰이 취소(401)되므로
+            # 공유 토큰을 먼저 가져온다. 이미 다른 곳이 새로 받아 둔 토큰이면 그대로 쓰고,
+            # 거절된 바로 그 토큰이 아직 공유 토큰일 때만 새로 발급한다. 공유 불가(None)면 아래 원작 직접 발급으로 간다.
+            _bad = self._tts_bad_token or self._access_token
+            _sh = None
+            if _TTS is not None:
+                try:
+                    _sh = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            _TTS.try_acquire,
+                            self.base_url,
+                            self.client_id,
+                            self.client_secret,
+                            bool(force_refresh or _bad),
+                            _bad,
+                            "2번 스나이퍼",
+                        ),
+                        timeout=15.0,
+                    )
+                except Exception:
+                    _sh = None
+            if _sh and _sh[0] == "ok":
+                self._access_token = _sh[1]
+                self._token_expires_mono = time.monotonic() + float(_sh[2])
+                self._tts_bad_token = ""
+                return self._access_token
+            if _sh and _sh[0] == "fail":
+                status_code, payload = _sh[1], _sh[2]
+            else:
+                status_code, payload = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._execute_http_sync,
+                        "POST",
+                        url,
+                        headers,
+                        form_data,
+                        "AUTH",
+                        10.0,
+                    ),
+                    timeout=12.0,
+                )
             if status_code != 200 or not isinstance(payload, dict):
                 err_code = str(payload.get("error") or f"http-{status_code}")
                 err_desc = str(
@@ -632,6 +679,7 @@ class TossApiClient:
 
             self._access_token = token
             self._token_expires_mono = time.monotonic() + float(expires_in)
+            self._tts_bad_token = ""
             return self._access_token
 
     async def ensure_account_seq(self) -> int:
@@ -834,6 +882,7 @@ class TossApiClient:
                 )
 
                 if status_code == 401 and attempt < max_retries:
+                    self._tts_bad_token = token  # [🔗토스 토큰 공유 HOOK] 거절된 토큰 기억 (비우기 전에)
                     self._access_token = ""
                     force_token_refresh = True
                     last_exc = None

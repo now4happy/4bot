@@ -1,5 +1,10 @@
 # 2번 토스 스나이퍼 변경 기록
 
+## v1.2.8 · 2026-11-18 19:45 (KST)
+- 파일: plugin_updater.py, toss_api.py, toss_hook_patch.py
+- 내용: toss: 공유 토큰 복원 (a) + 동기화 뒤 훅 자동 재적용 Q5 (방 room2-toss-sniper)
+- 브랜치: staging-toss
+
 ## v1.2.7 · 2026-11-13 15:23 (KST)
 - 파일: plugin_updater.py
 - 내용: sniper: plugin_updater commits synced files after direct upstream sync (bot_updater dirty-check fix)

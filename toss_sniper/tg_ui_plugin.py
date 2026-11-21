@@ -69,7 +69,9 @@ from quant_engine import (
     SUB_FROZEN_DAYS_TRIGGER,
     SUB_MAX_TIERS_3,
     SUB_MAX_TOTAL_LOTS_4,
+    is_primer_1sh_tag,
     next_cycled_portion_mode,
+    resolve_smart_primer_policy,
     summarize_stratum_portfolio,
 )
 from quant_indicators_plugin import (
@@ -98,6 +100,8 @@ from toss_api import (
     DEFAULT_INITIAL_SEED_USD,
     EST_TZ,
     LOCKED_BUY_INTERVAL_MIN,
+    PRIMER_MODE_AUTO_SMART,
+    PRIMER_MODE_OFF,
     TARGET_SYMBOL,
     get_bot_base_dir,
     get_folder_slug,
@@ -275,6 +279,12 @@ def _build_settlement_inline_keyboard(
     assassin_exec_mode = str(
         kwargs.get("assassin_exec_mode") or ASSASSIN_MODE_SIMULATED
     ).upper()
+    primer_1sh_mode = str(
+        kwargs.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART
+    ).upper()
+    primer_pol = resolve_smart_primer_policy(
+        portion_mode=portion_mode, primer_1sh_mode=primer_1sh_mode
+    )
 
     is_barbell = _is_barbell_portion_mode(portion_mode)
     is_simple = _is_simple_portion_mode(portion_mode)
@@ -299,6 +309,14 @@ def _build_settlement_inline_keyboard(
     else:
         assn_toggle_label = "🗡️ 암살자: 🧪[모의] ➔ 🔥[실전] 승격(0주시 전환)"
 
+    if bool(primer_pol.get("enabled", True)):
+        if is_barbell or is_simple:
+            primer_toggle_label = "🌱 1주마중물: 🧠스마트ON(전상태+1층공석) ➔ 🔴OFF"
+        else:
+            primer_toggle_label = "🌱 1주마중물: 🧠스마트ON(6층이하·서브잠금) ➔ 🔴OFF"
+    else:
+        primer_toggle_label = "🌱 1주마중물: 🔴OFF(정본v3.0) ➔ 🧠스마트ON"
+
     return {
         "inline_keyboard": [
             [
@@ -306,6 +324,12 @@ def _build_settlement_inline_keyboard(
             ],
             [
                 {"text": mode_label, "callback_data": "toggle_portion_mode"},
+            ],
+            [
+                {
+                    "text": primer_toggle_label,
+                    "callback_data": "toggle_primer_1sh_mode",
+                },
             ],
             [
                 {
@@ -398,12 +422,16 @@ def _format_multi_grid_stratum_lines(
 
     if active_l1:
         b1 = buckets[0]
+        is_b1_primer = is_primer_1sh_tag(b1)
+        l1_icon = "🌱" if is_b1_primer else "⚡"
         l1_t = safe_float(summary.get("l1_target_price"), 0.0)
         l1_g = safe_float(summary.get("l1_gain_pct"), 0.0)
         g1_sign = "+" if l1_g >= 0.0 else ""
         l1_rem_q = safe_int(summary.get("l1_rem_quota_qty"), 0)
         l1_target_q = safe_int(summary.get("l1_target_quota_qty"), b1.qty)
-        if l1_rem_q > 0 and l1_target_q > b1.qty:
+        if is_b1_primer:
+            l1_qty_label = f"마중물{b1.qty}주"
+        elif l1_rem_q > 0 and l1_target_q > b1.qty:
             l1_qty_label = f"{b1.qty}/{l1_target_q}주"
         else:
             l1_qty_label = f"{b1.qty}주"
@@ -415,8 +443,8 @@ def _format_multi_grid_stratum_lines(
                 st_p = safe_float(tr_m.get("active_stop_p"), 0.0)
                 if bool(tr_m.get("stepped_125")) and st_p > 0.0:
                     lines.append(
-                        f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${b1.book_price:.2f}</b> ➔ 스탑 <b>${st_p:.2f}</b> ({g1_sign}{l1_g:.2f}%·👑1.60%락)"
+                        f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                        f"<b>${b1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(보존${st_p:.2f}) ({g1_sign}{l1_g:.2f}%·👑1.60%락)"
                     )
                 else:
                     lk_m_p = safe_float(
@@ -424,20 +452,20 @@ def _format_multi_grid_stratum_lines(
                         safe_float(summary.get("l1_lock_125_price"), l1_ign_p),
                     )
                     lines.append(
-                        f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                        f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                         f"<b>${b1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(락${lk_m_p:.2f}) ({g1_sign}{l1_g:.2f}%·🔥무스탑)"
                     )
             else:
                 fg_c = safe_int(tr_m.get("forgive_count"), 0)
                 fg_b = f"·💡용서{fg_c}" if fg_c > 0 else "·점화1.50%"
                 lines.append(
-                    f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                    f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                     f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_ign_p:.2f}</b> ({g1_sign}{l1_g:.2f}%{fg_b})"
                 )
         else:
             l1_ov_lock_note = "·장외+1.5%" if is_ext_sell_only else ""
             lines.append(
-                f"⚡ <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
+                f"{l1_icon} <b>[1층: {l1_qty_label}·${b1.actual_cost_usd:,.0f}]</b> "
                 f"<b>${b1.book_price:.2f}</b> ➔ <b>${l1_t:.2f}</b> ({g1_sign}{l1_g:.2f}%{l1_ov_lock_note})"
             )
     else:
@@ -449,29 +477,45 @@ def _format_multi_grid_stratum_lines(
         ha_tag = pull_ha_badge or (
             "🕯️1분HA양봉OK" if closed_ha_ok else "🌑무머리HA음봉패스"
         )
-        pull_ha_wait = bool(
-            summary.get("reentry_signal_type")
-            == "HOLD_PULLBACK_SHAVED_HA_BEAR"
-        )
+        re_sig_t = str(summary.get("reentry_signal_type") or "")
+        pull_ha_wait = bool(re_sig_t == "HOLD_PULLBACK_SHAVED_HA_BEAR")
+        low_brk_ha_wait = bool(re_sig_t == "HOLD_LOW_BREAK_SHAVED_HA_BEAR")
+        reg_7m_wait = bool(re_sig_t == "HOLD_REG_OPEN_7M_VWAP_SHIELD")
+        vwap_wait = bool(re_sig_t == "HOLD_PULLBACK_ABOVE_SESSION_VWAP")
+        sess_vwap_u = safe_float(summary.get("session_vwap"), 0.0)
+        c_min_u = safe_float(summary.get("cycle_min_buy_price"), 0.0)
+        lb_note = f"·저가&lt;${c_min_u:.2f}" if c_min_u > 0.0 else ""
         if is_ext_sell_only:
             lines.append(
                 f"⚡ <b>[1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{cap_note}"
+            )
+        elif low_brk_ha_wait:
+            lines.append(
+                f"⚡ <b>[1층: 공석]</b> 🌑저가돌파(&lt;${c_min_u:.2f}) 무머리1분HA음봉 패스(다음1분 대기)"
+            )
+        elif reg_7m_wait:
+            lines.append(
+                f"⚡ <b>[1층: 공석]</b> 🛡️정규개장7분(09:30~09:36) VWAP안정화 대기{lb_note}"
             )
         elif pull_ha_wait:
             lines.append(
                 f"⚡ <b>[1층: 공석]</b> 🌑눌림(-1%) 무머리1분HA음봉 패스(다음1분 대기){cap_note}"
             )
+        elif vwap_wait:
+            lines.append(
+                f"⚡ <b>[1층: 공석]</b> 🛡️눌림&gt;VWAP(${sess_vwap_u:.2f}) 패스{lb_note}{cap_note}"
+            )
         elif is_late_cutoff:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 🛡️돌파차단 · 눌림(-1%·{ha_tag}) 감시{cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 🛡️돌파차단 · 눌림(&lt;=VWAP·{ha_tag}){lb_note}{cap_note}"
             )
         elif live_rsi_14 > 50.0:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 눌림(-1%·{ha_tag})/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 눌림(&lt;=VWAP){lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){cap_note}"
             )
         else:
             lines.append(
-                f"⚡ <b>[1층: 공석]</b> 눌림(-1%·{ha_tag})/돌파(RSI&lt;=50){cap_note}"
+                f"⚡ <b>[1층: 공석]</b> 눌림(&lt;=VWAP){lb_note}/돌파(RSI&lt;=50){cap_note}"
             )
 
     act_l2 = bool(summary.get("has_active_l2", False))
@@ -511,7 +555,21 @@ def _format_multi_grid_stratum_lines(
             f"({s2}{g2:.2f}%{ib})"
         )
     elif vac_l2:
-        lines.append("🗡️ <b>[2층: 공석]</b> 채굴완료 · 공석활주로 개방")
+        c_min_v2 = safe_float(summary.get("cycle_min_buy_price"), 0.0)
+        l2v_sig = str(summary.get("l2_vacant_low_break_signal_type") or "")
+        if is_ext_sell_only or c_min_v2 <= 0.0:
+            lines.append("🗡️ <b>[2층: 공석]</b> 채굴완료 · 공석활주로 개방")
+        elif l2v_sig == "HOLD_LOW_BREAK_SHAVED_HA_BEAR":
+            lines.append(
+                f"🗡️ <b>[2층: 공석]</b> 🌑저가돌파(&lt;${c_min_v2:.2f}) 무머리1분HA음봉 패스(다음1분 대기)"
+            )
+        else:
+            ha_v2 = pull_ha_badge or (
+                "🕯️1분HA양봉OK" if closed_ha_ok else "🌑무머리HA음봉패스"
+            )
+            lines.append(
+                f"🗡️ <b>[2층: 공석]</b> 채굴완료 · 저가돌파(<b>&lt;${c_min_v2:.2f}</b>·{ha_v2}) 감시"
+            )
 
     if i37_b:
         ic = len(i37_b)
@@ -631,7 +689,7 @@ def _format_sub_grid_stratum_lines(
                 if bool(tr_s.get("stepped_125")) and sst_p > 0.0:
                     lines.append(
                         f"  ⚡ <b>[서브1층: {sl1_label}·${sb1.actual_cost_usd:,.0f}]</b> "
-                        f"<b>${sb1.book_price:.2f}</b> ➔ 스탑 <b>${sst_p:.2f}</b> ({sg1_s}{sl1_g:.2f}%·👑1.60%락)"
+                        f"<b>${sb1.book_price:.2f}</b> ➔ <b>강세HA추적</b>(보존${sst_p:.2f}) ({sg1_s}{sl1_g:.2f}%·👑1.60%락)"
                     )
                 else:
                     slk_p = safe_float(
@@ -668,9 +726,17 @@ def _format_sub_grid_stratum_lines(
         s_ha_tag = pull_ha_badge or (
             "🕯️1분HA양봉OK" if closed_ha_ok else "🌑무머리HA음봉패스"
         )
-        sub_pull_ha_wait = bool(
-            summary.get("sub_reentry_signal_type")
-            == "HOLD_PULLBACK_SHAVED_HA_BEAR"
+        sub_re_sig_t = str(summary.get("sub_reentry_signal_type") or "")
+        sub_pull_ha_wait = bool(sub_re_sig_t == "HOLD_PULLBACK_SHAVED_HA_BEAR")
+        sub_lb_ha_wait = bool(sub_re_sig_t == "HOLD_LOW_BREAK_SHAVED_HA_BEAR")
+        sub_7m_wait = bool(sub_re_sig_t == "HOLD_REG_OPEN_7M_VWAP_SHIELD")
+        sub_vwap_wait = bool(
+            sub_re_sig_t == "HOLD_PULLBACK_ABOVE_SESSION_VWAP"
+        )
+        sub_vwap_u = safe_float(summary.get("session_vwap"), 0.0)
+        sub_c_min_u = safe_float(summary.get("sub_cycle_min_buy_price"), 0.0)
+        sub_lb_note = (
+            f"·저가&lt;${sub_c_min_u:.2f}" if sub_c_min_u > 0.0 else ""
         )
         if sub_lots >= sub_max_lots:
             lines.append(
@@ -680,21 +746,33 @@ def _format_sub_grid_stratum_lines(
             lines.append(
                 f"  ⚡ <b>[서브1층: 공석]</b> 🔒장외잠금 · 04:07 재장전{s_cap_note}"
             )
+        elif sub_lb_ha_wait:
+            lines.append(
+                f"  ⚡ <b>[서브1층: 공석]</b> 🌑저가돌파(&lt;${sub_c_min_u:.2f}) 무머리1분HA음봉 패스(다음1분 대기)"
+            )
+        elif sub_7m_wait:
+            lines.append(
+                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️정규개장7분(09:30~09:36) VWAP안정화 대기{sub_lb_note}"
+            )
         elif sub_pull_ha_wait:
             lines.append(
                 f"  ⚡ <b>[서브1층: 공석]</b> 🌑눌림(-1%) 무머리1분HA음봉 패스(다음1분 대기){s_cap_note}"
             )
+        elif sub_vwap_wait:
+            lines.append(
+                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️눌림&gt;VWAP(${sub_vwap_u:.2f}) 패스{sub_lb_note}{s_cap_note}"
+            )
         elif is_late_cutoff:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️돌파차단 · 눌림(-1%·{s_ha_tag}) 감시{s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 🛡️돌파차단 · 눌림(&lt;=VWAP·{s_ha_tag}){sub_lb_note}{s_cap_note}"
             )
         elif live_rsi_14 > 50.0:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(-1%·{s_ha_tag})/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(&lt;=VWAP){sub_lb_note}/🛡️돌파차단(RSI {live_rsi_14:.1f}&gt;50){s_cap_note}"
             )
         else:
             lines.append(
-                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(-1%·{s_ha_tag})/돌파(RSI&lt;=50){s_cap_note}"
+                f"  ⚡ <b>[서브1층: 공석]</b> 눌림(&lt;=VWAP){sub_lb_note}/돌파(RSI&lt;=50){s_cap_note}"
             )
 
     if sub_upper_buckets:
@@ -781,6 +859,17 @@ def build_avwap_radar_message(
     else:
         pull_ha_badge = "🕯️윗꼬리HA음봉OK"
 
+    if 407 <= hm_now <= 929:
+        sess_vwap = safe_float(
+            met.get("premarket_vwap"), safe_float(met.get("vwap"), 0.0)
+        )
+    elif 930 <= hm_now <= 1600:
+        sess_vwap = safe_float(
+            met.get("regular_vwap"), safe_float(met.get("vwap"), 0.0)
+        )
+    else:
+        sess_vwap = safe_float(met.get("vwap"), 0.0)
+
     summary = summarize_stratum_portfolio(
         st,
         live_price=lp,
@@ -789,6 +878,7 @@ def build_avwap_radar_message(
         closed_ha_shaved_bear=closed_ha_shaved_bear,
         closed_ha_bull=closed_ha_bull,
         closed_ha_ready=closed_ha_ready,
+        session_vwap=(sess_vwap if sess_vwap > 0.0 else None),
     )
     is_active = bool(st.get("is_active", True))
     is_barbell = _is_barbell_portion_mode(st)
@@ -986,6 +1076,7 @@ def build_avwap_radar_message(
     elif is_l2_only:
         pull_p = safe_float(summary.get("reentry_pullback_price"), 0.0)
         brk_p = safe_float(summary.get("reentry_breakout_price"), 0.0)
+        c_min_re = safe_float(summary.get("cycle_min_buy_price"), 0.0)
         l2_cap_p = safe_float(
             summary.get("l2_ceiling_price"),
             safe_float(summary.get("min_indiv_upper_price"), 0.0),
@@ -999,9 +1090,18 @@ def build_avwap_radar_message(
         else:
             brk_str = f"돌파 <b>${brk_p:.2f}</b>(RSI&lt;=50)"
         cap_str = f" · 상한 ${l2_cap_p:.2f}" if l2_cap_p > 0.0 else ""
+        vwap_str = f"&lt;=VWAP(${sess_vwap:.2f})·" if sess_vwap > 0.0 else ""
+        lb_re_str = f" · 저가 <b>&lt;${c_min_re:.2f}</b>" if c_min_re > 0.0 else ""
         gate_cond_lines.append(
-            f"▫️ 눌림 <b>${pull_p:.2f}</b>({pull_ha_badge}) / {brk_str} 시 {quota_badge_str} 매수"
+            f"▫️ 눌림 <b>${pull_p:.2f}</b>({vwap_str}{pull_ha_badge}){lb_re_str} / {brk_str} 시 {quota_badge_str}"
         )
+        if bool(summary.get("primer_eligible", False)):
+            p_trig_re = safe_float(summary.get("primer_trigger_price"), 0.0)
+            p_gap_re = safe_float(summary.get("primer_eff_gap_pct"), 3.5)
+            if p_trig_re > 0.0:
+                gate_cond_lines.append(
+                    f"▫️ 🌱마중물구제(1주): 10분검문 <b>${p_trig_re:.2f}</b> 이하 (-{p_gap_re:.1f}%가드)"
+                )
         gate_cond_lines.append(
             f"▫️ 기준 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}%{cap_str}"
         )
@@ -1010,6 +1110,7 @@ def build_avwap_radar_message(
         trig_p = safe_float(summary.get("trigger_buy_price"), 0.0)
         step_eligible = bool(summary.get("step_up_eligible", False))
         step_trig_p = safe_float(summary.get("stepped_trigger_price"), 0.0)
+        c_min_act = safe_float(summary.get("cycle_min_buy_price"), 0.0)
         gate_header_line = (
             f"🎯 <b>[다음 매수 타점]</b> (차기 검문: {escape_html(next_gate_str)})"
         )
@@ -1021,9 +1122,24 @@ def build_avwap_radar_message(
         eff_lot_tag = (
             f"·잠금{eff_lots}회" if ratchet_lots > held_lots else ""
         )
+        if bool(summary.get("l2_vacant_low_break_eligible", False)) and c_min_act > 0.0:
+            gate_cond_lines.append(
+                f"▫️ 2층공석 저가돌파(8%): <b>&lt;${c_min_act:.2f}</b> ({pull_ha_badge}) 시 즉시 충전"
+            )
         gate_cond_lines.append(
             f"▫️ 추매타점(8%): <b>${trig_p:.2f}</b> 이하 시 {quota_badge_str} 매수{step_note}"
         )
+        if bool(summary.get("is_l1_primer_1sh", False)):
+            gate_cond_lines.append(
+                "▫️ 🌱1주마중물 장전중: 추가마중물 자동잠금 (익절리셋·8%흡수 대기)"
+            )
+        elif bool(summary.get("primer_eligible", False)):
+            p_trig_act = safe_float(summary.get("primer_trigger_price"), 0.0)
+            p_gap_act = safe_float(summary.get("primer_eff_gap_pct"), 3.5)
+            if p_trig_act > 0.0:
+                gate_cond_lines.append(
+                    f"▫️ 🌱마중물타점(1주): <b>${p_trig_act:.2f}</b> 이하 (역산·-{p_gap_act:.1f}%가드)"
+                )
         gate_cond_lines.append(
             f"▫️ 현재위치: 저가 ${ref_anchor:.2f} 대비 {c_sign}{chg_anchor:.2f}% (목표 {drop_req:.1f}%{eff_lot_tag})"
         )
@@ -1097,9 +1213,10 @@ def build_avwap_radar_message(
 
     cash_title = "SOXL현금(60%)" if is_barbell else "가용현금"
 
+    vwap_hdr = f" · VWAP <b>${sess_vwap:.2f}</b>" if sess_vwap > 0.0 else ""
     lines = [
         f"📡 <b>[스나이퍼 레이더]</b> ({active_badge} · {mode_badge})",
-        f"🐂 <b>SOXL</b> 현재가 <b>${lp:.2f}</b> · RSI <b>{rsi_14:.1f}</b>",
+        f"🐂 <b>SOXL</b> 현재가 <b>${lp:.2f}</b> · RSI <b>{rsi_14:.1f}</b>{vwap_hdr}",
     ]
     if shield_line:
         lines.append(shield_line)
@@ -1441,18 +1558,34 @@ def build_settlement_control_message(
     )
     cyc_sign = "+" if cyc_net >= 0.0 else "-"
 
+    primer_badge = str(summary.get("primer_policy_badge") or "🧠스마트ON")
+    p_buy_c = safe_int(summary.get("primer_1sh_buy_events"), 0)
+    p_sell_c = safe_int(summary.get("primer_1sh_sell_events"), 0)
+    p_abs_c = safe_int(summary.get("primer_1sh_absorbed_events"), 0)
+    p_net_u = safe_float(summary.get("primer_1sh_realized_net_usd"), 0.0)
+    p_net_sign = "+" if p_net_u >= 0.0 else "-"
+    sub_ctrl_lbl = (
+        "서브(복리: 신규0주잠금)"
+        if (
+            not bool(summary.get("primer_allow_new_sub_entry", True))
+            and sub_sh <= 0
+        )
+        else "서브(상시)"
+    )
+
     lines = [
         "⚙️ <b>[전술 제어반]</b>",
         "──────────────",
         f"1️⃣ 스나이퍼 전원: <b>{power_str}</b> (수수료 {rt_fee_pct:.2f}%)",
         f"2️⃣ 운용 정량모드: <b>{p_mode_str}</b> (<code>/mode</code>)",
+        f"   ▫️ 1주 마중물: <b>{escape_html(primer_badge)}</b> (<code>/primer</code> · 매수{p_buy_c}/익절{p_sell_c}/흡수{p_abs_c} · {p_net_sign}${abs(p_net_u):,.2f})",
         f"3️⃣ 암살자 승격: <b>{assn_mode_str}</b> (<code>/assassin_mode</code>)",
         f"4️⃣ 기준 시드: <b>${init_seed:,.2f}</b> (확정자산 ${real_eq:,.2f})",
         f"   ▫️ 이번사이클익: <b>{cyc_sign}${abs(cyc_net):,.2f}</b> ({cyc_ev}회 익절 · 졸업 {comp_cycles}회)",
         f"   ▫️ 1회 정량: 본 ${next_bud:,.0f}({quota_badge_str}) · 서브 ${sub_bud:,.0f}({sub_quota_badge})",
         f"   ▫️ 격리/잉여금: <b>${withdrawable_surplus_usd:,.0f}</b> (탄창 <b>+{self_reserve_portions:.1f}회분</b>)",
         f"5️⃣ 보유/자동수혈: 본 <b>{held_sh}주</b>({held_tiers}층·{lot_ctrl_str}) · 수혈 <b>{used_res_cnt}회분</b>(${inj_res_usd:,.0f})",
-        f"   ▫️ 서브(상시): <b>{sub_sh}주</b>({sub_lots}/{sub_max_lots}회) · 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회",
+        f"   ▫️ {sub_ctrl_lbl}: <b>{sub_sh}주</b>({sub_lots}/{sub_max_lots}회) · 동결 {main_frozen}/{SUB_FROZEN_DAYS_TRIGGER}일 · 졸업 {sub_comp}회",
         "──────────────",
         "🧹 <code>/reset_profit</code> : 수익/금고 0점 초기화 (주식·시드 보존)",
         "⚖️ <code>/barbell</code> : 바벨 60/30/10 상세 · 🗡️ <code>/assassin</code> : 암살자 상세",
@@ -1968,6 +2101,7 @@ class TelegramCommandController:
                 bool(st.get("is_active", True)),
                 portion_mode=st.get("portion_mode"),
                 assassin_exec_mode=self._current_assassin_exec_mode(),
+                primer_1sh_mode=st.get("primer_1sh_mode"),
             ),
         )
 
@@ -2047,13 +2181,51 @@ class TelegramCommandController:
 
         next_bud = safe_float(summary.get("next_portion_budget"), 800.0)
         sub_bud = safe_float(summary.get("sub_next_portion_budget"), 400.0)
+        primer_b_lbl = escape_html(
+            str(summary.get("primer_policy_badge") or "🧠스마트ON")
+        )
         await self.send_message(
             chat_id=chat_id,
             text=(
                 "🔄 <b>[3단 운용 정량모드 순환 완료]</b>\n"
                 f"▫️ 현재 모드: <b>{m_lbl}</b>\n"
+                f"▫️ 1주 마중물 연동: <b>{primer_b_lbl}</b>\n"
                 f"▫️ 본그리드 1회(8%): <b>${next_bud:,.2f}</b> ({_format_case67_quota_badge(summary)})\n"
                 f"▫️ 서브그리드 1회(4%): <b>${sub_bud:,.2f}</b> ({_format_sub_quota_badge(summary)})"
+            ),
+            reply_markup=_build_main_reply_keyboard(),
+        )
+
+    async def _toggle_primer_mode_command(
+        self, chat_id: str, edit_msg_id: Optional[int] = None
+    ) -> None:
+        updated_st = await self.context.ledger.toggle_primer_1sh_mode()
+        self.context.wakeup_event.set()
+        if edit_msg_id is not None and edit_msg_id > 0:
+            await self._render_and_send_settlement(
+                chat_id=chat_id, edit_msg_id=edit_msg_id
+            )
+            return
+
+        live_p, _ = await self._refresh_live_price_and_metrics()
+        summary = summarize_stratum_portfolio(updated_st, live_price=live_p)
+        p_badge = escape_html(
+            str(summary.get("primer_policy_badge") or "🧠스마트ON")
+        )
+        p_on = bool(summary.get("primer_enabled", True))
+        if p_on:
+            if bool(summary.get("primer_allow_vacant_l1_rescue", False)):
+                rule_desc = "바벨/단리 맞춤 — 만석포함 전 상태 역산(-3.5% 가드) + 1층 공석 10분 구제 + 서브 상시 ON"
+            else:
+                rule_desc = "연속복리 맞춤 — 6층 이하/2층 공석 역산(-3.5% 가드 · 7층 만석 합병차단) + 신규 0주 서브 잠금(기보유 졸업유지)"
+        else:
+            rule_desc = "1주 마중물 완전 비활성화 (기존 v3.0 정본 8%/4% 그리드 단독 운용)"
+        await self.send_message(
+            chat_id=chat_id,
+            text=(
+                "🌱 <b>[1주 마중물 스마트 연동 스위치 전환]</b>\n"
+                f"▫️ 현재 상태: <b>{p_badge}</b>\n"
+                f"▫️ 적용 규율: {escape_html(rule_desc)}"
             ),
             reply_markup=_build_main_reply_keyboard(),
         )
@@ -2177,6 +2349,7 @@ class TelegramCommandController:
                 bool(updated_st.get("is_active", True)),
                 portion_mode=updated_st.get("portion_mode"),
                 assassin_exec_mode=self._current_assassin_exec_mode(),
+                primer_1sh_mode=updated_st.get("primer_1sh_mode"),
             ),
         )
         return True
@@ -2235,6 +2408,12 @@ class TelegramCommandController:
             "required_reserve_deposit_usd": 0.0,
             "last_reserve_check_ts": 0.0,
             "extra_13plus_buy_events": 0,
+            "primer_1sh_buy_events": 0,
+            "primer_1sh_sell_events": 0,
+            "primer_1sh_absorbed_events": 0,
+            "primer_1sh_realized_net_usd": 0.0,
+            "daily_primer_1sh_buy_cnt": 0,
+            "daily_primer_1sh_sell_cnt": 0,
             "total_buy_events": 0,
             "daily_buy_events": 0,
             "total_sell_events": 0,
@@ -2499,6 +2678,10 @@ class TelegramCommandController:
             await self._toggle_portion_mode_command(chat_id=chat_id)
             return
 
+        if first_token in ("/primer", "/primer_mode"):
+            await self._toggle_primer_mode_command(chat_id=chat_id)
+            return
+
         if first_token == "/seed":
             parts = text.split(maxsplit=1)
             if len(parts) >= 2:
@@ -2600,6 +2783,10 @@ class TelegramCommandController:
             )
         elif data == "toggle_portion_mode":
             await self._toggle_portion_mode_command(
+                chat_id=chat_id, edit_msg_id=msg_id
+            )
+        elif data == "toggle_primer_1sh_mode":
+            await self._toggle_primer_mode_command(
                 chat_id=chat_id, edit_msg_id=msg_id
             )
         elif data == "toggle_assassin_live":

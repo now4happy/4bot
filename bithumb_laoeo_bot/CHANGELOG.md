@@ -1,5 +1,15 @@
 # 3번 빗썸 적립 변경 기록
 
+## v4.4.1 · 2026-11-20 12:17 (KST)
+- 파일: b_core.py, b_ui.py, main.py
+- 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)
+- 브랜치: staging
+
+## v4.4.0 · 2026-11-19 15:40 (KST)
+- 파일: b_core.py, b_ui.py, main.py
+- 내용: 텔레그램 매매봇 메뉴 정리 3차 v2 (7번 제외): 첫 화면 4칸·금액 메뉴 설명·범위 표시·이모티콘 제거
+- 브랜치: staging
+
 ## v4.3.6 · 2026-11-14 14:48 (KST)
 - 파일: b_core.py, b_ui.py, main.py
 - 내용: bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황판·거래내역 (vNEXT)

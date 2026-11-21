@@ -1,6 +1,8 @@
 # ==========================================================
 # FILE: kis_order_engine.py
 # ==========================================================
+# 🚨 v1.0.6 (2026-11-20): [audit-fix-v2 r4 질문 7] 원인 불명(UNKNOWN) MOC 거절이면 거절 내용만 따로 텔레그램 메시지 1개 더 (주문 결과 메시지 형식 그대로, 같은 거절 10분 안 중복 안 보냄, 전송 실패는 주문에 영향 없음)
+# 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-4] MOC 거절은 시간 사유일 때만 LIMIT 대체, 수량·원인 불명은 대체 없이 실패 반환(reject_kind)
 # 🚨 MODIFIED: [파사드 패턴 3단계] 주문 전송, 취소, 미체결 및 원장 제어 도메인 분리
 # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 time.sleep(0.06) 땜질 코드를 전면 삭제하고, 내부 _api_request 의 GlobalThrottle 중앙 통제로 100% 위임하여 이벤트 루프 교착 상태 완벽 방어.
 # 🚨 MODIFIED: [선형 상속 락온] MarketDataProvider를 상속하여 API 클라이언트와 시세 연산 기능까지 풀 패키지 상속
@@ -11,14 +13,66 @@
 # 🚨 VERIFIED: [Case 36 절대 방어망 결속] MOC(시장가 매도) 주문 리젝 시 현재가 -5% 최유리 지정가(LIMIT) 덤핑 자동 폴백 100% 팩트 가동
 # 🚨 MODIFIED: [주문가능금액 역산 팩트 복구] KIS API가 특정 시간대에 예수금을 0.0으로 반환하는 고질적 결함을 우회하기 위해, 오리지널 수리적 역산(Reverse Calc) 공식(외화예수금+매도정산-매수정산)을 100% 롤백 완료.
 # 🚨 MODIFIED: [Case 36 절대 방어망 팩트 교정] 단순 -5% 하향 로직 소각 및 매수 1호가 팩트 스윕 요격망 결속 완료.
+# 🚨 v1.0.4 (2026-11-19): [audit-fix 1-1] get_account_balance: 보유 조회(거래소별)가 하나라도 실패하면 (cash, None) 반환 — 빈 {}(보유 없음)와 실패를 구분. [audit-fix 1-2] get_execution_history/get_reservation_orders 에 strict=True 옵션 추가(조회 실패 시 None, 기본 동작 불변).
 # ==========================================================
 
 import time
 import datetime
 import math
 import logging
+import os
+import json
+import urllib.request
 from zoneinfo import ZoneInfo
 from market_data_provider import MarketDataProvider
+
+# audit-fix 1-4: MOC 거절 사유 분류. 키워드는 코드 내 근거 문구(V14.8 '주문 불가 시간')와 일반 어휘 기준이며 KIS 실제 거절 문구 전수는 미확인.
+#   QTY  = 수량·잔고 계열 거절 → 같은 수량의 지정가도 거절되므로 폴백 금지
+#   TIME = 시간대 거절 → 지정가 폴백 허용
+#   UNKNOWN = 분류 불가 → 보수적으로 폴백 금지(실패 반환, 알림)
+_MOC_QTY_KEYWORDS = ("수량", "잔고", "보유", "qty", "quantity", "insufficient")
+_MOC_TIME_KEYWORDS = ("시간", "마감", "장종료", "장마감", "time", "session", "closed")
+
+def classify_moc_reject(msg):
+    m = str(msg or "").lower()
+    if any(k in m for k in _MOC_QTY_KEYWORDS): return "QTY"
+    if any(k in m for k in _MOC_TIME_KEYWORDS): return "TIME"
+    return "UNKNOWN"
+
+# audit-fix-v2 r4 질문 7 (풀이님 결정 2026-11-20 11:47): 원인 불명(UNKNOWN) MOC 거절은 주문 결과 메시지(거절 내용 포함, 형식 그대로)에 더해
+# 거절 내용만 따로 메시지 1개를 더 보낸다. 전송은 봇이 쓰는 같은 텔레그램 봇·대화(환경변수 TELEGRAM_TOKEN·ADMIN_CHAT_ID, main.py 와 같은 값).
+# 전송 실패는 주문 결과에 영향 없음(로그만). 같은 거절(종목·방향·수량·문구)은 REJECT_NOTICE_WINDOW_SEC 안에는 한 번만 — 제안값(근거 없음).
+REJECT_NOTICE_WINDOW_SEC = 600
+_REJECT_SEEN = {}
+
+def _send_reject_notice(text):
+    token, chat = os.getenv("TELEGRAM_TOKEN"), os.getenv("ADMIN_CHAT_ID")
+    if not token or not chat:
+        raise RuntimeError("TELEGRAM_TOKEN/ADMIN_CHAT_ID 없음")
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage",
+                                 data=json.dumps({"chat_id": chat, "text": text[:3900]}).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as r:
+        r.read()
+
+def _notify_unknown_reject(ticker, side, qty, rt_cd, msg):
+    """원인 불명 MOC 거절 내용만 따로 알림. 어떤 예외도 밖으로 내지 않음"""
+    try:
+        now = time.time()
+        key = (str(ticker), str(side), int(qty), str(msg))
+        for k in [k for k, t in _REJECT_SEEN.items() if now - t > REJECT_NOTICE_WINDOW_SEC]:
+            _REJECT_SEEN.pop(k, None)
+        if key in _REJECT_SEEN:
+            return
+        _REJECT_SEEN[key] = now
+        text = (f"🚨 [{ticker}] 시장가(MOC) 주문 거절 — 원인 불명\n"
+                f"· 주문: {side} {qty}주 MOC\n"
+                f"· 거절 코드(rt_cd): {rt_cd}\n"
+                f"· 거절 내용: {msg if msg else '(문구 없음)'}\n"
+                f"· 지정가로 바꿔 내지 않았고 주문은 나가지 않았어요. 확인이 필요해요.")
+        _send_reject_notice(text)
+    except Exception as e:
+        logging.error(f"🚨 [{ticker}] 거절 내용 별도 알림 전송 실패: {type(e).__name__}")
 
 class KisOrderEngine(MarketDataProvider):
     
@@ -27,6 +81,7 @@ class KisOrderEngine(MarketDataProvider):
         cash = 0.0
         holdings = {}
         api_success = False 
+        holdings_failed = False  # audit-fix 1-1: 보유 조회 실패 플래그 (빈 {} 와 구분)
   
         params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840", "TR_MKET_CD": "00", "INQR_DVSN_CD": "00"}
        
@@ -99,8 +154,14 @@ class KisOrderEngine(MarketDataProvider):
                     if tr_cont in ['M', 'F'] and nk200:
                         continue
                     else: break
-                else: break
+                else:
+                    # audit-fix 1-1: 보유 조회 실패 — 조용히 넘기면 {} 가 '보유 없음'으로 오인된다.
+                    holdings_failed = True
+                    logging.warning(f"🚨 [보유 조회 실패] {excg} inquire-balance 응답 실패 — 보유를 알 수 없어 실패로 처리")
+                    break
         
+        # audit-fix 1-1: 보유 조회가 하나라도 실패했으면 holdings=None (호출부가 실패로 처리). 빈 {} 는 '실제로 보유 없음'일 때만.
+        if holdings_failed: return cash, None
         if api_success: return cash, holdings
         else: return cash, None
 
@@ -139,7 +200,8 @@ class KisOrderEngine(MarketDataProvider):
         return valid_orders
 
     # 🚨 MODIFIED: [Case 18] 로컬 예약 스냅샷 폐기 및 KIS 원장 직접 연동
-    def get_reservation_orders(self, ticker, start_date, end_date):
+    def get_reservation_orders(self, ticker, start_date, end_date, strict=False):
+        # audit-fix 1-2: strict=True 이면 조회 실패 시 [] 대신 None 반환. 기본(False)은 기존 동작 그대로.
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         valid_orders = []
   
@@ -184,6 +246,7 @@ class KisOrderEngine(MarketDataProvider):
                 else:
                     break
             else:
+                if strict: return None
                 break
            
         return valid_orders
@@ -295,7 +358,14 @@ class KisOrderEngine(MarketDataProvider):
                 
                 # 🚨 MODIFIED: [Case 36 절대 방어망 팩트 교정] MOC 덤핑 시 단순 -5% 하향 로직을 소각하고, 매수 1호가(Bid Price) 팩트 타격으로 교정
                 if order_type == "MOC":
-                    logging.warning(f"🚨 [Case 36 방어망] KIS MOC 주문 리젝 감지 ({safe_msg}). 매수 1호가 덤핑 폴백 가동!")
+                    # audit-fix 1-4: 거절 사유별 분기 — 시간대 거절만 지정가 폴백, 수량 거절·미분류는 폴백하지 않고 실패로 반환
+                    reject_kind = classify_moc_reject(safe_msg)
+                    if reject_kind != "TIME":
+                        logging.error(f"🚨 [{ticker}] MOC 거절 ({reject_kind}): {safe_msg} — 지정가 덤핑 폴백 안 함, 실패 반환")
+                        if reject_kind == "UNKNOWN":      # r4 질문 7: 원인 불명 거절은 거절 내용만 따로 한 번 더 알림 (주문 결과 메시지는 그대로)
+                            _notify_unknown_reject(ticker, side, order_qty, str(res.get('rt_cd') or '999'), safe_msg)
+                        return {'rt_cd': str(res.get('rt_cd') or '999'), 'msg1': f"[MOC 거절:{reject_kind}] {safe_msg}" if safe_msg else f"[MOC 거절:{reject_kind}]", 'odno': '', 'reject_kind': reject_kind}
+                    logging.warning(f"🚨 [Case 36 방어망] KIS MOC 시간대 거절 감지 ({safe_msg}). 매수 1호가 덤핑 폴백 가동!")
                     bid_p = self.get_bid_price(ticker)
                     if bid_p > 0:
                         dump_price = bid_p
@@ -391,7 +461,8 @@ class KisOrderEngine(MarketDataProvider):
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "RSVN_ORD_RCIT_DT": order_date, "OVRS_RSVN_ODNO": order_id}
         return self._call_api("TTTT3017U", "/uapi/overseas-stock/v1/trading/order-resv-ccnl", "POST", body=body)
 
-    def get_execution_history(self, ticker, start_date, end_date):
+    def get_execution_history(self, ticker, start_date, end_date, strict=False):
+        # audit-fix 1-2: strict=True 이면 조회 실패 시 [] 대신 None 반환 (빈 결과와 실패 구분). 기본(False)은 기존 동작 그대로.
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         odno_map = {}
         
@@ -439,7 +510,9 @@ class KisOrderEngine(MarketDataProvider):
                     time.sleep(0.3)
                     continue
                 else: break
-            else: break
+            else:
+                if strict: return None
+                break
         # 🚨 MODIFIED: [치명적 논리 결함 수술] 딕셔너리 언패킹 오버라이드 맹점 교정 (원본 데이터 우선 배치)
         return [{**d["item"], "ft_ccld_qty": str(d["total_qty"]), "ft_ccld_unpr3": str(d["total_amt"]/d["total_qty"] if d["total_qty"]>0 else 0)} for d in odno_map.values()]
 

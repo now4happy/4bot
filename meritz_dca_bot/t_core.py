@@ -23,16 +23,20 @@
 # v1.2.4 (2026-11-13): 관제탑 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
 # v1.2.6 (2026-11-14): 모든 메뉴·화면 버튼을 맨밑 키보드로 (첫 줄 [📈 상황판, ☰ 메뉴]) · 인라인 버튼 안 보냄 · SGOV 메뉴는 비서봇으로.
 # v1.2.7 (2026-11-14): BOT_VERSION만 (SGOV 알림을 4번 방 대신 bridge 알림 파일로 — 내용은 sgov.py·bridge.py, send_panel 은 그대로)
+# v1.2.9 (2026-11-17): BOT_VERSION만 (SGOV 환율 재시도 창 캐시 폴백·시장가 주문 여유 10%·오래된 FRED 자료로 캐시 덮지 않기 — 내용은 sgov.py)
+# v1.3.2 (2026-11-19): audit-fix 6-7 int_sell_qty — 보유 전량이 되는 익절 매도(1주 보유 등)는 하지 않음 (0 반환). 그 외 BOT_VERSION.
 # v1.2.8 (2026-11-14): 봇 번호 정리 — 알림 허브 이름 HUB_NAME '메리츠 적립' → '6번 메리츠 적립' (매매 동작 변경 없음)
 # =====================================================================
+# v1.3.4 (2026-11-20, audit-fix-v2 r4 질문 6): 휴장일·공휴일 표 범위 끝 1주일 전 알림 — table_range_notices(d)·kr_calendar_known. 막지는 않음 (알림만, main.maybe_table_range_notice). 나머지는 BOT_VERSION 만
+# v1.3.3 (2026-11-20, audit-fix-v2 5-6·6-10): calendar_known — 휴장일 표(US_CLOSED) 연도 확인 + 2029·2030 추가(예상값) · KR_HOLIDAYS/kr_fx_day (한국 공휴일 환전 안 함). 나머지는 BOT_VERSION 만
 import os, sys, time, json, math, asyncio, requests
 import replay_log as RL   # 3번과 같은 재생 로그 (state_dir/logs)
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.2.8"
-BOT_TITLE = "🟦6번 메리츠 적립"
+BOT_VERSION = "v1.3.4"
+BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -82,9 +86,12 @@ def tg_api(method, payload=None):
 #   각 화면이 만든 버튼 목록({"text", "callback_data"})은 그대로 두고, 보낼 때 맨밑 키보드로 바꾼다.
 #   눌린 글자 → 원래 callback_data 는 REPLY_MAP 에 둔다 (가장 최근에 보낸 키보드 1개 · 메모리만).
 #   화면 이동용(관제탑 callback "panel")은 📈 상황판 으로 대신하므로 뺀다. SGOV 버튼(callback "sgov…")은 비서봇으로 옮겨서 뺀다.
-MAIN_ROW = ["📈 상황판", "☰ 메뉴"]
-MENU_ROWS = [["📋 보유종목", "➕ 종목 추가"], ["💰 자금·주식", "⚙️ 시드·주식"], ["🛠 도구", "❓ 도움말"], ["🏠 처음 화면"]]
-TOOLS_ROWS = [["📐 지수 연동 배수", "🎯 익절/매도비율"], ["🔎 종목 검색", "🔢 진행일수 보정"], ["🔙 메뉴"]]
+MAIN_ROW = ["상황판", "메뉴"]
+# v1.3.0 (2026-11-19): 첫 화면 4칸 [자금][매매 규칙][현재 상태][종목 관리] (+ 기존 이동 버튼 [처음 화면]).
+MENU_ROWS = [["자금", "매매 규칙"], ["현재 상태", "종목 관리"], ["처음 화면"]]
+RULES_ROWS = [["익절/매도비율", "지수 연동 배수"], ["진행일수 보정", "메뉴"]]
+STOCKS_ROWS = [["보유종목", "종목 추가"], ["종목 검색", "도움말"], ["메뉴"]]
+TOOLS_ROWS = RULES_ROWS   # 옛 '도구' 호환
 REPLY_MAP = {}
 
 
@@ -93,7 +100,7 @@ def _drop_button(cb: str) -> bool:
 
 
 def reply_rows(inline_kb):
-    """화면 버튼 목록 → (맨밑 키보드 줄, 글자→callback_data). 첫 줄 [📈 상황판, ☰ 메뉴]는 넣지 않음"""
+    """화면 버튼 목록 → (맨밑 키보드 줄, 글자→callback_data). 첫 줄 [상황판, 메뉴]는 넣지 않음"""
     rows, amap = [], {}
     for row in inline_kb or []:
         out = []
@@ -111,7 +118,7 @@ def reply_markup(rows):
 
 def send_panel(text, inline_kb, msg_id=None):
     """v1.2.6: 화면 1개 = 새 메시지 1개 + 맨밑 키보드 (msg_id 는 예전 호출 모양 유지용, 쓰지 않음)"""
-    head = ("🧪[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
+    head = ("[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
     rows, amap = reply_rows(inline_kb)
     REPLY_MAP.clear(); REPLY_MAP.update(amap)
     kb = [[{"text": t} for t in MAIN_ROW]] + rows
@@ -121,14 +128,14 @@ def send_panel(text, inline_kb, msg_id=None):
 def send_keyboard(text, rows_labels):
     """메뉴·도구·처음 화면 키보드 (글자 줄 그대로). 화면 버튼 표(REPLY_MAP)는 비움"""
     REPLY_MAP.clear()
-    head = ("🧪[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
+    head = ("[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
     return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": head + "\n" + text,
                                   "reply_markup": reply_markup([[{"text": t} for t in row] for row in rows_labels])})
 
 
 # 하단 키보드는 별도 메시지로 전송한다.
 # v1.2.6: 처음 화면 = 첫 줄 [📈 상황판, ☰ 메뉴] 만 (예전 [주식, SGOV, 관제탑] 대신).
-def send_bottom_menu(text="📌 처음 화면 · 아래 버튼을 눌러 주세요"):
+def send_bottom_menu(text="처음 화면 · 아래 버튼을 눌러 주세요"):
     return send_keyboard(text, [MAIN_ROW])
 
 def check_holiday():
@@ -240,10 +247,12 @@ def int_buy_qty(budget: float, carry: float, price: float, mode: str = "carry"):
 
 
 def int_sell_qty(qty: float, ratio_pct: float) -> int:
-    """3번 한국주식 익절 수량과 같음: 정수 보유의 ratio% 반올림, 최소 1주, 보유 이내"""
+    """3번 한국주식 익절 수량과 비슷: 정수 보유의 ratio% 반올림, 최소 1주.
+    v1.3.2 (audit-fix 6-7): 매도 수량이 보유 전량이 되면(보유 1주 등) 0 을 돌려줌 = 매도 안 함. 최소 2주 보유일 때만 익절 매도."""
     iq = int(math.floor(float(qty) + 1e-9))
-    if iq <= 0: return 0
-    return min(iq, max(1, int(round(iq * (float(ratio_pct) / 100.0)))))
+    if iq <= 1: return 0
+    sq = max(1, int(round(iq * (float(ratio_pct) / 100.0))))
+    return 0 if sq >= iq else sq
 
 
 def int_split_sell_qty(qty: float, rem_days: int) -> int:
@@ -442,10 +451,10 @@ async def n7_market_multipliers(client, cfg: dict, is_kr_market: bool) -> dict:
             RL.ev("decision", "n7_multiplier", "ok", None, actor="scheduler", index=idx, d=round(d, 4), mult=eff,
                   cand=st.get("cand"), cand_days=st.get("cand_days"), changed=changed)
             if changed:
-                msg = (f"📐 [지수 연동 배수 변경 · {name} ({etf})]\n• 200일선 대비 {d*100:+.1f}% (전일 {cdate} 종가 기준)\n"
+                msg = (f"[지수 연동 배수 변경 · {name} ({etf})]\n• 200일선 대비 {d*100:+.1f}% (전일 {cdate} 종가 기준)\n"
                        f"• 매수 배수: {before:.1f}배 → {eff:.1f}배 (연속 {N7_CONFIRM_DAYS}거래일 확인)")
                 if eff > 1.0: msg += "\n" + n7_forecast_text(cfg, idx, eff)
-                send_panel(msg, [[{"text": "🎛 관제탑", "callback_data": "panel"}]])
+                send_panel(msg, [[{"text": "관제탑", "callback_data": "panel"}]])
         if dirty:
             cfg["n7_state"] = states; await n7_save_state(states)
     except Exception as e:
@@ -456,8 +465,8 @@ async def n7_market_multipliers(client, cfg: dict, is_kr_market: bool) -> dict:
 def n7_status_lines(cfg: dict) -> list:
     """관제탑 표시용: 켜짐/꺼짐 + 기준 지수별 현재 배수·거리·후보 일수."""
     if not cfg.get("n7_enabled", False):
-        return [" • 지수 연동 배수(N7): ⚪ 꺼짐 — 기존 금액 그대로"]
-    lines = [" • 지수 연동 배수(N7): 🟢 켜짐 (200일선 기준, 최대 2.0배)"]
+        return [" • 지수 연동 배수(N7): 꺼짐 — 기존 금액 그대로"]
+    lines = [" • 지수 연동 배수(N7): 켜짐 (200일선 기준, 최대 2.0배)"]
     states = cfg.get("n7_state") or {}
     for idx, (etf, _, name) in N7_INDEX.items():
         st = states.get(idx)
@@ -472,9 +481,60 @@ US_CLOSED = {
     2026: "01-01 01-19 02-16 04-03 05-25 06-19 07-03 09-07 11-26 12-25",
     2027: "01-01 01-18 02-15 03-26 05-31 06-18 07-05 09-06 11-25 12-24",
     2028: "01-17 02-21 04-14 05-29 06-19 07-04 09-04 11-23 12-25",
+    # audit-fix-v2 5-6: 2029·2030 은 NYSE 미공시 — 통상 규칙으로 뮤즈가 예상한 값 (2026-11-20 뮤즈 자료). NYSE 공시되면 다시 확인.
+    2029: "01-01 01-15 02-19 03-30 05-28 06-19 07-04 09-03 11-22 12-25",
+    2030: "01-01 01-21 02-18 04-19 05-27 06-19 07-04 09-02 11-28 12-25",
 }
+
+# audit-fix-v2 6-10 (풀이님 결정 2026-11-20 09:12·뮤즈 Q5 검색 09:14): 메리츠 환전은 영업일에만 된다 (주말·공휴일 불가 — 비공식 정리글 2곳 근거, 공식 페이지 아님).
+# 7번(meritz_laoer/main.py) KR_HOLIDAYS 와 같은 목록. 2029 는 공식 월력요항 미발표라 바뀌면 다시 확인해야 한다.
+KR_HOLIDAYS = frozenset((
+    "2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-03-02", "2026-05-01", "2026-05-05", "2026-05-25", "2026-06-03", "2026-07-17",
+    "2026-08-17", "2026-09-24", "2026-09-25", "2026-10-05", "2026-10-09", "2026-12-25", "2026-12-31",
+    "2027-01-01", "2027-02-08", "2027-02-09", "2027-03-01", "2027-05-03", "2027-05-05", "2027-05-13", "2027-07-19", "2027-08-16",
+    "2027-09-14", "2027-09-15", "2027-09-16", "2027-10-04", "2027-10-11", "2027-12-27", "2027-12-31",
+    "2028-01-26", "2028-01-27", "2028-01-28", "2028-03-01", "2028-04-12", "2028-05-01", "2028-05-02", "2028-05-05", "2028-06-06", "2028-08-15",
+    "2028-10-02", "2028-10-03", "2028-10-04", "2028-10-05", "2028-10-09", "2028-12-25",
+    "2029-01-01", "2029-02-12", "2029-02-13", "2029-02-14", "2029-03-01", "2029-05-01", "2029-05-07", "2029-05-21", "2029-06-06", "2029-08-15",
+    "2029-09-21", "2029-09-24", "2029-10-03", "2029-10-09", "2029-12-25", "2029-12-31",
+))
+
+
+def kr_fx_day(d):
+    """한국 영업일(평일·국내 공휴일 아님) — 메리츠 환전 가능한 날 (audit-fix 6-10)"""
+    return d.weekday() < 5 and d.isoformat() not in KR_HOLIDAYS
+
 
 def is_trading_day(d):
     if d.weekday() >= 5: return False
     return d.strftime("%m-%d") not in US_CLOSED.get(d.year, "").split()
 
+
+def calendar_known(d):
+    """audit-fix 5-6: 휴장일 표(US_CLOSED)에 그 연도가 있는가. 없으면 is_trading_day 는 주말만 걸러 휴장일을 모른다."""
+    return d.year in US_CLOSED
+
+
+# audit-fix-v2 r4 질문 6 (풀이님 결정 2026-11-20 11:28): 표 범위를 벗어나기 1주일 전에 알리고 물어본다 — 바로 막지 않는다.
+TABLE_NOTICE_DAYS = 7   # 풀이님 결정: 막기 1주일 전
+
+
+def kr_calendar_known(d):
+    """한국 공휴일 표(KR_HOLIDAYS)에 그 연도가 있는가. 없으면 kr_fx_day 는 주말만 걸러 공휴일을 모른다."""
+    return str(d.year) in {h[:4] for h in KR_HOLIDAYS}
+
+
+def table_range_notices(d, days=TABLE_NOTICE_DAYS):
+    """d(한국 날짜) 기준으로 '표 범위 밖이 days 일 안에 시작하거나 이미 시작한' 표 목록.
+    돌려줌 [(표 키, 표 이름, 표가 없는 첫 날짜 'YYYY-MM-DD', 알림 시작일 'YYYY-MM-DD')]. 표가 충분히 길면 빈 목록.
+    미국 표는 calendar_known(US_CLOSED 연도), 한국 표는 kr_calendar_known(KR_HOLIDAYS 연도)으로 판단한다."""
+    from datetime import date, timedelta
+    out = []
+    for key, name, known, years in (("us", "미국 휴장일 표(US_CLOSED)", calendar_known, set(US_CLOSED)),
+                                    ("kr", "한국 공휴일 표(KR_HOLIDAYS)", kr_calendar_known, {int(h[:4]) for h in KR_HOLIDAYS})):
+        if known(d + timedelta(days=days)): continue
+        y = min(years)
+        while y in years: y += 1                     # 표가 없는 첫 해
+        gap = date(y, 1, 1)
+        out.append((key, name, gap.isoformat(), (gap - timedelta(days=days)).isoformat()))
+    return out

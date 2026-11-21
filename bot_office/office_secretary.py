@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 v1.9.5 (2026-11-20, audit-fix-v2 8-5): 업데이트 처리 중 오류가 나면 offset 유지(같은 입력 최대 3번 다시 처리 뒤 건너뜀, process_updates)
+# 사무실 v1.8.8 (2026-11-19): 8번 비서 도움말·"모르는 명령" 안내 글자를 새 메뉴 구조(자금 · 환율 규칙 · SGOV 현황 · 도움말)에 맞춤 — 글자만 변경, 버튼 글자·구조·매매 로직 그대로
 # 사무실 v1.8.7 (2026-11-14): 웹 사무실 완전 제거에 맞춰 8번 비서를 SGOV 메뉴 전용으로 정리 — 🏢 사무실·/주소·🖥 PC 상태·💰 잔액·Update 안내 삭제
 #                         (남김: SGOV 메뉴 office_sgov.py · 허브 신호 · 전략·종목·금액·enabled 변경 없음)
 # 사무실 v1.8.6 (2026-11-14): 봇 이름·번호 새 1~9번 목록으로 표시 문자열만 정리 (전략·종목·금액·enabled 그대로)
@@ -57,9 +59,9 @@ TELEGRAM_API = os.environ.get("OFFICE_TELEGRAM_API", "https://api.telegram.org")
 SYSTEMCTL = os.environ.get("OFFICE_SYSTEMCTL", "systemctl")
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 
-HELP = ("🤖 <b>8번 비서 사용법</b> (SGOV 메뉴)\n"
-        "▫️ <b>📈 상황판</b> : SGOV 상황판\n"
-        "▫️ <b>☰ 메뉴</b> : 🪙 SGOV 현황 · 💰 자금·SGOV · ⚙️ 시드·SGOV · 💵 분배금 기록 · 🛠 도구 · ❓ 도움말")
+HELP = ("<b>8번 비서 사용법</b> (SGOV 메뉴)\n"
+        "· <b>상황판</b> 버튼 : SGOV 상황판\n"
+        "· <b>메뉴</b> 버튼 : 자금 · 환율 규칙 · SGOV 현황 · 도움말")
 
 
 def load(p, default):
@@ -178,7 +180,7 @@ def handle_message(tg, st, msg):
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?") or raw == "❓ 도움말":
         tg.send(HELP, keyboard=MENU_KB); return
-    tg.send("모르는 명령이에요. 아래 버튼(📈 상황판 · ☰ 메뉴)으로 써 주세요.", keyboard=MENU_KB)
+    tg.send("모르는 명령이에요. 아래 상황판·메뉴 버튼으로 써 주세요. (메뉴 안: 자금 · 환율 규칙 · SGOV 현황 · 도움말)", keyboard=MENU_KB)
 
 
 def handle_callback(tg, st, cb):
@@ -189,6 +191,36 @@ def handle_callback(tg, st, cb):
     if data.startswith(("mq:", "rb:", "ch:", "rq:", "cx:", "ap:", "apy:", "keep:", "rj:", "df:")):   # 삭제한 수정 요청·결재 버튼 (예전 메시지)
         tg.answer(cb_id, "수정 요청·결재 기능은 없어졌어요"); tg.buttons(msg_id, []); return
     tg.answer(cb_id, "없어진 버튼이에요"); tg.buttons(msg_id, [])   # v1.8.7: 예전 메시지의 삭제된 버튼(옛 잔액 회사 선택 등) — 버튼만 지움
+
+
+MAX_UPDATE_TRIES = 3     # 제안값(근거 없음): 같은 입력이 계속 오류를 내도 이 횟수까지만 다시 처리하고 건너뜀 (영원히 막히지 않게)
+_FAILS = {}
+
+
+def process_updates(tg, st, updates, offset, fails):
+    """audit-fix 8-5: 업데이트를 순서대로 처리 → (새 offset, 다시 처리할 게 있는지). 처리 중 오류가 나면 그 입력의 offset 을 올리지 않고
+    이번 묶음을 멈춤 (버튼 입력이 말없이 사라지지 않음). 같은 입력이 MAX_UPDATE_TRIES 번 오류면 건너뛰고 계속"""
+    for upd in updates:
+        uid = upd["update_id"]
+        try:
+            if "message" in upd:
+                m = upd["message"]
+                if str((m.get("chat") or {}).get("id")) == tg.chat:
+                    handle_message(tg, st, m)
+            elif "callback_query" in upd:
+                cb = upd["callback_query"]
+                if str(((cb.get("message") or {}).get("chat") or {}).get("id")) == tg.chat:
+                    handle_callback(tg, st, cb)
+        except Exception as e:
+            n = fails.get(uid, 0) + 1
+            fails[uid] = n
+            print(f"처리 오류({n}/{MAX_UPDATE_TRIES}):", type(e).__name__, e, flush=True)
+            if n < MAX_UPDATE_TRIES:
+                return offset, True
+            print("같은 입력이 계속 오류라 건너뜁니다:", uid, flush=True)
+        fails.pop(uid, None)
+        offset = uid + 1
+    return offset, False
 
 
 def main():
@@ -213,19 +245,9 @@ def main():
             url = f"{TELEGRAM_API}/bot{tg.token}/getUpdates?" + urllib.parse.urlencode(q)
             with urllib.request.urlopen(url, timeout=40) as r:
                 res = json.load(r)
-            for upd in res.get("result", []):
-                offset = upd["update_id"] + 1
-                try:
-                    if "message" in upd:
-                        m = upd["message"]
-                        if str((m.get("chat") or {}).get("id")) == tg.chat:
-                            handle_message(tg, st, m)
-                    elif "callback_query" in upd:
-                        cb = upd["callback_query"]
-                        if str(((cb.get("message") or {}).get("chat") or {}).get("id")) == tg.chat:
-                            handle_callback(tg, st, cb)
-                except Exception as e:
-                    print("처리 오류:", type(e).__name__, e, flush=True)
+            offset, retry = process_updates(tg, st, res.get("result", []), offset, _FAILS)
+            if retry:
+                time.sleep(2)     # audit-fix 8-5: 처리 오류 → offset 유지, 같은 입력을 다음 확인 때 다시 처리 (바로 되풀이하지 않게 잠깐 쉼)
             st.pop("pending", None)   # 옛 수정 요청 대기 기록 정리
             st["offset"] = offset
             save_like(STATE, st)
