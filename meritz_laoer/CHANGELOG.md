@@ -1,12 +1,9 @@
-# 메리츠 SOXL 무매 변경 기록
-
-## v1.3.0 · 2026-11-21 13:44 (KST)
-- 파일: config.py, main.py, notifier.py, sniper_mode.py, sub_grid.py, tg_menu.py, tower_strategy.py
-- 내용: 판 25 meritz_laoer v2.5.0 (박스·층 하이브리드, 토스 스나이퍼 이식, 돌파 매수액 설정)
-- 브랜치: staging
-
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v1.4.0 · 2026-11-21 (KST) — 판 26 (meritz_laoer v2.6.0)
+- 파일: main.py, sniper_mode.py, tower_strategy.py, tg_menu.py, config.py, notifier.py, README.md, CHANGELOG.md, test_hybrid_v260.py(새). sub_grid.py 는 안 바뀜
+- 내용: ① 박스별 매도 — 미완성 층의 매수 1건 = 박스 1개(floor['boxes']), 박스마다 자기 평단 기준 매도(그 층 안 최저 평단 박스 +1.5% · 나머지 +1.0%, 그 박스 전량), 층 원가·수량은 판 박스 몫만 줄고 층 평단은 남은 박스 가중평균, 층 완성 → 탑 매도. 예전 상태(박스 없음)·탑 매도 잔여 = 박스 1개 ② 눌림 매수% 설정 sniper_portion_pct(기본 8, 0 초과 100 이하) + 텔레그램 '눌림 매수% 변경'. 돌파 16%·서브 4% 그대로
+- 검증: test_hybrid_v260.py 통과 · 기존 시험(v250·v240)·Golden 은 파일이 없어 미실행 · 실거래·서버 적용·push 없음. 자세한 건 VERIFY.md
 ## v1.3.0 · 2026-11-21 (KST) — 판 25 (meritz_laoer v2.5.0)
 - 파일: main.py, sniper_mode.py, sub_grid.py(새), tower_strategy.py, tg_menu.py, config.py, notifier.py, test_hybrid_v250.py(새)
 - 내용: 하이브리드 박스·층 (토스 스나이퍼 이식): 매수 1번 = 박스 시드(기본 $15,000)의 8% · 서브 그리드 4% · 박스 안 자동 매도(+1.5%/+1.0%) 복귀 · 층 간격 규칙 삭제 · 첫 기준가 설정 · 평단 정수 달러 층 이름 · 지하층→공사중 · 퍼센트 작업 계산(percent_plan). 판 24 선택 질문 코드는 남기고 안 부름.

@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.20)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.6.0)
+# v2.6.0 (2026-11-21, 판 26): validate_settings 에 sniper_portion_pct 검사 (없으면 통과·기본 8, 있으면 0 초과 100 이하 숫자)
 # v2.2.20 (2026-11-21, 판 22 듀얼 모드): SAFE_DEFAULTS 에 trading_mode("tower" 기본 | "sniper") · sniper_tp_l1_pct(1.5) · sniper_tp_upper_pct(1.0) 추가. validate_settings 가 trading_mode 값(sniper|tower)·익절 % (0 초과 50 이하)를 검사하고, 스나이퍼 모드는 order_type=LIMIT · intraday_sell_check_sec>=30 이어야 통과(탑쌓기 모드는 예전 그대로). 나머지는 그대로
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): validate_settings 에 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day 검사 추가 — 없으면 통과(기본 1), 있으면 1~3 정수만 (0·4 이상·소수·글자·true/false 는 문제 목록에 넣어 주문 전에 막음). DEFAULTS 에는 안 넣음(없을 때 코드가 1 로 읽음). 나머지는 그대로
 # v2.2.9 (2026-11-20, audit-fix 7번 3차 — 풀이님 결정 10:14): 사다리 삭제로 탑쌓기 전용 — credit_problems·CHOICES(unit_base·first_buy_mode)·ladder_levels·적립 상태(accum_state.json: get_accum/save_accum/accum_or_start)·사다리 설정 키·start.mode/filled_levels/rebuy_*/first_round_credit_usd 제거. validate_settings(s) 는 사다리 값을 안 보고, tower_gap_usd(1 이상 정수)·tower_floor_usd(>0)·tower_floors(1 이상 정수) 와 strategy("tower" 가 아니면 차단)를 검사. order_type(LOC|LIMIT) 검사는 그대로
@@ -203,6 +204,9 @@ def validate_settings(s):
     bp = s.get("sniper_breakout_portion_pct")      # v2.5.0 수정1: 돌파 매수 비율 — 없으면 기본 16, 있으면 0 초과 100 이하
     if bp is not None and (isinstance(bp, bool) or not isinstance(bp, (int, float)) or not (0 < _f(bp) <= 100)):
         bad.append("sniper_breakout_portion_pct 는 0 초과 100 이하 (돌파 매수 비율, 박스 시드의 %)")
+    pp = s.get("sniper_portion_pct")      # v2.6.0: 눌림(본) 매수 비율 — 없으면 기본 8, 있으면 0 초과 100 이하 (돌파 매수% 검사와 같은 방식)
+    if pp is not None and (isinstance(pp, bool) or not isinstance(pp, (int, float)) or not (0 < _f(pp) <= 100)):
+        bad.append("sniper_portion_pct 는 0 초과 100 이하 (눌림 매수 비율, 박스 시드의 %)")
     fl = s.get("tower_floors")
     if fl is not None and (isinstance(fl, bool) or _f(fl) < 1 or _f(fl) != int(_f(fl))):
         bad.append("tower_floors 는 1 이상 정수 (층 수)")

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.5.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.6.0)
+# v2.6.0 (2026-11-21, 판 26 박스별 매도·매수 비율 설정): 박스별 매도 주문의 중복 방지를 박스 단위로(sold_box_keys_today·busy_boxes·거절 기록 키 '층:박스') · 매도 체결 알림 글자(박스만 줄임) · 계획 미리보기에 박스별 목표 줄. 층 단위 주문(탑 매도)은 예전 그대로.
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층 — 토스 스나이퍼 이식): ① 매수 = 신호 1번에 박스 시드의 8%(sniper_mode.plan_buy) · 서브 그리드 4%(sub_grid.py) ② 박스 안 매도(+1.5%/+1.0%, 박스 전체) 자동으로 복귀 — 판 24 선택 질문(pick_scan) 호출 삭제(코드는 남김)
 #   ③ 하루 매수 층 수 제한(buy_layer_limit_hit)은 스나이퍼 매수에 안 씀 ④ 서브 상태 동기화(sync_sub)·10분 게이트(mark_sub_gate) ⑤ 지하층 → 공사중. 계좌·API·16:10 동기화·장부=잔고 정지·주문 시간은 안 바꿈
 # v2.4.0 (2026-11-21, 판 24): ① 장부 바로잡기(run_ledger_migration, 일회성: 메리츠 실제 잔고 684주일 때만 → 장부 684주 · 두 층 373주 $40.29 / 311주 $48.14 · 잠금 · 공사중(빈 층), 주문·실제 잔고 안 건드림, 마커 파일로 한 번만, 이전 날 늦은 체결은 건너뜀)
@@ -126,7 +127,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.5.0"
+BOT_VERSION = "v2.6.0"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)
@@ -433,6 +434,8 @@ def sniper_plan_head(plan, s):
     tp = i.get("tower_pct") or [0.0, 0.0]
     head = (f"하이브리드 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {i['n_layers']}개 · 스나이퍼 익절(미완성 층) 1층 +{i['tp_l1']:g}% · 상단층 +{i['tp_upper']:g}% · 탑 매도(완성 층) +{tp[0]:g}% → {tp[1]:g}%\n"
             + ("매도 목표 " + " · ".join(f"{r['no']}층{'(완성·탑)' if r.get('complete') else ''} ${(SN.ceil2(r['avg'] * (1 + tp[0] / 100.0)) if r.get('complete') else r['target']):.2f}" + (" (공격 층)" if r["role"] == "L1" and not r.get("complete") else "") for r in sorted(i["sells"], key=lambda r: r["no"])) if i.get("sells") else "매도 목표 없음 (보유 층 없음)"))
+    if i.get("boxes"):                                                       # v2.6.0 박스별 매도 목표 (미완성 층의 박스마다 자기 평단 기준)
+        head += "\n박스별 매도 목표 " + " · ".join(f"{b['label']} ${b['avg']:.2f}→${b['target']:.2f} ({b['qty']}주{'·공격' if b['role'] == 'L1' else ''})" for b in i["boxes"][:6]) + (f" · 그 위 {len(i['boxes']) - 6}개" if len(i["boxes"]) > 6 else "")
     head += f"\n매수 신호: {SN.SIGNAL_KO.get(sg['signal_type'], sg['signal_type'])}"
     if sg.get("anchor"):
         head += f" · 기준 ${sg['anchor']:.2f}({ANCHOR_KO.get(sg['anchor_kind'], sg['anchor_kind'])}) · 눌림 ${sg['pullback_price']:.2f}({sg['drop_pct']:+.1f}%)" + (f" · 돌파 ${sg['breakout_price']:.2f} (RSI {SN.BREAKOUT_MAX_RSI:g} 이하)" if sg.get("breakout_price") else "")
@@ -1186,9 +1189,22 @@ def sold_floor_ids_today(m, rows=None, open_rows=None):
     src = our_live_orders(m, rows or {}, open_rows, "SELL") if rows is not None else list(m.get("orders") or []) + list(m.get("attempts") or [])
     out = set()
     for o in src:
-        if isinstance(o, dict) and o.get("side") == "SELL" and o.get("floor_id") is not None:
+        if isinstance(o, dict) and o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is None:      # v2.6.0: 박스 주문은 sold_box_keys_today 가 봄
             try:
                 out.add(int(o["floor_id"]))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def sold_box_keys_today(m, rows=None, open_rows=None):
+    """v2.6.0 오늘 매도 주문이 '살아 있는' 박스 키 {(층 id, 박스 id)} — 같은 박스에 매도 둘이 겹치지 않게 (다른 박스는 같은 날에도 팔 수 있음). 취소된 주문은 sold_floor_ids_today 와 같은 규칙으로 뺌"""
+    src = our_live_orders(m, rows or {}, open_rows, "SELL") if rows is not None else list(m.get("orders") or []) + list(m.get("attempts") or [])
+    out = set()
+    for o in src:
+        if isinstance(o, dict) and o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is not None:
+            try:
+                out.add((int(o["floor_id"]), int(o["box_id"])))
             except (TypeError, ValueError):
                 pass
     return out
@@ -1327,14 +1343,15 @@ def run_sniper_dry(s, api, note):
     SN.series_add(ss, px, now_t)
     SN.update_peak(ss, len(SN.active_floors(sim)), q)
     cfg._save_json(DRY_SNIPER_FILE, ss)
-    done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None}
+    done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is None}
+    done_boxes = {(int(o["floor_id"]), int(o["box_id"])) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is not None}      # v2.6.0 박스별 매도: 박스 단위로 건너뜀
     out = []
     if n.time() < datetime.time(16, 10):
-        sells, _sn = SN.plan_sells(s, sim, px, max(0, q), skip_ids=done_sell)                  # v2.5.0: 박스 안 매도 자동 (모의는 기록만)
-        tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, q - sum(o["qty"] for o in sells)), skip_ids=done_sell)
+        sells, _sn = SN.plan_sells(s, sim, px, max(0, q), skip_ids=done_sell, skip_boxes=done_boxes)                  # v2.6.0: 박스별 매도 자동 (모의는 기록만)
+        tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, q - sum(o["qty"] for o in sells)), skip_ids=done_sell | {a for a, _b in done_boxes})
         tw_pick, _held = pick_sells(tw_all, TW.sell_layers(s) - len({int(o["floor_id"]) for o in m["orders"] if o.get("mode") == "tower" and o.get("side") == "SELL"}))
         for o in sells + tw_pick:
-            if o.get("floor_id") in done_sell:
+            if o.get("floor_id") in done_sell or (o.get("box_id") is not None and (int(o["floor_id"]), int(o["box_id"])) in done_boxes):
                 continue
             rec = dict(o, sim=True, at=n.isoformat())
             rec.pop("reached", None)
@@ -1509,14 +1526,23 @@ def run_sniper_tick(s, api, note):
     out = []
     # ---- 매도: 층 평단 + 익절% 에 닿은 층 전량. 이 층 매도가 이미 나가 있거나(미체결·응답 못 받음) 같은 목표가로 거절됐던 층은 건너뜀
     open_rows = open_rows_or_none(api, s)                # 판 23 수정1 B3: 미체결 판단은 미체결 조회로 (앱에서 취소한 주문은 잠금에서 빠짐)
-    busy = {int(x["floor_id"]) for x in sniper_open_orders(m, rows, "SELL", open_rows) if x.get("floor_id") is not None}
-    rej = {int(k): float(v) for k, v in (m.get("sniper_rejected") or {}).items()}
+    open_sells = sniper_open_orders(m, rows, "SELL", open_rows)
+    busy = {int(x["floor_id"]) for x in open_sells if x.get("floor_id") is not None and x.get("box_id") is None}                      # 층 단위 주문(탑 매도 등)이 나가 있는 층
+    busy_boxes = {(int(x["floor_id"]), int(x["box_id"])) for x in open_sells if x.get("floor_id") is not None and x.get("box_id") is not None}      # v2.6.0 박스별 매도: 주문이 나가 있는 박스
+    rej_raw = m.get("sniper_rejected") or {}
+    rej = {int(k): float(v) for k, v in rej_raw.items() if ":" not in str(k)}
+    rej_box = {tuple(int(x) for x in str(k).split(":")): float(v) for k, v in rej_raw.items() if ":" in str(k)}                         # 박스 거절 기록 키 "층:박스"
     for r in SN.sell_rows(sim, s, px):
         if r["id"] in rej and abs(rej[r["id"]] - r["target"]) < 1e-9:
             busy.add(r["id"])
-    busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 층은 다시 안 냄 (한 층에 매도 둘이 겹치지 않게)
-    sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy)      # v2.5.0: 박스 안 매도 자동 (미완성 층: 공격 박스 +1.5% · 위 박스 +1.0%, 박스 전체). 판 24 선택 질문은 안 부름
-    tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy)      # 완성 층만 (탑 매도 +10% → 50%)
+    for br in SN.box_rows(sim, s, px):
+        k = (br["floor_id"], br["box_id"])
+        if k in rej_box and abs(rej_box[k] - br["target"]) < 1e-9:
+            busy_boxes.add(k)
+    busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 층은 다시 안 냄 (층 단위 주문만 — 박스 주문은 박스 단위로 아래에서 봄)
+    busy_boxes |= sold_box_keys_today(m, rows, open_rows)
+    sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy, skip_boxes=busy_boxes)      # v2.6.0: 박스별 매도 자동 (미완성 층: 박스마다 자기 평단 기준 — 공격 박스 +1.5% · 나머지 +1.0%, 그 박스만 전량). 판 24 선택 질문은 안 부름
+    tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy | {a for a, _b in busy_boxes})      # 완성 층만 (탑 매도 +10% → 50%)
     tw_pick, tw_held = pick_sells([o for o in tw_all if not (int(o["floor_id"]) in rej and abs(rej[int(o["floor_id"])] - float(o["price"])) < 1e-9)],
                                   TW.sell_layers(s) - tower_sold_count_today(m, rows, open_rows))      # 하루 매도 층 수(N_sell) 적용 — 넘는 층은 알림만 (알림은 하루 한 번)
     if tw_held:
@@ -1534,7 +1560,7 @@ def run_sniper_tick(s, api, note):
         for sel in sells:
             o = dict(sel, desc=("" if sel.get("mode") == "tower" else "스나이퍼 매도 · ") + sel.get("desc", ""))
             o.pop("reached", None)
-            att = {"at": n.isoformat(), "qty": o["qty"], "price": o["price"], "kind": "sell", "floor_id": o.get("floor_id"), "status": "접수 시도 (이 기록이 있으면 같은 목표가로는 다시 안 냄)"}
+            att = {"at": n.isoformat(), "qty": o["qty"], "price": o["price"], "kind": "sell", "floor_id": o.get("floor_id"), "box_id": o.get("box_id"), "status": "접수 시도 (이 기록이 있으면 같은 목표가로는 다시 안 냄)"}
             if status == MKT_AFTER:
                 att["market_status"] = status
             m.setdefault("sell_attempts", []).append(att)
@@ -1546,7 +1572,7 @@ def run_sniper_tick(s, api, note):
             else:
                 att["status"] = ("증권사가 거절: " if res == "rejected" else "응답 못 받음 — 체결 내역에서 자동으로 찾음: ") + (errs[0] if errs else "")[:100]
                 if res == "rejected":
-                    m.setdefault("sniper_rejected", {})[str(int(o["floor_id"]))] = float(o["price"])
+                    m.setdefault("sniper_rejected", {})[(f"{int(o['floor_id'])}:{int(o['box_id'])}" if o.get("box_id") is not None else str(int(o["floor_id"])))] = float(o["price"])      # v2.6.0: 박스 주문은 "층:박스" 키
             cfg._save_json(mark, m)
             results.append(res)
             placed.append(o)
@@ -2024,7 +2050,8 @@ def run_sync(s, api, note, mark_path):
         o = a["o"]
         lines.append(f"- {SIDE_KO.get(a['side'], a['side'])} {a['dq']}주 @ ${a['da'] / a['dq']:.2f} ({o.get('desc', '')})")
         if a["side"] == "SELL":
-            lines.append(f"  매도 체결 → {int(o['floor_id'])}층만 줄이고 그 층 탑업 단계 시작 (층 평단 ${float(o.get('floor_avg') or 0):.2f})" if o.get("floor_id") is not None
+            lines.append(f"  매도 체결 → {int(o['floor_id'])}층의 박스(평단 ${float(o.get('box_avg') or 0):.2f})만 줄임 (층 원가·수량도 그 박스 몫만큼만)" if o.get("floor_id") is not None and o.get("box_id") is not None
+                         else f"  매도 체결 → {int(o['floor_id'])}층만 줄이고 그 층 탑업 단계 시작 (층 평단 ${float(o.get('floor_avg') or 0):.2f})" if o.get("floor_id") is not None
                          else "  매도 체결 → 층별로 나눠 줄이고 탑업 단계 시작")
         done = a["closed"] or done
     hold, _, _ = api.holding(s["symbol"])

@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.5.0)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.6.0)
+# v2.6.0 (2026-11-21, 판 26): ① 박스 모델 — 미완성 층 floor['boxes'] = [{id, qty, cost, ono}] (매수 체결 1건 = 박스 1개, 층 qty·cost = 박스 합, 예전 상태·불일치는 층 전체 1박스 id 0) · boxes_view·sync_boxes·fit_boxes·next_box_id · _apply_sell 박스별(층 원가·수량은 판 박스 몫만) · 병합·장부 조정·입고가 박스 유지 ② portion_pct(s) 추가, portion_usd(s) 가 설정 비율 사용 (PORTION_PCT=8.0 은 기본값) · percent_plan(portion_pct_=)
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층): ① 박스 시드 box_seed(s)(tower_box_seed_usd, 기본 $15,000)·매수 분할 portion_usd(s)(박스 시드의 8%, 단리 고정)·서브 4% sub_portion_usd(s) 추가 ② 층 표현 = 평단 정수 달러(price_label·floor_labels, 소수점 버림 — 내부 id 는 그대로)
 #   ③ 탑 매도 체결 뒤 남은 층은 '잠금'을 풀어 공사중 박스로 되돌림(_apply_sell — 토스 스나이퍼가 비워진 부분을 다시 채우고, 채워지면 다시 완성 층) ④ percent_plan(남은 시드→나누는 비율 계산, 표시용 순수 계산) ⑤ view_lines 가 층을 평단 달러로 표시.
 #   바뀌지 않은 것: make_plan·_apply_buy(탑쌓기 칸 매수 — 하이브리드에서는 안 부름)·is_tower·합병·동기화.
@@ -97,9 +98,18 @@ def box_seed(s):
     return v if v > 0 else BOX_SEED_USD
 
 
+def portion_pct(s):
+    """v2.6.0 눌림(본) 매수 비율(%): 설정 sniper_portion_pct, 없거나 0 이하·100 초과·숫자 아님·bool 이면 기본 8.0 (PORTION_PCT)"""
+    v = (s or {}).get("sniper_portion_pct")
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return PORTION_PCT
+    x = _f(v)
+    return x if 0 < x <= 100 else PORTION_PCT
+
+
 def portion_usd(s):
-    """v2.5.0 신호 한 번에 사는 금액 = 박스 시드 × 8% (단리 고정, 달러 2자리). 시드 $15,000 이면 $1,200"""
-    return round(box_seed(s) * PORTION_PCT / 100.0, 2)
+    """v2.6.0 신호 한 번에 사는 금액 = 박스 시드 × 눌림 비율(portion_pct, 기본 8%) (단리 고정, 달러 2자리). 시드 $15,000 이고 8% 이면 $1,200"""
+    return round(box_seed(s) * portion_pct(s) / 100.0, 2)
 
 
 def breakout_portion_pct(s):
@@ -143,12 +153,13 @@ def floor_labels(st):
     return out
 
 
-def percent_plan(remaining_usd, box_usd, hi=PCT_BAND_HI_USD, lo=PCT_BAND_LO_USD):
+def percent_plan(remaining_usd, box_usd, hi=PCT_BAND_HI_USD, lo=PCT_BAND_LO_USD, portion_pct_=None):
     """v2.5.0 퍼센트 작업(표시용 순수 계산, 주문에 안 씀): 남은 시드를 가격 구간 hi→lo 에 층(박스)마다 같은 금액·같은 가격 폭으로 나눔.
     박스 수 n = 남은 시드 ÷ 박스 시드 (반올림, 최소 1) · 박스당 금액 = 남은 시드 ÷ n · 박스당 비율(%) = 100 ÷ n · 박스당 가격 폭 = (hi − lo) ÷ n ·
     $1 당 금액 = 남은 시드 ÷ (hi − lo) · $1 당 비율(%) = 100 ÷ (hi − lo). 구간 = 위에서부터 [hi, hi − 폭], … 입력이 이상하면(0 이하·hi ≤ lo) None.
-    토스 신호 숫자(눌림·돌파·8%)는 안 바꿈 — 남은 시드를 바꾸면 이 값이 다시 계산됨"""
+    토스 신호 숫자(눌림·돌파)는 안 바꿈 — 남은 시드를 바꾸면 이 값이 다시 계산됨. v2.6.0: portion_pct_ 를 주면(호출한 쪽이 TW.portion_pct(s) 를 넘김) 그 비율을, 없으면 기본 8%를 표시"""
     r, b, h, l_ = _f(remaining_usd), _f(box_usd), _f(hi), _f(lo)
+    pp = _f(portion_pct_) if (portion_pct_ is not None and 0 < _f(portion_pct_) <= 100) else PORTION_PCT
     if r <= 0 or b <= 0 or h <= l_ or l_ < 0:
         return None
     n = max(1, int(math.floor(r / b + 0.5 + 1e-9)))
@@ -156,7 +167,7 @@ def percent_plan(remaining_usd, box_usd, hi=PCT_BAND_HI_USD, lo=PCT_BAND_LO_USD)
     bands = [(round(h - i * w, 2), round(h - (i + 1) * w, 2)) for i in range(n)]
     return {"remaining_usd": round(r, 2), "box_usd": round(b, 2), "boxes": n, "per_box_usd": round(r / n, 2), "per_box_pct": round(100.0 / n, 2),
             "band_width_usd": round(w, 4), "per_dollar_usd": round(r / (h - l_), 2), "per_dollar_pct": round(100.0 / (h - l_), 2),
-            "hi": h, "lo": l_, "bands": bands, "portion_pct": PORTION_PCT, "portion_usd": round(b * PORTION_PCT / 100.0, 2)}
+            "hi": h, "lo": l_, "bands": bands, "portion_pct": pp, "portion_usd": round(b * pp / 100.0, 2)}
 
 
 LAYERS_MAX = 3             # v2.2.17: 하루 매수·매도 층 수 설정의 상한 (1 ~ LAYERS_MAX 정수만)
@@ -200,6 +211,8 @@ def ensure_state(st):
         st["applied"] = {}
     if not isinstance(st.get("absorbed"), dict):
         st["absorbed"] = {}
+    if isinstance(st.get("next_box"), bool) or not isinstance(st.get("next_box"), int) or st.get("next_box") < 1:
+        st["next_box"] = 1                                            # v2.6.0: 박스 번호 발급기 (상태 안에서 겹치지 않는 박스 번호)
     if not isinstance(st.get("empty"), list):
         st["empty"] = []                                              # v2.4.0: 빈 층(지하층·스나이퍼 선택 새 층) 목록 — 0주라 floors 에 못 둠 (normalize 가 수량 0 층을 지움)
     legacy = bool(st.pop("sell_block", False))
@@ -227,7 +240,68 @@ def is_tower(f):
 
 def _floor(fid, qty, cost, target, kind):
     return {"id": int(fid), "qty": int(qty), "cost": round(_f(cost), 4), "target": float(target), "done": False, "closed": False,
-            "levels": [], "settled": [], "base_usd": 0.0, "carry_usd": 0.0, "kind": kind, "rebuy_pending": False, "locked": False}
+            "levels": [], "settled": [], "base_usd": 0.0, "carry_usd": 0.0, "kind": kind, "rebuy_pending": False, "locked": False, "boxes": []}
+
+
+# ---------------------------------------------------------------- v2.6.0 박스 (미완성 층의 매수 1건 = 박스 1개)
+# 박스 = {"id": 상태 안에서 겹치지 않는 번호, "qty": 주, "cost": 원가(달러), "ono": 산 주문번호(선택 — 같은 주문의 부분 체결을 한 박스로 모음)}.
+# 규칙: 층의 qty·cost 는 박스들의 합과 같다. 박스가 없거나 합이 안 맞으면(예전 상태 파일·장부 조정·탑 매도 뒤 잔여) 층 전체를 박스 1개(id 0, 평단 = 층 평단)로 본다.
+# 완성 층(탑 매도)은 박스를 안 씀 — 완성되면 boxes 를 비움.
+BOX_COST_TOL = 0.05         # 박스 원가 합과 층 원가가 이만큼(달러) 이내로 다르면 같은 것으로 봄 (반올림 먼지)
+
+
+def boxes_view(f):
+    """읽기 전용 박스 목록 (복사본, 상태 안 바꿈). 수량 0 이하 층은 []. 박스 합이 층 qty·cost 와 다르거나 박스가 없으면 [층 전체 1개(id 0)]"""
+    q, c = int(_f(f.get("qty"))), _f(f.get("cost"))
+    if q <= 0:
+        return []
+    bs = []
+    for b in (f.get("boxes") if isinstance(f.get("boxes"), list) else []):
+        if isinstance(b, dict) and int(_f(b.get("qty"))) > 0:
+            bs.append({"id": int(_f(b.get("id"))), "qty": int(_f(b.get("qty"))), "cost": round(_f(b.get("cost")), 4), "ono": str(b.get("ono") or "")})
+    if bs and sum(b["qty"] for b in bs) == q and abs(sum(b["cost"] for b in bs) - c) <= BOX_COST_TOL and len({b["id"] for b in bs}) == len(bs):
+        return bs
+    return [{"id": 0, "qty": q, "cost": round(c, 4), "ono": ""}]
+
+
+def box_avg(b):
+    q = int(_f(b.get("qty")))
+    return round(_f(b.get("cost")) / q, 4) if q > 0 else 0.0
+
+
+def next_box_id(st):
+    """겹치지 않는 새 박스 번호 (발급기 st['next_box'] 와 지금 있는 박스 번호 중 큰 값 + 1 을 보장)"""
+    used = [int(_f(b.get("id"))) for f in (st.get("floors") or []) for b in (f.get("boxes") or []) if isinstance(b, dict)]
+    nb = max(int(_f(st.get("next_box"))) or 1, max(used, default=0) + 1, 1)
+    st["next_box"] = nb + 1
+    return nb
+
+
+def sync_boxes(st, f):
+    """상태를 바꾸는 쪽에서 부름: 층 f 의 boxes 를 boxes_view 결과로 맞춤 (합이 맞으면 반올림 먼지를 마지막 박스에 흡수해 합을 정확히). 완성 층은 건드리지 않음 → 박스 목록"""
+    if is_tower(f):
+        return boxes_view(f)
+    bs = boxes_view(f)                                                # 예전 상태·불일치면 1박스 (id 0)
+    if bs:
+        bs[-1]["cost"] = round(bs[-1]["cost"] + (_f(f.get("cost")) - sum(b["cost"] for b in bs)), 4)
+    f["boxes"] = bs
+    return bs
+
+
+def fit_boxes(st, f):
+    """층 qty·cost 를 바깥에서 바꾼 뒤(장부 조정·입고) 박스를 맞춤: 차이를 마지막 박스가 받음 (받아도 수량이 1 이상 남을 때만) — 안 되면 박스를 비워 1박스로 접음"""
+    q, c = int(_f(f.get("qty"))), _f(f.get("cost"))
+    bs = [b for b in (f.get("boxes") or []) if isinstance(b, dict) and int(_f(b.get("qty"))) > 0]
+    if q <= 0 or not bs:
+        f["boxes"] = []
+        return
+    dq, dc = q - sum(int(_f(b["qty"])) for b in bs), round(c - sum(_f(b["cost"]) for b in bs), 4)
+    last = max(bs, key=lambda b: int(_f(b.get("id"))))
+    if int(_f(last["qty"])) + dq >= 1 and _f(last["cost"]) + dc > 0:
+        last["qty"], last["cost"] = int(_f(last["qty"])) + dq, round(_f(last["cost"]) + dc, 4)
+        f["boxes"] = bs
+    else:
+        f["boxes"] = []
 
 
 def ledger_fix_state(st, specs, fu):
@@ -664,12 +738,21 @@ def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
             st["empty"] = [e for e in (st.get("empty") or []) if str(e.get("id")) != str(eid)]
     if f is None:
         return
+    bs = sync_boxes(st, f)                                            # v2.6.0: 사기 전 보유분을 박스로 정리 (예전 상태면 1박스)
+    ono = str(order.get("no") or "").strip()
+    hit = next((b for b in bs if ono and b.get("ono") == ono), None)  # 같은 주문의 부분 체결은 한 박스로 모음 (매수 체결 1건 = 박스 1개)
+    if hit is not None:
+        hit["qty"], hit["cost"] = int(hit["qty"]) + q, round(_f(hit["cost"]) + amt, 4)
+    else:
+        bs.append({"id": next_box_id(st), "qty": int(q), "cost": round(amt, 4), "ono": ono})
+    f["boxes"] = bs
     f["qty"] = int(f["qty"]) + q
     f["cost"] = round(_f(f["cost"]) + amt, 4)
     f["rebuy_pending"], f["closed"] = False, False
     need = _f(f.get("target") or FLOOR_USD) - _f(f["cost"])
     if is_complete(f) or need < amt / q - 1e-9:
         f["done"], f["levels"], f["settled"], f["base_usd"], f["carry_usd"] = True, [], [], 0.0, 0.0
+        f["boxes"] = []                                               # v2.6.0: 층 완성 = 탑 매도 층 (박스별 매도 끝)
     else:
         _topup_setup(f, gap, start_usd)
         f["rebuy_pending"] = False
@@ -683,10 +766,25 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
     tf = _by_id(st, order.get("floor_id")) if order.get("floor_id") is not None else None
     if tf is not None:
         a = min(q, int(_f(tf.get("qty"))))
-        if a > 0:
+        bid = order.get("box_id")
+        box = None
+        if a > 0 and bid is not None and order.get("mode") == "sniper":      # v2.6.0 박스별 매도: 그 박스만 줄임 (층 원가·수량도 그 박스 몫만큼만)
+            bs = sync_boxes(st, tf)
+            box = next((b for b in bs if int(b["id"]) == int(_f(bid))), None)
+        if box is not None:
+            a = min(a, int(box["qty"]))
+            c = _f(box["cost"]) if a == int(box["qty"]) else _f(box["cost"]) * a / int(box["qty"])
+            box["qty"], box["cost"] = int(box["qty"]) - a, round(max(0.0, _f(box["cost"]) - c), 4)
+            tf["boxes"] = [b for b in bs if int(b["qty"]) > 0]
+            tf["qty"] = int(tf["qty"]) - a
+            tf["cost"] = round(max(0.0, _f(tf["cost"]) - c), 4)
+            removed = round(c, 4)
+            sold = [tf]
+        elif a > 0:
             c = _f(tf.get("cost")) if a == int(tf["qty"]) else _f(tf.get("cost")) * a / int(tf["qty"])
             tf["qty"] = int(tf["qty"]) - a
             tf["cost"] = round(max(0.0, _f(tf["cost"]) - c), 4)
+            tf["boxes"] = []                                         # v2.6.0: 층 단위 매도(탑 매도·예전 주문) 뒤 남은 주식은 박스 1개로 봄 (평단 = 층 평단)
             removed = round(c, 4)
             sold = [tf]
     else:
@@ -817,9 +915,14 @@ def add_holdings(st, qty, avg, s=None):
         st["floors"], st["next_id"] = [f], 2
         return 1, [f"층 없음 → 입고 {q}주를 1층으로 만듦 (평단 ${a:.2f})"]
     f = next((x for x in live if not is_complete(x)), live[-1])
+    bs = sync_boxes(st, f) if not is_tower(f) else []                  # v2.6.0: 입고분은 박스 1개로 더함
+    if bs or not is_tower(f):
+        bs.append({"id": next_box_id(st), "qty": q, "cost": round(q * a, 4), "ono": ""})
+        f["boxes"] = bs
     f["qty"] = int(f["qty"]) + q
     f["cost"] = round(_f(f["cost"]) + q * a, 4)
     if is_complete(f):
+        f["boxes"] = []
         f["done"], f["closed"], f["levels"], f["settled"], f["carry_usd"] = True, False, [], [], 0.0
         f["rebuy_pending"] = False
         tail = "1층이 완성돼요" if int(_f(f["id"])) == 1 else "이 층이 완성돼요"
@@ -831,9 +934,17 @@ def add_holdings(st, qty, avg, s=None):
 
 
 # ---------------------------------------------------------------- 동기화 · 정리
-def _merge(a, b, gap, start_usd=0.0):
+def _merge(a, b, gap, start_usd=0.0, st=None):
     m = _floor(min(int(a["id"]), int(b["id"])), int(a["qty"]) + int(b["qty"]), _f(a["cost"]) + _f(b["cost"]), max(_f(a["target"]), _f(b["target"])), "merged")
     _topup_setup(m, gap, start_usd)
+    if not is_tower(m) and not (a.get("locked") or b.get("locked")):       # v2.6.0: 합친 층이 미완성이면 두 층의 박스를 이어 붙임 (번호가 겹치면 새로 발급)
+        seen, mb = set(), []
+        for b0 in boxes_view(a) + boxes_view(b):
+            if b0["id"] in seen:
+                b0 = dict(b0, id=(next_box_id(st) if st is not None else max([x["id"] for x in mb] + [0]) + 1))
+            seen.add(b0["id"])
+            mb.append(b0)
+        m["boxes"] = mb
     m["locked"] = bool(a.get("locked") or b.get("locked"))                                     # v2.4.0: 잠금은 이어짐
     m["rebuy_pending"] = bool((a.get("rebuy_pending") or b.get("rebuy_pending")) and not m["done"])      # 합쳐도 금지는 이어짐 (다시 살 게 없으면 풂)
     return m
@@ -851,7 +962,7 @@ def normalize(st, gap=GAP_USD, start_usd=0.0):
         while out and floor_avg(cur) >= floor_avg(out[-1]) - 1e-9 and not (cur.get("indep") or out[-1].get("indep")):
             top = out.pop()
             notes.append(f"층 합병: {top['id']}층(평단 ${floor_avg(top):.2f}) + {cur['id']}층(평단 ${floor_avg(cur):.2f}) → 수량 {int(top['qty']) + int(cur['qty'])}주")
-            cur = _merge(top, cur, gap, start_usd)
+            cur = _merge(top, cur, gap, start_usd, st)
         out.append(cur)
     out.sort(key=lambda f: -floor_avg(f))                            # 위(평단 높은 층)부터 번호를 다시 붙임
     for i, f in enumerate(out, 1):
@@ -889,17 +1000,23 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
         rest_q, rest_c = dq, dc
         for f in fl:
             take_q = max(rest_q, -int(f["qty"])) if rest_q < 0 else rest_q
+            if not is_tower(f):
+                sync_boxes(st, f)                                     # v2.6.0: 조정 전에 박스를 층과 맞춰 둠 (조정 뒤 fit_boxes 가 차이를 마지막 박스에 넣음)
             f["qty"] = int(f["qty"]) + take_q
             rest_q -= take_q
             take_c = max(rest_c, -_f(f["cost"])) if rest_c < 0 else rest_c
             f["cost"] = round(_f(f["cost"]) + take_c, 4)
             rest_c = round(rest_c - take_c, 4)
+            if f.get("boxes"):
+                fit_boxes(st, f)
             if rest_q == 0 and abs(rest_c) <= 0.01:
                 break
         if rest_q > 0 and fl:
             fl[0]["qty"] = int(fl[0]["qty"]) + rest_q
+            fl[0]["boxes"] = []
         if rest_c > 0.01 and fl:
             fl[0]["cost"] = round(_f(fl[0]["cost"]) + rest_c, 4)
+            fl[0]["boxes"] = []
     notes += normalize(st, gap, start_usd)
     return st, notes
 
