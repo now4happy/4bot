@@ -1,9 +1,14 @@
-# 7번 메리츠 SOXL 탑쌓기 변경 기록
+# 7번 메리츠 SOXL 하이브리드 변경 기록
 
-## v1.2.7 · 2026-11-21 04:46 (KST)
-- 파일: config.py, main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_strategy.py
-- 내용: meritz_laoer CHANGELOG 중복 v1.2.6 항목 1개 제거 (판 22 리베이스 때 버전 기록 커밋과 겹침, 문서만)
-- 브랜치: staging
+## v1.2.8 수정1 · 2026-11-21 (KST) — 버전 v2.3.0 그대로 (판 23 수정1, 풀이님 정정 반영)
+- 파일: main.py, sniper_mode.py, tg_menu.py, README.md, CHANGELOG.md, test_hybrid_v230.py
+- 내용: ① (풀이님 결정으로 뺌) 장중 환전 고침 — auto_fx 마커·하루 한 번 환전은 v2.3.0 그대로, test_intraday_fx_exchanges_only_shortfall 도 그대로 ② 하루 매수 층 수 제한: 그날 매수 주문이 나간 층 수가 tower_max_buy_layers_per_day(기존 설정, 새 설정 없음)에 닿으면 새 층 매수는 안 하고 알림만(하루 한 번), 거절·취소 주문은 안 셈, 이미 산 층의 남은 시드 채우기는 계속 ③ B3 미체결 판단을 미체결 조회(open_orders_today)로 (앱에서 취소한 주문은 매수·매도 잠금에서 빠짐) ④ B7 모의에서도 스나이퍼 틱이 돌되 주문 없이 시뮬레이션 기록(dry_orders_<날짜>.json) ⑤ S3 눌림 깊이 = max(현재 층 수, 사이클 최고 층수) — sniper_state.json peak_layers, 0주면 초기화 ⑥ S1 16:10 동기화 뒤 체결은 다음 날 첫 확인 때 장부·층에 반영(최근 4일 기록, late_done 표시) ⑦ 정리: pyflakes 새 경고 5개, '목표 도달' 라벨, 죽은 코드 defer_sell·limit_morning_sells 제거
+- 브랜치: staging 에 올리기 전 (검토 대기)
+
+## v1.2.8 · 2026-11-21 (KST)
+- 파일: tower_strategy.py, sniper_mode.py, config.py, main.py, tg_menu.py, notifier.py, README.md, CHANGELOG.md (+ 새 시험 test_hybrid_v230.py)
+- 내용: meritz_laoer v2.3.0 (판 23 하이브리드 — 매수는 스나이퍼, 완성 층은 탑 매도): 모드 선택(trading_mode)·모드 버튼 삭제 · 사기=스나이퍼(눌림·돌파)만 · 층 시드에 닿은 층은 완성 → 탑 매도(평단 +10% → 50%), 미완성(재매수 대기 포함) 층은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·전량), 한 층에 매도 둘이 같은 날 겹치지 않음 · 총 시드·층 수 한도 없음(total_krw 선택·tower_floors 무시) · 새 층 = 가장 낮은 층 평단 − tower_gap_usd(기본 5) 이하일 때 · 탑 매도 체결도 스나이퍼 기준가 갱신 · 환전(아침 = 층 시드 × 하루 매수 층 수 · 장중 자동환전 · 달러부족 알림 · 휴장 전날 rounds · --check 부족 달러 표시 고침) · 텔레그램 메뉴를 스나이퍼 봇 형식(첫 화면 4개 · 레이더 · 잔고 동기화 · 전술 제어반 · 환전, 인라인 버튼)으로 새로 만듦, 시스템 업데이트 버튼 삭제 · 표시 고침(B8). 16:10 동기화·장부=잔고 정지·체결 중복 방지·주문 시간·스나이퍼 신호 숫자·매도 %는 그대로. 수정1 고침 중 B3·B7·S3·S1 은 수정1 원문이 이 판 자료에 없어 미반영(질문란)
+- 브랜치: staging 에 올리기 전 (검토 대기)
 
 ## v1.2.7 · 2026-11-21 (KST)
 - 파일: sniper_mode.py(새 파일), tower_strategy.py, config.py, main.py, tg_menu.py, notifier.py, README.md

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.2.20)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.3.0)
+# v2.3.0 수정1 (2026-11-21, 판 23 수정1 — 버전 그대로): 하루 매수 층 수 제한(buy_layer_limit_hit, 기존 설정 tower_max_buy_layers_per_day) · B3 미체결 조회 · B7 모의 스나이퍼(run_sniper_dry) · S3 사이클 최고 층수 잠금 · S1 16:10 뒤 체결 다음 날 반영(run_late_fills) · '목표 도달' 라벨 · 죽은 코드 defer_sell·limit_morning_sells 제거
+# v2.3.0 (2026-11-21, 판 23 하이브리드 — 스나이퍼 매수 + 탑 매도): 모드 선택(trading_mode) 삭제, 항상 하이브리드. 사기=스나이퍼(눌림·돌파)만, 층 시드(기본 $15,000)에 닿은 층은 '완성'이라 탑 매도(층 평단 +10% → 50%), 미완성 층(재매수 대기 포함)은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·층 전량).
+#   총 시드·층 수 한도 없음(total_krw 선택). 새 층 = 가장 낮은 층 평단 − tower_gap_usd(기본 5) 이하일 때. 탑 매도 체결도 스나이퍼 기준가(직전 익절) 갱신. 같은 날 한 층에 매도 주문이 이미 있었으면(탑 매도 일부 체결 뒤 남은 몫 포함) 그 층은 그날 다시 안 팖.
+#   환전: 아침 = 층 시드 × tower_max_buy_layers_per_day (휴장 전날은 × 회차), 장중 매수 신호 때 달러 부족하면 자동환전(실시간 환전 시간만), 마감 60분 전 달러부족 알림 유지. --check 환전 표시 고침(부족 달러 shortfall_usd). 계좌·종목·API·스나이퍼 신호 숫자·매도 %·16:10 동기화·장부=잔고 정지·중복 체결 방지·주문 시간은 안 바꿈.
 # v2.2.20 (2026-11-21, 판 22 메리츠 3번 계좌 SOXL 듀얼 모드 — 스나이퍼 + 탑쌓기): 설정 trading_mode(tower 기본 | sniper). 탑쌓기는 v2.2.18 그대로 (run_order_day·run_intraday_sell·run_sync·16:10 동기화·장부=잔고 정지 규칙 안 바꿈).
 #   스나이퍼(새 파일 sniper_mode.py): loop 가 run_sniper_tick(30초 간격, 정규장 09:30~16:00 ET 매수 · 정규장+장후 16:10 까지 매도) 를 부름. 하루 기록 파일(orders_<날짜>.json)을 탑쌓기와 같이 씀 — 스나이퍼 매도·스나이퍼 매수 체결은 확인 즉시 장부·층에 반영, 탑쌓기 매수는 그대로 run_sync 가 반영.
 #   build_plan·plan_head·next_trade_lines·strategy_ko·cmd_check 는 모드를 따라감. 모드를 바꾸면 다음 판단부터 적용(이미 낸 주문은 안 건드림). 같은 날 스나이퍼 → 탑쌓기로 바꾸면 run_order_day 가 스나이퍼 기록에 이어 탑쌓기 주문을 냄(sniper_day·tower_ordered 표시).
@@ -118,7 +122,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.2.20"
+BOT_VERSION = "v2.3.0"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)
@@ -243,8 +247,8 @@ TOWER_FILE = "data/tower_state.json"      # v2.2.0 탑쌓기 층 상태 (state_d
 
 
 def strategy_ko(s=None):
-    """v2.2.9: 7번은 탑쌓기만 씀 (사다리 삭제). v2.2.20: 설정 trading_mode 를 따라 스나이퍼 | 탑쌓기"""
-    return SN.mode_ko(s or {})
+    """v2.3.0: 7번은 하이브리드 (스나이퍼 매수 + 탑 매도) 하나만 씀"""
+    return "하이브리드"
 
 
 def tower_state_for(cfg, qty, principal, s=None):
@@ -255,14 +259,27 @@ def tower_state_for(cfg, qty, principal, s=None):
     return TW.migrate_from_holdings(qty, principal, s), False
 
 
-def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx=False, open_px=0.0):
+def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx=False, open_px=0.0, tst=None):
     """오늘 계획 (장부·상태를 바꾸지 않음) → {"orders", "notes", "info"}. info 에 필요달러(need_usd)·부족달러(shortfall_usd)
     open_px: 오늘 시초가 (v2.2.14 — 0 이면 확정 전: 계획 배정 그대로)"""
-    tst, _ = tower_state_for(cfg, qty, principal, s)
-    if SN.get_mode(s) == SN.MODE_SNIPER:                  # v2.2.20: 스나이퍼 계획 미리보기 (상태·장부 안 바꿈)
-        ss = SN.load_state(cfg)
-        return SN.make_plan(s, tst, price, ss, SN.rsi_from_state(ss, time.time())[0], cash, sellable, now_et())
-    return limit_morning_sells(s, defer_sell(s, TW.make_plan(s, tst, qty, principal, price, fx, cash, sellable, ignore_auto_fx, open_px=open_px)))
+    if tst is None:                                       # v2.3.0 B8: 호출한 쪽이 '오늘 체결을 메모리에서 더한 층 상태'를 주면 그걸로 계산 (텔레그램 오늘 계획·자금 현황)
+        tst, _ = tower_state_for(cfg, qty, principal, s)
+    ss = SN.load_state(cfg)                               # v2.3.0: 항상 하이브리드 계획 미리보기 (스나이퍼 매수·매도 + 탑 매도, 상태·장부 안 바꿈)
+    return SN.make_plan(s, tst, price, ss, SN.rsi_from_state(ss, time.time())[0], cash, sellable, now_et())
+
+
+def hybrid_fx_plan(s, cash, rounds=1):
+    """v2.3.0 환전 계산용 계획 모양 {"orders","notes","info"}: 필요 달러 = 층 시드 × 하루 매수 층 수(tower_max_buy_layers_per_day, 기본 1) × rounds (휴장 전날은 1 + extra 회차).
+    부족 달러 = max(0, 필요 − 달러 예수금) (info["shortfall_usd"] — auto_fx·알림이 읽는 키). 계산만 함 (시세·층 상태 안 읽음)"""
+    fu, _n, _g = TW.params(s)
+    layers = TW.buy_layers(s)
+    rounds = max(1, int(rounds))
+    need = round(fu * layers * rounds, 2)
+    cash = float(cash or 0)
+    basis = f"층 시드 ${fu:,.0f} × 하루 매수 층 수 {layers}" + (f" × {rounds}회차" if rounds > 1 else "") + f" = ${need:,.0f}"
+    return {"orders": [{"side": "BUY", "type": "LIMIT", "qty": 0, "price": 0.0, "desc": basis}], "notes": [], "fx_basis": basis,
+            "info": {"mode": SN.MODE_SNIPER, "need_usd": need, "usd_cash": round(cash, 2), "shortfall_usd": round(max(0.0, need - cash), 2), "auto_fx": True,
+                     "floor_usd": fu, "layers": layers, "rounds": rounds}}
 
 
 # ---------------------------------------------------------------- v2.2.14 판 17 시초가 (그날 한 번만 정함)
@@ -402,19 +419,29 @@ def _tower_progress(tw, s, fid=None):
         return "", ""
 
 
+ANCHOR_KO = {"exit": "직전 매도가", "buy": "직전 매수가", "avg": "낮은 층 평단"}      # v2.3.0 B8: 영어 종류 이름을 화면에 그대로 안 보임
+
+
 def sniper_plan_head(plan, s):
     """v2.2.20 스나이퍼 계획 미리보기 글자"""
     i, sg = plan["info"], plan["info"]["signal"]
     pl = f" ({i['profit_pct']:+.2f}%)" if i.get("profit_pct") is not None else ""
-    head = (f"스나이퍼 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {i['n_layers']}/{i['floors_max']}개 · 익절 1층 +{i['tp_l1']:g}% · 상단층 +{i['tp_upper']:g}%\n"
-            + ("매도 목표 " + " · ".join(f"{r['no']}층 ${r['target']:.2f}" + (" (공격 층)" if r["role"] == "L1" else "") for r in sorted(i["sells"], key=lambda r: r["no"])) if i.get("sells") else "매도 목표 없음 (보유 층 없음)"))
+    tp = i.get("tower_pct") or [0.0, 0.0]
+    head = (f"하이브리드 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {i['n_layers']}개 · 스나이퍼 익절(미완성 층) 1층 +{i['tp_l1']:g}% · 상단층 +{i['tp_upper']:g}% · 탑 매도(완성 층) +{tp[0]:g}% → {tp[1]:g}%\n"
+            + ("매도 목표 " + " · ".join(f"{r['no']}층{'(완성·탑)' if r.get('complete') else ''} ${(SN.ceil2(r['avg'] * (1 + tp[0] / 100.0)) if r.get('complete') else r['target']):.2f}" + (" (공격 층)" if r["role"] == "L1" and not r.get("complete") else "") for r in sorted(i["sells"], key=lambda r: r["no"])) if i.get("sells") else "매도 목표 없음 (보유 층 없음)"))
     head += f"\n매수 신호: {SN.SIGNAL_KO.get(sg['signal_type'], sg['signal_type'])}"
     if sg.get("anchor"):
-        head += f" · 기준 ${sg['anchor']:.2f}({sg['anchor_kind']}) · 눌림 ${sg['pullback_price']:.2f}({sg['drop_pct']:+.1f}%)" + (f" · 돌파 ${sg['breakout_price']:.2f} (RSI {SN.BREAKOUT_MAX_RSI:g} 이하)" if sg.get("breakout_price") else "")
+        head += f" · 기준 ${sg['anchor']:.2f}({ANCHOR_KO.get(sg['anchor_kind'], sg['anchor_kind'])}) · 눌림 ${sg['pullback_price']:.2f}({sg['drop_pct']:+.1f}%)" + (f" · 돌파 ${sg['breakout_price']:.2f} (RSI {SN.BREAKOUT_MAX_RSI:g} 이하)" if sg.get("breakout_price") else "")
         if sg.get("cap_price"):
             head += f" · 상한 ${sg['cap_price']:.2f}"
     head += " · RSI " + (f"{i['rsi']:.1f}" if i.get("rsi") is not None else "모으는 중")
-    head += f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}"
+    fl = i.get("fill")
+    if fl:
+        head += f"\n채우는 층 {fl['no']}층{' (재매수 대기)' if fl['rebuy'] else ''}: 채움 {fl['ratio'] * 100:.0f}% (원가 ${fl['cost']:,.0f} / 층 시드 ${fl['target']:,.0f})"
+    cap = sg.get("cap_price") or 0.0
+    if cap > 0:
+        head += f"\n새 층 가격 ${cap - i.get('gap', 0):.2f} (가장 낮은 층 평단 ${cap:.2f} − 간격 ${i.get('gap', 0)})"
+    head += f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['need_usd'] - i['usd_cash']):,}" if i['need_usd'] > i['usd_cash'] + 1e-9 else "")
     return head
 
 
@@ -468,41 +495,6 @@ def intraday_on(s):
     except (TypeError, ValueError):
         return False
     return sec > 0 and s.get("order_type") == "LIMIT"
-
-
-def defer_sell(s, plan):
-    """오늘 매수 주문이 있으면 아침 계획에서 매도 주문을 뺌 → 장중 확인(run_intraday_sell)이 오늘 체결을 반영한 평단으로 판단.
-    (오늘 매수가 체결되면 평단이 바뀌는데, 아침에 낸 매도 주문은 취소할 수 없어 낡은 평단 기준으로 남기 때문) 매수 주문이 없는 날은 그대로"""
-    if not intraday_on(s):
-        return plan
-    orders = plan["orders"]
-    if any(o.get("side") == "BUY" for o in orders) and any(o.get("kind") == "sell" for o in orders):
-        plan["orders"] = [o for o in orders if o.get("kind") != "sell"]
-        plan["notes"].append("매도는 장중에 확인해서 내요 (오늘 산 주식이 체결되면 평단이 바뀌어서)")
-        plan["info"]["sell_deferred"] = True
-    return plan
-
-
-def limit_morning_sells(s, plan, sold_n=0):
-    """v2.2.17 판 20 수정1: 아침 계획 매도에도 하루 매도 층 수(N_sell) 적용. 계획에 남은(defer_sell 이 안 뺀) 매도 주문 중 목표에 닿은 층(reached)을
-    번호가 큰 층부터 '남은 횟수'(N_sell − sold_n, 아침엔 보통 sold_n=0 이라 N_sell)까지만 남기고, 나머지는 주문에서 빼 plan["info"]["held_back"] 에 남김(알림만).
-    pick_sells 는 장중 확인(run_intraday_sell)과 같은 함수. 안 닿은 매도 주문(목표가에 걸어 두는 주문)과 매수 주문은 안 건드림. 계산만 함 (장부·상태 안 바꿈)"""
-    left_n = max(0, TW.sell_layers(s) - int(sold_n))
-    reached = [o for o in plan["orders"] if o.get("kind") == "sell" and o.get("reached")]
-    sells, held = pick_sells(reached, left_n)
-    if not held:
-        return plan
-    plan["orders"] = [o for o in plan["orders"] if not any(o is x for x in held)]
-    rows = {int(r["id"]): r for r in plan["info"].get("sells") or []}
-    for o in held:
-        r = rows.get(int(o["floor_id"]))
-        if r is not None:
-            r["ordered"] = False                                    # 이 층은 오늘 아침 주문에서 빠짐 (알림만)
-    plan["info"]["held_back"] = [{"floor_id": int(o["floor_id"]), "floor_avg": float(o.get("floor_avg") or 0), "target": float(o["price"]), "qty": int(o["qty"]),
-                                  "hold_qty": int((rows.get(int(o["floor_id"])) or {}).get("qty") or 0)} for o in held]        # 들어온 순서 그대로 (장중 알림과 같음)
-    plan["info"]["held_back_n_sell"] = TW.sell_layers(s)
-    plan["info"]["held_back_placed"] = sorted((int(o["floor_id"]) for o in sells), reverse=True)
-    return plan
 
 
 def _warn_once(cfg, mark, m, key, note, text):
@@ -583,11 +575,10 @@ def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sni
 def next_trade_lines(s, st):
     """체결 알림에 붙는 '다음 매매': 층별 다음 매도(목표가·수량)와 다음에 살 칸. 상태(st)는 바꾸지 않음. 글자 주의: notifier.to_korean 이 '= $'·'필요 $' 같은 앞말 뒤 금액의 소수점을 지우므로
     가격 앞에는 '평단'·'목표가'·'→' 만 씀 (금액은 어차피 정수)"""
-    if SN.get_mode(s) == SN.MODE_SNIPER:                      # v2.2.20: 스나이퍼 다음 매매 (층별 목표가 + 눌림·돌파 타점)
-        try:
-            return SN.trigger_lines(s, st, SN.load_state(ConfigManager(s)))
-        except Exception:
-            return ["다음 매매: 계산 못 함"]
+    try:                                                      # v2.3.0: 하이브리드 다음 매매 (층별 목표가 — 완성 층은 탑 매도 + 눌림·돌파 타점)
+        return SN.trigger_lines(s, st, SN.load_state(ConfigManager(s)))
+    except Exception:
+        return ["다음 매매: 계산 못 함"]
     pct = float(s.get("sell_profit_pct") or 0)
     frac = float(s.get("sell_fraction_pct") or 0)
     lines = []
@@ -933,7 +924,7 @@ def send_order(s, api, cfg, mark, m, o, exch, errors, intraday=False):
         r = api.order(o["side"], s["symbol"], exch, o["type"], o["qty"], o["price"])
         if str(r.get("no") or "").strip():
             m["attempts"].remove(a)
-            m.setdefault("orders", []).append(dict(o, no=str(r["no"]).strip(), **({"intraday": True} if intraday else {})))
+            m.setdefault("orders", []).append(dict(o, no=str(r["no"]).strip(), placed_ts=round(time.time(), 1), **({"intraday": True} if intraday else {})))
             out = "ok"
         else:
             why = "주문 응답에 주문번호가 없음"
@@ -951,6 +942,13 @@ def send_order(s, api, cfg, mark, m, o, exch, errors, intraday=False):
         errors.append(f"{o.get('desc')}: {why} (응답을 못 받았어요 — 다시 주문하지 않고 자동으로 확인해요)")
     cfg._save_json(mark, m)
     return out
+
+
+def reached_line(plan, price):
+    """판 23 수정1: 목표 도달 안내 — 층마다 '완성 층 = 탑 매도 +% / 미완성 층 = 스나이퍼 +%' 와 그 층 목표가를 각각 적음 (예전엔 스나이퍼 목표가를 '+10% 목표'로 적었음)"""
+    rs = [r for r in plan["info"].get("sells") or [] if r.get("reached")]
+    return "".join(f"{r['no']}층({'완성·탑 매도' if r.get('complete') else '스나이퍼'}) 평단 +{r['pct']:g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${r['target']:.2f})\n"
+                   for r in sorted(rs, key=lambda r: r["no"]))
 
 
 def held_back_lines(plan, s, price):
@@ -1099,7 +1097,7 @@ def run_order_day(s, api, note, live):
     cfg._save_json(mark, m)
     reached = plan["info"].get("profit_reached")
     note.send(f"{d} 주문 {'접수' if live else '계획'} · 보유 {qty}주 평단 ${avg:.2f}\n{plan_head(plan, s)}\n"
-              + (f"평가 이익 +{float(s['sell_profit_pct']):g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${plan['info']['sell_target']:.2f})\n" if reached else "")
+              + (reached_line(plan, price) if reached else "")
               + fx_lines(fxres)
               + fmt_orders(placed)
               + held_back_lines(plan, s, price)
@@ -1114,15 +1112,109 @@ SNIPER_STALE_BUY_SEC = 600           # 낸 매수가 이 시간(초)이 지나�
 
 
 def sniper_on(s):
-    return SN.get_mode(s) == SN.MODE_SNIPER
+    """v2.3.0: 모드 선택이 없어 항상 하이브리드 루프 (옛 이름 유지 — 장중 틱이 항상 돈다)"""
+    return True
 
 
-def sniper_open_orders(m, rows, side):
-    """우리가 낸 side 주문 중 아직 다 체결 안 된 것 + 응답 못 받은 시도(attempts). 메리츠 API 에 취소가 없어 낸 주문은 체결되거나 장이 끝날 때까지 남음"""
-    out = [o for o in m.get("orders") or [] if isinstance(o, dict) and o.get("side") == side and o.get("no")
-           and int((rows.get(str(o["no"])) or {}).get("qty", 0)) < int(o.get("qty") or 0)]
-    out += [a for a in m.get("attempts") or [] if isinstance(a, dict) and a.get("side") == side]
+def buy_layer_limit_hit(s, m, rows, open_rows, order):
+    """판 23 수정1 (풀이님 결정): 그날 매수 주문이 나간 층 수가 tower_max_buy_layers_per_day(설정 그대로, 기본 1) 에 닿았는데 오늘 아직 안 산 새 층에 사려 하면 → 알림 글자, 아니면 None.
+    센 대상 = 오늘 기록의 매수 주문 중 살아 있는 것 (미체결 조회에 있거나 체결 있음·방금 낸 주문·응답 못 받은 시도) — 거절·앱에서 취소한 주문은 안 셈. 같은 층에 더 사는 건(남은 시드 채우기) 층 수를 안 늘리므로 계속 가능"""
+    if not order or order.get("floor_id") is None:
+        return None
+    n_max = TW.buy_layers(s)
+    bought = {int(o["floor_id"]) for o in our_live_orders(m, rows, open_rows, "BUY") if o.get("floor_id") is not None}
+    if len(bought) >= n_max and int(order["floor_id"]) not in bought:
+        return (f"스나이퍼 매수 신호가 났지만 오늘 매수한 층이 하루 매수 층 수 {n_max}개에 닿아 더 안 샀어요 "
+                f"(오늘 매수 층: {', '.join(str(x) + '층' for x in sorted(bought))} · 안 산 {int(order['floor_id'])}층 {order['qty']}주 @ ${float(order['price']):.2f})")
+    return None
+
+
+def open_rows_or_none(api, s):
+    """미체결 조회(open_orders_today) 결과 — 조회 실패면 None (그때는 주문 기록만으로 판단하는 예전 방식으로 안전하게 되돌림)"""
+    try:
+        return [r for r in api.open_orders_today(s["symbol"]) if isinstance(r, dict)]
+    except Exception as e:
+        logging.warning(f"미체결 조회 실패 {type(e).__name__} — 주문 기록으로 판단")
+        return None
+
+
+OPEN_LIST_GRACE_SEC = 180          # 방금 낸 주문은 미체결 조회에 늦게 보일 수 있어 이 시간 동안은 살아 있다고 봄 (취소로 오해해 같은 매도를 또 내는 일 방지)
+
+
+def _just_placed(o):
+    try:
+        return time.time() - float(o.get("placed_ts") or 0) < OPEN_LIST_GRACE_SEC
+    except (TypeError, ValueError):
+        return False
+
+
+def _open_nos(open_rows, side):
+    """미체결 행 중 side(BUY/SELL) 주문번호 집합과 번호 없는 행 수 → (번호 집합, 번호 없는 행 수)"""
+    code = "1" if side == "SELL" else "2"
+    rs = [r for r in open_rows if str(r.get("seln_byov_clcd")) == code]
+    nos = {str(r.get("oder_no") or "").strip() for r in rs} - {""}
+    return nos, sum(1 for r in rs if not str(r.get("oder_no") or "").strip())
+
+
+def our_live_orders(m, rows, open_rows, side):
+    """판 23 수정1 (B3): 우리가 낸 side 주문 중 '살아 있는' 것 = 미체결 조회에 남아 있거나 체결이 있는 주문 (앱에서 취소한 주문은 미체결도 체결도 아니라 빠짐).
+    미체결 행에 주문번호가 있으면 번호로 맞추고, 번호가 없으면 미체결 행 수만큼만 (주문 기록에서 아직 다 안 체결된 것 중) 살아 있다고 봄. open_rows=None(조회 실패)이면 예전처럼 기록만으로 판단.
+    응답 못 받은 시도(attempts)는 번호가 없어 체결 내역에서 찾기 전까지 살아 있다고 봄 (중복 주문 방지가 우선)"""
+    orders = [o for o in m.get("orders") or [] if isinstance(o, dict) and o.get("side") == side and o.get("no")]
+    filled = lambda o: int((rows.get(str(o["no"])) or {}).get("qty", 0))
+    if open_rows is None:
+        live = list(orders)
+    else:
+        nos, anon = _open_nos(open_rows, side)
+        live = []
+        for o in orders:
+            if filled(o) >= 1 or str(o["no"]) in nos or _just_placed(o):
+                live.append(o)
+            elif anon > 0 and filled(o) < int(o.get("qty") or 0):
+                live.append(o)
+                anon -= 1
+    return live + [a for a in m.get("attempts") or [] if isinstance(a, dict) and a.get("side") == side]
+
+
+def sold_floor_ids_today(m, rows=None, open_rows=None):
+    """오늘 이 층에 매도가 '살아 있는'(미체결이거나 체결 있음 · 응답 못 받음) 층 id 집합 — 한 층에 두 매도가 같은 날 겹치지 않게 (v2.3.0). 판 23 수정1 B3: 앱에서 취소해 미체결도 체결도 없는 주문은 '이미 팔았다'로 안 셈.
+    rows·open_rows 를 안 주면 (예전 호출) 주문 기록만 봄"""
+    src = our_live_orders(m, rows or {}, open_rows, "SELL") if rows is not None else list(m.get("orders") or []) + list(m.get("attempts") or [])
+    out = set()
+    for o in src:
+        if isinstance(o, dict) and o.get("side") == "SELL" and o.get("floor_id") is not None:
+            try:
+                out.add(int(o["floor_id"]))
+            except (TypeError, ValueError):
+                pass
     return out
+
+
+def tower_sold_count_today(m, rows=None, open_rows=None):
+    src = our_live_orders(m, rows or {}, open_rows, "SELL") if rows is not None else list(m.get("orders") or []) + list(m.get("attempts") or [])
+    return len({int(o["floor_id"]) for o in src if isinstance(o, dict) and o.get("side") == "SELL" and o.get("mode") == "tower" and o.get("floor_id") is not None})
+
+
+def sniper_open_orders(m, rows, side, open_rows=None):
+    """우리가 낸 side 주문 중 아직 다 체결 안 된 것 + 응답 못 받은 시도(attempts). 메리츠 API 에 취소가 없어 낸 주문은 체결되거나 장이 끝날 때까지 남음.
+    판 23 수정1 B3: open_rows(미체결 조회)를 주면 거기 없는 주문(앱에서 취소)은 빠짐 — 취소한 주문 때문에 그날 매수·매도가 잠기지 않음"""
+    if open_rows is None:
+        out = [o for o in m.get("orders") or [] if isinstance(o, dict) and o.get("side") == side and o.get("no")
+               and int((rows.get(str(o["no"])) or {}).get("qty", 0)) < int(o.get("qty") or 0)]
+        return out + [a for a in m.get("attempts") or [] if isinstance(a, dict) and a.get("side") == side]
+    nos, anon = _open_nos(open_rows, side)
+    out = []
+    for o in m.get("orders") or []:
+        if not (isinstance(o, dict) and o.get("side") == side and o.get("no")):
+            continue
+        if int((rows.get(str(o["no"])) or {}).get("qty", 0)) >= int(o.get("qty") or 0):
+            continue                                            # 다 체결됨
+        if str(o["no"]) in nos or _just_placed(o):
+            out.append(o)
+        elif anon > 0:                                          # 미체결 행에 번호가 없으면 행 수만큼만 우리 주문으로 봄
+            out.append(o)
+            anon -= 1
+    return out + [a for a in m.get("attempts") or [] if isinstance(a, dict) and a.get("side") == side]
 
 
 def sniper_preflight(s, api, note, cfg, d, mark, n):
@@ -1173,12 +1265,96 @@ def sniper_preflight(s, api, note, cfg, d, mark, n):
     return m, "시작"
 
 
+def live_fx_ok(s):
+    return bool(s.get("auto_fx_enabled")) and not s.get("dry_run", True)
+
+
+def intraday_fx(s, api, cfg, note, mark, m, d, n, need, cash):
+    """v2.3.0 장중 자동환전 → (환전 뒤 달러 예수금, auto_fx 결과 또는 None). 필요 달러 need − 예수금 만큼(+여유%, 하루 상한 안)만 환전. 환전 신청 직후엔 예수금 반영을 잠깐 기다림. 못 한 이유는 같은 이유로 하루 한 번만 알림"""
+    plan = {"info": {"shortfall_usd": round(need - cash, 2)}}
+    fxres = auto_fx(s, api, cfg, plan, True, d, fx_now=n)
+    if fxres is None:
+        return cash, None
+    if fxres.get("done"):
+        for _ in range(FX_WAIT_TRIES):
+            c2 = api.usd_cash()
+            if c2 >= need:
+                break
+            time.sleep(FX_WAIT_SEC)
+        cash = api.usd_cash()
+        note.send(f"장중 자동환전 · 스나이퍼 매수 필요 ${need:,.0f} · 예수금 ${cash:,.0f}\n" + fx_lines(fxres).strip())
+    else:
+        _warn_once(cfg, mark, m, "intraday_fx_" + str(fxres.get("status"))[:20], note,
+                   f"장중 자동환전 안 함 · 스나이퍼 매수에 필요 ${need:,.0f} > 예수금 ${cash:,.0f}\n" + fx_lines(fxres).strip())
+    return cash, fxres
+
+
+DRY_SNIPER_FILE = "data/dry_sniper_state.json"
+
+
+def run_sniper_dry(s, api, note):
+    """판 23 수정1 B7 모의 스나이퍼: 실거래 틱과 같은 신호·계획을 쓰되 주문(api.order)은 절대 안 냄. 시세·예수금 조회만 하고, 층 상태·장부·실거래 스나이퍼 상태 파일은 안 건드림.
+    시뮬레이션 주문은 data/dry_orders_<날짜>.json 에 'sim' 으로 기록하고 [모의] 알림만 보냄 (체결은 가정하지 않아 층·장부는 그대로 → 같은 층 매도·같은 층 매수는 하루 한 번만 기록).
+    눌림 깊이·RSI 용 시세 기록은 모의 전용 파일(dry_sniper_state.json)에만 저장. 시간대는 실거래와 같음 (매수 정규장·16:00 전, 매도 16:10 전)"""
+    now_t = time.time()
+    if now_t - _SNIPER["last"] < max(30.0, float(s.get("intraday_sell_check_sec") or 30)):
+        return "대기"
+    _SNIPER["last"] = now_t
+    n = now_et()
+    d = n.strftime("%Y-%m-%d")
+    cfg = ConfigManager(s)
+    mark = os.path.join(s["state_dir"], "data", f"dry_orders_{d}.json")
+    m = cfg._load_json(mark, None)
+    if not isinstance(m, dict) or not isinstance(m.get("orders"), list):
+        m = {"date": d, "dry": True, "orders": []}
+    status = str(api.us_market_status())
+    if status not in (MKT_REGULAR, MKT_AFTER):
+        return "장 닫힘"
+    pos = cfg.get_position()
+    if not pos:
+        return "해당 없음"
+    q, principal = int(pos["qty"]), float(pos["principal"])
+    tst, _had = tower_state_for(cfg, q, principal, s)                   # 읽기만 (저장 안 함)
+    sim = copy.deepcopy(tst)
+    px = float(api.price(s["symbol"], s["price_market"])["price"])
+    ss = cfg._load_json(DRY_SNIPER_FILE, None)
+    if not isinstance(ss, dict):
+        ss = copy.deepcopy(SN.load_state(cfg))                          # 처음엔 실거래 기준가를 복사해 시작 (이후 모의 파일만 씀)
+    SN.series_add(ss, px, now_t)
+    SN.update_peak(ss, len(SN.active_floors(sim)), q)
+    cfg._save_json(DRY_SNIPER_FILE, ss)
+    done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None}
+    out = []
+    if n.time() < datetime.time(16, 10):
+        sells, _sn = SN.plan_sells(s, sim, px, q, skip_ids=done_sell, otype="LIMIT")
+        tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, q - sum(o["qty"] for o in sells)), skip_ids=done_sell)
+        tw_pick, _held = pick_sells(tw_all, TW.sell_layers(s) - len({int(o["floor_id"]) for o in m["orders"] if o.get("mode") == "tower" and o.get("side") == "SELL"}))
+        for o in sells + tw_pick:
+            rec = dict(o, sim=True, at=n.isoformat())
+            rec.pop("reached", None)
+            m["orders"].append(rec)
+            out.append(rec)
+    if (status == MKT_REGULAR and n.time() < datetime.time(16, 0)
+            and len({o.get("floor_id") for o in m["orders"] if o.get("side") == "BUY"}) < TW.buy_layers(s)):          # 하루 매수 층 수(tower_max_buy_layers_per_day)까지만 기록
+        rsi = SN.rsi_from_state(ss, now_t)[0]
+        pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT")
+        if pb["order"] and not any(o.get("side") == "BUY" and o.get("floor_id") == pb["order"]["floor_id"] for o in m["orders"]):
+            rec = dict(pb["order"], sim=True, at=n.isoformat())
+            m["orders"].append(rec)
+            out.append(rec)
+    if out:
+        cfg._save_json(mark, m)
+        note.send(f"모의 스나이퍼 — 주문은 안 냈어요 (시뮬레이션 기록만)\n현재가 ${px:.2f}\n" + fmt_orders(out))
+        return "모의 기록"
+    return "모의 신호 없음"
+
+
 def run_sniper_tick(s, api, note):
     """v2.2.20 스나이퍼 한 번치 (실거래만, loop 가 09:30 ET ~ 체결 반영 시각 전에 부름. 간격 = intraday_sell_check_sec, 최소 30초). 순서:
     ① 오늘 기록이 없으면 만듦 ② 체결 확인 → 매도·스나이퍼 매수 체결은 즉시 장부·층에 반영 (탑쌓기 매수는 run_sync) ③ 체결 알림 ④ 잔고 = 예상 확인 (다르면 보류)
     ⑤ 시세를 분 단위로 모음(RSI 용) ⑥ 층별 목표에 닿으면 그 층 전량 지정가 매도 (정규장·장후, 16:10 전까지) ⑦ 60초마다 눌림·돌파 신호 → 한 층 시드(남은 몫)만큼 지정가 매수 (정규장·16:00 전까지, 15:30 뒤 돌파 차단)"""
     if s.get("dry_run", True):
-        return "모의"
+        return run_sniper_dry(s, api, note)                    # 판 23 수정1 B7: 모의에서도 스나이퍼가 돌되 주문은 안 나가고 시뮬레이션 기록만
     if not sniper_on(s):
         return "꺼짐"
     now_t = time.time()
@@ -1212,6 +1388,9 @@ def run_sniper_tick(s, api, note):
         apply_tower_fills(s, cfg, d, items, tst, sniper_only=True)           # 매도·스나이퍼 매수 체결 즉시 반영 (장부·층 같이 저장)
         pos = cfg.get_position()
     if not pos:
+        _ss0 = SN.load_state(cfg)
+        if SN.update_peak(_ss0, 0, 0):                           # 판 23 수정1 S3: 보유 0주 = 사이클 끝 → 최고 층수 초기화
+            SN.save_state(cfg, _ss0)
         return "해당 없음"
     q, pr = int(pos["qty"]), float(pos["principal"])
     sim = copy.deepcopy(tst)
@@ -1230,6 +1409,7 @@ def run_sniper_tick(s, api, note):
     px = float(api.price(s["symbol"], s["price_market"])["price"])
     ss = SN.load_state(cfg)
     SN.series_add(ss, px, now_t)
+    SN.update_peak(ss, len(SN.active_floors(sim)), q)            # 판 23 수정1 S3: 이번 사이클 최고 층수 (눌림 깊이 잠금) — 상태 파일에 저장
     SN.save_state(cfg, ss)
     hold, sellable, exch_vid = api.holding(s["symbol"])
     if hold != q:
@@ -1238,14 +1418,22 @@ def run_sniper_tick(s, api, note):
     exch = str(s.get("exch_id") or exch_vid or "")
     out = []
     # ---- 매도: 층 평단 + 익절% 에 닿은 층 전량. 이 층 매도가 이미 나가 있거나(미체결·응답 못 받음) 같은 목표가로 거절됐던 층은 건너뜀
-    busy = {int(x["floor_id"]) for x in sniper_open_orders(m, rows, "SELL") if x.get("floor_id") is not None}
+    open_rows = open_rows_or_none(api, s)                # 판 23 수정1 B3: 미체결 판단은 미체결 조회로 (앱에서 취소한 주문은 잠금에서 빠짐)
+    busy = {int(x["floor_id"]) for x in sniper_open_orders(m, rows, "SELL", open_rows) if x.get("floor_id") is not None}
     rej = {int(k): float(v) for k, v in (m.get("sniper_rejected") or {}).items()}
     for r in SN.sell_rows(sim, s, px):
         if r["id"] in rej and abs(rej[r["id"]] - r["target"]) < 1e-9:
             busy.add(r["id"])
-    sells, _snotes = SN.plan_sells(s, sim, px, sellable, skip_ids=busy, otype="LIMIT")
+    busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 층은 다시 안 냄 (한 층에 매도 둘이 겹치지 않게)
+    sells, _snotes = SN.plan_sells(s, sim, px, sellable, skip_ids=busy, otype="LIMIT")      # 미완성 층만 (스나이퍼 매도)
+    tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy)      # 완성 층만 (탑 매도 +10% → 50%)
+    tw_pick, tw_held = pick_sells([o for o in tw_all if not (int(o["floor_id"]) in rej and abs(rej[int(o["floor_id"])] - float(o["price"])) < 1e-9)],
+                                  TW.sell_layers(s) - tower_sold_count_today(m, rows, open_rows))      # 하루 매도 층 수(N_sell) 적용 — 넘는 층은 알림만 (알림은 하루 한 번)
+    if tw_held:
+        _warn_once(cfg, mark, m, "tower_sell_held", note, "탑 매도 목표에 닿았지만 하루 매도 층 수(" + str(TW.sell_layers(s)) + ")를 넘어 주문은 안 냄: " + ", ".join(f"{o['floor_id']}층" for o in tw_held))
+    sells = sells + [dict(o, type="LIMIT") for o in tw_pick]
     if sells:
-        if foreign_open_sells(api.open_orders_today(s["symbol"]), m, rows):
+        if foreign_open_sells(open_rows if open_rows is not None else api.open_orders_today(s["symbol"]), m, rows):
             _warn_once(cfg, mark, m, "open_sell", note, "이 계좌에 SOXL 매도 미체결 주문이 이미 있어 스나이퍼 매도를 안 냄 (수동 확인)")
             sells = []
         elif not exch:
@@ -1254,7 +1442,7 @@ def run_sniper_tick(s, api, note):
     if sells:
         results, errs_all, placed = [], [], []
         for sel in sells:
-            o = dict(sel, desc="스나이퍼 매도 · " + sel.get("desc", ""))
+            o = dict(sel, desc=("" if sel.get("mode") == "tower" else "스나이퍼 매도 · ") + sel.get("desc", ""))
             o.pop("reached", None)
             att = {"at": n.isoformat(), "qty": o["qty"], "price": o["price"], "kind": "sell", "floor_id": o.get("floor_id"), "status": "접수 시도 (이 기록이 있으면 같은 목표가로는 다시 안 냄)"}
             if status == MKT_AFTER:
@@ -1276,11 +1464,11 @@ def run_sniper_tick(s, api, note):
         ss["last_order_ts"] = now_t
         SN.save_state(cfg, ss)
         ok_n = sum(1 for r in results if r == "ok")
-        note.send(f"{'장후(' + status + ') ' if status == MKT_AFTER else ''}스나이퍼 매도 {'접수' if ok_n == len(results) else ('실패' if ok_n == 0 and all(r == 'rejected' for r in results) else '일부 접수 · 실패·응답 없음 있음')}\n"
+        note.send(f"{'장후(' + status + ') ' if status == MKT_AFTER else ''}매도 {'접수' if ok_n == len(results) else ('실패' if ok_n == 0 and all(r == 'rejected' for r in results) else '일부 접수 · 실패·응답 없음 있음')}\n"
                   f"현재가 ${px:.2f}\n" + fmt_orders(placed) + ("\n" + "\n".join(errs_all) if errs_all else ""))
         out.append("매도 접수" if ok_n else "매도 실패")
     # ---- 매수: 정규장·16:00 전·60초마다·주문 뒤 60초 쉼 · 낸 매수가 안 끝났으면 새로 안 냄 (취소 불가)
-    open_buys = sniper_open_orders(m, rows, "BUY")
+    open_buys = sniper_open_orders(m, rows, "BUY", open_rows)
     if open_buys:
         old = [o for o in open_buys if o.get("ts") and now_t - float(o["ts"]) > SNIPER_STALE_BUY_SEC]
         if old:
@@ -1291,7 +1479,19 @@ def run_sniper_tick(s, api, note):
         return out[0] if out else "대기"
     _SNIPER["last_buy"] = now_t
     rsi = SN.rsi_from_state(ss, now_t)[0]
-    pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT")
+    cash_now = api.usd_cash()
+    pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT")
+    lim = buy_layer_limit_hit(s, m, rows, open_rows, SN.plan_buy(s, sim, px, ss, rsi, 1e12, n, "LIMIT")["order"])       # 판 23 수정1: 하루 매수 층 수 제한 (환전보다 먼저 확인)
+    if lim:
+        _warn_once(cfg, mark, m, "buy_layers_limit", note, lim)
+        return out[0] if out else "하루 매수 층 수 도달"
+    if live_fx_ok(s) and pb["signal"].get("should_buy"):          # v2.3.0 장중 자동환전: 매수 신호가 났는데 달러가 모자라면 부족분만 환전 (실시간 환전 시간·하루 한 번·상한은 auto_fx 가 지킴)
+        full = SN.plan_buy(s, sim, px, ss, rsi, 1e12, n, "LIMIT")["order"]
+        need = round(full["qty"] * full["price"], 2) if full else 0.0
+        if need > cash_now + 1e-9:
+            cash_now, fxres = intraday_fx(s, api, cfg, note, mark, m, d, n, need, cash_now)
+            if fxres and fxres.get("done"):
+                pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT")
     if not pb["order"]:
         if pb["notes"] and pb["signal"].get("should_buy"):
             _warn_once(cfg, mark, m, "buy_" + pb["signal"]["signal_type"], note, "스나이퍼 매수 신호가 났지만 안 샀어요\n" + "\n".join("· " + x for x in pb["notes"]))
@@ -1443,21 +1643,11 @@ def _fxm_later(note, d, key, text, sec=300):
 
 
 def _next_rounds_inputs(s, api, cfg, rounds):
-    """'다음 rounds 회차분' 계산용 입력 → (계획, 전일종가, 적용환율, 달러 예수금). 가격 기준 전일 종가·그 시점 적용환율.
-    계획은 자동환전을 켠 것으로 계산(한도까지) — 꺼져 있어도 '필요 달러'가 예수금에 눌리지 않게. 조회 실패는 MeritzError, 전일 종가 없음은 ValueError"""
-    pos = cfg.get_position()
-    if not pos:                                                # 모의: 장부 시작 전이면 설정 start 로 가정 (run_order_day 와 같음)
-        st = s["start"]
-        pos = {"qty": int(float(st.get("qty") or 0)), "principal": float(st.get("principal_usd") or 0)}
-    p = api.price(s["symbol"], s["price_market"])
+    """v2.3.0: '다음 rounds 회차분' 환전 계산용 입력 → (계획, 0.0, 적용환율, 달러 예수금). 계획 = hybrid_fx_plan: 필요 달러 = 층 시드 × 하루 매수 층 수 × rounds (시세·층 상태는 안 읽음 — 아침 환전은 그날 채울 층 분을 미리).
+    조회 실패는 MeritzError (옛 반환 모양 유지: 두 번째 값은 예전의 전일 종가 자리 — 쓰지 않아 0.0)"""
     rate, _tm = api.fx_applied()
     cash = api.usd_cash()
-    prev_close = float(p.get("prev_close") or 0)
-    if not prev_close > 0:
-        raise ValueError("전일 종가 없음")
-    q = int(pos["qty"])
-    plan = build_plan(dict(s, auto_fx_enabled=True), cfg, prev_close, rate, cash, q, float(pos["principal"]), q)
-    return plan, prev_close, rate, cash
+    return hybrid_fx_plan(s, cash, rounds), 0.0, rate, cash
 
 
 def run_fx_morning(s, api, note, live):
@@ -1467,8 +1657,6 @@ def run_fx_morning(s, api, note, live):
     가격 기준은 전일 종가(prev_close), 환율은 그 시점 적용환율. 매수 계획이 없거나 부족이 없으면 안 함(기록 안 씀 — Q24). 환전 뒤 달러 반영을 기다리지 않음 (주문까지 시간이 많음)"""
     if not s.get("auto_fx_enabled"):
         return "꺼짐"
-    if SN.get_mode(s) == SN.MODE_SNIPER:                       # v2.2.20: 환전 계산이 탑쌓기 회차 기준이라 스나이퍼 모드에서는 안 함
-        return "스나이퍼 모드"
     n = now_kst()
     w = fx_window_info(n, s)
     if not w["open"]:
@@ -1516,8 +1704,11 @@ def run_fx_morning(s, api, note, live):
         logging.info("자동환전: 부족 달러 없음 — 환전 안 함")
         return "필요 없음"
     i = plan["info"]
-    head = f"{d} 자동환전 (한국시간 {n.strftime('%H:%M')}) · 다음 {rounds}회차분" + (f" (휴장 전날: 오늘 몫 + 휴장 중 주문일 {ca['extra']}회차)" if ca else "") + f" · 전일 종가 ${prev_close:.2f}"
-    text = head + f"\n{fmt_orders(buys)}\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}\n" + fx_lines(fxres)
+    head = f"{d} 아침 자동환전 (한국시간 {n.strftime('%H:%M')}) · 다음 {rounds}회차분" + (f" (휴장 전날: 오늘 몫 + 휴장 중 주문일 {ca['extra']}회차)" if ca else "")
+    cap_usd = int(float(s.get("auto_fx_max_usd_per_day") or 0))
+    over = (f"\n⚠️ 필요 ${i['need_usd']:,.0f} (+여유 {float(s.get('auto_fx_buffer_pct') or 0):g}%)가 하루 환전 상한 ${cap_usd:,} 를 넘어요 — 상한만큼만 환전하고 나머지는 장중 자동환전이나 직접 환전이 필요해요"
+            if fxres.get("capped") else "")
+    text = head + f"\n{plan.get('fx_basis') or fmt_orders(buys)}\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}\n" + fx_lines(fxres) + over
     if live and not fxres.get("done") and not os.path.exists(marker):      # 환율·원화 예수금·시간 문제로 신청 전에 멈춤 (기록 안 씀) → 같은 창 안에서 다시 시도
         _fxm_later(note, d, "fx", text + "(5분 뒤 다시 시도해요)")
         return "환전 안 함"
@@ -1571,8 +1762,6 @@ def run_fx_shortage_alert(s, api, note, live):
     """v2.0.8 마감 60분 전 '달러부족' 알림 — 마감 = 주문 시간. 다음 한 회차(휴장 전날이면 1+extra 회차)에 필요한 달러 > 달러 예수금이면 하루 한 번.
     부족분이 0원이면 아무 기록도 안 씀(Q24) — 5분마다 다시 확인. 알림 뒤에도 창 안이면 자동환전은 계속 시도(별도 함수). 자동환전 꺼짐이어도 알림.
     Q25: 필요 달러 = 정수 주 × 사다리 가격 (make_plan 그대로)"""
-    if SN.get_mode(s) == SN.MODE_SNIPER:                       # v2.2.20: 스나이퍼 모드는 달러부족 알림 안 함 (탑쌓기 회차 기준 계산)
-        return "스나이퍼 모드"
     n = now_kst()
     if not shortage_alert_due(n, s):
         return "시간 아님"
@@ -1603,7 +1792,7 @@ def run_fx_shortage_alert(s, api, note, live):
     dl = order_time_kst(day, s)
     left = max(0, int((dl - n).total_seconds() // 60))
     text = (f"달러부족 — 마감(주문 시간 {_hm_text(dl, day)}) 약 {left}분 전이에요.\n"
-            f"다음 {rounds}회차에 필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f} · 부족 ${math.ceil(short):,}\n"
+            f"다음 {rounds}회차 매수분({plan.get('fx_basis', '')})에 필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f} · 부족 ${math.ceil(short):,}\n"
             + ("자동환전이 켜져 있어요 — 환전 시간 안이면 계속 시도해요. 그래도 안 되면(원화 부족·환율 조회 실패 등) 직접 환전해 주세요."
                if s.get("auto_fx_enabled") else "자동환전이 꺼져 있어요 — 직접 환전해 주세요."))
     if note.send(text) is not False:
@@ -1773,6 +1962,39 @@ def run_sync(s, api, note, mark_path):
     return "완료"
 
 
+LATE_FILL_DAYS = 4          # 늦은 체결은 최근 며칠(달력 기준) 기록만 다시 확인 — 오래된 기록을 처음 배포한 날 한꺼번에 조회하지 않음
+
+
+def run_late_fills(s, api, note, mp, today):
+    """판 23 수정1 S1: 16:10 동기화로 '반영 끝'이 된 날 기록(orders_<날짜>.json)에 대해, 그 뒤(장후)에 체결된 몫을 다음 날 첫 확인 때 장부·층에 반영.
+    주문번호별 '이미 반영한 수량'을 층 상태가 갖고 있어 늘어난 몫만 들어감 (중복 반영 없음). 반영한 뒤 층 상태를 장부에 맞추고 알림. 확인을 한 번 마치면 late_done 표시 (같은 날 기록은 다시 안 봄).
+    메리츠가 16:10 이후 접수·체결을 하는지는 미확인 — 체결이 있을 때만 반영하고, 없으면 아무것도 안 바꿈. 조회가 실패하면 표시 안 하고 다음 반복에 다시"""
+    cfg = ConfigManager(s)
+    m = cfg._load_json(mp, {})
+    if not isinstance(m, dict) or not m.get("synced") or m.get("late_done") or not m.get("orders") or str(m.get("date") or "") >= today:
+        return "해당 없음"
+    d = m["date"]
+    try:
+        rows = fill_rows_for(api, s, d)
+    except MeritzError as e:
+        logging.warning(f"늦은 체결 확인 실패(다음에 다시): {str(e)[:100]}")
+        return "조회 실패"
+    items = fill_items(m, rows)
+    _p0 = cfg.get_position() or {"qty": 0, "principal": 0.0}
+    tst, had = tower_state_for(cfg, int(_p0["qty"]), float(_p0["principal"]), s)
+    applied = apply_tower_fills(s, cfg, d, items, tst) if had else []
+    lines = [f"- {SIDE_KO.get(a['side'], a['side'])} {a['dq']}주 @ ${a['da'] / a['dq']:.2f} ({a['o'].get('desc', '')})" for a in applied]
+    if applied:
+        pos = cfg.get_position()
+        tst2, tnotes = TW.reconcile(tst, int(pos["qty"]), float(pos["principal"]), TW.params(s)[2], s)
+        cfg._save_json(TOWER_FILE, tst2)
+        lines += [f"  {x}" for x in tnotes]
+        note.send(f"{d} 16:10 이후에 체결된 주문을 오늘 아침 장부에 반영\n" + "\n".join(lines) + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}")
+    m["late_done"] = True
+    cfg._save_json(mp, m)
+    return "반영" if applied else "없음"
+
+
 def pending_syncs(state):
     dd = os.path.join(state, "data")
     try:
@@ -1833,8 +2055,17 @@ def loop():
                     run_open_capture(s, api, live, n)
                 except Exception as e:
                     logging.warning(f"시초가 확인 중 오류: {type(e).__name__}")
+            if live:                     # 판 23 수정1 S1: 어제 이전 기록 중 16:10 뒤에 체결된 몫을 다음 날 첫 확인에 장부·층에 반영 — 오늘 스나이퍼 틱(잔고=장부 확인)보다 먼저
+                for mp in pending_syncs(state):
+                    try:
+                        md = datetime.date.fromisoformat(os.path.basename(mp)[7:17])
+                        if 0 < (n.date() - md).days <= LATE_FILL_DAYS:
+                            api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
+                            run_late_fills(s, api, note, mp, n.strftime("%Y-%m-%d"))
+                    except Exception as e:
+                        logging.warning(f"늦은 체결 반영 중 오류: {type(e).__name__}")
             if sniper_on(s):          # v2.2.20 스나이퍼 모드: 09:30 ET ~ 체결 반영 시각 전 (정규장 매수·정규장+장후 매도). 탑쌓기 주문 시간·당일 매도 확인은 안 돌림
-                if live and n.weekday() < 5 and OPEN_TIME_ET <= n.time() < _hm(s["sync_time_et"], datetime.time(16, 10)):
+                if n.weekday() < 5 and OPEN_TIME_ET <= n.time() < _hm(s["sync_time_et"], datetime.time(16, 10)):      # 판 23 수정1 B7: 모의도 돌림 (run_sniper_tick 이 모의면 주문 없이 시뮬레이션)
                     try:
                         api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                         run_sniper_tick(s, api, note)
@@ -1876,7 +2107,7 @@ def loop():
 
 
 def cmd_check(s):
-    print(f"7번 메리츠 SOXL 듀얼 모드 {BOT_VERSION} 점검 (주문 없음) · 지금 모드: {SN.mode_ko(s)}")
+    print(f"7번 메리츠 SOXL 하이브리드 {BOT_VERSION} 점검 (주문 없음)")
     bad = validate_settings(s)
     idb, fp = check_identity(s)
     print(f"- 봇 {'켜짐' if s.get('enabled') else '꺼짐'} · {'모의' if s.get('dry_run', True) else '실거래'} · "
@@ -1912,9 +2143,11 @@ def cmd_check(s):
     print("  " + to_korean(fmt_orders(orders)).replace("\n", "\n  "))
     for n in notes:
         print("  ·", to_korean(n))
+    fxp = hybrid_fx_plan(s, cash, 1)      # v2.3.0: 환전 필요량 = 층 시드 × 하루 매수 층 수 (부족 달러는 shortfall_usd — 예전엔 이 키가 없어 늘 '필요 없음'으로 나왔음)
+    print(f"  환전 기준: {fxp['fx_basis']} · 예수금 ${cash:,.0f} · 부족 ${math.ceil(fxp['info']['shortfall_usd']):,}")
     with in_dir(state):
-        r = auto_fx(s, api, ConfigManager(s), plan, False, now_et().strftime("%Y-%m-%d"))
-    print("  " + (fx_lines(r).strip().replace("\n", "\n  ") if r else "환전: 필요 없음 또는 자동환전 꺼짐"))
+        r = auto_fx(s, api, ConfigManager(s), fxp, False, now_et().strftime("%Y-%m-%d"))
+    print("  " + (fx_lines(r).strip().replace("\n", "\n  ") if r else ("환전: 자동환전 꺼짐" if not s.get("auto_fx_enabled") else "환전: 부족 달러 없음 (필요 없음)")))
     if hold != q:
         print(f"  잔고 {hold}주 ≠ 장부/시작 {q}주 → 입고 전이거나 다른 계좌")
     return 0
