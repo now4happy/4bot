@@ -1,5 +1,11 @@
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v1.3.0 · 2026-11-21 (KST) — 판 25 (meritz_laoer v2.5.0)
+- 파일: main.py, sniper_mode.py, sub_grid.py(새), tower_strategy.py, tg_menu.py, config.py, notifier.py, test_hybrid_v250.py(새)
+- 내용: 하이브리드 박스·층 (토스 스나이퍼 이식): 매수 1번 = 박스 시드(기본 $15,000)의 8% · 서브 그리드 4% · 박스 안 자동 매도(+1.5%/+1.0%) 복귀 · 층 간격 규칙 삭제 · 첫 기준가 설정 · 평단 정수 달러 층 이름 · 지하층→공사중 · 퍼센트 작업 계산(percent_plan). 판 24 선택 질문 코드는 남기고 안 부름.
+- 수정1(돌파 매수액): 설정 sniper_breakout_portion_pct(기본 16%, 눌림 8% 그대로) + 텔레그램 '돌파 매수% 변경' 메뉴.
+- 검증: test_hybrid_v250.py 16개 통과 · pyflakes 새 경고 0 · import 확인. test_hybrid_v240.py·Golden 비교는 파일이 없어 미실행. 실거래·서버 적용 없음.
+
 ## v1.2.9 · 2026-11-21 11:08 (KST)
 - 파일: main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_strategy.py
 - 내용: 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·선택 버튼·업데이트 알림 판 번호). 검증: 새 시험 18개 통과, 기존 시험 40개 통과·3개 실패(의도한 변경), 해시 전부 일치, 비밀 0건.

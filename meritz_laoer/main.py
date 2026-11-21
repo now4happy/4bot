@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.4.0)
-# v2.4.0 (2026-11-21, 판 24): ① 장부 바로잡기(run_ledger_migration, 일회성: 메리츠 실제 잔고 684주일 때만 → 장부 684주 · 두 층 373주 $40.29 / 311주 $48.14 · 잠금 · 지하층(빈 층), 주문·실제 잔고 안 건드림, 마커 파일로 한 번만, 이전 날 늦은 체결은 건너뜀)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.5.0)
+# v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층 — 토스 스나이퍼 이식): ① 매수 = 신호 1번에 박스 시드의 8%(sniper_mode.plan_buy) · 서브 그리드 4%(sub_grid.py) ② 박스 안 매도(+1.5%/+1.0%, 박스 전체) 자동으로 복귀 — 판 24 선택 질문(pick_scan) 호출 삭제(코드는 남김)
+#   ③ 하루 매수 층 수 제한(buy_layer_limit_hit)은 스나이퍼 매수에 안 씀 ④ 서브 상태 동기화(sync_sub)·10분 게이트(mark_sub_gate) ⑤ 지하층 → 공사중. 계좌·API·16:10 동기화·장부=잔고 정지·주문 시간은 안 바꿈
+# v2.4.0 (2026-11-21, 판 24): ① 장부 바로잡기(run_ledger_migration, 일회성: 메리츠 실제 잔고 684주일 때만 → 장부 684주 · 두 층 373주 $40.29 / 311주 $48.14 · 잠금 · 공사중(빈 층), 주문·실제 잔고 안 건드림, 마커 파일로 한 번만, 이전 날 늦은 체결은 건너뜀)
 #   ② 스나이퍼 목표가에 닿으면 자동 매도 대신 텔레그램 버튼(스나이퍼/탑쌓기) 선택 (run_sniper_tick·apply_pick) ③ 잠긴 층은 탑 매도만 ④ 지하층부터 스나이퍼 매수. 업데이트 알림 판 번호는 bot_office/bot_updater.py
 # v2.3.0 수정1 (2026-11-21, 판 23 수정1 — 버전 그대로): 하루 매수 층 수 제한(buy_layer_limit_hit, 기존 설정 tower_max_buy_layers_per_day) · B3 미체결 조회 · B7 모의 스나이퍼(run_sniper_dry) · S3 사이클 최고 층수 잠금 · S1 16:10 뒤 체결 다음 날 반영(run_late_fills) · '목표 도달' 라벨 · 죽은 코드 defer_sell·limit_morning_sells 제거
 # v2.3.0 (2026-11-21, 판 23 하이브리드 — 스나이퍼 매수 + 탑 매도): 모드 선택(trading_mode) 삭제, 항상 하이브리드. 사기=스나이퍼(눌림·돌파)만, 층 시드(기본 $15,000)에 닿은 층은 '완성'이라 탑 매도(층 평단 +10% → 50%), 미완성 층(재매수 대기 포함)은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·층 전량).
@@ -124,7 +126,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.4.0"
+BOT_VERSION = "v2.5.0"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)
@@ -267,7 +269,7 @@ def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx
     if tst is None:                                       # v2.3.0 B8: 호출한 쪽이 '오늘 체결을 메모리에서 더한 층 상태'를 주면 그걸로 계산 (텔레그램 오늘 계획·자금 현황)
         tst, _ = tower_state_for(cfg, qty, principal, s)
     ss = SN.load_state(cfg)                               # v2.3.0: 항상 하이브리드 계획 미리보기 (스나이퍼 매수·매도 + 탑 매도, 상태·장부 안 바꿈)
-    return SN.make_plan(s, tst, price, ss, SN.rsi_from_state(ss, time.time())[0], cash, sellable, now_et())
+    return SN.make_plan(s, tst, price, ss, SN.rsi_from_state(ss, time.time())[0], cash, sellable, now_et(), is_trading_day=us_trading_day)
 
 
 def hybrid_fx_plan(s, cash, rounds=1):
@@ -421,7 +423,7 @@ def _tower_progress(tw, s, fid=None):
         return "", ""
 
 
-ANCHOR_KO = {"exit": "직전 매도가", "buy": "직전 매수가", "avg": "낮은 층 평단"}      # v2.3.0 B8: 영어 종류 이름을 화면에 그대로 안 보임
+ANCHOR_KO = {"exit": "직전 매도가", "buy": "직전 매수가", "avg": "낮은 층 평단", "first": "첫 기준가(설정)"}      # v2.3.0 B8: 영어 종류 이름을 화면에 그대로 안 보임
 
 
 def sniper_plan_head(plan, s):
@@ -1328,19 +1330,20 @@ def run_sniper_dry(s, api, note):
     done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None}
     out = []
     if n.time() < datetime.time(16, 10):
-        sells = []                                                     # v2.4.0: 스나이퍼 목표에 닿아도 자동 매도 안 함 (실거래는 텔레그램 선택, 모의는 기록 안 함)
+        sells, _sn = SN.plan_sells(s, sim, px, max(0, q), skip_ids=done_sell)                  # v2.5.0: 박스 안 매도 자동 (모의는 기록만)
         tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, q - sum(o["qty"] for o in sells)), skip_ids=done_sell)
         tw_pick, _held = pick_sells(tw_all, TW.sell_layers(s) - len({int(o["floor_id"]) for o in m["orders"] if o.get("mode") == "tower" and o.get("side") == "SELL"}))
         for o in sells + tw_pick:
+            if o.get("floor_id") in done_sell:
+                continue
             rec = dict(o, sim=True, at=n.isoformat())
             rec.pop("reached", None)
             m["orders"].append(rec)
             out.append(rec)
-    if (status == MKT_REGULAR and n.time() < datetime.time(16, 0)
-            and len({o.get("floor_id") for o in m["orders"] if o.get("side") == "BUY"}) < TW.buy_layers(s)):          # 하루 매수 층 수(tower_max_buy_layers_per_day)까지만 기록
+    if status == MKT_REGULAR and n.time() < datetime.time(16, 0):           # v2.5.0: 하루 매수 층 수 제한 없음
         rsi = SN.rsi_from_state(ss, now_t)[0]
-        pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT")
-        if pb["order"] and not any(o.get("side") == "BUY" and o.get("floor_id") == pb["order"]["floor_id"] for o in m["orders"]):
+        pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT", is_trading_day=us_trading_day)
+        if pb["order"] and not any(o.get("side") == "BUY" and o.get("floor_id") == pb["order"]["floor_id"] and o.get("signal") == pb["order"].get("signal") for o in m["orders"]):
             rec = dict(pb["order"], sim=True, at=n.isoformat())
             m["orders"].append(rec)
             out.append(rec)
@@ -1430,7 +1433,7 @@ def run_ledger_migration(s, api, note, today):
     fl = sorted(tst["floors"], key=TW.floor_avg)
     note.send(f"장부 바로잡기 완료 (일회성)\n이유: 16:10 이후 장부에만 +{old_q - LEDGER_FIX_SHARES}주가 늘어났고 실제 체결은 없었어요 (장부 {old_q}주 → 실제 잔고 {LEDGER_FIX_SHARES}주).\n"
               + "\n".join(f"- {i}층 {int(f['qty'])}주 · 원가 ${f['cost']:,.0f} · 평단 ${TW.floor_avg(f):.2f} (잠금 · 탑 매도)" for i, f in enumerate(fl, 1))
-              + "\n- 지하층: 0주 · $0 (다음 스나이퍼 매수부터 채움)\n실제 잔고·주문은 안 건드렸어요. 정지 표시가 남아 있으면 확인한 뒤 직접 풀어 주세요.")
+              + "\n- 공사중: 0주 · $0 (다음 스나이퍼 매수부터 채움)\n실제 잔고·주문은 안 건드렸어요. 정지 표시가 남아 있으면 확인한 뒤 직접 풀어 주세요.")
     return "완료"
 
 
@@ -1501,6 +1504,8 @@ def run_sniper_tick(s, api, note):
         _warn_once(cfg, mark, m, "hold", note, f"오늘 체결 반영 뒤 예상 {q}주 ≠ 메리츠 잔고 {hold}주 — 스나이퍼 매매를 보류하고 계속 확인해요 (체결 조회가 늦은 것일 수 있음)")
         return "잔고 불일치"
     exch = str(s.get("exch_id") or exch_vid or "")
+    if SN.sync_sub(ss, hold):                                   # v2.5.0 서브 버킷 수량을 실제 보유에 맞춤
+        SN.save_state(cfg, ss)
     out = []
     # ---- 매도: 층 평단 + 익절% 에 닿은 층 전량. 이 층 매도가 이미 나가 있거나(미체결·응답 못 받음) 같은 목표가로 거절됐던 층은 건너뜀
     open_rows = open_rows_or_none(api, s)                # 판 23 수정1 B3: 미체결 판단은 미체결 조회로 (앱에서 취소한 주문은 잠금에서 빠짐)
@@ -1510,11 +1515,7 @@ def run_sniper_tick(s, api, note):
         if r["id"] in rej and abs(rej[r["id"]] - r["target"]) < 1e-9:
             busy.add(r["id"])
     busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 층은 다시 안 냄 (한 층에 매도 둘이 겹치지 않게)
-    sells = []                                           # v2.4.0: 스나이퍼 목표에 닿아도 자동 매도 안 함 → 아래 선택 질문(스나이퍼/탑쌓기). 잠긴 층·완성 층은 탑 매도만
-    asks = SN.pick_scan(ss, sim, s, px)
-    if asks:
-        SN.save_state(cfg, ss)
-        send_pick_prompts(s, note, asks)
+    sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy)      # v2.5.0: 박스 안 매도 자동 (미완성 층: 공격 박스 +1.5% · 위 박스 +1.0%, 박스 전체). 판 24 선택 질문은 안 부름
     tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy)      # 완성 층만 (탑 매도 +10% → 50%)
     tw_pick, tw_held = pick_sells([o for o in tw_all if not (int(o["floor_id"]) in rej and abs(rej[int(o["floor_id"])] - float(o["price"])) < 1e-9)],
                                   TW.sell_layers(s) - tower_sold_count_today(m, rows, open_rows))      # 하루 매도 층 수(N_sell) 적용 — 넘는 층은 알림만 (알림은 하루 한 번)
@@ -1569,18 +1570,15 @@ def run_sniper_tick(s, api, note):
     _SNIPER["last_buy"] = now_t
     rsi = SN.rsi_from_state(ss, now_t)[0]
     cash_now = api.usd_cash()
-    pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT")
-    lim = buy_layer_limit_hit(s, m, rows, open_rows, SN.plan_buy(s, sim, px, ss, rsi, 1e12, n, "LIMIT")["order"])       # 판 23 수정1: 하루 매수 층 수 제한 (환전보다 먼저 확인)
-    if lim:
-        _warn_once(cfg, mark, m, "buy_layers_limit", note, lim)
-        return out[0] if out else "하루 매수 층 수 도달"
-    if live_fx_ok(s) and pb["signal"].get("should_buy"):          # v2.3.0 장중 자동환전: 매수 신호가 났는데 달러가 모자라면 부족분만 환전 (실시간 환전 시간·하루 한 번·상한은 auto_fx 가 지킴)
-        full = SN.plan_buy(s, sim, px, ss, rsi, 1e12, n, "LIMIT")["order"]
+    pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day)
+    buy_sig = bool(pb["signal"].get("should_buy")) or bool(pb.get("sub") and pb["sub"].get("buy"))
+    if live_fx_ok(s) and buy_sig:          # v2.3.0 장중 자동환전: 매수 신호가 났는데 달러가 모자라면 부족분만 환전 (실시간 환전 시간·하루 한 번·상한은 auto_fx 가 지킴)
+        full = SN.plan_buy(s, sim, px, ss, rsi, 1e12, n, "LIMIT", is_trading_day=us_trading_day)["order"]
         need = round(full["qty"] * full["price"], 2) if full else 0.0
         if need > cash_now + 1e-9:
             cash_now, fxres = intraday_fx(s, api, cfg, note, mark, m, d, n, need, cash_now)
             if fxres and fxres.get("done"):
-                pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT")
+                pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day)
     if not pb["order"]:
         if pb["notes"] and pb["signal"].get("should_buy"):
             _warn_once(cfg, mark, m, "buy_" + pb["signal"]["signal_type"], note, "스나이퍼 매수 신호가 났지만 안 샀어요\n" + "\n".join("· " + x for x in pb["notes"]))
@@ -1592,6 +1590,8 @@ def run_sniper_tick(s, api, note):
     errs = []
     res = send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True)
     ss["last_order_ts"] = now_t
+    if o.get("sub") and res != "rejected":
+        SN.mark_sub_gate(ss, pb.get("sub"))                    # v2.5.0 서브 10분 게이트 기록
     if res == "rejected":
         ss["buy_block_until"] = now_t + 300                    # 거절되면 5분 쉼 (같은 거절을 매분 반복하지 않게)
     SN.save_state(cfg, ss)

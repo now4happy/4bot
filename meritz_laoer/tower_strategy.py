@@ -1,5 +1,8 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.4.0)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.5.0)
+# v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층): ① 박스 시드 box_seed(s)(tower_box_seed_usd, 기본 $15,000)·매수 분할 portion_usd(s)(박스 시드의 8%, 단리 고정)·서브 4% sub_portion_usd(s) 추가 ② 층 표현 = 평단 정수 달러(price_label·floor_labels, 소수점 버림 — 내부 id 는 그대로)
+#   ③ 탑 매도 체결 뒤 남은 층은 '잠금'을 풀어 공사중 박스로 되돌림(_apply_sell — 토스 스나이퍼가 비워진 부분을 다시 채우고, 채워지면 다시 완성 층) ④ percent_plan(남은 시드→나누는 비율 계산, 표시용 순수 계산) ⑤ view_lines 가 층을 평단 달러로 표시.
+#   바뀌지 않은 것: make_plan·_apply_buy(탑쌓기 칸 매수 — 하이브리드에서는 안 부름)·is_tower·합병·동기화.
 # v2.4.0 (2026-11-21, 판 24): 층 상태에 locked(잠금=탑 매도)·st["empty"](빈 층: 지하층·스나이퍼 선택 새 층)·indep(합병 안 하는 층) 추가 — is_tower(잠금 또는 완성)·ledger_fix_state(일회성 장부 바로잡기용 층 목록 교체). 기본값이면 v2.3.0 동작 그대로.
 # v2.3.0 (2026-11-21, 판 23 하이브리드): make_plan 에 인자 2개 추가(기본값이면 v2.2.20 동작 그대로) — complete_only=True: 매도를 '완성 층'만 계산(탑 매도 +10% → 50%), sell_only=True: 매도 계산 뒤 매수 계획 없이 돌려줌(매수는 스나이퍼 몫).
 #   _apply_sell: 스나이퍼 부분 매도 잔여는 완성으로 만들지 않고 미완성으로 둠(스나이퍼가 계속 관리). view_lines: 총 층 수 한도 표시 없음('N층'). 한도(층 수·총 시드)는 하이브리드에서 안 씀(tower_floors 는 예전 탑쌓기 코드용으로만 남음).
@@ -44,6 +47,13 @@ FLOOR_USD = 15000.0        # 한 층 금액 (달러)
 FLOORS = 10                # 층 수 → 총 한도 = FLOOR_USD × FLOORS = $150,000
 GAP_USD = 5                # 층 간격 (달러) = 한 층의 칸 수
 TOL_USD = 100.0            # 완성 허용 오차: 층 투자금이 목표에서 이만큼 이내로 모자라면 완성 (슬리피지·반올림)
+BOX_SEED_USD = 15000.0     # v2.5.0 박스 시드 기본값 (달러) — 설정 tower_box_seed_usd. 풀이님 결정 2026-11-21 (Q9): 기존 완성 층($15,000)과 같은 금액
+PORTION_PCT = 8.0          # v2.5.0 신호 한 번에 사는 금액 = 박스 시드의 8% (토스 quant_engine.py:46 PORTION_RATIO_LOCKED = 0.08, 단리 고정 — 총자산 % 복리는 안 씀)
+BREAKOUT_PORTION_PCT = 16.0   # v2.5.0 수정1 돌파 매수 한 번에 사는 금액 = 박스 시드의 16% (눌림은 8% 그대로) — 설정 sniper_breakout_portion_pct, 기본 16 (8%의 2배, 시드 $15,000 이면 $2,400)
+SUB_PORTION_PCT = 4.0      # v2.5.0 서브 그리드 한 번에 사는 금액 = 박스 시드의 4% (토스 SUB_PORTION_RATIO_4PCT = 0.04)
+REMAINING_SEED_USD = 120000.0    # 퍼센트 작업 기본 입력값: 남은 시드 (설정 tower_remaining_seed_usd 로 바꿀 수 있음)
+PCT_BAND_HI_USD = 30.0     # 퍼센트 작업: 고르게 나눌 가격 구간 위쪽 ($30) — 근거 percent_work.md
+PCT_BAND_LO_USD = 10.0     # 퍼센트 작업: 구간 아래쪽 ($10)
 
 
 def _f(v):
@@ -79,6 +89,74 @@ def params(s):
     g = _f(s.get("tower_gap_usd"))
     g = int(g) if g >= 1 and g == int(g) else GAP_USD
     return (fu if fu > 0 else FLOOR_USD), (fl if fl >= 1 else FLOORS), g
+
+
+def box_seed(s):
+    """v2.5.0 박스 시드(달러): 설정 tower_box_seed_usd, 없거나 0 이하면 기본 $15,000"""
+    v = _f((s or {}).get("tower_box_seed_usd"))
+    return v if v > 0 else BOX_SEED_USD
+
+
+def portion_usd(s):
+    """v2.5.0 신호 한 번에 사는 금액 = 박스 시드 × 8% (단리 고정, 달러 2자리). 시드 $15,000 이면 $1,200"""
+    return round(box_seed(s) * PORTION_PCT / 100.0, 2)
+
+
+def breakout_portion_pct(s):
+    """v2.5.0 수정1 돌파 매수 비율(%): 설정 sniper_breakout_portion_pct, 없거나 0 이하·100 초과면 기본 16"""
+    v = _f((s or {}).get("sniper_breakout_portion_pct"))
+    return v if 0 < v <= 100 else BREAKOUT_PORTION_PCT
+
+
+def breakout_portion_usd(s):
+    """v2.5.0 수정1 돌파 신호 한 번에 사는 금액 = 박스 시드 × 돌파 비율 (기본 16% → 시드 $15,000 이면 $2,400)"""
+    return round(box_seed(s) * breakout_portion_pct(s) / 100.0, 2)
+
+
+def sub_portion_usd(s):
+    """v2.5.0 서브 그리드 한 번에 사는 금액 = 박스 시드 × 4% (시드 $15,000 이면 $600)"""
+    return round(box_seed(s) * SUB_PORTION_PCT / 100.0, 2)
+
+
+def price_label(avg):
+    """v2.5.0 층 표현: 평단의 정수 달러 (소수점은 버림). 평단 $48.14 → '48달러 층'. 평단이 0 이하면 '공사중'"""
+    a = _f(avg)
+    return f"{int(math.floor(a + 1e-9))}달러 층" if a > 0 else "공사중"
+
+
+def floor_labels(st):
+    """v2.5.0 {층 id: '48달러 층'} — 수량이 있는 층만. 정수 달러가 같은 층이 둘 이상이면 위에서부터 '(1)·(2)' 를 붙여 구분 (내부 id 는 안 바뀜)"""
+    fl = [f for f in top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
+    base = {int(_f(f.get("id"))): price_label(floor_avg(f)) for f in fl}
+    cnt = {}
+    for v in base.values():
+        cnt[v] = cnt.get(v, 0) + 1
+    seen, out = {}, {}
+    for f in fl:
+        i = int(_f(f.get("id")))
+        v = base[i]
+        if cnt[v] > 1:
+            seen[v] = seen.get(v, 0) + 1
+            out[i] = f"{v}({seen[v]})"
+        else:
+            out[i] = v
+    return out
+
+
+def percent_plan(remaining_usd, box_usd, hi=PCT_BAND_HI_USD, lo=PCT_BAND_LO_USD):
+    """v2.5.0 퍼센트 작업(표시용 순수 계산, 주문에 안 씀): 남은 시드를 가격 구간 hi→lo 에 층(박스)마다 같은 금액·같은 가격 폭으로 나눔.
+    박스 수 n = 남은 시드 ÷ 박스 시드 (반올림, 최소 1) · 박스당 금액 = 남은 시드 ÷ n · 박스당 비율(%) = 100 ÷ n · 박스당 가격 폭 = (hi − lo) ÷ n ·
+    $1 당 금액 = 남은 시드 ÷ (hi − lo) · $1 당 비율(%) = 100 ÷ (hi − lo). 구간 = 위에서부터 [hi, hi − 폭], … 입력이 이상하면(0 이하·hi ≤ lo) None.
+    토스 신호 숫자(눌림·돌파·8%)는 안 바꿈 — 남은 시드를 바꾸면 이 값이 다시 계산됨"""
+    r, b, h, l_ = _f(remaining_usd), _f(box_usd), _f(hi), _f(lo)
+    if r <= 0 or b <= 0 or h <= l_ or l_ < 0:
+        return None
+    n = max(1, int(math.floor(r / b + 0.5 + 1e-9)))
+    w = (h - l_) / n
+    bands = [(round(h - i * w, 2), round(h - (i + 1) * w, 2)) for i in range(n)]
+    return {"remaining_usd": round(r, 2), "box_usd": round(b, 2), "boxes": n, "per_box_usd": round(r / n, 2), "per_box_pct": round(100.0 / n, 2),
+            "band_width_usd": round(w, 4), "per_dollar_usd": round(r / (h - l_), 2), "per_dollar_pct": round(100.0 / (h - l_), 2),
+            "hi": h, "lo": l_, "bands": bands, "portion_pct": PORTION_PCT, "portion_usd": round(b * PORTION_PCT / 100.0, 2)}
 
 
 LAYERS_MAX = 3             # v2.2.17: 하루 매수·매도 층 수 설정의 상한 (1 ~ LAYERS_MAX 정수만)
@@ -638,6 +716,8 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
                 continue
             _topup_setup(f, gap, start_usd)                          # 팔린 층만 탑업 준비 (v2.2.6)
             f["rebuy_pending"] = not f.get("done")                   # 다시 살 게 없는(완성) 층은 매도 금지를 걸지 않음 — 걸면 풀 매수가 영영 없음
+            if not f.get("done"):                                    # v2.5.0 판 25: 탑 매도로 일부 비워진 층은 잠금을 풀어 다시 공사중 박스로 (스나이퍼가 채움 · 채워지면 다시 완성 층)
+                f["locked"] = False
     st["_cost_removed"] = removed
 
 
@@ -854,8 +934,8 @@ def layer_marker(f):
 
 
 def floor_status(f):
-    """층 상태 글자: 완성 | 미완성 (v2.2.6 — 완성이 아니면 전부 미완성. 예전의 '쌓는 중'은 없앰)"""
-    return "완성" if is_complete(f) else "미완성"
+    """층 상태 글자: 완성 | 공사중 (v2.5.0 — 완성이 아니면 전부 공사중(=판 24 까지의 '미완성'))"""
+    return "완성" if is_complete(f) else "공사중"
 
 
 def _fmt_layers(total):
@@ -874,7 +954,8 @@ def view_lines(st, s=None):
         return ["탑: 0층 (채운 층 없음)"]
     total = sum(1.0 if is_complete(f) else fill_ratio(f) for f in fl)
     lines = [f"탑: {' '.join(layer_marker(f) for f in fl)}  {_fmt_layers(total)}층"]
+    labels = floor_labels(st)
     for f in fl:
-        lines.append(f"{int(_f(f.get('id')))}층 · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}"
+        lines.append(f"{labels.get(int(_f(f.get('id'))), price_label(floor_avg(f)))} · 평단 ${floor_avg(f):.2f} · {int(_f(f.get('qty')))}주 · {floor_status(f)}"
                      + ("" if is_complete(f) else f" ({int(round(fill_ratio(f) * 100))}%)"))
     return lines

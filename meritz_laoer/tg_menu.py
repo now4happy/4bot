@@ -85,6 +85,10 @@ SET_ITEMS = {
     "탑쌓기 매도% 변경": dict(key="sell_profit_pct", name="탑쌓기 매도%", unit="%", kind="num", lo=0, lo_incl=False, hi=500, ex="예: 10 (완성 층 평단보다 10% 오르면 매도)"),
     "매도 비중 변경": dict(key="sell_fraction_pct", name="매도 비중", unit="%", kind="num", lo=0, lo_incl=False, hi=100, hi_incl=False, ex="예: 50 (보유의 절반을 매도)"),
     "층 간격 변경": dict(key="tower_gap_usd", name="층 간격", unit="$", kind="int", lo=1, ex="예: 5 (1 이상 정수, 달러)"),
+    "박스 시드 변경": dict(key="tower_box_seed_usd", name="박스 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (박스 하나에 채울 달러. 매수 1번 = 이 금액의 8%)"),
+    "돌파 매수% 변경": dict(key="sniper_breakout_portion_pct", name="돌파 매수%", unit="%", kind="num", lo=0, lo_incl=False, hi=100, ex="예: 16 (돌파 신호 한 번에 박스 시드의 16% 매수. 눌림은 8% 그대로)"),
+    "첫 기준가 변경": dict(key="sniper_first_anchor_usd", name="첫 기준가", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 48.5 (기준가·층이 아직 없을 때만 쓰는 첫 기준가, 달러)"),
+    "남은 시드 변경": dict(key="tower_remaining_seed_usd", name="퍼센트 작업 남은 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 120000 (퍼센트 작업에서 $30~$10 구간에 나눌 남은 달러)"),
     "층 시드 변경": dict(key="tower_floor_usd", name="층 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (한 층에 쌓을 달러, 정수)"),
     "하루 매수 층 수 변경": dict(key="tower_max_buy_layers_per_day", name="하루 매수 층 수", unit="층", kind="int", lo=1, hi=3, ex="예: 2"),
     "하루 매도 층 수 변경": dict(key="tower_max_sell_layers_per_day", name="하루 매도 층 수", unit="층", kind="int", lo=1, hi=3, ex="예: 2"),
@@ -99,6 +103,10 @@ MEANS = {
     "sell_profit_pct": ("완성 층을 파는 기준이에요. 그 층 평단보다 이 %만큼 오르면 매도해요 (탑쌓기 매도).", "다음 판단부터 완성 층 파는 시점이 달라져요"),
     "sell_fraction_pct": ("탑쌓기 매도가 일어날 때 그 층 보유 중 파는 비중이에요 (정수 주 내림, 1주는 남김).", "다음 탑쌓기 매도부터 파는 양이 달라져요"),
     "tower_gap_usd": ("새 층 가격 간격(달러)이에요. 새 층 첫 가격 = 가장 낮은 층 평단 − 이 간격. 1 이상 정수만 돼요. 안 정하면 5예요.", "다음 새 층을 만드는 가격 기준이 달라져요"),
+    "tower_box_seed_usd": ("박스 하나의 시드(달러)예요. 매수 신호 1번에 이 금액의 8%(서브 신호는 4%)를 사요 — 단리 고정. 마지막 회차는 박스에 남은 시드만큼 사요. 안 정하면 15000이에요.", "다음 매수부터 한 번에 사는 금액과 새 박스 크기가 달라져요 (이미 있는 층은 안 바뀜)"),
+    "sniper_breakout_portion_pct": ("돌파 신호(기준가 +1% · RSI 50 이하)가 날 때 한 번에 사는 금액이에요. 박스 시드의 이 %만큼 사요 (눌림 매수는 8% 그대로). 안 정하면 16이에요 (시드 15000이면 2400달러). 마지막 회차는 박스에 남은 시드만큼만 사요.", "다음 돌파 매수부터 한 번에 사는 금액이 달라져요 (눌림·서브 금액은 그대로)"),
+    "sniper_first_anchor_usd": ("기준가도 층도 아직 없을 때만 쓰는 첫 기준가(달러)예요. 첫 체결이 생기면 그 체결가가 기준가가 돼요. 안 정하면 첫 매수 신호가 없어요.", "기준가·층이 없는 동안의 첫 매수 타점이 달라져요"),
+    "tower_remaining_seed_usd": ("퍼센트 작업 계산용 남은 시드(달러)예요. $30~$10 구간에 나눠 박스 몇 개·한 박스 몇 %인지 보여줘요 (표시만, 주문엔 안 써요). 안 정하면 120000이에요.", "퍼센트 작업 표시 비율이 다시 계산돼요"),
     "tower_floor_usd": ("한 층의 시드(달러)예요. 층 원가가 이 금액에 닿으면 그 층은 완성이에요. 총 시드·층 수 한도는 없어요. 안 정하면 15000이에요.", "새 층·남은 몫 매수 금액과 층 완성 기준이 달라져요"),
     "tower_max_buy_layers_per_day": ("하루에 채울 층 수예요 (아침 환전 금액 = 층 시드 × 이 값). 1~3 정수만 돼요. 안 정하면 1이에요.", "아침 환전액이 달라져요"),
     "tower_max_sell_layers_per_day": ("하루에 최대 몇 층까지 팔지예요. 1~3 정수만 돼요. 안 정하면 1이에요 (지금처럼 하루에 한 층). 같은 때 여러 층이 목표에 닿으면 번호가 큰 층(맨 위 층)부터 팔아요.", "다음 매도 확인부터 하루에 파는 층 수가 달라져요 (목표 이익률·매도 비중은 그대로)"),
@@ -111,12 +119,19 @@ _EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A
 BOOL_NAME = {"enabled": "봇", "auto_fx_enabled": "자동환전"}
 FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # 값 없이 켜기를 눌렀을 때 이 글자만
 SET_POWER = "봇 켜기/끄기"
-TACT_SET = ["층 시드 변경", "층 간격 변경", "스나이퍼 1층 익절 변경", "스나이퍼 상단층 익절 변경", "탑쌓기 매도% 변경", "매도 비중 변경",
+TACT_SET = ["박스 시드 변경", "돌파 매수% 변경", "첫 기준가 변경", "남은 시드 변경", "층 시드 변경", "층 간격 변경", "스나이퍼 1층 익절 변경", "스나이퍼 상단층 익절 변경", "탑쌓기 매도% 변경", "매도 비중 변경",
             "하루 매수 층 수 변경", "하루 매도 층 수 변경"]
 FX_SET = ["환전 하루 상한 변경", "환전 여유% 변경"]
-TOWER_DEFAULTS = {"tower_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD),
+TOWER_DEFAULTS = {"tower_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_box_seed_usd": int(_TW.BOX_SEED_USD), "sniper_breakout_portion_pct": _TW.BREAKOUT_PORTION_PCT, "tower_remaining_seed_usd": int(_TW.REMAINING_SEED_USD),
                   "tower_max_buy_layers_per_day": 1, "tower_max_sell_layers_per_day": 1,
                   "sniper_tp_l1_pct": _SN.TP_L1_DEFAULT, "sniper_tp_upper_pct": _SN.TP_UPPER_DEFAULT}   # 설정에 없으면 쓰는 기본값 (표시용)
+
+
+def _f0(x):
+    try:
+        return float(x or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def cur_val(s, key):
@@ -456,6 +471,7 @@ class MenuBot:
         fx = "켜짐" if s.get("auto_fx_enabled") else "꺼짐"
         fx += f" (여유 {fmt_val(KEY_ITEM['auto_fx_buffer_pct'], s.get('auto_fx_buffer_pct'), '입력 전')} · 하루 상한 {fmt_val(KEY_ITEM['auto_fx_max_usd_per_day'], s.get('auto_fx_max_usd_per_day'), '입력 전')})" if fx_values_ready(s) else " (여유%·하루 상한 입력 전)"
         return ["설정값",
+                f"· 박스 시드 {v('tower_box_seed_usd')} (눌림 8% ${_TW.portion_usd(s):,.0f} · 돌파 {_TW.breakout_portion_pct(s):g}% ${_TW.breakout_portion_usd(s):,.0f}) · 첫 기준가 " + (f"${float(s['sniper_first_anchor_usd']):.2f}" if _f0(s.get("sniper_first_anchor_usd")) > 0 else "안 정함"),
                 f"· 층 시드 {v('tower_floor_usd')} · 층 간격 {v('tower_gap_usd')}",
                 f"· 탑쌓기 매도 +{v('sell_profit_pct')} → 보유의 {v('sell_fraction_pct')}",
                 f"· 스나이퍼 익절 1층 {v('sniper_tp_l1_pct')} · 상단층 {v('sniper_tp_upper_pct')}",
@@ -502,10 +518,10 @@ class MenuBot:
                 state = "재매수 대기" if r["rebuy"] else "탑업 중"
                 prog = f" ◧{int(round(ratio * 100))}%"
                 fill = fill or (r["no"], ratio, r["cost"], r["tgt_usd"], state)
-            out.append(f"⚡ <b>[{r['no']}층: {r['qty']}주·${r['cost']:,.0f}]</b> <b>${r['avg']:.2f}</b> ➔ <b>${tg:.2f}</b> ({'+' if (g or 0) >= 0 else ''}{(g or 0):.2f}%) {esc(state)}{prog}")
+            out.append(f"⚡ <b>[{esc(r['label'])}: {r['qty']}주·${r['cost']:,.0f}]</b> <b>${r['avg']:.2f}</b> ➔ <b>${tg:.2f}</b> ({'+' if (g or 0) >= 0 else ''}{(g or 0):.2f}%) {esc(state)}{prog}")
         for e in (st.get("empty") or []):          # v2.4.0 빈 층 (지하층 · 스나이퍼 선택 새 층) — 0주·$0, 번호는 채워진 뒤 평단 순으로 붙음
             if isinstance(e, dict):
-                out.append("⚪ <b>[" + ("지하층" if e.get("kind") == "basement" else "새 층") + ": 0주·$0]</b>" + (f" 기준가 ${float(e.get('ref_px') or 0):.2f}" if float(e.get("ref_px") or 0) > 0 else " 스나이퍼 매수가 여기서 시작"))
+                out.append("⚪ <b>[" + ("공사중" if e.get("kind") == "basement" else "새 박스") + ": 0주·$0]</b>" + (f" 기준가 ${float(e.get('ref_px') or 0):.2f}" if float(e.get("ref_px") or 0) > 0 else " 스나이퍼 매수가 여기서 시작"))
         return out, fill
 
     def board_text(self, s):
@@ -545,7 +561,7 @@ class MenuBot:
             lines.append("🎯 메리츠 조회 미확인: " + esc("; ".join(d["api_bad"][:3])))
         else:
             lines.append("🎯 <b>[다음 매수 타점]</b>")
-            anchor, kind = _SN.anchor_info(st, ss)
+            anchor, kind = _SN.anchor_info(st, ss, s)
             cap = min((_TW.floor_avg(f) for f in fl), default=0.0)
             late = _SN.is_late_cutoff(o.now_et())
             sig = _SN.buy_signal(px, anchor, kind, cap, _SN.depth_layers(ss, len(fl)), rsi, late)
@@ -707,6 +723,7 @@ class MenuBot:
         on = bool(s.get("enabled"))
         return "\n".join(["⚙️ <b>[전술 제어반]</b>", "──────────────",
                           f"1️⃣ 봇 전원: <b>{'🟢 켜짐' if on else '🔴 꺼짐'}</b> ({'모의' if s.get('dry_run', True) else '실거래'})",
+                          f"🧱 박스 시드: <b>{v('tower_box_seed_usd')}</b> (눌림 8% = ${_TW.portion_usd(s):,.0f} · 돌파 {_TW.breakout_portion_pct(s):g}% = ${_TW.breakout_portion_usd(s):,.0f} · 서브 4% = ${_TW.sub_portion_usd(s):,.0f}) · 첫 기준가: <b>" + (f"${float(s['sniper_first_anchor_usd']):.2f}" if _f0(s.get("sniper_first_anchor_usd")) > 0 else "안 정함") + "</b>",
                           f"2️⃣ 층 시드: <b>{v('tower_floor_usd')}</b> · 층 간격: <b>{v('tower_gap_usd')}</b> (새 층 가격 = 가장 낮은 층 평단 − 간격)",
                           f"3️⃣ 스나이퍼 익절(미완성 층, 전량): 1층 <b>+{v('sniper_tp_l1_pct')}</b> · 상단층 <b>+{v('sniper_tp_upper_pct')}</b>",
                           f"4️⃣ 탑쌓기 매도(완성 층): 평단 <b>+{v('sell_profit_pct')}</b> → 보유의 <b>{v('sell_fraction_pct')}</b>",
