@@ -1,3 +1,10 @@
+# 메리츠 SOXL 무매 변경 기록
+
+## v1.3.2 · 2026-11-21 15:13 (KST)
+- 파일: config.py, main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 판 27 meritz_laoer v2.7.0 (층 간격 설정·버튼 제거)
+- 브랜치: staging
+
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
 ## v1.5.0 · 2026-11-21 (KST) — 판 27 (meritz_laoer v2.7.0)
