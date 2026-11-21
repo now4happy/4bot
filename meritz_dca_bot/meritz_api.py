@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_dca_bot/meritz_api.py   (MERITZ_DCA v1.0.1)
+# v1.3.2 (2026-11-19, audit-fix 6-6): usd_estimated_or_zero 추가, get_buying_power 가 이 값(estm_frcr_amt)을 돌려줌 — 주문 검사·SGOV·자동환전·브리핑이 같은 달러 잔고 소스(usd_estimated)
 # 메리츠증권 Open API — 메리츠 적립 봇(meritz_dca)용. 3번 toss_api.py 자리를 대신함 (미국주식만)
 # v1.2.5 (2026-11-14): 시세 0 이하를 거부해 다음 거래소 조회 허용.
 # v1.0.0 (2026-11-08): 첫 버전.
@@ -218,6 +219,30 @@ class MeritzApi:
             raise MeritzError("USD 추정 예수금 숫자 확인 필요")
         return value
 
+    def usd_estimated_or_zero(self):
+        """v1.3.2 (audit-fix 6-6): usd_estimated 와 같은 값(estm_frcr_amt). 다른 점 하나: USD 행이 하나도 없으면(빈 계좌) 0.0.
+        주문 검사·SGOV·자동환전·브리핑이 모두 같은 달러 잔고 값을 쓰게 하려고 get_buying_power 가 이 값을 돌려줌."""
+        d = self._call("GET", "/accounts/v1/me/overseas/currencies")
+        if d.get("tr_cont") == "1":
+            raise MeritzError("외화잔고 응답이 완전하지 않음")
+        rows = d.get("data")
+        if rows is None:
+            rows = []
+        if not isinstance(rows, list):
+            raise MeritzError("외화잔고 형식 확인 필요")
+        usd = [row for row in rows if isinstance(row, dict) and str(row.get("crcd", "")).strip().upper() == "USD"]
+        if not usd:
+            return 0.0
+        if len(usd) != 1 or usd[0].get("estm_frcr_amt") in (None, ""):
+            raise MeritzError("USD 추정 예수금 행 없음")
+        try:
+            value = float(str(usd[0]["estm_frcr_amt"]).replace(",", ""))
+        except (ValueError, TypeError):
+            raise MeritzError("USD 추정 예수금 숫자 확인 필요") from None
+        if not math.isfinite(value):
+            raise MeritzError("USD 추정 예수금 숫자 확인 필요")
+        return value
+
     def fx_applied_rate(self, crcd="USD", mnec_clcd="1"):
         """환전 적용환율 조회 (읽기 전용). 외화 매수(원화->외화)는 mnec_clcd='1', tltr_aply_byrt 사용.
         출처: 메리츠 Open API openapi.json v2026-10-22, GET /forex/v1/rates/applied"""
@@ -416,7 +441,7 @@ class MeritzDcaClient:
     async def get_buying_power(self, currency="USD"):
         if str(currency).upper() != "USD":
             return 0.0
-        return float(await self._t(self.api.usd_cash_or_zero))
+        return float(await self._t(self.api.usd_estimated_or_zero))   # v1.3.2 audit-fix 6-6: frcr_amt → estm_frcr_amt (usd_estimated 와 같은 소스)
 
     async def us_market_status(self):
         return await self._t(self.api.us_market_status)

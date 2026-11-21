@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -424,17 +425,100 @@ async def _consume_shm_gate_if_fresh(
         _CONSUMED_SHM_GATE_KEYS[slug] = skey
     return res_e
 
-# MODIFIED: 스나이퍼 동기화 — 초기 과민 콜백 폐기(0.00) · +1.45% 도달 시 +1.25% 스텝락 · +2% 여유 콜백(0.35)
+# MODIFIED [Case 106]: 실시간 -0.35% 틱 콜백 영구 폐기(0.00) ➔ 하드보존(+1.00%➔+1.25%) + 순수 완결 1분봉 강세HA 홀딩 단일화
 ASSASSIN_SAFE_CAP_PCT: float = 5.00
 ASSASSIN_ARM_IGNITION_PCT: float = 1.00
 ASSASSIN_STEP_TRIG_PCT: float = 1.45
 ASSASSIN_STEP_LOCK_PCT: float = 1.25
 ASSASSIN_BOOST_TIER2_PCT: float = 2.00
 ASSASSIN_CALLBACK_TIGHT_PCT: float = 0.00
-ASSASSIN_CALLBACK_WIDE_PCT: float = 0.35
+ASSASSIN_CALLBACK_WIDE_PCT: float = 0.00
 ASSASSIN_QQQ_SURGE_BYPASS_PCT: float = 0.20
 
 LIVE_BUY_ORDER_MAX_WAIT_SEC: float = 60.0
+# NEW [Case 107]: 실전 트레일링 익절 보존선 사수 및 에어포켓 60초 용서 릴리스 상수/산출기
+LIVE_TRAIL_EXIT_FORGIVE_WAIT_SEC: float = 60.0
+LIVE_TRAIL_FORGIVE_CUTOFF_HM: int = 1550
+_LIVE_EXIT_FIRST_START_MONO: Dict[str, float] = {}
+
+_TRAIL_LOCKED_EXIT_CODES: Tuple[str, ...] = (
+    "CAP_500_HOMERUN",
+    "TRAIL_FLOOR_100",
+    "TRAIL_CALLBACK_BOOST",
+    "TRAIL_HA_RED_BOOST",
+)
+_PROFIT_PROTECTED_EXIT_CODES: Tuple[str, ...] = (
+    "CAP_500_HOMERUN",
+    "TRAIL_FLOOR_100",
+    "TRAIL_CALLBACK_BOOST",
+    "TRAIL_HA_RED_BOOST",
+    "VWAP_1500_PROFIT_EXIT",
+)
+_EXIT_DESC_TRAILING_PRICE_RE = re.compile(r"\(\$[0-9]+(?:\.[0-9]+)?\)$")
+
+
+def _sync_exit_desc_price_tag(exit_desc: str, actual_price: float) -> str:
+    desc = str(exit_desc or "").strip()
+    xp = safe_float(actual_price, 0.0)
+    if not desc or xp <= 0.0:
+        return desc
+    return _EXIT_DESC_TRAILING_PRICE_RE.sub(f"(${xp:.2f})", desc)
+
+
+def _resolve_live_profit_exit_floor_price(
+    st: Dict[str, Any],
+    exit_code: str,
+    peak_override: float = 0.0,
+) -> float:
+    code_u = str(exit_code or "").upper().strip()
+    if code_u not in _PROFIT_PROTECTED_EXIT_CODES:
+        return 0.0
+    ep = safe_float(st.get("entry_price"), 0.0)
+    if ep <= 0.0:
+        return 0.0
+    if code_u == "VWAP_1500_PROFIT_EXIT":
+        return round(math.ceil((ep * 1.0020 - 1e-9) * 100.0) / 100.0, 2)
+    arm_p = safe_float(st.get("arm_100_price"), 0.0)
+    if arm_p <= 0.0:
+        arm_p = (
+            math.ceil(
+                (ep * (1.0 + ASSASSIN_ARM_IGNITION_PCT / 100.0) - 1e-9)
+                * 100.0
+            )
+            / 100.0
+        )
+    step_trig_p = round(ep * (1.0 + ASSASSIN_STEP_TRIG_PCT / 100.0), 4)
+    lock_125_p = (
+        math.ceil(
+            (ep * (1.0 + ASSASSIN_STEP_LOCK_PCT / 100.0) - 1e-9) * 100.0
+        )
+        / 100.0
+    )
+    pk = max(
+        safe_float(st.get("peak_price"), 0.0),
+        safe_float(peak_override, 0.0),
+    )
+    if pk >= step_trig_p - 1e-9:
+        return round(max(arm_p, lock_125_p), 2)
+    return round(arm_p, 2)
+
+
+def compute_live_exit_chase_price(
+    st: Dict[str, Any],
+    exit_code: str,
+    live_price: float,
+    hm: int,
+    best_bid_price: float = 0.0,
+) -> float:
+    lp = max(0.01, safe_float(live_price, 0.01))
+    if safe_int(hm, 0) >= ASSASSIN_MOC_EXIT_HM:
+        ref_m_p = min(lp, best_bid_price) if best_bid_price > 0.0 else lp
+        return round(max(0.01, ref_m_p * 0.985), 2)
+    floor_p = _resolve_live_profit_exit_floor_price(st, exit_code)
+    if floor_p > 0.0:
+        mkt_fl = math.floor((lp * 0.998 + 1e-9) * 100.0) / 100.0
+        return round(max(floor_p, mkt_fl), 2)
+    return round(max(0.01, lp * 0.996), 2)
 
 # [Case 93 & Case 97-A : 출동 순간 QQQ 지수(entry_qqq_price) 기반 08:15~ SN4×SN3 단일 방어망 상수 (UG 영구 소각)]
 SAFETY_NET_MODE_DEFAULT: str = "SN4_DEEP_1000_SN3_SMART_HYBRID"
@@ -445,6 +529,15 @@ SAFETY_DYN_QQQ_MAX_THR_PCT: float = 1.00
 SAFETY_STAGE1_HEART_STOP_PCT: float = -3.00
 SAFETY_STAGE23_SOXL_LOSS_MAX_PCT: float = -1.50
 SAFETY_STAGE23_QQQ_VEL3M_DROP_PCT: float = -0.25
+
+# NEW [Case 109 : 과대낙폭(<-5.00%) 손절 래치 & -5.00% 반등 점화 완결 1분봉 무밑꼬리 강세 HA양봉 트레일링 상수]
+ASSASSIN_REBOUND_LATCH_ENABLED: bool = True
+ASSASSIN_REBOUND_LATCH_THR_PCT: float = -5.00
+ASSASSIN_REBOUND_IGNITE_PCT: float = -5.00
+ASSASSIN_REBOUND_PRE_STEP_FLOOR_PCT: float = -6.00
+ASSASSIN_REBOUND_STEP_TRIG_PCT: float = -4.50
+ASSASSIN_REBOUND_STEP_LOCK_PCT: float = -4.85
+ASSASSIN_REBOUND_HARD_FLOOR_PCT: float = -12.00
 
 
 def _is_collapsed_assassin_anchors(
@@ -668,9 +761,24 @@ class AssassinSimLedger:
             "is_trailing_armed": False,
             "armed_time_est": "",
             "armed_minute_key": "",
+            "armed_wall_minute_key": "",
+            "armed_closed_bar_key": "",
             "peak_price": 0.0,
             "post_entry_min_price": 0.0,
             "active_stop_floor_price": 0.0,
+            # NEW [Case 109]: 과대낙폭 손절 래치 & -5.00% 반등 강세HA 트레일링 상태 슬롯
+            "is_stop_latched": False,
+            "stop_latched_time_est": "",
+            "stop_latched_wall_minute_key": "",
+            "stop_latched_price": 0.0,
+            "rebound_arm_m500_price": 0.0,
+            "rebound_cata_floor_price": 0.0,
+            "is_rebound_armed": False,
+            "rebound_armed_time_est": "",
+            "rebound_armed_minute_key": "",
+            "rebound_armed_wall_minute_key": "",
+            "rebound_armed_closed_bar_key": "",
+            "rebound_peak_price": 0.0,
             # Dual-Ready 실전 미체결 추적 슬롯
             "pending_buy_order_id": "",
             "pending_buy_ordered_qty": 0,
@@ -682,10 +790,12 @@ class AssassinSimLedger:
             "pending_exit_code": "",
             "pending_exit_desc": "",
             "pending_exit_mono": 0.0,
-            # 5대 알림 1회 발송 래치
+            # 알림 1회 발송 래치 (Case 109 손절래치·반등점화 알림 포함)
             "alert_0815_no_trade_sent": False,
             "alert_entry_sent": False,
             "alert_arm_100_sent": False,
+            "alert_stop_latch_sent": False,
+            "alert_rebound_arm_sent": False,
             "alert_exit_sent": False,
             "alert_live_bp_shortfall_sent": False,
             # 당일 체결 요약
@@ -787,6 +897,50 @@ class AssassinSimLedger:
         base["entry_trigger_mode"] = str(
             base.get("entry_trigger_mode") or ""
         ).strip()
+        base["armed_wall_minute_key"] = str(
+            base.get("armed_wall_minute_key") or ""
+        ).strip()
+        base["armed_closed_bar_key"] = str(
+            base.get("armed_closed_bar_key") or ""
+        ).strip()
+        base["is_stop_latched"] = bool(base.get("is_stop_latched", False))
+        base["stop_latched_time_est"] = str(
+            base.get("stop_latched_time_est") or ""
+        ).strip()
+        base["stop_latched_wall_minute_key"] = str(
+            base.get("stop_latched_wall_minute_key") or ""
+        ).strip()
+        base["stop_latched_price"] = round(
+            max(0.0, safe_float(base.get("stop_latched_price"), 0.0)), 4
+        )
+        base["rebound_arm_m500_price"] = round(
+            max(0.0, safe_float(base.get("rebound_arm_m500_price"), 0.0)), 2
+        )
+        base["rebound_cata_floor_price"] = round(
+            max(0.0, safe_float(base.get("rebound_cata_floor_price"), 0.0)), 2
+        )
+        base["is_rebound_armed"] = bool(base.get("is_rebound_armed", False))
+        base["rebound_armed_time_est"] = str(
+            base.get("rebound_armed_time_est") or ""
+        ).strip()
+        base["rebound_armed_minute_key"] = str(
+            base.get("rebound_armed_minute_key") or ""
+        ).strip()
+        base["rebound_armed_wall_minute_key"] = str(
+            base.get("rebound_armed_wall_minute_key") or ""
+        ).strip()
+        base["rebound_armed_closed_bar_key"] = str(
+            base.get("rebound_armed_closed_bar_key") or ""
+        ).strip()
+        base["rebound_peak_price"] = round(
+            max(0.0, safe_float(base.get("rebound_peak_price"), 0.0)), 4
+        )
+        base["alert_stop_latch_sent"] = bool(
+            base.get("alert_stop_latch_sent", False)
+        )
+        base["alert_rebound_arm_sent"] = bool(
+            base.get("alert_rebound_arm_sent", False)
+        )
         raw_dyn_thr = safe_float(
             base.get("dyn_qqq_stage2_thr_pct"), SAFETY_DYN_QQQ_MIN_THR_PCT
         )
@@ -1214,9 +1368,23 @@ class AssassinSimLedger:
             is_trailing_armed=False,
             armed_time_est="",
             armed_minute_key="",
+            armed_wall_minute_key="",
+            armed_closed_bar_key="",
             peak_price=0.0,
             post_entry_min_price=0.0,
             active_stop_floor_price=0.0,
+            is_stop_latched=False,
+            stop_latched_time_est="",
+            stop_latched_wall_minute_key="",
+            stop_latched_price=0.0,
+            rebound_arm_m500_price=0.0,
+            rebound_cata_floor_price=0.0,
+            is_rebound_armed=False,
+            rebound_armed_time_est="",
+            rebound_armed_minute_key="",
+            rebound_armed_wall_minute_key="",
+            rebound_armed_closed_bar_key="",
+            rebound_peak_price=0.0,
             pending_buy_order_id="",
             pending_buy_ordered_qty=0,
             pending_buy_price=0.0,
@@ -1230,6 +1398,8 @@ class AssassinSimLedger:
             alert_0815_no_trade_sent=False,
             alert_entry_sent=False,
             alert_arm_100_sent=False,
+            alert_stop_latch_sent=False,
+            alert_rebound_arm_sent=False,
             alert_exit_sent=False,
             alert_live_bp_shortfall_sent=False,
             today_exit_reason="",
@@ -1400,8 +1570,12 @@ async def activate_live_assassin_on_zero_soxl_if_armed(
         clear_sim_pos_kw = {
             "has_position": False,
             "is_live_position": False,
+            "is_stop_latched": False,
+            "is_rebound_armed": False,
             "alert_entry_sent": False,
             "alert_arm_100_sent": False,
+            "alert_stop_latch_sent": False,
+            "alert_rebound_arm_sent": False,
             "alert_exit_sent": False,
             "alert_live_bp_shortfall_sent": False,
         }
@@ -1519,8 +1693,12 @@ async def toggle_assassin_live_promotion(
                 initial_seed_usd=init_seed,
                 has_position=False,
                 is_live_position=False,
+                is_stop_latched=False,
+                is_rebound_armed=False,
                 alert_entry_sent=False,
                 alert_arm_100_sent=False,
+                alert_stop_latch_sent=False,
+                alert_rebound_arm_sent=False,
                 alert_exit_sent=False,
                 alert_live_bp_shortfall_sent=False,
             )
@@ -1854,8 +2032,22 @@ def evaluate_assassin_ha_trailing_and_exits(
     closed_ha_shaved_bull: Optional[bool] = None,
     armed_minute_key: str = "",
     cur_minute_key: str = "",
+    cur_bar_minute_key: str = "",
+    armed_wall_minute_key: str = "",
+    armed_closed_bar_key: str = "",
+    is_stop_latched: bool = False,
+    stop_latched_wall_minute_key: str = "",
+    is_rebound_armed: bool = False,
+    rebound_peak_price: float = 0.0,
+    rebound_armed_minute_key: str = "",
+    rebound_armed_wall_minute_key: str = "",
+    rebound_armed_closed_bar_key: str = "",
+    enable_rebound_latch: bool = ASSASSIN_REBOUND_LATCH_ENABLED,
 ) -> Dict[str, Any]:
-    # MODIFIED: 완결 1분봉 확정 HA 음봉 통일 · 등호(<=) 자기격발 제거 · +1.45%➔+1.25% 스텝락 결합
+    # MODIFIED [Case 99 · Case 103 · Case 109]:
+    # 1) 정규 수익 트레일링(+1.00% ➔ +1.45%시 +1.25% 보존 · 기완결봉 3중 락온 무밑꼬리 강세HA양봉 홀딩)
+    # 2) 08:15~ SN4×SN3 격발 시 >=-5.00% 경미손실 즉시 칼손절 vs <-5.00% 과대낙폭 손절래치(is_stop_latched) 가동
+    # 3) 손절래치 중 -5.00% 반등 도달 시 점화(초동 -6.00% 방어 ➔ -4.50% 돌파 시 -4.85% 보존) & 완결 1분봉 무밑꼬리 강세HA양봉 패스(+1.00% 돌파 시 정규 트레일링 자동 승격)
     ep = safe_float(entry_price, 0.0)
     lp = safe_float(live_price, 0.0)
     bh = max(lp, safe_float(bar_high_price, lp))
@@ -1882,43 +2074,160 @@ def evaluate_assassin_ha_trailing_and_exits(
         if ep > 0.0
         else arm_p
     )
+    rb_arm_m500_p = (
+        math.ceil(
+            (ep * (1.0 + ASSASSIN_REBOUND_IGNITE_PCT / 100.0) - 1e-9) * 100.0
+        )
+        / 100.0
+        if ep > 0.0
+        else 0.0
+    )
+    rb_pre_step_fl_p = (
+        round(ep * (1.0 + ASSASSIN_REBOUND_PRE_STEP_FLOOR_PCT / 100.0), 2)
+        if ep > 0.0
+        else 0.0
+    )
+    rb_step_trig_p = (
+        round(ep * (1.0 + ASSASSIN_REBOUND_STEP_TRIG_PCT / 100.0), 4)
+        if ep > 0.0
+        else 0.0
+    )
+    rb_step_lock_p = (
+        math.ceil(
+            (ep * (1.0 + ASSASSIN_REBOUND_STEP_LOCK_PCT / 100.0) - 1e-9)
+            * 100.0
+        )
+        / 100.0
+        if ep > 0.0
+        else 0.0
+    )
+    rb_cata_fl_p = (
+        round(ep * (1.0 + ASSASSIN_REBOUND_HARD_FLOOR_PCT / 100.0), 2)
+        if ep > 0.0
+        else 0.0
+    )
+
+    wall_mk = str(cur_minute_key or "").strip()
+    bar_mk = str(cur_bar_minute_key or "").strip()
+    c_mk = str(closed_bar_minute_key or "").strip()
+    eff_form_mk = bar_mk if (bar_mk and bar_mk > wall_mk) else wall_mk
 
     armed = bool(is_trailing_armed)
     just_armed = False
     eff_armed_mk = str(armed_minute_key or "").strip()
-    cur_peak = max(safe_float(peak_price, ep), lp, bh)
+    eff_armed_wall_mk = str(armed_wall_minute_key or "").strip()
+    eff_armed_closed_mk = str(armed_closed_bar_key or "").strip()
+
+    stop_latched = bool(is_stop_latched) and (not armed)
+    eff_latched_wall_mk = str(stop_latched_wall_minute_key or "").strip()
+    rb_armed = bool(is_rebound_armed) and stop_latched
+    just_rb_armed = False
+    eff_rb_armed_mk = str(rebound_armed_minute_key or "").strip()
+    eff_rb_armed_wall_mk = str(rebound_armed_wall_minute_key or "").strip()
+    eff_rb_armed_closed_mk = str(rebound_armed_closed_bar_key or "").strip()
+    cur_rb_peak = max(
+        safe_float(rebound_peak_price, 0.0),
+        lp if stop_latched else 0.0,
+    )
+
+    eff_bh_top = (
+        lp
+        if (
+            stop_latched
+            and wall_mk
+            and eff_latched_wall_mk
+            and wall_mk <= eff_latched_wall_mk
+        )
+        else bh
+    )
+    cur_peak = max(safe_float(peak_price, ep), lp, eff_bh_top)
     cur_min = (
         min(safe_float(post_entry_min_price, lp), lp)
         if safe_float(post_entry_min_price, 0.0) > 0.0
         else lp
     )
 
-    if bh >= cap_p or lp >= cap_p:
-        exec_p = max(lp, cap_p)
-        return {
-            "should_exit": True,
-            "exit_code": "CAP_500_HOMERUN",
-            "exit_desc": f"👑 +5.00% 상단 안전 캡 홈런 익절(${exec_p:.2f})",
-            "exit_price": round(exec_p, 2),
-            "is_trailing_armed": True,
-            "just_armed": not armed,
-            "armed_minute_key": eff_armed_mk or str(cur_minute_key or ""),
-            "peak_price": round(max(cur_peak, exec_p), 4),
-            "post_entry_min_price": round(cur_min, 4),
-            "active_stop_floor_price": round(cap_p, 2),
-        }
+    def _pack_rb(
+        res_d: Dict[str, Any],
+        latched_v: bool = False,
+        just_latched_v: bool = False,
+        latched_wmk_v: str = "",
+        rb_armed_v: bool = False,
+        just_rb_v: bool = False,
+        rb_mk_v: str = "",
+        rb_wmk_v: str = "",
+        rb_cmk_v: str = "",
+        rb_pk_v: float = 0.0,
+    ) -> Dict[str, Any]:
+        res_d.update(
+            {
+                "is_stop_latched": bool(latched_v),
+                "just_stop_latched": bool(just_latched_v),
+                "stop_latched_wall_minute_key": str(latched_wmk_v or ""),
+                "rebound_arm_m500_price": round(rb_arm_m500_p, 2),
+                "rebound_cata_floor_price": round(rb_cata_fl_p, 2),
+                "is_rebound_armed": bool(rb_armed_v),
+                "just_rebound_armed": bool(just_rb_v),
+                "rebound_armed_minute_key": str(rb_mk_v or ""),
+                "rebound_armed_wall_minute_key": str(rb_wmk_v or ""),
+                "rebound_armed_closed_bar_key": str(rb_cmk_v or ""),
+                "rebound_peak_price": round(max(0.0, float(rb_pk_v)), 4),
+            }
+        )
+        return res_d
 
-    if not armed and (bh >= arm_p or lp >= arm_p):
+    if eff_bh_top >= cap_p or lp >= cap_p:
+        exec_p = max(lp, cap_p)
+        return _pack_rb(
+            {
+                "should_exit": True,
+                "exit_code": "CAP_500_HOMERUN",
+                "exit_desc": f"👑 +5.00% 상단 안전 캡 홈런 익절(${exec_p:.2f})",
+                "exit_price": round(exec_p, 2),
+                "is_trailing_armed": True,
+                "just_armed": not armed,
+                "armed_minute_key": eff_armed_mk or eff_form_mk,
+                "armed_wall_minute_key": eff_armed_wall_mk or wall_mk,
+                "armed_closed_bar_key": eff_armed_closed_mk or c_mk,
+                "peak_price": round(max(cur_peak, exec_p), 4),
+                "post_entry_min_price": round(cur_min, 4),
+                "active_stop_floor_price": round(cap_p, 2),
+            }
+        )
+
+    if (
+        not armed
+        and (eff_bh_top >= arm_p or lp >= arm_p)
+        and (not stop_latched or lp >= arm_p - 1e-9)
+    ):
         armed = True
         just_armed = True
-        eff_armed_mk = str(cur_minute_key or eff_armed_mk).strip()
-        cur_peak = max(cur_peak, lp, bh, arm_p)
+        stop_latched = False
+        rb_armed = False
+        eff_armed_wall_mk = wall_mk
+        eff_armed_mk = eff_form_mk or eff_armed_mk
+        eff_armed_closed_mk = c_mk
+        cur_peak = max(cur_peak, lp, eff_bh_top, arm_p)
+    elif (
+        armed
+        and wall_mk
+        and eff_armed_wall_mk
+        and wall_mk == eff_armed_wall_mk
+    ):
+        if bar_mk and bar_mk > eff_armed_mk:
+            eff_armed_mk = bar_mk
+        if c_mk and c_mk > eff_armed_closed_mk:
+            eff_armed_closed_mk = c_mk
 
     if armed:
         peak_gain_pct = ((cur_peak - ep) / ep) * 100.0 if ep > 0.0 else 1.0
         stepped_125 = bool(cur_peak >= step_trig_p - 1e-9)
         eff_floor_p = lock_125_p if stepped_125 else arm_p
-        if stepped_125 and peak_gain_pct >= ASSASSIN_BOOST_TIER2_PCT:
+        if (
+            ASSASSIN_CALLBACK_WIDE_PCT > 0.0
+            and stepped_125
+            and peak_gain_pct >= ASSASSIN_BOOST_TIER2_PCT
+        ):
             cb_stop_p = round(
                 max(
                     lock_125_p,
@@ -1930,47 +2239,76 @@ def evaluate_assassin_ha_trailing_and_exits(
             cb_stop_p = round(eff_floor_p, 2)
 
         if just_armed and lp >= arm_p - 1e-9:
-            return {
-                "should_exit": False,
-                "exit_code": "ARMED_HOLD_TRACKING",
-                "exit_desc": f"🔥 +1.00% 점화 완료 · 완결1분HA & 보존선 ${cb_stop_p:.2f} 추적 중",
-                "exit_price": 0.0,
-                "is_trailing_armed": True,
-                "just_armed": True,
-                "armed_minute_key": eff_armed_mk,
-                "peak_price": round(cur_peak, 4),
-                "post_entry_min_price": round(cur_min, 4),
-                "active_stop_floor_price": cb_stop_p,
-            }
+            return _pack_rb(
+                {
+                    "should_exit": False,
+                    "exit_code": "ARMED_HOLD_TRACKING",
+                    "exit_desc": f"🔥 +1.00% 점화 완료 · 완결1분HA & 보존선 ${cb_stop_p:.2f} 추적 중",
+                    "exit_price": 0.0,
+                    "is_trailing_armed": True,
+                    "just_armed": True,
+                    "armed_minute_key": eff_armed_mk,
+                    "armed_wall_minute_key": eff_armed_wall_mk,
+                    "armed_closed_bar_key": eff_armed_closed_mk,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": cb_stop_p,
+                }
+            )
 
         if lp < arm_p - 1e-9:
-            return {
-                "should_exit": True,
-                "exit_code": "TRAIL_FLOOR_100",
-                "exit_desc": f"🛡️ +1.00% 익절 보존선(${arm_p:.2f}) 스윕 체결",
-                "exit_price": round(arm_p, 2),
-                "is_trailing_armed": True,
-                "just_armed": False,
-                "armed_minute_key": eff_armed_mk,
-                "peak_price": round(cur_peak, 4),
-                "post_entry_min_price": round(cur_min, 4),
-                "active_stop_floor_price": round(arm_p, 2),
-            }
+            return _pack_rb(
+                {
+                    "should_exit": True,
+                    "exit_code": "TRAIL_FLOOR_100",
+                    "exit_desc": f"🛡️ +1.00% 익절 보존선(${arm_p:.2f}) 스윕 체결",
+                    "exit_price": round(arm_p, 2),
+                    "is_trailing_armed": True,
+                    "just_armed": False,
+                    "armed_minute_key": eff_armed_mk,
+                    "armed_wall_minute_key": eff_armed_wall_mk,
+                    "armed_closed_bar_key": eff_armed_closed_mk,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": round(arm_p, 2),
+                }
+            )
 
         if stepped_125 and lp < cb_stop_p - 1e-9:
             exec_cb_p = round(max(lock_125_p, lp), 2)
-            return {
-                "should_exit": True,
-                "exit_code": "TRAIL_CALLBACK_BOOST",
-                "exit_desc": f"🚀 스텝보존/고점(${cur_peak:.2f}) 스탑 익절(${exec_cb_p:.2f})",
-                "exit_price": exec_cb_p,
-                "is_trailing_armed": True,
-                "just_armed": False,
-                "armed_minute_key": eff_armed_mk,
-                "peak_price": round(cur_peak, 4),
-                "post_entry_min_price": round(cur_min, 4),
-                "active_stop_floor_price": cb_stop_p,
-            }
+            return _pack_rb(
+                {
+                    "should_exit": True,
+                    "exit_code": "TRAIL_CALLBACK_BOOST",
+                    "exit_desc": f"🚀 스텝보존/고점(${cur_peak:.2f}) 스탑 익절(${exec_cb_p:.2f})",
+                    "exit_price": exec_cb_p,
+                    "is_trailing_armed": True,
+                    "just_armed": False,
+                    "armed_minute_key": eff_armed_mk,
+                    "armed_wall_minute_key": eff_armed_wall_mk,
+                    "armed_closed_bar_key": eff_armed_closed_mk,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": cb_stop_p,
+                }
+            )
+
+        is_post_ignition_closed_bar = bool(
+            bool(c_mk)
+            and (
+                not eff_armed_mk
+                or c_mk >= eff_armed_mk
+            )
+            and (
+                not eff_armed_closed_mk
+                or c_mk > eff_armed_closed_mk
+            )
+            and (
+                not eff_armed_wall_mk
+                or not wall_mk
+                or wall_mk > eff_armed_wall_mk
+            )
+        )
 
         if closed_ha_shaved_bull is not None:
             eff_shaved_bull = bool(
@@ -1980,21 +2318,13 @@ def evaluate_assassin_ha_trailing_and_exits(
             is_closed_ha_red_hit = bool(
                 closed_ha_ready
                 and (not eff_shaved_bull)
-                and bool(closed_bar_minute_key)
-                and (
-                    not eff_armed_mk
-                    or closed_bar_minute_key >= eff_armed_mk
-                )
+                and is_post_ignition_closed_bar
             )
         elif closed_ha_bull is not None:
             is_closed_ha_red_hit = bool(
                 closed_ha_ready
                 and (not closed_ha_bull)
-                and bool(closed_bar_minute_key)
-                and (
-                    not eff_armed_mk
-                    or closed_bar_minute_key >= eff_armed_mk
-                )
+                and is_post_ignition_closed_bar
             )
         else:
             is_closed_ha_red_hit = bool(not soxl_is_ha_bull)
@@ -2009,46 +2339,332 @@ def evaluate_assassin_ha_trailing_and_exits(
                 if bool(closed_ha_bull)
                 else "완결 1분봉 HA 음봉 확정"
             )
-            return {
-                "should_exit": True,
-                "exit_code": "TRAIL_HA_RED_BOOST",
-                "exit_desc": f"🕯️ {ha_exit_lbl} 트레일링 익절(${exec_ha_p:.2f})",
-                "exit_price": exec_ha_p,
-                "is_trailing_armed": True,
-                "just_armed": False,
-                "armed_minute_key": eff_armed_mk,
-                "peak_price": round(cur_peak, 4),
-                "post_entry_min_price": round(cur_min, 4),
-                "active_stop_floor_price": exec_ha_p,
-            }
+            return _pack_rb(
+                {
+                    "should_exit": True,
+                    "exit_code": "TRAIL_HA_RED_BOOST",
+                    "exit_desc": f"🕯️ {ha_exit_lbl} 트레일링 익절(${exec_ha_p:.2f})",
+                    "exit_price": exec_ha_p,
+                    "is_trailing_armed": True,
+                    "just_armed": False,
+                    "armed_minute_key": eff_armed_mk,
+                    "armed_wall_minute_key": eff_armed_wall_mk,
+                    "armed_closed_bar_key": eff_armed_closed_mk,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": exec_ha_p,
+                }
+            )
 
         if safe_int(hm, 0) >= ASSASSIN_MOC_EXIT_HM:
             exec_moc_p = round(max(arm_p, lp), 2)
-            return {
-                "should_exit": True,
-                "exit_code": "TRAIL_MOC_1559",
-                "exit_desc": f"🔔 15:59 장마감 트레일링 확정 익절(${exec_moc_p:.2f})",
-                "exit_price": exec_moc_p,
+            return _pack_rb(
+                {
+                    "should_exit": True,
+                    "exit_code": "TRAIL_MOC_1559",
+                    "exit_desc": f"🔔 15:59 장마감 트레일링 확정 익절(${exec_moc_p:.2f})",
+                    "exit_price": exec_moc_p,
+                    "is_trailing_armed": True,
+                    "just_armed": False,
+                    "armed_minute_key": eff_armed_mk,
+                    "armed_wall_minute_key": eff_armed_wall_mk,
+                    "armed_closed_bar_key": eff_armed_closed_mk,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": exec_moc_p,
+                }
+            )
+
+        return _pack_rb(
+            {
+                "should_exit": False,
+                "exit_code": "ARMED_HOLD_TRACKING",
+                "exit_desc": f"🔥 강세HA 트레일링 추적 중(최고 ${cur_peak:.2f} / 스탑 ${cb_stop_p:.2f})",
+                "exit_price": 0.0,
                 "is_trailing_armed": True,
                 "just_armed": False,
                 "armed_minute_key": eff_armed_mk,
+                "armed_wall_minute_key": eff_armed_wall_mk,
+                "armed_closed_bar_key": eff_armed_closed_mk,
                 "peak_price": round(cur_peak, 4),
                 "post_entry_min_price": round(cur_min, 4),
-                "active_stop_floor_price": exec_moc_p,
+                "active_stop_floor_price": cb_stop_p,
             }
+        )
 
-        return {
-            "should_exit": False,
-            "exit_code": "ARMED_HOLD_TRACKING",
-            "exit_desc": f"🔥 강세HA 트레일링 추적 중(최고 ${cur_peak:.2f} / 스탑 ${cb_stop_p:.2f})",
-            "exit_price": 0.0,
-            "is_trailing_armed": True,
-            "just_armed": False,
-            "armed_minute_key": eff_armed_mk,
-            "peak_price": round(cur_peak, 4),
-            "post_entry_min_price": round(cur_min, 4),
-            "active_stop_floor_price": cb_stop_p,
-        }
+    # =========================================================================
+    # [Case 109] 당일 손절 래치(stop_latched == True) 가동 중:
+    # -5.00% 반등 점화 & 완결 1분봉 무밑꼬리 강세 HA양봉 패스 트레일링
+    # =========================================================================
+    if stop_latched:
+        if (
+            not rb_armed
+            and (
+                eff_bh_top >= rb_arm_m500_p - 1e-9
+                or lp >= rb_arm_m500_p - 1e-9
+            )
+            and lp >= rb_pre_step_fl_p - 1e-9
+        ):
+            rb_armed = True
+            just_rb_armed = True
+            eff_rb_armed_wall_mk = wall_mk
+            eff_rb_armed_mk = eff_form_mk or eff_rb_armed_mk
+            eff_rb_armed_closed_mk = c_mk
+            cur_rb_peak = max(cur_rb_peak, lp, eff_bh_top, rb_arm_m500_p)
+        elif (
+            rb_armed
+            and wall_mk
+            and eff_rb_armed_wall_mk
+            and wall_mk == eff_rb_armed_wall_mk
+        ):
+            if bar_mk and bar_mk > eff_rb_armed_mk:
+                eff_rb_armed_mk = bar_mk
+            if c_mk and c_mk > eff_rb_armed_closed_mk:
+                eff_rb_armed_closed_mk = c_mk
+
+        if rb_armed:
+            cur_rb_peak = max(cur_rb_peak, lp, eff_bh_top, rb_arm_m500_p)
+            rb_stepped = bool(cur_rb_peak >= rb_step_trig_p - 1e-9)
+            eff_rb_floor_p = round(
+                rb_step_lock_p if rb_stepped else rb_pre_step_fl_p, 2
+            )
+
+            if just_rb_armed and lp >= eff_rb_floor_p - 1e-9:
+                return _pack_rb(
+                    {
+                        "should_exit": False,
+                        "exit_code": "REBOUND_ARMED_HOLD_TRACKING",
+                        "exit_desc": (
+                            f"🕯️ -5.00%(${rb_arm_m500_p:.2f}) 반등점화 완료 · "
+                            f"완결1분 강세HA 홀딩 추적 중(방어 ${eff_rb_floor_p:.2f})"
+                        ),
+                        "exit_price": 0.0,
+                        "is_trailing_armed": False,
+                        "just_armed": False,
+                        "peak_price": round(cur_peak, 4),
+                        "post_entry_min_price": round(cur_min, 4),
+                        "active_stop_floor_price": eff_rb_floor_p,
+                    },
+                    latched_v=True,
+                    latched_wmk_v=eff_latched_wall_mk,
+                    rb_armed_v=True,
+                    just_rb_v=True,
+                    rb_mk_v=eff_rb_armed_mk,
+                    rb_wmk_v=eff_rb_armed_wall_mk,
+                    rb_cmk_v=eff_rb_armed_closed_mk,
+                    rb_pk_v=cur_rb_peak,
+                )
+
+            if lp < eff_rb_floor_p - 1e-9:
+                exec_rb_fl = round(
+                    eff_rb_floor_p
+                    if eff_bh_top >= eff_rb_floor_p - 1e-9
+                    else lp,
+                    2,
+                )
+                rb_fl_lbl = (
+                    f"-4.85% 스텝보존선(${rb_step_lock_p:.2f})"
+                    if rb_stepped
+                    else f"-6.00% 초동방어선(${rb_pre_step_fl_p:.2f})"
+                )
+                return _pack_rb(
+                    {
+                        "should_exit": True,
+                        "exit_code": "REBOUND_FLOOR_STOP",
+                        "exit_desc": (
+                            f"🛡️ 손절래치 {rb_fl_lbl} 손실축소 청산(${exec_rb_fl:.2f})"
+                        ),
+                        "exit_price": exec_rb_fl,
+                        "is_trailing_armed": False,
+                        "just_armed": False,
+                        "peak_price": round(cur_peak, 4),
+                        "post_entry_min_price": round(cur_min, 4),
+                        "active_stop_floor_price": eff_rb_floor_p,
+                    },
+                    latched_v=True,
+                    latched_wmk_v=eff_latched_wall_mk,
+                    rb_armed_v=True,
+                    rb_mk_v=eff_rb_armed_mk,
+                    rb_wmk_v=eff_rb_armed_wall_mk,
+                    rb_cmk_v=eff_rb_armed_closed_mk,
+                    rb_pk_v=cur_rb_peak,
+                )
+
+            is_post_rb_closed_bar = bool(
+                bool(c_mk)
+                and (not eff_rb_armed_mk or c_mk >= eff_rb_armed_mk)
+                and (
+                    not eff_rb_armed_closed_mk
+                    or c_mk > eff_rb_armed_closed_mk
+                )
+                and (
+                    not eff_rb_armed_wall_mk
+                    or not wall_mk
+                    or wall_mk > eff_rb_armed_wall_mk
+                )
+            )
+            if closed_ha_shaved_bull is not None:
+                eff_rb_shaved_bull = bool(
+                    (True if closed_ha_bull is None else closed_ha_bull)
+                    and closed_ha_shaved_bull
+                )
+                is_rb_closed_ha_exit = bool(
+                    closed_ha_ready
+                    and (not eff_rb_shaved_bull)
+                    and is_post_rb_closed_bar
+                )
+            elif closed_ha_bull is not None:
+                is_rb_closed_ha_exit = bool(
+                    closed_ha_ready
+                    and (not closed_ha_bull)
+                    and is_post_rb_closed_bar
+                )
+            else:
+                is_rb_closed_ha_exit = bool(not soxl_is_ha_bull)
+
+            if (
+                is_rb_closed_ha_exit
+                and qqq_vel_max_3m_10m_pct < ASSASSIN_QQQ_SURGE_BYPASS_PCT
+            ):
+                exec_rb_ha = round(max(eff_rb_floor_p, lp), 2)
+                rb_ha_lbl = (
+                    "완결 1분봉 아랫꼬리 HA양봉(반등둔화)"
+                    if bool(closed_ha_bull)
+                    else "완결 1분봉 HA 음봉 확정"
+                )
+                return _pack_rb(
+                    {
+                        "should_exit": True,
+                        "exit_code": "REBOUND_HA_TRAIL_EXIT",
+                        "exit_desc": (
+                            f"🕯️ 손절래치 {rb_ha_lbl} 손실축소 청산(${exec_rb_ha:.2f})"
+                        ),
+                        "exit_price": exec_rb_ha,
+                        "is_trailing_armed": False,
+                        "just_armed": False,
+                        "peak_price": round(cur_peak, 4),
+                        "post_entry_min_price": round(cur_min, 4),
+                        "active_stop_floor_price": exec_rb_ha,
+                    },
+                    latched_v=True,
+                    latched_wmk_v=eff_latched_wall_mk,
+                    rb_armed_v=True,
+                    rb_mk_v=eff_rb_armed_mk,
+                    rb_wmk_v=eff_rb_armed_wall_mk,
+                    rb_cmk_v=eff_rb_armed_closed_mk,
+                    rb_pk_v=cur_rb_peak,
+                )
+
+            if safe_int(hm, 0) >= ASSASSIN_MOC_EXIT_HM:
+                exec_rb_moc = round(lp, 2)
+                return _pack_rb(
+                    {
+                        "should_exit": True,
+                        "exit_code": "REBOUND_MOC_1559",
+                        "exit_desc": (
+                            f"🔔 15:59 장마감 반등트레일링 MOC 청산(${exec_rb_moc:.2f})"
+                        ),
+                        "exit_price": exec_rb_moc,
+                        "is_trailing_armed": False,
+                        "just_armed": False,
+                        "peak_price": round(cur_peak, 4),
+                        "post_entry_min_price": round(cur_min, 4),
+                        "active_stop_floor_price": exec_rb_moc,
+                    },
+                    latched_v=True,
+                    latched_wmk_v=eff_latched_wall_mk,
+                    rb_armed_v=True,
+                    rb_mk_v=eff_rb_armed_mk,
+                    rb_wmk_v=eff_rb_armed_wall_mk,
+                    rb_cmk_v=eff_rb_armed_closed_mk,
+                    rb_pk_v=cur_rb_peak,
+                )
+
+            return _pack_rb(
+                {
+                    "should_exit": False,
+                    "exit_code": "REBOUND_ARMED_HOLD_TRACKING",
+                    "exit_desc": (
+                        f"🕯️ 반등 강세HA 추적 중(반등고점 ${cur_rb_peak:.2f} / 방어 ${eff_rb_floor_p:.2f})"
+                    ),
+                    "exit_price": 0.0,
+                    "is_trailing_armed": False,
+                    "just_armed": False,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": eff_rb_floor_p,
+                },
+                latched_v=True,
+                latched_wmk_v=eff_latched_wall_mk,
+                rb_armed_v=True,
+                rb_mk_v=eff_rb_armed_mk,
+                rb_wmk_v=eff_rb_armed_wall_mk,
+                rb_cmk_v=eff_rb_armed_closed_mk,
+                rb_pk_v=cur_rb_peak,
+            )
+
+        if rb_cata_fl_p > 0.0 and lp <= rb_cata_fl_p + 1e-9:
+            exec_cata_p = round(lp, 2)
+            return _pack_rb(
+                {
+                    "should_exit": True,
+                    "exit_code": "LATCH_HARD_FLOOR_STOP",
+                    "exit_desc": (
+                        f"🚨 손절래치 비상 하드플로어(-12.00% · ${rb_cata_fl_p:.2f}) 방어 손절(${exec_cata_p:.2f})"
+                    ),
+                    "exit_price": exec_cata_p,
+                    "is_trailing_armed": False,
+                    "just_armed": False,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": round(rb_cata_fl_p, 2),
+                },
+                latched_v=True,
+                latched_wmk_v=eff_latched_wall_mk,
+                rb_pk_v=cur_rb_peak,
+            )
+
+        if safe_int(hm, 0) >= ASSASSIN_MOC_EXIT_HM:
+            exec_lmoc_p = round(lp, 2)
+            return _pack_rb(
+                {
+                    "should_exit": True,
+                    "exit_code": "LATCH_MOC_1559",
+                    "exit_desc": (
+                        f"🔔 15:59 장마감 손절래치 무오버나이트 MOC 청산(${exec_lmoc_p:.2f})"
+                    ),
+                    "exit_price": exec_lmoc_p,
+                    "is_trailing_armed": False,
+                    "just_armed": False,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": exec_lmoc_p,
+                },
+                latched_v=True,
+                latched_wmk_v=eff_latched_wall_mk,
+                rb_pk_v=cur_rb_peak,
+            )
+
+        cur_g_latched = ((lp - ep) / ep) * 100.0 if ep > 0.0 else 0.0
+        return _pack_rb(
+            {
+                "should_exit": False,
+                "exit_code": "HOLD_STOP_LATCH_WAIT_REBOUND",
+                "exit_desc": (
+                    f"🛡️ 당일 손절래치 대기(현재 {cur_g_latched:+.2f}% ➔ "
+                    f"-5.00% ${rb_arm_m500_p:.2f} 반등점화 대기)"
+                ),
+                "exit_price": 0.0,
+                "is_trailing_armed": False,
+                "just_armed": False,
+                "peak_price": round(cur_peak, 4),
+                "post_entry_min_price": round(cur_min, 4),
+                "active_stop_floor_price": round(rb_cata_fl_p, 2),
+            },
+            latched_v=True,
+            latched_wmk_v=eff_latched_wall_mk,
+            rb_pk_v=cur_rb_peak,
+        )
 
     cur_gain_pct = ((lp - ep) / ep) * 100.0 if ep > 0.0 else 0.0
     if (
@@ -2057,30 +2673,34 @@ def evaluate_assassin_ha_trailing_and_exits(
         and soxl_reg_vwap > 0.0
         and lp >= soxl_reg_vwap
     ):
-        return {
-            "should_exit": True,
-            "exit_code": "VWAP_1500_PROFIT_EXIT",
-            "exit_desc": f"🎯 15:00 이후 수익권 정규장 VWAP(${soxl_reg_vwap:.2f}) 탈출 익절(${lp:.2f})",
-            "exit_price": round(lp, 2),
-            "is_trailing_armed": False,
-            "just_armed": False,
-            "peak_price": round(cur_peak, 4),
-            "post_entry_min_price": round(cur_min, 4),
-            "active_stop_floor_price": round(lp, 2),
-        }
+        return _pack_rb(
+            {
+                "should_exit": True,
+                "exit_code": "VWAP_1500_PROFIT_EXIT",
+                "exit_desc": f"🎯 15:00 이후 수익권 정규장 VWAP(${soxl_reg_vwap:.2f}) 탈출 익절(${lp:.2f})",
+                "exit_price": round(lp, 2),
+                "is_trailing_armed": False,
+                "just_armed": False,
+                "peak_price": round(cur_peak, 4),
+                "post_entry_min_price": round(cur_min, 4),
+                "active_stop_floor_price": round(lp, 2),
+            }
+        )
 
     if safe_int(hm, 0) >= ASSASSIN_MOC_EXIT_HM:
-        return {
-            "should_exit": True,
-            "exit_code": "MOC_1559_EXIT",
-            "exit_desc": f"🔔 15:59 정규장 마감 무오버나이트 MOC 청산(${lp:.2f})",
-            "exit_price": round(lp, 2),
-            "is_trailing_armed": False,
-            "just_armed": False,
-            "peak_price": round(cur_peak, 4),
-            "post_entry_min_price": round(cur_min, 4),
-            "active_stop_floor_price": round(lp, 2),
-        }
+        return _pack_rb(
+            {
+                "should_exit": True,
+                "exit_code": "MOC_1559_EXIT",
+                "exit_desc": f"🔔 15:59 정규장 마감 무오버나이트 MOC 청산(${lp:.2f})",
+                "exit_price": round(lp, 2),
+                "is_trailing_armed": False,
+                "just_armed": False,
+                "peak_price": round(cur_peak, 4),
+                "post_entry_min_price": round(cur_min, 4),
+                "active_stop_floor_price": round(lp, 2),
+            }
+        )
 
     trig_safe, safe_code, safe_desc = evaluate_directional_3stage_safety_net_v2(
         hm=hm,
@@ -2101,29 +2721,78 @@ def evaluate_assassin_ha_trailing_and_exits(
         entry_gate_id=entry_gate_id,
     )
     if trig_safe:
-        return {
-            "should_exit": True,
-            "exit_code": safe_code,
+        if (
+            enable_rebound_latch
+            and safe_int(hm, 0) < ASSASSIN_MOC_EXIT_HM
+            and cur_gain_pct < (ASSASSIN_REBOUND_LATCH_THR_PCT - 1e-9)
+        ):
+            if rb_cata_fl_p > 0.0 and lp <= rb_cata_fl_p + 1e-9:
+                return _pack_rb(
+                    {
+                        "should_exit": True,
+                        "exit_code": "LATCH_HARD_FLOOR_STOP",
+                        "exit_desc": (
+                            f"🚨 과대낙폭 비상 하드플로어(-12.00% · ${rb_cata_fl_p:.2f}) 즉시 방어 손절(${lp:.2f})"
+                        ),
+                        "exit_price": round(lp, 2),
+                        "is_trailing_armed": False,
+                        "just_armed": False,
+                        "peak_price": round(cur_peak, 4),
+                        "post_entry_min_price": round(cur_min, 4),
+                        "active_stop_floor_price": round(rb_cata_fl_p, 2),
+                    },
+                    latched_v=True,
+                    just_latched_v=True,
+                    latched_wmk_v=wall_mk,
+                    rb_pk_v=lp,
+                )
+            return _pack_rb(
+                {
+                    "should_exit": False,
+                    "exit_code": "HOLD_STOP_LATCH_ARMED",
+                    "exit_desc": (
+                        f"🛡️ 과대낙폭({cur_gain_pct:+.2f}%) 바닥매도 유예 & 당일 손절래치 가동"
+                        f"(-5.00% ${rb_arm_m500_p:.2f} 반등점화 대기)"
+                    ),
+                    "exit_price": 0.0,
+                    "is_trailing_armed": False,
+                    "just_armed": False,
+                    "peak_price": round(cur_peak, 4),
+                    "post_entry_min_price": round(cur_min, 4),
+                    "active_stop_floor_price": round(rb_cata_fl_p, 2),
+                },
+                latched_v=True,
+                just_latched_v=True,
+                latched_wmk_v=wall_mk,
+                rb_pk_v=lp,
+            )
+        return _pack_rb(
+            {
+                "should_exit": True,
+                "exit_code": safe_code,
+                "exit_desc": safe_desc,
+                "exit_price": round(lp, 2),
+                "is_trailing_armed": False,
+                "just_armed": False,
+                "peak_price": round(cur_peak, 4),
+                "post_entry_min_price": round(cur_min, 4),
+                "active_stop_floor_price": round(lp, 2),
+            }
+        )
+
+    return _pack_rb(
+        {
+            "should_exit": False,
+            "exit_code": "HOLD_WAITING_IGNITION",
             "exit_desc": safe_desc,
-            "exit_price": round(lp, 2),
+            "exit_price": 0.0,
             "is_trailing_armed": False,
             "just_armed": False,
             "peak_price": round(cur_peak, 4),
             "post_entry_min_price": round(cur_min, 4),
-            "active_stop_floor_price": round(lp, 2),
+            "active_stop_floor_price": 0.0,
         }
-
-    return {
-        "should_exit": False,
-        "exit_code": "HOLD_WAITING_IGNITION",
-        "exit_desc": safe_desc,
-        "exit_price": 0.0,
-        "is_trailing_armed": False,
-        "just_armed": False,
-        "peak_price": round(cur_peak, 4),
-        "post_entry_min_price": round(cur_min, 4),
-        "active_stop_floor_price": 0.0,
-    }
+    )
 
 
 _LAST_ASSASSIN_WARMUP_MONO: float = 0.0
@@ -2496,6 +3165,9 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
 
     is_bull_bar = bool(lp >= cur_bar_open)
     is_ha_bull = bool(soxl_met.get("ha_bull", True))
+    cur_bar_min_key = str(
+        soxl_met.get("cur_bar_minute_key") or ""
+    ).strip()
     closed_bar_min_key = str(
         soxl_met.get("closed_bar_minute_key") or ""
     ).strip()
@@ -2557,6 +3229,7 @@ async def _extract_live_assassin_features_and_qqq_snapshot(
         "cur_bar_low": round(cur_bar_low, 4),
         "is_bull_bar": is_bull_bar,
         "is_ha_bull": is_ha_bull,
+        "cur_bar_minute_key": cur_bar_min_key,
         "closed_bar_minute_key": closed_bar_min_key,
         "closed_ha_ready": closed_ha_ready,
         "closed_ha_bull": closed_ha_bull,
@@ -2901,9 +3574,18 @@ async def _send_3_truth_gate_entry_alert(
         if trig_mode.startswith("T03A_")
         else f"정찰병 #{seq_no} 파견 타점"
     )
+    rb_m5_p = safe_float(st.get("rebound_arm_m500_price"), 0.0)
+    if rb_m5_p <= 0.0 and ep > 0.0:
+        rb_m5_p = (
+            math.ceil(
+                (ep * (1.0 + ASSASSIN_REBOUND_IGNITE_PCT / 100.0) - 1e-9)
+                * 100.0
+            )
+            / 100.0
+        )
     safety_line = (
-        f"🛡️ 안전망(SN4×SN3): 08:15~ 출동QQQ(<b>${eq_qqq:.2f}</b>) 대비 "
-        f"<b>-{dyn_thr:.2f}%</b> 딥안전망(지지붕괴 진성폭락만 손절)"
+        f"🛡️ 안전망(SN4×SN3·Case109): 08:15~ 출동QQQ(<b>${eq_qqq:.2f}</b>) <b>-{dyn_thr:.2f}%</b> "
+        f"(&gt;=-5% 즉시 / &lt;-5%시 <b>${rb_m5_p:.2f}</b> 반등강세HA 손실축소)"
     )
 
     if is_live_pos:
@@ -2959,8 +3641,59 @@ async def _send_4_arm_100_trailing_alert(
         "──────────────",
         f"▫️ 진입단가: <b>${ep:.2f}</b> ➔ 현재가: <b>${live_price:.2f}</b> (<b>{cur_g:+.2f}%</b>)",
         f"🔒 익절보존선: <b>${arm_p:.2f} (+1.00%)</b> 하드 잠금 완료 (손실 가능성 0%!)",
-        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 완결 1분봉 무밑꼬리 강세 HA양봉 홀딩",
-        "▫️ 출구조건: 완결 1분봉 비강세HA(아랫꼬리양봉·음봉) 확정 또는 스텝보존(+1.25%)/콜백(-0.35%) 이탈 시 익절",
+        f"🚀 상단목표캡: <b>${cap_p:.2f} (+5.00%)</b> 까지 완결 1분봉 무밑꼬리 강세 HA양봉 홀딩(콜백 0%)",
+        "▫️ 출구조건: 완결 1분봉 비강세HA(아랫꼬리양봉·음봉) 확정 또는 하드보존선(+1.00%➔+1.25%) 이탈 시 익절",
+        f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
+    ]
+    await context.send_slim_alert("\n".join(lines))
+
+
+async def _send_4b_stop_latch_armed_alert(
+    context: Any,
+    st: Dict[str, Any],
+    live_price: float,
+    now_est: datetime,
+) -> None:
+    if context is None or not hasattr(context, "send_slim_alert"):
+        return
+    m_tag = _mode_badge(st)
+    ep = safe_float(st.get("entry_price"), 0.0)
+    rb_arm_p = safe_float(st.get("rebound_arm_m500_price"), 0.0)
+    cata_p = safe_float(st.get("rebound_cata_floor_price"), 0.0)
+    cur_g = ((live_price - ep) / ep) * 100.0 if ep > 0.0 else 0.0
+    lines = [
+        f"🛡️ <b>[{m_tag} 암살자 과대낙폭 바닥매도 유예 · 당일 손절래치 가동!]</b>",
+        "──────────────",
+        f"▫️ 진입단가: <b>${ep:.2f}</b> ➔ 래치단가: <b>${live_price:.2f}</b> (<b>{cur_g:+.2f}%</b> &lt; -5.00%)",
+        f"🕯️ 반등점화선: <b>${rb_arm_p:.2f} (-5.00%)</b> 도달 시 완결 1분봉 무밑꼬리 강세HA 홀딩 점화!",
+        "▫️ 손실압축: -4.50% 돌파 시 -4.85% 보존 잠금 · +1.00% 돌파 시 정규 익절 트레일링 자동 승격",
+        f"🚨 비상하드플로어: <b>${cata_p:.2f} (-12.00%)</b> 방어 및 15:59 무오버나이트 MOC",
+        f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
+    ]
+    await context.send_slim_alert("\n".join(lines))
+
+
+async def _send_4c_rebound_arm_m500_alert(
+    context: Any,
+    st: Dict[str, Any],
+    live_price: float,
+    now_est: datetime,
+) -> None:
+    if context is None or not hasattr(context, "send_slim_alert"):
+        return
+    m_tag = _mode_badge(st)
+    ep = safe_float(st.get("entry_price"), 0.0)
+    rb_arm_p = safe_float(st.get("rebound_arm_m500_price"), 0.0)
+    arm_100_p = safe_float(st.get("arm_100_price"), 0.0)
+    fl_p = safe_float(st.get("active_stop_floor_price"), 0.0)
+    cur_g = ((live_price - ep) / ep) * 100.0 if ep > 0.0 else -5.0
+    lines = [
+        f"🕯️ <b>[{m_tag} 암살자 -5.00% 반등 도달 · 강세HA 손실축소 트레일링(0.4s) 점화!]</b>",
+        "──────────────",
+        f"▫️ 진입단가: <b>${ep:.2f}</b> ➔ 현재가: <b>${live_price:.2f}</b> (<b>{cur_g:+.2f}%</b> · 점화가 ${rb_arm_p:.2f})",
+        f"🔒 하단방어선: 초동 <b>${fl_p:.2f}</b> (-4.50% 돌파 즉시 <b>-4.85%</b> 하드보존 상향 잠금)",
+        f"🚀 홀딩/승격: 완결 1분봉 무밑꼬리 강세 HA양봉 유지 시 홀딩(<b>${arm_100_p:.2f}</b> 돌파 시 정규 익절 승격!)",
+        "▫️ 청산조건: 완결 1분봉 비강세HA(아랫꼬리양봉·음봉) 확정 또는 방어선 이탈 시 즉시 손실축소 청산",
         f"🕒 {now_est.strftime('%m-%d %H:%M:%S EST')}",
     ]
     await context.send_slim_alert("\n".join(lines))
@@ -3381,6 +4114,16 @@ async def _finalize_assassin_position_entry(
         / 100.0
     )
     cap_p = round(fill_p * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2)
+    rb_arm_m500_p = (
+        math.ceil(
+            (fill_p * (1.0 + ASSASSIN_REBOUND_IGNITE_PCT / 100.0) - 1e-9)
+            * 100.0
+        )
+        / 100.0
+    )
+    rb_cata_fl_p = round(
+        fill_p * (1.0 + ASSASSIN_REBOUND_HARD_FLOOR_PCT / 100.0), 2
+    )
     _, cap_oid = await _dispatch_assassin_safe_cap_sell_order(
         context=context,
         qty=eff_cap_qty,
@@ -3452,9 +4195,25 @@ async def _finalize_assassin_position_entry(
         "is_trailing_armed": False,
         "armed_time_est": "",
         "armed_minute_key": "",
+        "armed_wall_minute_key": "",
+        "armed_closed_bar_key": "",
         "peak_price": round(fill_p, 4),
         "post_entry_min_price": round(fill_p, 4),
         "active_stop_floor_price": 0.0,
+        "is_stop_latched": False,
+        "stop_latched_time_est": "",
+        "stop_latched_wall_minute_key": "",
+        "stop_latched_price": 0.0,
+        "rebound_arm_m500_price": round(rb_arm_m500_p, 2),
+        "rebound_cata_floor_price": round(rb_cata_fl_p, 2),
+        "is_rebound_armed": False,
+        "rebound_armed_time_est": "",
+        "rebound_armed_minute_key": "",
+        "rebound_armed_wall_minute_key": "",
+        "rebound_armed_closed_bar_key": "",
+        "rebound_peak_price": 0.0,
+        "alert_stop_latch_sent": False,
+        "alert_rebound_arm_sent": False,
         "pending_buy_order_id": "",
         "pending_buy_ordered_qty": 0,
         "pending_buy_price": 0.0,
@@ -3888,9 +4647,25 @@ async def _settle_assassin_exit_to_ledger(
         "qqq_chg_from_entry_pct": cur_qqq_chg_pct,
         "is_trailing_armed": new_armed,
         "armed_minute_key": "",
+        "armed_wall_minute_key": "",
+        "armed_closed_bar_key": "",
+        "is_stop_latched": False,
+        "stop_latched_time_est": "",
+        "stop_latched_wall_minute_key": "",
+        "stop_latched_price": 0.0,
+        "rebound_arm_m500_price": 0.0,
+        "rebound_cata_floor_price": 0.0,
+        "is_rebound_armed": False,
+        "rebound_armed_time_est": "",
+        "rebound_armed_minute_key": "",
+        "rebound_armed_wall_minute_key": "",
+        "rebound_armed_closed_bar_key": "",
+        "rebound_peak_price": 0.0,
         "peak_price": peak_p,
         "post_entry_min_price": min_p,
-        "today_exit_reason": exit_desc,
+        "today_exit_reason": _sync_exit_desc_price_tag(
+            exit_desc, round(exec_xp, 2)
+        ),
         "today_exit_time_est": dt_now.strftime("%H:%M:%S"),
         "today_exit_price": round(exec_xp, 2),
         "today_gain_pct": round(gain_pct, 2),
@@ -3934,13 +4709,19 @@ async def _settle_assassin_exit_to_ledger(
         upd_exit["exit_safety_stage1_cnt"] = (
             safe_int(st.get("exit_safety_stage1_cnt"), 0) + 1
         )
-    elif exit_code == "STAGE23_DIR_BEAR_BREAK":
+    elif exit_code in (
+        "STAGE23_DIR_BEAR_BREAK",
+        "REBOUND_HA_TRAIL_EXIT",
+        "REBOUND_FLOOR_STOP",
+        "LATCH_HARD_FLOOR_STOP",
+    ):
         upd_exit["exit_safety_stage23_cnt"] = (
             safe_int(st.get("exit_safety_stage23_cnt"), 0) + 1
         )
     else:
         upd_exit["exit_moc_cnt"] = safe_int(st.get("exit_moc_cnt"), 0) + 1
 
+    _LIVE_EXIT_FIRST_START_MONO.pop(assn_ledger.folder_slug, None)
     if context is not None:
         context.assassin_high_freq_active = False
 
@@ -3961,6 +4742,7 @@ async def _sync_live_pending_exit_order(
 ) -> str:
     sell_oid = str(st.get("pending_exit_sell_order_id") or "").strip()
     if not sell_oid:
+        _LIVE_EXIT_FIRST_START_MONO.pop(assn_ledger.folder_slug, None)
         return "NO_PENDING_EXIT"
 
     det = await context.api.get_order_detail(sell_oid)
@@ -4080,6 +4862,13 @@ async def _sync_live_pending_exit_order(
     if raw_xm <= 0.0 or raw_xm > now_m_x:
         raw_xm = now_m_x
         await assn_ledger.update_state(pending_exit_mono=raw_xm)
+    first_x_m = safe_float(
+        _LIVE_EXIT_FIRST_START_MONO.get(assn_ledger.folder_slug), 0.0
+    )
+    if first_x_m <= 0.0 or first_x_m > now_m_x:
+        first_x_m = raw_xm
+        _LIVE_EXIT_FIRST_START_MONO[assn_ledger.folder_slug] = first_x_m
+    total_exit_elapsed = max(0.0, now_m_x - first_x_m)
     elapsed = now_m_x - raw_xm
     hm_chk = dt_now.hour * 100 + dt_now.minute
     wait_thr = 3.0 if hm_chk >= ASSASSIN_MOC_EXIT_HM else 5.0
@@ -4094,27 +4883,151 @@ async def _sync_live_pending_exit_order(
                     eff_chase_lp = fresh_c_lp
             except Exception:
                 pass
-        if hm_chk >= ASSASSIN_MOC_EXIT_HM:
-            bid_p = await context.api.get_best_bid_price(
+        exit_code_p = str(st.get("pending_exit_code") or "EXIT").upper().strip()
+        hard_floor_p = _resolve_live_profit_exit_floor_price(
+            st, exit_code_p, peak_override=eff_chase_lp
+        )
+        # NEW [Case 107]: 에어포켓 급락으로 60.0초 미체결(체결 0주 & 15:50 이전) 시 보존선 사수 취소 및 용서 릴리스
+        if (
+            hard_floor_p > 0.0
+            and hm_chk < LIVE_TRAIL_FORGIVE_CUTOFF_HM
+            and fq <= 0
+            and total_exit_elapsed >= LIVE_TRAIL_EXIT_FORGIVE_WAIT_SEC
+            and eff_chase_lp < (hard_floor_p - 1e-9)
+        ):
+            try:
+                await context.api.cancel_order(sell_oid)
+            except Exception:
+                pass
+            await asyncio.sleep(0.35)
+            det_c = await context.api.get_order_detail(sell_oid)
+            st_c = (
+                str(det_c.get("status") or "").upper().strip()
+                if isinstance(det_c, dict)
+                else ""
+            )
+            ex_c = (
+                det_c.get("execution")
+                if (
+                    isinstance(det_c, dict)
+                    and isinstance(det_c.get("execution"), dict)
+                )
+                else {}
+            )
+            fq_c = safe_int(ex_c.get("filledQuantity"), 0)
+            fp_c = safe_float(ex_c.get("averageFilledPrice"), hard_floor_p)
+            if st_c == "FILLED":
+                return await _settle_assassin_exit_to_ledger(
+                    context=context,
+                    assn_ledger=assn_ledger,
+                    st=st,
+                    exec_xp=(fp_c if fp_c > 0.0 else hard_floor_p),
+                    exit_code=exit_code_p,
+                    exit_desc=str(
+                        st.get("pending_exit_desc") or "실전 청산 체결"
+                    ),
+                    entry_qqq_p=eq_qqq,
+                    cur_qqq_chg_pct=q_chg,
+                    new_armed=bool(st.get("is_trailing_armed", False)),
+                    peak_p=safe_float(st.get("peak_price"), fp_c),
+                    min_p=safe_float(st.get("post_entry_min_price"), fp_c),
+                    dt_now=dt_now,
+                )
+            if (
+                isinstance(det_c, dict)
+                and st_c in ("CANCELED", "REJECTED", "REPLACED")
+                and fq_c <= 0
+            ):
+                _LIVE_EXIT_FIRST_START_MONO.pop(assn_ledger.folder_slug, None)
+                live_q_rel = max(1, safe_int(st.get("live_held_qty"), 1))
+                ep_rel = max(
+                    0.01, safe_float(st.get("entry_price"), eff_chase_lp)
+                )
+                cap_p_rel = safe_float(st.get("cap_500_price"), 0.0) or round(
+                    ep_rel * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2
+                )
+                _, rel_cap_oid = await _dispatch_assassin_safe_cap_sell_order(
+                    context=context,
+                    qty=live_q_rel,
+                    cap_price=cap_p_rel,
+                    is_live=True,
+                )
+                await assn_ledger.update_state(
+                    is_trailing_armed=False,
+                    armed_time_est="",
+                    armed_minute_key="",
+                    armed_wall_minute_key="",
+                    armed_closed_bar_key="",
+                    peak_price=round(eff_chase_lp, 4),
+                    post_entry_min_price=round(
+                        min(
+                            safe_float(
+                                st.get("post_entry_min_price"), eff_chase_lp
+                            ),
+                            eff_chase_lp,
+                        ),
+                        4,
+                    ),
+                    active_stop_floor_price=0.0,
+                    alert_arm_100_sent=False,
+                    safe_cap_sell_order_id=rel_cap_oid,
+                    pending_exit_sell_order_id="",
+                    pending_exit_code="",
+                    pending_exit_desc="",
+                    pending_exit_mono=0.0,
+                )
+                context.assassin_high_freq_active = False
+                logger.info(
+                    "💡 [Case 107 실전 암살자 에어포켓 60초 미체결 보존선($%.2f) 사수 릴리스] 실호가=$%.2f -> 손절정정 차단 & +5%% 안전캡($%.2f) 복구",
+                    hard_floor_p,
+                    eff_chase_lp,
+                    cap_p_rel,
+                )
+                if hasattr(context, "send_slim_alert"):
+                    await context.send_slim_alert(
+                        title="💡 [[실전] 암살자 에어포켓 미체결 · 보존선 사수 릴리스]",
+                        body=(
+                            f"호가 공백으로 실호가(${eff_chase_lp:.2f})가 익절보존선(${hard_floor_p:.2f})을 하회하여 "
+                            f"하향 정정을 차단하고 주문을 안전 취소했습니다. (+5.00% 안전캡 ${cap_p_rel:.2f} 복구 · 반등 시 재점화)"
+                        ),
+                    )
+                return "ASSASSIN_LIVE_EXIT_FORGIVEN_RELEASE"
+
+        bid_p = (
+            await context.api.get_best_bid_price(
                 TARGET_SYMBOL, fallback_price=eff_chase_lp
             )
-            ref_m_p = (
-                min(eff_chase_lp, bid_p) if bid_p > 0.0 else eff_chase_lp
-            )
-            chase_p = round(max(0.01, ref_m_p * 0.985), 2)
+            if hm_chk >= ASSASSIN_MOC_EXIT_HM
+            else 0.0
+        )
+        chase_p = compute_live_exit_chase_price(
+            st=st,
+            exit_code=exit_code_p,
+            live_price=eff_chase_lp,
+            hm=hm_chk,
+            best_bid_price=bid_p,
+        )
+        cur_ord_p = (
+            safe_float(det.get("price"), 0.0) if isinstance(det, dict) else 0.0
+        )
+        # MODIFIED [Case 107]: 이미 보존선과 동일한 가격에 대기 중이면 중복 정정을 생략해 호가창 시간우선순위 사수
+        if cur_ord_p > 0.0 and abs(chase_p - cur_ord_p) < 0.005:
+            await assn_ledger.update_state(pending_exit_mono=time.monotonic())
         else:
-            chase_p = round(max(0.01, eff_chase_lp * 0.996), 2)
-        try:
-            mod_r = await context.api.modify_order(
-                order_id=sell_oid, new_price=chase_p
-            )
-            new_oid = str((mod_r or {}).get("orderId") or sell_oid).strip()
-            await assn_ledger.update_state(
-                pending_exit_sell_order_id=new_oid,
-                pending_exit_mono=time.monotonic(),
-            )
-        except Exception:
-            pass
+            try:
+                mod_r = await context.api.modify_order(
+                    order_id=sell_oid, new_price=chase_p
+                )
+                new_oid = str((mod_r or {}).get("orderId") or sell_oid).strip()
+                await assn_ledger.update_state(
+                    pending_exit_sell_order_id=new_oid,
+                    pending_exit_desc=_sync_exit_desc_price_tag(
+                        str(st.get("pending_exit_desc") or ""), chase_p
+                    ),
+                    pending_exit_mono=time.monotonic(),
+                )
+            except Exception:
+                pass
     context.assassin_high_freq_active = True
     return "ASSASSIN_LIVE_EXIT_WAITING"
 # -*- coding: utf-8 -*-
@@ -5095,6 +6008,28 @@ async def execute_simulated_assassin_tick_plugin(
             ),
             armed_minute_key=str(st.get("armed_minute_key") or ""),
             cur_minute_key=dt_now.strftime("%Y-%m-%d %H:%M"),
+            cur_bar_minute_key=str(feat.get("cur_bar_minute_key") or ""),
+            armed_wall_minute_key=str(
+                st.get("armed_wall_minute_key") or ""
+            ),
+            armed_closed_bar_key=str(
+                st.get("armed_closed_bar_key") or ""
+            ),
+            is_stop_latched=bool(st.get("is_stop_latched", False)),
+            stop_latched_wall_minute_key=str(
+                st.get("stop_latched_wall_minute_key") or ""
+            ),
+            is_rebound_armed=bool(st.get("is_rebound_armed", False)),
+            rebound_peak_price=safe_float(st.get("rebound_peak_price"), 0.0),
+            rebound_armed_minute_key=str(
+                st.get("rebound_armed_minute_key") or ""
+            ),
+            rebound_armed_wall_minute_key=str(
+                st.get("rebound_armed_wall_minute_key") or ""
+            ),
+            rebound_armed_closed_bar_key=str(
+                st.get("rebound_armed_closed_bar_key") or ""
+            ),
         )
 
         new_armed = bool(exit_eval.get("is_trailing_armed", False))
@@ -5103,8 +6038,37 @@ async def execute_simulated_assassin_tick_plugin(
             or st.get("armed_minute_key")
             or ""
         ).strip()
+        new_armed_wall_mk = str(
+            exit_eval.get("armed_wall_minute_key")
+            or st.get("armed_wall_minute_key")
+            or ""
+        ).strip()
+        new_armed_closed_mk = str(
+            exit_eval.get("armed_closed_bar_key")
+            or st.get("armed_closed_bar_key")
+            or ""
+        ).strip()
+        new_stop_latched = bool(exit_eval.get("is_stop_latched", False))
+        just_stop_latched = bool(exit_eval.get("just_stop_latched", False))
+        new_latched_wmk = str(
+            exit_eval.get("stop_latched_wall_minute_key") or ""
+        ).strip()
+        new_rb_armed = bool(exit_eval.get("is_rebound_armed", False))
+        just_rb_armed = bool(exit_eval.get("just_rebound_armed", False))
+        new_rb_mk = str(
+            exit_eval.get("rebound_armed_minute_key") or ""
+        ).strip()
+        new_rb_wmk = str(
+            exit_eval.get("rebound_armed_wall_minute_key") or ""
+        ).strip()
+        new_rb_cmk = str(
+            exit_eval.get("rebound_armed_closed_bar_key") or ""
+        ).strip()
+        new_rb_pk = safe_float(exit_eval.get("rebound_peak_price"), 0.0)
         if context is not None:
-            context.assassin_high_freq_active = new_armed
+            context.assassin_high_freq_active = bool(
+                new_armed or new_rb_armed
+            )
 
         if (
             new_armed
@@ -5117,6 +6081,11 @@ async def execute_simulated_assassin_tick_plugin(
                 is_trailing_armed=True,
                 armed_time_est=dt_now.strftime("%H:%M:%S"),
                 armed_minute_key=new_armed_mk,
+                armed_wall_minute_key=new_armed_wall_mk,
+                armed_closed_bar_key=new_armed_closed_mk,
+                is_stop_latched=False,
+                is_rebound_armed=False,
+                rebound_peak_price=0.0,
                 peak_price=safe_float(exit_eval.get("peak_price"), lp),
                 post_entry_min_price=safe_float(
                     exit_eval.get("post_entry_min_price"), lp
@@ -5148,19 +6117,74 @@ async def execute_simulated_assassin_tick_plugin(
             return "ASSASSIN_TRAILING_ARMED"
 
         if not bool(exit_eval.get("should_exit", False)):
-            st = await assn_ledger.update_state(
-                entry_qqq_price=entry_qqq_p,
-                qqq_chg_from_entry_pct=cur_qqq_chg_pct,
-                is_trailing_armed=new_armed,
-                armed_minute_key=new_armed_mk,
-                peak_price=safe_float(exit_eval.get("peak_price"), lp),
-                post_entry_min_price=safe_float(
+            hold_upd_kw: Dict[str, Any] = {
+                "entry_qqq_price": entry_qqq_p,
+                "qqq_chg_from_entry_pct": cur_qqq_chg_pct,
+                "is_trailing_armed": new_armed,
+                "armed_minute_key": new_armed_mk,
+                "armed_wall_minute_key": new_armed_wall_mk,
+                "armed_closed_bar_key": new_armed_closed_mk,
+                "is_stop_latched": new_stop_latched,
+                "stop_latched_wall_minute_key": new_latched_wmk,
+                "rebound_arm_m500_price": safe_float(
+                    exit_eval.get("rebound_arm_m500_price"),
+                    safe_float(st.get("rebound_arm_m500_price"), 0.0),
+                ),
+                "rebound_cata_floor_price": safe_float(
+                    exit_eval.get("rebound_cata_floor_price"),
+                    safe_float(st.get("rebound_cata_floor_price"), 0.0),
+                ),
+                "is_rebound_armed": new_rb_armed,
+                "rebound_armed_minute_key": new_rb_mk,
+                "rebound_armed_wall_minute_key": new_rb_wmk,
+                "rebound_armed_closed_bar_key": new_rb_cmk,
+                "rebound_peak_price": new_rb_pk,
+                "peak_price": safe_float(exit_eval.get("peak_price"), lp),
+                "post_entry_min_price": safe_float(
                     exit_eval.get("post_entry_min_price"), lp
                 ),
-                active_stop_floor_price=safe_float(
+                "active_stop_floor_price": safe_float(
                     exit_eval.get("active_stop_floor_price"), 0.0
                 ),
+            }
+            send_latch_alert = bool(
+                new_stop_latched
+                and (
+                    just_stop_latched
+                    or not bool(st.get("alert_stop_latch_sent", False))
+                )
+                and not bool(st.get("alert_stop_latch_sent", False))
             )
+            if send_latch_alert:
+                hold_upd_kw["stop_latched_time_est"] = dt_now.strftime(
+                    "%H:%M:%S"
+                )
+                hold_upd_kw["stop_latched_price"] = round(lp, 4)
+                hold_upd_kw["alert_stop_latch_sent"] = True
+
+            send_rb_alert = bool(
+                new_rb_armed
+                and (
+                    just_rb_armed
+                    or not bool(st.get("alert_rebound_arm_sent", False))
+                )
+                and not bool(st.get("alert_rebound_arm_sent", False))
+            )
+            if send_rb_alert:
+                hold_upd_kw["rebound_armed_time_est"] = dt_now.strftime(
+                    "%H:%M:%S"
+                )
+                hold_upd_kw["alert_rebound_arm_sent"] = True
+
+            st = await assn_ledger.update_state(**hold_upd_kw)
+            if send_latch_alert:
+                await _send_4b_stop_latch_armed_alert(
+                    context=context, st=st, live_price=lp, now_est=dt_now
+                )
+            if send_rb_alert:
+                await _send_4c_rebound_arm_m500_alert(
+                    context=context, st=st, live_price=lp, now_est=dt_now
+                )
             if hm < ASSASSIN_MACRO_CUTOFF_HM and not bool(
                 st.get("gt_gate_scout_done", False)
             ):
@@ -5183,20 +6207,89 @@ async def execute_simulated_assassin_tick_plugin(
         exit_desc = str(exit_eval.get("exit_desc") or exit_code)
         target_xp = safe_float(exit_eval.get("exit_price"), lp)
         if is_live_pos and context is not None and hasattr(context, "api"):
+            fresh_x_lp = 0.0
             try:
                 fresh_x_lp = await context.api.get_current_price(
                     TARGET_SYMBOL, bypass_shm_cache=True
                 )
-                if fresh_x_lp > 0.0:
-                    arm_fl = safe_float(st.get("arm_100_price"), 0.0)
-                    target_xp = round(
-                        max(arm_fl, fresh_x_lp)
-                        if (new_armed and arm_fl > 0.0)
-                        else fresh_x_lp,
-                        2,
-                    )
             except Exception:
-                pass
+                fresh_x_lp = 0.0
+            if fresh_x_lp > 0.0:
+                eval_pk = max(
+                    safe_float(exit_eval.get("peak_price"), lp), fresh_x_lp
+                )
+                hard_fl = _resolve_live_profit_exit_floor_price(
+                    st, exit_code, peak_override=eval_pk
+                )
+                base_arm_fl = safe_float(st.get("arm_100_price"), hard_fl)
+                # NEW [Case 107]: 발주 직전 2차 실호가가 +1.00% 점화선 미만으로 급락 시 허공 발주 없이 즉시 용서 릴리스
+                if (
+                    exit_code in _TRAIL_LOCKED_EXIT_CODES
+                    and hm < LIVE_TRAIL_FORGIVE_CUTOFF_HM
+                    and base_arm_fl > 0.0
+                    and fresh_x_lp < (base_arm_fl - 1e-9)
+                ):
+                    eff_cap_oid = cap_oid_now
+                    if not eff_cap_oid:
+                        ep_f = max(
+                            0.01,
+                            safe_float(st.get("entry_price"), fresh_x_lp),
+                        )
+                        cap_p_f = safe_float(
+                            st.get("cap_500_price"), 0.0
+                        ) or round(
+                            ep_f * (1.0 + ASSASSIN_SAFE_CAP_PCT / 100.0), 2
+                        )
+                        _, eff_cap_oid = (
+                            await _dispatch_assassin_safe_cap_sell_order(
+                                context=context,
+                                qty=max(1, safe_int(st.get("live_held_qty"), 1)),
+                                cap_price=cap_p_f,
+                                is_live=True,
+                            )
+                        )
+                    await assn_ledger.update_state(
+                        entry_qqq_price=entry_qqq_p,
+                        qqq_chg_from_entry_pct=cur_qqq_chg_pct,
+                        is_trailing_armed=False,
+                        armed_time_est="",
+                        armed_minute_key="",
+                        armed_wall_minute_key="",
+                        armed_closed_bar_key="",
+                        peak_price=round(fresh_x_lp, 4),
+                        post_entry_min_price=round(
+                            min(
+                                safe_float(
+                                    exit_eval.get("post_entry_min_price"),
+                                    fresh_x_lp,
+                                ),
+                                fresh_x_lp,
+                            ),
+                            4,
+                        ),
+                        active_stop_floor_price=0.0,
+                        alert_arm_100_sent=False,
+                        safe_cap_sell_order_id=eff_cap_oid,
+                    )
+                    context.assassin_high_freq_active = False
+                    logger.info(
+                        "💡 [Case 107 실전 암살자 2차 실호가($%.2f) < 점화가($%.2f) '허락보다 용서를' 릴리스] code=%s",
+                        fresh_x_lp,
+                        base_arm_fl,
+                        exit_code,
+                    )
+                    return "ASSASSIN_LIVE_TRAIL_FORGIVEN_PRE_ORDER"
+                if hard_fl > 0.0:
+                    floor_cent_lp = (
+                        math.floor((fresh_x_lp + 1e-9) * 100.0) / 100.0
+                    )
+                    target_xp = round(max(hard_fl, floor_cent_lp), 2)
+                    exit_desc = _sync_exit_desc_price_tag(exit_desc, target_xp)
+                else:
+                    target_xp = round(fresh_x_lp, 2)
+            _LIVE_EXIT_FIRST_START_MONO[assn_ledger.folder_slug] = (
+                time.monotonic()
+            )
         eff_sell_q = (
             safe_int(st.get("live_held_qty"), 1)
             if is_live_pos
@@ -5285,6 +6378,13 @@ async def execute_simulated_assassin_tick_plugin(
                     pending_exit_desc=exit_desc,
                     pending_exit_mono=time.monotonic(),
                     is_trailing_armed=new_armed,
+                    is_stop_latched=new_stop_latched,
+                    stop_latched_wall_minute_key=new_latched_wmk,
+                    is_rebound_armed=new_rb_armed,
+                    rebound_peak_price=new_rb_pk,
+                    rebound_armed_minute_key=new_rb_mk,
+                    rebound_armed_wall_minute_key=new_rb_wmk,
+                    rebound_armed_closed_bar_key=new_rb_cmk,
                     peak_price=safe_float(exit_eval.get("peak_price"), lp),
                     post_entry_min_price=safe_float(
                         exit_eval.get("post_entry_min_price"), lp
@@ -5399,8 +6499,18 @@ def format_assassin_slim_radar_block(
                 ((lp - ep) / ep) * 100.0 if (lp > 0.0 and ep > 0.0) else 0.0
             )
             armed = bool(st.get("is_trailing_armed", False))
+            s_latched = bool(st.get("is_stop_latched", False))
+            rb_armed = bool(st.get("is_rebound_armed", False))
+            if armed:
+                trail_tag_s = "HA추적중"
+            elif rb_armed:
+                trail_tag_s = "🕯️-5%반등HA추적"
+            elif s_latched:
+                trail_tag_s = "🛡️손절래치(-5%대기)"
+            else:
+                trail_tag_s = "+1%대기"
             status_line = (
-                f"🔥본대보유({_esc(st.get('entry_gate_id'))}·${ep:.2f}➔{cur_g:+.2f}%·{'HA추적중' if armed else '+1%대기'})"
+                f"🔥본대보유({_esc(st.get('entry_gate_id'))}·${ep:.2f}➔{cur_g:+.2f}%·{trail_tag_s})"
             )
         elif bool(st.get("is_session_done", False)):
             if phase == "NO_TRADE_OFFWORK_0815":
@@ -5518,7 +6628,7 @@ async def build_assassin_detail_dashboard_html(
         vwap_line,
         f"③ 전일종가: <b>${feat['prev_reg_close']:.2f}</b> ({feat['vs_prev_close_pct']:+.2f}%) | ④ 프리시가: <b>${feat['pre_open_price']:.2f}</b> ({feat['vs_pre_open_pct']:+.2f}%)",
         t03a_scan_line,
-        f"🛡️ 단일안전망: QQQ 1분 <b>{feat['qqq_vel_1m_pct']:+.2f}%</b> · 08:15~ 출동 고정QQQ 대비 <b>SN4×SN3(-1.0%)</b> 방어",
+        f"🛡️ 단일안전망: QQQ 1분 <b>{feat['qqq_vel_1m_pct']:+.2f}%</b> · 08:15~ <b>SN4×SN3(-1.0%)</b> (&lt;-5%시 반등강세HA 손실축소)",
         "━━━━━━━━━━━━━━━━━━",
     ]
 
@@ -5539,6 +6649,10 @@ async def build_assassin_detail_dashboard_html(
         pk_p = safe_float(st.get("peak_price"), lp)
         fl_p = safe_float(st.get("active_stop_floor_price"), arm_p)
         armed = bool(st.get("is_trailing_armed", False))
+        s_latched = bool(st.get("is_stop_latched", False))
+        rb_armed = bool(st.get("is_rebound_armed", False))
+        rb_arm_p = safe_float(st.get("rebound_arm_m500_price"), 0.0)
+        rb_pk_p = safe_float(st.get("rebound_peak_price"), lp)
         trig_m = str(st.get("entry_trigger_mode") or "SCOUT_GATE")
         gid_str = str(st.get("entry_gate_id") or "")
         sn_badge = f"08:15~ SN4×SN3 -{dyn_thr:.2f}%"
@@ -5547,13 +6661,26 @@ async def build_assassin_detail_dashboard_html(
             if bool(st.get("is_live_position", False))
             else f"단리 <b>{safe_int(st.get('simple_held_qty'), 0)}주</b> / 복리 <b>{safe_int(st.get('comp_held_qty'), 0)}주</b>"
         )
+        if s_latched:
+            rb_st_lbl = (
+                f"🕯️반등강세HA추적중(반등고점 ${rb_pk_p:.2f} / 방어 ${fl_p:.2f})"
+                if rb_armed
+                else f"🛡️손절래치 대기(반등점화 ${rb_arm_p:.2f} / 비상플로어 ${fl_p:.2f})"
+            )
+            target_def_line = (
+                f"• 손실축소: {rb_st_lbl} · +1%승격 <b>${arm_p:.2f}</b>"
+            )
+        else:
+            target_def_line = (
+                f"• 목표/방어: 캡 <b>${cap_p:.2f}</b>(+5%) · 점화 <b>${arm_p:.2f}</b>(+1%) · 최고 <b>${pk_p:.2f}</b> · 스탑 <b>${fl_p:.2f}</b> ({'HA추적중' if armed else '점화대기'})"
+            )
         lines.extend(
             [
                 f"🔥 <b>[금일 본대 포지션 가동 중 (1일 1회) · 게이트 {_esc(gid_str)}]</b>",
                 f"• 진입단가: <b>${ep:.2f}</b> ({_esc(st.get('entry_time_est'))} EST · {_esc(trig_m)}) ➔ 현재 <b>{cur_g:+.2f}%</b>",
                 f"• 고정QQQ: <b>${eq_qqq:.2f}</b> ➔ 현재 <b>${qqq_lp:.2f}</b> (<b>{qqq_chg:+.2f}%</b> / {sn_badge})",
                 f"• 보유수량: {qty_str}",
-                f"• 목표/방어: 캡 <b>${cap_p:.2f}</b>(+5%) · 점화 <b>${arm_p:.2f}</b>(+1%) · 최고 <b>${pk_p:.2f}</b> · 스탑 <b>${fl_p:.2f}</b> ({'HA추적중' if armed else '점화대기'})",
+                target_def_line,
                 "━━━━━━━━━━━━━━━━━━",
             ]
         )
@@ -5974,5 +7101,416 @@ def run_assassin_plugin_tdd() -> bool:
         ex_weak_bull_exit["should_exit"] is True
         and ex_weak_bull_exit["exit_code"] == "TRAIL_HA_RED_BOOST"
     )
+
+    # 9) 2026-11-17 06:01:31 ➔ 06:01:32 EST (+1분 마감라벨 오프셋) 1초 조기청산 차단 회귀 검증
+    r_ign = evaluate_assassin_ha_trailing_and_exits(
+        hm=601,
+        entry_price=47.77,
+        live_price=48.27,
+        bar_high_price=48.27,
+        is_trailing_armed=False,
+        peak_price=47.77,
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.05,
+        qqq_vel_3m_pct=0.10,
+        qqq_vel_max_3m_10m_pct=0.10,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:01",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=False,
+        armed_minute_key="",
+        cur_minute_key="2026-11-17 06:01",
+        cur_bar_minute_key="2026-11-17 06:02",
+    )
+    assert r_ign["should_exit"] is False and r_ign["just_armed"] is True
+
+    r_1sec = evaluate_assassin_ha_trailing_and_exits(
+        hm=601,
+        entry_price=47.77,
+        live_price=48.27,
+        bar_high_price=48.29,
+        is_trailing_armed=True,
+        peak_price=r_ign["peak_price"],
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.05,
+        qqq_vel_3m_pct=0.10,
+        qqq_vel_max_3m_10m_pct=0.10,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:01",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=False,
+        armed_minute_key=r_ign["armed_minute_key"],
+        cur_minute_key="2026-11-17 06:01",
+        cur_bar_minute_key="2026-11-17 06:02",
+        armed_wall_minute_key=r_ign["armed_wall_minute_key"],
+        armed_closed_bar_key=r_ign["armed_closed_bar_key"],
+    )
+    assert r_1sec["should_exit"] is False, f"06:01:32 1초 조기청산 재발: {r_1sec}"
+
+    r_0602_pass = evaluate_assassin_ha_trailing_and_exits(
+        hm=602,
+        entry_price=47.77,
+        live_price=48.55,
+        bar_high_price=48.60,
+        is_trailing_armed=True,
+        peak_price=48.60,
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.05,
+        qqq_vel_3m_pct=0.10,
+        qqq_vel_max_3m_10m_pct=0.10,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:02",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=True,
+        armed_minute_key=r_1sec["armed_minute_key"],
+        cur_minute_key="2026-11-17 06:02",
+        cur_bar_minute_key="2026-11-17 06:03",
+        armed_wall_minute_key=r_1sec["armed_wall_minute_key"],
+        armed_closed_bar_key=r_1sec["armed_closed_bar_key"],
+    )
+    assert r_0602_pass["should_exit"] is False
+
+    r_0609_exit = evaluate_assassin_ha_trailing_and_exits(
+        hm=609,
+        entry_price=47.77,
+        live_price=48.74,
+        bar_high_price=48.88,
+        is_trailing_armed=True,
+        peak_price=48.88,
+        arm_100_price=48.25,
+        cap_500_price=50.16,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=48.76,
+        soxl_pre_open_price=47.90,
+        soxl_reg_vwap=0.0,
+        post_entry_min_price=47.21,
+        qqq_vel_1m_pct=0.02,
+        qqq_vel_3m_pct=0.05,
+        qqq_vel_max_3m_10m_pct=0.05,
+        qqq_bear_drop_amp_pct=0.50,
+        nq_entry_bear_amp_pct=2.00,
+        closed_bar_minute_key="2026-11-17 06:09",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=False,
+        armed_minute_key=r_0602_pass["armed_minute_key"],
+        cur_minute_key="2026-11-17 06:09",
+        cur_bar_minute_key="2026-11-17 06:10",
+        armed_wall_minute_key=r_0602_pass["armed_wall_minute_key"],
+        armed_closed_bar_key=r_0602_pass["armed_closed_bar_key"],
+    )
+    assert (
+        r_0609_exit["should_exit"] is True
+        and r_0609_exit["exit_code"] == "TRAIL_HA_RED_BOOST"
+    )
+
+    # 10) Case 107: 2026-11-17 실전($47.77 진입 ➔ $48.27 점화) 5.0초 0.996($48.15) 보존선 파괴 원천 차단 검증
+    mock_live_st_100 = {
+        "entry_price": 47.77,
+        "arm_100_price": 48.25,
+        "peak_price": 48.27,
+    }
+    fl_100 = _resolve_live_profit_exit_floor_price(
+        mock_live_st_100, "TRAIL_HA_RED_BOOST"
+    )
+    chase_at_4827 = compute_live_exit_chase_price(
+        mock_live_st_100, "TRAIL_HA_RED_BOOST", live_price=48.27, hm=601
+    )
+    chase_at_4815 = compute_live_exit_chase_price(
+        mock_live_st_100, "TRAIL_HA_RED_BOOST", live_price=48.15, hm=601
+    )
+    assert (
+        abs(fl_100 - 48.25) < 1e-6
+        and abs(chase_at_4827 - 48.25) < 1e-6
+        and abs(chase_at_4815 - 48.25) < 1e-6
+    ), f"Case 107 +1.00% 보존선($48.25) 하향 이탈 재발: {fl_100}, {chase_at_4827}, {chase_at_4815}"
+
+    mock_live_st_125 = {
+        "entry_price": 47.77,
+        "arm_100_price": 48.25,
+        "peak_price": 48.60,
+    }
+    fl_125 = _resolve_live_profit_exit_floor_price(
+        mock_live_st_125, "TRAIL_HA_RED_BOOST"
+    )
+    chase_step_125 = compute_live_exit_chase_price(
+        mock_live_st_125, "TRAIL_HA_RED_BOOST", live_price=48.30, hm=605
+    )
+    chase_stop_cut = compute_live_exit_chase_price(
+        mock_live_st_125, "STAGE23_DIR_BEAR_BREAK", live_price=46.50, hm=945
+    )
+    synced_desc = _sync_exit_desc_price_tag(
+        "🕯️ 완결 1분봉 아랫꼬리 HA양봉(추세둔화) 트레일링 익절($48.27)",
+        48.25,
+    )
+    assert (
+        abs(fl_125 - 48.37) < 1e-6
+        and abs(chase_step_125 - 48.37) < 1e-6
+        and abs(chase_stop_cut - 46.31) < 1e-6
+        and synced_desc.endswith("($48.25)")
+    ), f"Case 107 +1.25% 스텝보존/긴급손절/사유동기화 검증 실패: {fl_125}, {chase_step_125}, {chase_stop_cut}"
+
+    # 11) Case 109: 과대낙폭(<-5.00%) 손절래치 & -5.00% 반등 무밑꼬리 강세HA 패스 & +1.00% 정규 승격 회귀 검증
+    r_mild_cut = evaluate_assassin_ha_trailing_and_exits(
+        hm=938,
+        entry_price=52.34,
+        live_price=50.50,
+        bar_high_price=51.00,
+        is_trailing_armed=False,
+        peak_price=52.34,
+        arm_100_price=52.87,
+        cap_500_price=54.96,
+        soxl_is_bull_bar=False,
+        soxl_is_ha_bull=False,
+        soxl_prev_reg_close=51.00,
+        soxl_pre_open_price=53.02,
+        soxl_reg_vwap=51.20,
+        post_entry_min_price=50.50,
+        qqq_vel_1m_pct=-0.25,
+        qqq_vel_3m_pct=-0.50,
+        qqq_vel_max_3m_10m_pct=-0.50,
+        qqq_bear_drop_amp_pct=1.05,
+        nq_entry_bear_amp_pct=2.00,
+        entry_qqq_price=663.00,
+        qqq_live_price=656.00,
+        entry_gate_id="G3",
+    )
+    assert (
+        r_mild_cut["should_exit"] is True
+        and r_mild_cut["exit_code"] == "STAGE23_DIR_BEAR_BREAK"
+    ), f"Case 109 경미손실(>=-5%) 즉시손절 불발: {r_mild_cut}"
+
+    r_deep_latch = evaluate_assassin_ha_trailing_and_exits(
+        hm=938,
+        entry_price=52.34,
+        live_price=47.25,
+        bar_high_price=50.10,
+        is_trailing_armed=False,
+        peak_price=52.34,
+        arm_100_price=52.87,
+        cap_500_price=54.96,
+        soxl_is_bull_bar=False,
+        soxl_is_ha_bull=False,
+        soxl_prev_reg_close=49.07,
+        soxl_pre_open_price=53.02,
+        soxl_reg_vwap=49.40,
+        post_entry_min_price=47.25,
+        qqq_vel_1m_pct=-0.25,
+        qqq_vel_3m_pct=-0.65,
+        qqq_vel_max_3m_10m_pct=-0.65,
+        qqq_bear_drop_amp_pct=1.02,
+        nq_entry_bear_amp_pct=2.00,
+        entry_qqq_price=663.00,
+        qqq_live_price=656.23,
+        entry_gate_id="G3",
+        closed_bar_minute_key="2026-11-18 09:37",
+        closed_ha_ready=True,
+        closed_ha_bull=False,
+        closed_ha_shaved_bull=False,
+        cur_minute_key="2026-11-18 09:38",
+        cur_bar_minute_key="2026-11-18 09:38",
+    )
+    assert (
+        r_deep_latch["should_exit"] is False
+        and r_deep_latch["is_stop_latched"] is True
+        and r_deep_latch["just_stop_latched"] is True
+        and r_deep_latch["is_rebound_armed"] is False
+    ), f"Case 109 11-18 과대낙폭(-9.72%) 손절래치 불발: {r_deep_latch}"
+
+    r_rb_ign = evaluate_assassin_ha_trailing_and_exits(
+        hm=1000,
+        entry_price=52.34,
+        live_price=49.84,
+        bar_high_price=49.90,
+        is_trailing_armed=False,
+        peak_price=52.34,
+        arm_100_price=52.87,
+        cap_500_price=54.96,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=49.07,
+        soxl_pre_open_price=53.02,
+        soxl_reg_vwap=48.75,
+        post_entry_min_price=46.50,
+        qqq_vel_1m_pct=0.15,
+        qqq_vel_3m_pct=0.35,
+        qqq_vel_max_3m_10m_pct=0.15,
+        qqq_bear_drop_amp_pct=0.48,
+        nq_entry_bear_amp_pct=2.00,
+        entry_qqq_price=663.00,
+        qqq_live_price=659.80,
+        entry_gate_id="G3",
+        closed_bar_minute_key="2026-11-18 09:59",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=True,
+        cur_minute_key="2026-11-18 10:00",
+        cur_bar_minute_key="2026-11-18 10:00",
+        is_stop_latched=True,
+        stop_latched_wall_minute_key="2026-11-18 09:38",
+        rebound_peak_price=47.25,
+    )
+    assert (
+        r_rb_ign["should_exit"] is False
+        and r_rb_ign["is_rebound_armed"] is True
+        and r_rb_ign["just_rebound_armed"] is True
+    ), f"Case 109 -5.00% 반등점화 불발: {r_rb_ign}"
+
+    r_rb_pass = evaluate_assassin_ha_trailing_and_exits(
+        hm=1001,
+        entry_price=52.34,
+        live_price=50.27,
+        bar_high_price=50.92,
+        is_trailing_armed=False,
+        peak_price=52.34,
+        arm_100_price=52.87,
+        cap_500_price=54.96,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=49.07,
+        soxl_pre_open_price=53.02,
+        soxl_reg_vwap=48.77,
+        post_entry_min_price=46.50,
+        qqq_vel_1m_pct=0.12,
+        qqq_vel_3m_pct=0.15,
+        qqq_vel_max_3m_10m_pct=0.15,
+        qqq_bear_drop_amp_pct=0.32,
+        nq_entry_bear_amp_pct=2.00,
+        entry_qqq_price=663.00,
+        qqq_live_price=660.90,
+        entry_gate_id="G3",
+        closed_bar_minute_key="2026-11-18 10:00",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=True,
+        cur_minute_key="2026-11-18 10:01",
+        cur_bar_minute_key="2026-11-18 10:01",
+        is_stop_latched=True,
+        stop_latched_wall_minute_key="2026-11-18 09:38",
+        is_rebound_armed=True,
+        rebound_peak_price=r_rb_ign["rebound_peak_price"],
+        rebound_armed_minute_key=r_rb_ign["rebound_armed_minute_key"],
+        rebound_armed_wall_minute_key=r_rb_ign["rebound_armed_wall_minute_key"],
+        rebound_armed_closed_bar_key=r_rb_ign["rebound_armed_closed_bar_key"],
+    )
+    assert (
+        r_rb_pass["should_exit"] is False
+        and abs(r_rb_pass["active_stop_floor_price"] - 49.81) < 1e-6
+    ), f"Case 109 무밑꼬리 강세HA 홀딩 패스 또는 -4.85% 스텝잠금 불발: {r_rb_pass}"
+
+    r_rb_exit = evaluate_assassin_ha_trailing_and_exits(
+        hm=1003,
+        entry_price=52.34,
+        live_price=50.40,
+        bar_high_price=50.55,
+        is_trailing_armed=False,
+        peak_price=52.34,
+        arm_100_price=52.87,
+        cap_500_price=54.96,
+        soxl_is_bull_bar=False,
+        soxl_is_ha_bull=False,
+        soxl_prev_reg_close=49.07,
+        soxl_pre_open_price=53.02,
+        soxl_reg_vwap=48.85,
+        post_entry_min_price=46.50,
+        qqq_vel_1m_pct=-0.05,
+        qqq_vel_3m_pct=0.05,
+        qqq_vel_max_3m_10m_pct=0.05,
+        qqq_bear_drop_amp_pct=0.35,
+        nq_entry_bear_amp_pct=2.00,
+        entry_qqq_price=663.00,
+        qqq_live_price=660.70,
+        entry_gate_id="G3",
+        closed_bar_minute_key="2026-11-18 10:02",
+        closed_ha_ready=True,
+        closed_ha_bull=False,
+        closed_ha_shaved_bull=False,
+        cur_minute_key="2026-11-18 10:03",
+        cur_bar_minute_key="2026-11-18 10:03",
+        is_stop_latched=True,
+        stop_latched_wall_minute_key="2026-11-18 09:38",
+        is_rebound_armed=True,
+        rebound_peak_price=r_rb_pass["rebound_peak_price"],
+        rebound_armed_minute_key=r_rb_pass["rebound_armed_minute_key"],
+        rebound_armed_wall_minute_key=r_rb_pass["rebound_armed_wall_minute_key"],
+        rebound_armed_closed_bar_key=r_rb_pass["rebound_armed_closed_bar_key"],
+    )
+    assert (
+        r_rb_exit["should_exit"] is True
+        and r_rb_exit["exit_code"] == "REBOUND_HA_TRAIL_EXIT"
+        and abs(r_rb_exit["exit_price"] - 50.40) < 1e-6
+    ), f"Case 109 비강세HA 손실축소 청산 불발: {r_rb_exit}"
+
+    r_rb_prom = evaluate_assassin_ha_trailing_and_exits(
+        hm=1004,
+        entry_price=52.34,
+        live_price=52.90,
+        bar_high_price=52.95,
+        is_trailing_armed=False,
+        peak_price=52.34,
+        arm_100_price=52.87,
+        cap_500_price=54.96,
+        soxl_is_bull_bar=True,
+        soxl_is_ha_bull=True,
+        soxl_prev_reg_close=49.07,
+        soxl_pre_open_price=53.02,
+        soxl_reg_vwap=49.50,
+        post_entry_min_price=46.50,
+        qqq_vel_1m_pct=0.25,
+        qqq_vel_3m_pct=0.50,
+        qqq_vel_max_3m_10m_pct=0.50,
+        qqq_bear_drop_amp_pct=0.0,
+        nq_entry_bear_amp_pct=2.00,
+        entry_qqq_price=663.00,
+        qqq_live_price=664.00,
+        entry_gate_id="G3",
+        closed_bar_minute_key="2026-11-18 10:03",
+        closed_ha_ready=True,
+        closed_ha_bull=True,
+        closed_ha_shaved_bull=True,
+        cur_minute_key="2026-11-18 10:04",
+        cur_bar_minute_key="2026-11-18 10:04",
+        is_stop_latched=True,
+        stop_latched_wall_minute_key="2026-11-18 09:38",
+        is_rebound_armed=True,
+        rebound_peak_price=r_rb_pass["rebound_peak_price"],
+        rebound_armed_minute_key=r_rb_pass["rebound_armed_minute_key"],
+        rebound_armed_wall_minute_key=r_rb_pass["rebound_armed_wall_minute_key"],
+        rebound_armed_closed_bar_key=r_rb_pass["rebound_armed_closed_bar_key"],
+    )
+    assert (
+        r_rb_prom["should_exit"] is False
+        and r_rb_prom["is_trailing_armed"] is True
+        and r_rb_prom["is_stop_latched"] is False
+        and r_rb_prom["is_rebound_armed"] is False
+    ), f"Case 109 +1.00% 정규 수익 트레일링 자동 승격 불발: {r_rb_prom}"
 
     return True

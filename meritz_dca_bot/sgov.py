@@ -1,6 +1,8 @@
 # =====================================================================
 # FILE: meritz_dca_bot/sgov.py   (MERITZ_DCA v1.1.0)
+# v1.3.2 (2026-11-19, audit-fix 6-1): buy_cash_buffer_pct 값이 없을 때의 대체값 1.0 → 10.0 (설정 기본값과 맞춤). SGOV 매수 수량 계산(ORDER_BUFFER_PCT 10%)은 그대로
 # SGOV(미국 초단기 국채 ETF) 회차 적립 — NKE/QLD 적립과 같은 봇·같은 4번 계좌, 판단 공식은 완전히 따로.
+# v1.2.9 (2026-11-17): 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10%(ORDER_BUFFER_PCT)·수량 0 구분 + 오래된 FRED 자료로 캐시 덮지 않기(cache_newer)
 # v1.2.7 (2026-11-14): sgov_step 의 SGOV 알림 7곳을 4번 방(send_panel) 대신 bridge 알림 파일(bridge.write_alert)로 — 비서봇이 자기 방으로 보냄 (문구 그대로)
 # v1.2.5 (2026-11-14): 환율 자료 조회 실패 시 저장된 캐시 폴백.
 # v1.1.0 (2026-11-13): 첫 버전.
@@ -16,6 +18,7 @@
 #   - 모의(dry_run): 주문·환전 API 를 부르지 않음 (주문은 main._order 의 모의 경로, 환전은 부르지 않음)
 # v1.2.0 (2026-11-13): SGOV 패널 금색 표식
 # =====================================================================
+# v1.3.3 (2026-11-20, audit-fix-v2 5-1~5-6): 총 회차 수 증가 문구·관문 (a) 출처 주의 문구·아침 환전액에 주문 여유 10%·달러 부족 미룸 15분·예정일 격자(휴장 보정 누적 방지)·휴장일 표 범위 밖 보류+알림
 import calendar
 import copy
 import requests
@@ -39,6 +42,7 @@ SGOV_DEFAULTS = {
     "target_usd_total": 0.0, "tranche_usd": 0.0, "first_tranche_usd": 0.0,
     "tranches_total": 0, "tranches_done": 0, "interval_days": 0, "next_due_date": "",
     "skip_jump_pct": 1.5, "skip_cap_mode": "review", "fx_avg_months": 36,
+    "due_grid": "",                        # audit-fix 5-5: 휴장일 보정 전 일정 격자 (예정일이 밀리지 않게)
     "wait_usd": 0.0,                       # SGOV 대기 달러 (분배금 + 정수 주문 남은 돈) — 적립 매수에 쓰지 않음
     "skip_streak": 0, "skip_streak_b": 0, "skips_total": 0, "review_hold": False,
     "last_exec_date": "", "last_decision": {},
@@ -48,10 +52,12 @@ SGOV_DEFAULTS = {
 SEED_KEYS = ("symbol", "target_usd_total", "tranche_usd", "first_tranche_usd", "tranches_total", "interval_days",
              "next_due_date", "skip_jump_pct", "skip_cap_mode", "fx_avg_months")
 # 회차 판단이 저장하는 값 (메뉴에서 바꾸는 enabled·skip_jump_pct·skip_cap_mode 는 덮어쓰지 않음)
-PROGRESS_KEYS = ("tranches_total", "tranches_done", "next_due_date", "wait_usd", "skip_streak", "skip_streak_b",
+PROGRESS_KEYS = ("tranches_total", "tranches_done", "next_due_date", "due_grid", "wait_usd", "skip_streak", "skip_streak_b",
                  "skips_total", "review_hold", "last_exec_date", "last_decision")
 
 _HIST = {"fail_ts": 0.0, "fail_day": ""}
+# audit-fix 5-4 (풀이님 결정 2026-11-20 09:35): 달러 부족으로 미루면 메시지를 보내고, 그날은 다시 확인하지 않는다 (900초 재확인 없앰).
+_DEFER = {"day": "", "ts": 0.0, "reserve": 0.0, "tries": 0}
 _DAILY = {"day": ""}
 
 
@@ -122,13 +128,32 @@ def tranche_amount(sg: dict) -> float:
     return _f(sg.get("first_tranche_usd")) if int(_f(sg.get("tranches_done"))) == 0 else _f(sg.get("tranche_usd"))
 
 
-def next_due_after(due_str: str, interval: int, today_str: str) -> str:
-    """다음 회차 날짜 = 이번 예정일 + 간격 (오늘보다 뒤가 될 때까지) → 미국 거래일로 맞춤"""
-    d = _d(due_str) or _d(today_str); t = _d(today_str); step = timedelta(days=max(1, int(interval)))
-    d = d + step
-    while d <= t: d += step
+def _to_trading_day(d):
     while not is_trading_day(d): d += timedelta(days=1)
-    return d.isoformat()
+    return d
+
+
+def next_due_pair(due_str: str, interval: int, today_str: str, grid_str=None):
+    """audit-fix 5-5: 다음 회차 = (거래일로 맞추기 전) 격자 날짜 + 간격. 격자는 휴장일 보정에 밀리지 않고 처음 일정 그대로 이어진다.
+    반환 (예정일, 격자일). 저장된 격자일이 현재 예정일과 맞지 않으면(메뉴에서 예정일을 직접 고친 경우) 예정일을 기준으로 다시 시작."""
+    t = _d(today_str); step = timedelta(days=max(1, int(interval)))
+    due = _d(due_str); grid = _d(grid_str)
+    if grid is not None and due is not None and _to_trading_day(grid) == due:
+        base = grid
+    else:
+        base = due or t
+    g = base + step
+    while g <= t: g += step
+    return _to_trading_day(g).isoformat(), g.isoformat()
+
+
+def next_due_after(due_str: str, interval: int, today_str: str, grid_str=None) -> str:
+    """다음 회차 날짜 = 격자 날짜(이번 일정 + 간격, 오늘보다 뒤) → 미국 거래일로 맞춤 (5-5: grid_str 로 밀림 방지)"""
+    return next_due_pair(due_str, interval, today_str, grid_str)[0]
+
+
+def _advance_due(sg: dict, today_str: str):
+    sg["next_due_date"], sg["due_grid"] = next_due_pair(sg.get("next_due_date"), int(_f(sg.get("interval_days"), 1)), today_str, sg.get("due_grid"))
 
 
 # ---------------------------------------------------------------- 환율 자료 (공개 일별 종가 + 메리츠 적용환율 기록)
@@ -167,6 +192,11 @@ async def get_history(today_kst: str):
     if c.get("fetched_kst") == today_kst and c.get("closes"):
         return [tuple(x) for x in c["closes"]], "cache_today"
     if _HIST["fail_day"] == today_kst and time.time() - _HIST["fail_ts"] < HIST_RETRY_SEC:
+        # v1.2.9: 30분 안 다시 받지 않는 것은 유지하되, 캐시가 있으면 그걸로 판단한다.
+        # 2026-11-16에 이 분기가 None을 돌려줘 관문 (a)(b)가 둘 다 실패해 건너뛴 것이 원인이다.
+        # v1.2.5의 except 블록과 같은 cache_stale 이유를 쓴다.
+        if c.get("closes"):
+            return [tuple(x) for x in c["closes"]], "cache_stale"
         return None, "fetch_failed_recently"
     url = str(SETTINGS.get("sgov_fx_history_url") or FX_HISTORY_URL_DEFAULT)
     try:
@@ -179,6 +209,13 @@ async def get_history(today_kst: str):
         if c.get("closes"):
             return [tuple(x) for x in c["closes"]], "cache_stale"
         return None, "fetch_failed"
+    # v1.2.9: 새로 받은 자료가 기존 캐시보다 오래됐으면(FRED 지연 등) 캐시를 덮지 않는다.
+    # 2026-11-17 실측: FRED 마지막 종가 2026-11-06, 캐시 마지막 2026-11-13(Yahoo).
+    # 덮어쓰면 weekly_jump이 no_reference가 되고 avg_months도 14일이 지나면 history_stale이 된다.
+    # closes는 오름차순 정렬돼 있고, 날짜는 ISO 문자열이라 문자열 비교가 날짜 비교와 같다.
+    if c.get("closes") and closes and closes[-1][0] < c["closes"][-1][0]:
+        RL.ev("external_call", "sgov_fx_history", "ok", "cache_newer", actor="scheduler", rows=len(c["closes"]), last=c["closes"][-1][0])
+        return [tuple(x) for x in c["closes"]], "cache_newer"
     _write_json(p, {"fetched_kst": today_kst, "source": url.split("?")[0], "closes": closes})
     RL.ev("external_call", "sgov_fx_history", "ok", None, actor="scheduler", rows=len(closes), last=closes[-1][0])
     return closes, "fetched"
@@ -277,6 +314,7 @@ def sgov_precheck(sg: dict, today_str: str):
     due = _d(sg.get("next_due_date"))
     if not due or _d(today_str) < due: return "not_due"
     if not is_trading_day(_d(today_str)): return "not_trading_day"
+    if not calendar_known(_d(today_str)): return "calendar_out_of_range"   # audit-fix 5-6: 휴장일 표에 없는 연도 → 휴장 여부를 모르므로 주문 안 함 + 알림
     if sg.get("review_hold"): return "review_hold"
     return None
 
@@ -296,17 +334,24 @@ def apply_skip(sg: dict, kind: str, today_str: str):
     sg["skips_total"] = int(_f(sg.get("skips_total"))) + 1
     sg["skip_streak"] = int(_f(sg.get("skip_streak"))) + 1
     if kind == "b": sg["skip_streak_b"] = int(_f(sg.get("skip_streak_b"))) + 1   # (a) 건너뜀은 proceed3 횟수에 안 셈
-    sg["next_due_date"] = next_due_after(sg.get("next_due_date"), int(_f(sg.get("interval_days"), 1)), today_str)
+    _advance_due(sg, today_str)
     sg["last_exec_date"] = today_str
     if sg.get("skip_cap_mode", "review") == "review" and sg["skip_streak"] >= 3:
         sg["review_hold"] = True
 
 
-def buy_plan(sg: dict, price: float, buffer_pct: float) -> dict:
-    """정수 주 수량 + 1% 여유 포함 필요 달러 (적립 매수와 같은 계산). 남은 돈은 SGOV 대기 달러로 넘김"""
+ORDER_BUFFER_PCT = 10.0   # 시장가 주문 때 메리츠가 따지는 여유 (근거 2: 관측 범위 5.3% 초과·10.3% 이하 — 10%로 잡으면 안전 쪽)
+
+
+def buy_plan(sg: dict, price: float, buffer_pct: float, cash_usd=None) -> dict:
+    """정수 주 수량 + 시장가 주문 여유 포함 필요 달러. 남은 돈은 SGOV 대기 달러로 넘김.
+    메리츠 시장가 매수는 주문가능금액을 수량×가격×(1+약 10%)로 따져서, 1% 여유만으로는 주문이 거절된다 (2026-11-16 실측: 45주·44주 거절, 42주 접수).
+    수량 = min(회차금 기준 int(budget // price), 현금 기준 int(cash_usd // (price × 1.10))). cash_usd 가 None 이면 회차금 기준만 (미리보기용)."""
     budget = round(tranche_amount(sg) + max(0.0, _f(sg.get("wait_usd"))), 4)
     q = int(budget // price) if price > 0 else 0
-    need = round(q * price * (1 + float(buffer_pct) / 100.0), 2)
+    if cash_usd is not None and price > 0:
+        q = min(q, int(max(0.0, float(cash_usd)) // (price * (1 + ORDER_BUFFER_PCT / 100.0))))
+    need = round(q * price * (1 + ORDER_BUFFER_PCT / 100.0), 2)
     return {"budget": budget, "qty": q, "need": need, "left": round(budget - q * price, 4)}
 
 
@@ -314,7 +359,7 @@ def apply_buy(sg: dict, plan: dict, today_str: str):
     sg["tranches_done"] = int(_f(sg.get("tranches_done"))) + 1
     sg["wait_usd"] = max(0.0, plan["left"])
     sg["skip_streak"] = 0; sg["skip_streak_b"] = 0
-    sg["next_due_date"] = next_due_after(sg.get("next_due_date"), int(_f(sg.get("interval_days"), 1)), today_str)
+    _advance_due(sg, today_str)
     sg["last_exec_date"] = today_str
 
 
@@ -363,15 +408,23 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
         if pre:
             if pre == "config_problem" and RL.once("sgov|config_problem"):
                 RL.ev("decision", "sgov_tranche", "skipped", "config_problem", actor="scheduler", n=len(sgov_problems(sg)))
-                _alert("config_problem", today_str, "⛔ [SGOV 설정 확인 필요 — 회차 판단 안 함]\n" + "\n".join("• " + b for b in sgov_problems(sg)))
+                _alert("config_problem", today_str, "[SGOV 설정 확인 필요 — 회차 판단 안 함]\n" + "\n".join("• " + b for b in sgov_problems(sg)))
             elif pre == "review_hold" and RL.once("sgov|review_hold"):
                 RL.ev("decision", "sgov_tranche", "skipped", "review_hold", actor="scheduler", streak=sg.get("skip_streak"))
-                _alert("review_hold", today_str, "🛑 [SGOV 재점검 대기 — 매수 안 함]\n• 3회 연속 건너뛰어 회차를 멈췄습니다 (강제 매수 없음).\n"
+                _alert("review_hold", today_str, "[SGOV 재점검 대기 — 매수 안 함]\n• 3회 연속 건너뛰어 회차를 멈췄습니다 (강제 매수 없음).\n"
                            "• 규칙·환율 자료·남은 일정을 확인한 뒤 SGOV 메뉴에서 '재점검 완료'를 눌러 주세요.")
+            elif pre == "calendar_out_of_range" and RL.once("sgov|calendar_out_of_range"):
+                RL.ev("decision", "sgov_tranche", "skipped", "calendar_out_of_range", actor="scheduler")
+                _alert("calendar_range", today_str, "[SGOV 휴장일 표 범위 밖 — 회차 판단·주문 안 함]\n• 휴장일 표(t_core.US_CLOSED)에 이 연도가 없어 오늘이 휴장일인지 알 수 없습니다.\n• 표를 새 연도로 늘린 뒤 다시 켜지거나 다음 회차에 진행됩니다 (건너뜀 아님, 회차 그대로).")
             elif pre not in ("disabled", "not_due", "done_today", "complete"):
                 RL.count("sgov_skip:" + pre)
             return out
         n_now = int(_f(sg.get("tranches_done"))) + 1; n_tot = int(_f(sg.get("tranches_total")))
+        if _DEFER["day"] == today_str:
+            # audit-fix 5-4: 오늘 달러 부족으로 미룸 → 메시지는 이미 보냈으니 오늘은 다시 확인하지 않고, 잡아 둔 예약만 유지
+            RL.count("sgov_skip:usd_deferred_today")
+            out["reserve"] = max(out["reserve"], _DEFER["reserve"])
+            return out
         x = _f(sg.get("skip_jump_pct"), 1.5)
         gi = await gate_inputs(client, sg, _kst_day())
         g = eval_gates(gi, x)
@@ -388,23 +441,24 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
             await save_sgov_progress(sg)
             RL.ev("decision", "sgov_tranche", "skipped", f"gate_{kind}:{dec.get('why')}", actor="scheduler", audit_ref=aref,
                   streak=sg["skip_streak"], hold=sg.get("review_hold"))
-            msg = (f"⏭ [SGOV {n_now}회차 건너뜀 — 매수 없음]\n• {a_txt}\n• {b_txt}\n"
+            msg = (f"[SGOV {n_now}회차 건너뜀 — 매수 없음]\n• {a_txt}\n• {b_txt}\n"
                    f"• 이 회차는 맨 뒤로 붙였습니다 (전체 {sg['tranches_total']}회). 다음 회차에 몰아 사지 않습니다.\n"
                    f"• 다음 예정일: {sg['next_due_date']} (미국 동부) · 연속 건너뜀 {sg['skip_streak']}회")
-            if sg.get("review_hold"): msg += "\n🛑 3회 연속 → 재점검 대기로 멈춤 (SGOV 메뉴에서 '재점검 완료')"
+            if sg.get("review_hold"): msg += "\n3회 연속 → 재점검 대기로 멈춤 (SGOV 메뉴에서 '재점검 완료')"
             _alert("skip", today_str, msg)
             return out
         # ---- 관문 통과 → (ii) 이 회차 달러를 먼저 예약
-        buf = float(SETTINGS.get("buy_cash_buffer_pct", 1.0))
+        buf = float(SETTINGS.get("buy_cash_buffer_pct", 10.0))
         try: price = float(await client.get_current_price(sym) or 0.0)
         except Exception as pe: price = 0.0; RL.err("sgov_price", pe, event_type="external_call")
         out["reserve"] = round(tranche_amount(sg) + max(0.0, _f(sg.get("wait_usd"))) + tranche_amount(sg) * buf / 100.0, 2)
         if price <= 0:
             if RL.once("sgov|price"):
                 RL.ev("decision", "sgov_tranche", "skipped", "price_zero_deferred", actor="scheduler")
-                _alert("price_deferred", today_str, f"⚠️ [SGOV {n_now}회차 미룸]\n• 현재가 조회 실패 — 오늘은 주문 안 함, 다음 거래일 다시 확인 (건너뜀 아님)")
+                _alert("price_deferred", today_str, f"[SGOV {n_now}회차 미룸]\n• 현재가 조회 실패 — 오늘은 주문 안 함, 다음 거래일 다시 확인 (건너뜀 아님)")
             return out
-        plan = buy_plan(sg, price, buf)
+        usd_before = float(await client.get_buying_power("USD") or 0.0)   # v1.2.9: 수량이 현금에 맞춰지므로 buy_plan 보다 먼저 조회
+        plan = buy_plan(sg, price, buf, usd_before)
         out["reserve"] = round(plan["need"] + plan["left"], 2)
         if live:
             try: bq = float((await client.get_symbol_holdings(sym)).get("qty") or 0.0)
@@ -414,22 +468,25 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
                 fail_reasons[sym] = f"SGOV 장부 {lq:g}주 ≠ 메리츠 {bq if bq is not None else '?'}주"
                 if RL.once("sgov|ledger_mismatch"):
                     RL.ev("decision", "sgov_tranche", "skipped", "ledger_mismatch", actor="scheduler", audit_ref=aref)
-                    _alert("ledger_mismatch", today_str, f"⛔ [SGOV 오늘 주문 안 함]\n• {fail_reasons[sym]}\n• 입고·수동 매매·체결 누락을 확인해 주세요. (건너뜀 아님, 회차 그대로)")
+                    _alert("ledger_mismatch", today_str, f"[SGOV 오늘 주문 안 함]\n• {fail_reasons[sym]}\n• 입고·수동 매매·체결 누락을 확인해 주세요. (건너뜀 아님, 회차 그대로)")
                 return out
-        if plan["qty"] <= 0:
+        if plan["qty"] <= 0 and plan["budget"] < price:
+            # 회차금 자체가 1주 값보다 적을 때만 주문 없이 회차 완료 (v1.2.9: 여유 때문에 수량 0이 된 경우는 아래 달러 부족 미룸으로)
             apply_buy(sg, plan, today_str); await save_sgov_progress(sg)
             RL.ev("decision", "sgov_tranche", "ok", "carry_no_order", actor="scheduler", audit_ref=aref)
-            out["logs"].append(f"↪️ SGOV {n_now}회차: 1주(${price:.2f})보다 적어 주문 없이 대기 달러 ${sg['wait_usd']:.2f} 로 넘김")
+            out["logs"].append(f"↪SGOV {n_now}회차: 1주(${price:.2f})보다 적어 주문 없이 대기 달러 ${sg['wait_usd']:.2f} 로 넘김")
             out["reserve"] = round(_f(sg["wait_usd"]), 2)
             return out
-        usd_before = float(await client.get_buying_power("USD") or 0.0)
-        if usd_before < plan["need"]:
+        if plan["qty"] <= 0 or usd_before < plan["need"]:
             # 달러 부족: SGOV 는 미룸(건너뜀 아님, 예정일 그대로). 예약은 유지 → 적립 매수는 남은 달러로만 (부족하면 그날 쉼)
-            fail_reasons[sym] = f"SGOV 달러 부족 (필요 ${plan['need']:.2f} / 보유 ${usd_before:.2f})"
+            # v1.2.9: 수량 0(회차금 ≥ 1주 값인데 10% 여유 때문에 0주)도 여기로 — need 가 0이라 안내에는 1주 필요액을 보여줌. 회차 완료·예정일 변경 없음.
+            need_txt = plan["need"] if plan["qty"] > 0 else round(price * (1 + ORDER_BUFFER_PCT / 100.0), 2)
+            fail_reasons[sym] = f"SGOV 달러 부족 (필요 ${need_txt:.2f} / 보유 ${usd_before:.2f})"
+            _DEFER.update(day=today_str, ts=time.time(), reserve=out["reserve"], tries=(_DEFER["tries"] + 1 if _DEFER["day"] == today_str else 1))   # audit-fix 5-4
             if RL.once("sgov|usd_insufficient"):
                 RL.ev("decision", "sgov_tranche", "skipped", "usd_insufficient_deferred", actor="scheduler", audit_ref=aref)
-                _alert("usd_deferred", today_str, f"⚠️ [SGOV {n_now}회차 미룸 — 달러 부족]\n• 필요 ${plan['need']:.2f} / 보유 ${usd_before:.2f}\n"
-                           f"• 건너뜀이 아니라 미룸입니다 (예정일 그대로, 다음 거래일 다시 확인).\n• SGOV 몫을 먼저 떼어 두어 적립 매수는 남은 달러로만 합니다.")
+                _alert("usd_deferred", today_str, f"[SGOV {n_now}회차 미룸 — 달러 부족]\n• 필요 ${need_txt:.2f} / 보유 ${usd_before:.2f}\n"
+                           f"• 건너뜀이 아니라 미룸입니다 (예정일 그대로, 오늘은 다시 확인하지 않고 다음 거래일 다시 확인).\n• SGOV 몫을 먼저 떼어 두어 적립 매수는 남은 달러로만 합니다.")
             return out
         if not (await DcaConfigManager.load()).get("is_master_active", False):
             RL.ev("decision", "sgov_tranche", "skipped", "master_turned_off", actor="scheduler"); return out
@@ -440,7 +497,7 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
         except Exception as oe:
             sg2 = sgov_block(await DcaConfigManager.load()); sg2["last_exec_date"] = today_str
             await save_sgov_progress(sg2)            # 거절·응답 없음 모두 오늘은 다시 주문하지 않음 (회차·예정일 그대로)
-            _alert("order_failed", today_str, f"⚠️ [SGOV {n_now}회차 주문 안 됨]\n• {str(oe)[:160]}\n• 오늘은 다시 주문하지 않습니다. 응답이 끊긴 경우 체결됐을 수 있으니 메리츠 앱에서 확인해 주세요.")
+            _alert("order_failed", today_str, f"[SGOV {n_now}회차 주문 안 됨]\n• {str(oe)[:160]}\n• 오늘은 다시 주문하지 않습니다. 응답이 끊긴 경우 체결됐을 수 있으니 메리츠 앱에서 확인해 주세요.")
             return out
         spent = round(plan["qty"] * price * (1 + buf / 100.0), 2)
         apply_buy(sg, plan, today_str); await save_sgov_progress(sg); fail_reasons.pop(sym, None)
@@ -448,7 +505,7 @@ async def sgov_step(client, order_fn, today_str: str, live: bool) -> dict:
         except Exception: usd_after = usd_before
         already = min(spent, max(0.0, usd_before - usd_after))     # 증권사가 이미 뺀 만큼은 예약에서 뺌 (두 번 막지 않게)
         out["reserve"] = round(max(0.0, spent - already) + _f(sg["wait_usd"]), 2)
-        out["logs"].append(f"🪙 SGOV {n_now}/{sg['tranches_total']}회차: {plan['qty']}주 시장가 매수 (회차 예산 ${plan['budget']:.2f}"
+        out["logs"].append(f"SGOV {n_now}/{sg['tranches_total']}회차: {plan['qty']}주 시장가 매수 (회차 예산 ${plan['budget']:.2f}"
                            f"{' · 7일 상승 기준 무시(3회째 진행)' if dec['override_b'] else ''}) · 다음 {sg['next_due_date']}")
     except Exception as e:
         RL.err("sgov_step", e, event_type="decision")
@@ -463,7 +520,9 @@ async def sgov_fx_need(client, cfg: dict, kst_day: str) -> float:
         if sgov_precheck(sg, kst_day): return 0.0
         g = eval_gates(await gate_inputs(client, sg, kst_day), _f(sg.get("skip_jump_pct"), 1.5))
         if sgov_decide(sg, g)["action"] != "buy": return 0.0
-        return round(tranche_amount(sg) + max(0.0, _f(sg.get("wait_usd"))), 2)
+        # audit-fix 5-3: 저녁 주문은 수량×가격×(1+ORDER_BUFFER_PCT%) 만큼 달러를 요구하므로 아침 환전액에도 같은 여유를 얹는다
+        #   (여유 없이 환전하면 저녁에 '달러 부족 미룸'이 난다)
+        return round((tranche_amount(sg) + max(0.0, _f(sg.get("wait_usd")))) * (1 + ORDER_BUFFER_PCT / 100.0), 2)
     except Exception as e:
         RL.err("sgov_fx_need", e, event_type="decision"); return 0.0
 
@@ -483,10 +542,10 @@ async def sgov_daily_refresh(client, now_kst=None):
 # ---------------------------------------------------------------- 화면 (텔레그램 조작판)
 def sgov_panel_line(cfg: dict) -> str:
     sg = cfg.get("sgov") if isinstance(cfg.get("sgov"), dict) else {}
-    if not sg.get("enabled"): return " • 🪙 SGOV 회차 적립: ⚪ 꺼짐"
+    if not sg.get("enabled"): return " • SGOV 회차 적립: 꺼짐"
     lg = sg.get("ledger") or {}
-    return (f" • 🪙 SGOV 회차 적립: 🟢 {int(_f(sg.get('tranches_done')))}/{int(_f(sg.get('tranches_total')))}회 · 다음 {sg.get('next_due_date') or '-'}"
-            f" · 보유 {_f(lg.get('qty')):g}주" + (" · 🛑 재점검 대기" if sg.get("review_hold") else ""))
+    return (f" • SGOV 회차 적립: {int(_f(sg.get('tranches_done')))}/{int(_f(sg.get('tranches_total')))}회 · 다음 {sg.get('next_due_date') or '-'}"
+            f" · 보유 {_f(lg.get('qty')):g}주" + (" · 재점검 대기" if sg.get("review_hold") else ""))
 
 
 def build_sgov_view(cfg: dict, notice: str = ""):
@@ -497,35 +556,35 @@ def build_sgov_view(cfg: dict, notice: str = ""):
     act = {"buy": "매수", "skip_a": "건너뜀 (a 평균 환율)", "skip_b": "건너뜀 (b 7일 상승)"}.get(ld.get("action"), "-")
     probs = sgov_problems(sg)
     lines = [
-        f"🟨 [SGOV 달러 단기 회차 적립 ({BOT_VERSION})]",
-        f"▫️ 상태: {'🟢 켜짐' if sg.get('enabled') else '⚪ 꺼짐'}" + (" · 🛑 재점검 대기 (매수 멈춤)" if sg.get("review_hold") else ""),
-        f"▫️ 회차: {int(_f(sg.get('tranches_done')))}/{int(_f(sg.get('tranches_total')))}회 완료 · 간격 {int(_f(sg.get('interval_days')))}일 · 건너뜀 누적 {int(_f(sg.get('skips_total')))}회",
-        f"▫️ 다음 예정일: {sg.get('next_due_date') or '-'} (미국 동부) · 이번 회차 ${tranche_amount(sg):,.2f}",
-        f"▫️ 연속 건너뜀: {int(_f(sg.get('skip_streak')))}회 (7일 상승 연속 {int(_f(sg.get('skip_streak_b')))}회)",
+        f"[SGOV 달러 단기 회차 적립 ({BOT_VERSION})]",
+        f"· 상태: {'켜짐' if sg.get('enabled') else '꺼짐'}" + (" · 재점검 대기 (매수 멈춤)" if sg.get("review_hold") else ""),
+        f"· 회차: {int(_f(sg.get('tranches_done')))}/{int(_f(sg.get('tranches_total')))}회 완료 · 간격 {int(_f(sg.get('interval_days')))}일 · 건너뜀 누적 {int(_f(sg.get('skips_total')))}회",
+        f"· 다음 예정일: {sg.get('next_due_date') or '-'} (미국 동부) · 이번 회차 ${tranche_amount(sg):,.2f}",
+        f"· 연속 건너뜀: {int(_f(sg.get('skip_streak')))}회 (7일 상승 연속 {int(_f(sg.get('skip_streak_b')))}회)",
         "─────────────────",
-        "⚙️ [건너뜀 규칙 — 다음 회차 판단부터 적용, 바꿔도 바로 사지 않음]",
-        f" • (a) 회차 날 적용환율이 최근 {int(_f(sg.get('fx_avg_months'), 36))}개월 평균보다 낮아야 매수",
+        "[건너뜀 규칙 — 다음 회차 판단부터 적용, 바꿔도 바로 사지 않음]",
+        f" • (a) 회차 날 적용환율이 최근 {int(_f(sg.get('fx_avg_months'), 36))}개월 평균보다 낮아야 매수 (적용환율=메리츠 API 값, 평균=FRED USD/KRW 일별 종가 평균 — 출처·기준이 달라 같은 잣대가 아님)",
         f" • (b) 7일 전보다 {x:g}% 이상 오르면 건너뜀 (X = {x:g}%)",
         f" • 연속 건너뜀: {CAP_MODES.get(mode, mode)}",
-        " • 건너뛴 회차는 맨 뒤로 붙임 (다음 회차에 몰아 사지 않음)",
+        " • 건너뛴 회차는 맨 뒤로 붙임 (다음 회차에 몰아 사지 않음) — 총 매수 횟수가 계획보다 늘어난다 (총 회차 수 +1)",
         "─────────────────",
-        "📒 [SGOV 장부 — NKE/QLD 적립과 따로]",
+        "[SGOV 장부 — NKE/QLD 적립과 따로]",
         f" • 보유 {q:g}주 · 원금 ${pr:,.2f} · 평단 ${(pr / q if q > 1e-9 else 0):.4f}",
         f" • 분배금 누적 ${_f(lg.get('distributions_usd')):,.2f} · SGOV 대기 달러 ${_f(sg.get('wait_usd')):,.2f} (다음 회차에 재투자)",
         f" • 최근 판단: {ld.get('date') or '-'} {act}" + (f" · 환율 {ld['rate']:.2f} / 평균 {ld['avg']:.2f}" if ld.get("rate") and ld.get("avg") else "")
         + (f" · 7일 {ld['jump']:+.2f}%" if ld.get("jump") is not None else ""),
     ]
-    if probs: lines += ["⛔ 설정 확인 필요:"] + ["   · " + p for p in probs[:5]]
+    if probs: lines += ["설정 확인 필요:"] + ["   · " + p for p in probs[:5]]
     if notice: lines = [notice, ""] + lines
-    kb = [[{"text": ("✅ " if abs(v - x) < 1e-9 else "") + f"X {v:g}%", "callback_data": f"sgovx_{v:g}"} for v in SKIP_X_CHOICES[:3]],
-          [{"text": ("✅ " if abs(v - x) < 1e-9 else "") + f"X {v:g}%", "callback_data": f"sgovx_{v:g}"} for v in SKIP_X_CHOICES[3:]]]
+    kb = [[{"text": ("[선택] " if abs(v - x) < 1e-9 else "") + f"X {v:g}%", "callback_data": f"sgovx_{v:g}"} for v in SKIP_X_CHOICES[:3]],
+          [{"text": ("[선택] " if abs(v - x) < 1e-9 else "") + f"X {v:g}%", "callback_data": f"sgovx_{v:g}"} for v in SKIP_X_CHOICES[3:]]]
     for m, label in CAP_MODES.items():
-        kb.append([{"text": ("✅ " if m == mode else "") + label, "callback_data": f"sgovmode_{m}"}])
+        kb.append([{"text": ("[선택] " if m == mode else "") + label, "callback_data": f"sgovmode_{m}"}])
     if sg.get("review_hold"):
-        kb.append([{"text": "✅ 재점검 완료 · 다음 회차부터 다시 판단", "callback_data": "sgov_review_ok"}])
-    kb.append([{"text": "💵 분배금 기록", "callback_data": "sgov_dist"},
-               {"text": "⏸ SGOV 끄기" if sg.get("enabled") else "▶️ SGOV 켜기", "callback_data": "sgov_toggle"}])
-    kb.append([{"text": "🔄 새로고침", "callback_data": "sgov"}, {"text": "🔙 관제탑", "callback_data": "panel"}])
+        kb.append([{"text": "재점검 완료 · 다음 회차부터 다시 판단", "callback_data": "sgov_review_ok"}])
+    kb.append([{"text": "분배금 기록", "callback_data": "sgov_dist"},
+               {"text": "SGOV 끄기" if sg.get("enabled") else "SGOV 켜기", "callback_data": "sgov_toggle"}])
+    kb.append([{"text": "새로고침", "callback_data": "sgov"}, {"text": "관제탑", "callback_data": "panel"}])
     return "\n".join(lines), kb
 
 
@@ -555,7 +614,7 @@ async def sgov_preview_lines(client, cfg: dict, today_et: str) -> list:
     out = [f"- SGOV 회차 적립: {'켜짐' if sg.get('enabled') else '꺼짐'} · {int(_f(sg.get('tranches_done')))}/{int(_f(sg.get('tranches_total')))}회"
            f" · 다음 {sg.get('next_due_date') or '-'} · X {_f(sg.get('skip_jump_pct'), 1.5):g}% · {sg.get('skip_cap_mode')}"
            f" · 장부 {_f(sg['ledger'].get('qty')):g}주 · 대기 ${_f(sg.get('wait_usd')):.2f}"]
-    for p in sgov_problems(sg): out.append("  ✗ " + p)
+    for p in sgov_problems(sg): out.append("  " + p)
     pre = sgov_precheck(sg, today_et)
     gi = await gate_inputs(client, sg, _kst_day())
     g = eval_gates(gi, _f(sg.get("skip_jump_pct"), 1.5))
@@ -570,9 +629,9 @@ async def sgov_preview_lines(client, cfg: dict, today_et: str) -> list:
         return out
     try:
         p = float(await client.get_current_price(sym) or 0)
-        plan = buy_plan(sg, p, float(SETTINGS.get("buy_cash_buffer_pct", 1.0)))
+        plan = buy_plan(sg, p, float(SETTINGS.get("buy_cash_buffer_pct", 10.0)))
         out.append(f"  → 오늘 계획: {sym} {plan['qty']}주 매수 (회차 ${plan['budget']:.2f}, 필요 ${plan['need']:.2f}, 남은 ${plan['left']:.2f} 대기)"
                    + (" · 7일 상승 기준 무시(3회째)" if dec["override_b"] else ""))
     except Exception as e:
-        out.append(f"  ✗ {sym} 시세 조회 실패 {e}")
+        out.append(f"  {sym} 시세 조회 실패 {e}")
     return out

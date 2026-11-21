@@ -1,0 +1,14 @@
+# 브리핑 타이머 (기존 bot-office-briefing.timer 는 건드리지 않는다)
+# 09:30 CST(Asia/Taipei, UTC+8, 서머타임 없음) = 10:30 KST = 02:30 UTC, 평일. Q3 확인됨.
+# Asia/Taipei 접미사는 systemd 버전에 따라 안 될 수 있어 UTC 로 적는다.
+[Unit]
+Description=Telegram briefing timer (weekdays 02:30 UTC = 09:30 CST)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 02:30:00 UTC
+Persistent=true
+AccuracySec=30s
+Unit=briefing.service
+
+[Install]
+WantedBy=timers.target

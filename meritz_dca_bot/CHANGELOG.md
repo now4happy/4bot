@@ -1,4 +1,34 @@
-# 3번 메리츠 적립 변경 기록
+# 6번 메리츠 적립 변경 기록
+
+## v1.3.4 · 2026-11-20 13:53 (KST)
+- 파일: main.py, t_core.py
+- 내용: audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
+- 브랜치: staging
+
+## v1.3.3 · 2026-11-20 12:17 (KST)
+- 파일: main.py, sgov.py, t_core.py
+- 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)
+- 브랜치: staging
+
+## v1.3.2 · 2026-11-19 20:54 (KST)
+- 파일: dca_engine.py, main.py, meritz_api.py, sgov.py, t_core.py, t_ui.py
+- 내용: fix(audit): 1번 보유 조회 실패 구분·타임아웃 중복 방지, 6번 v1.3.2, 7번 v2.2.1
+- 브랜치: staging
+
+## v1.3.1 · 2026-11-19 16:49 (KST)
+- 파일: main.py
+- 내용: 텔레그램 매매봇 메뉴 정리 3차 v3: 7번 v2.0.9 기준 재적용 + 6번 문구 정리
+- 브랜치: staging
+
+## v1.3.0 · 2026-11-19 15:40 (KST)
+- 파일: main.py, sgov.py, t_core.py, t_ui.py
+- 내용: 텔레그램 매매봇 메뉴 정리 3차 v2 (7번 제외): 첫 화면 4칸·금액 메뉴 설명·범위 표시·이모티콘 제거
+- 브랜치: staging
+
+## v1.2.9 · 2026-11-17 09:44 (KST)
+- 파일: sgov.py, t_core.py
+- 내용: meritz_dca_bot v1.2.9: SGOV 환율 재시도 창 캐시 폴백 + 시장가 주문 여유 10% + 오래된 FRED 자료 덮지 않기 (방: 3. 미국주식 적립)
+- 브랜치: staging
 
 ## v1.2.8 · 2026-11-14 13:57 (KST)
 - 파일: t_core.py

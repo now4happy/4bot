@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: scheduler_regular.py
 # ==========================================================
+# 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-3·1-5] 시세(현재가/전일종가) 0 이하면 계획 없이 다음 재시도로 넘김 · 달력 폴백은 휴장 처리(Fail-Closed)
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 39대 엣지 케이스 완벽 결속 교차 검증 완료.
 # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 await asyncio.sleep(0.06) 땜질을 무려 24개소에서 전면 삭제.
 # 🚨 MODIFIED: [중앙 통제소 위임] 모든 API 지연을 GlobalThrottle(중앙 통제소)로 100% 위임하여 비동기 이벤트 루프 마비 및 교착 상태 완벽 방어.
@@ -11,6 +12,7 @@
 # 🚨 MODIFIED: [TimeoutError 침묵 패러독스 수술] 파이썬 내장 TimeoutError 발생 시 str(e)가 빈 문자열("")을 반환하여 텔레그램 타전망에 사유가 누락되는 현상을 100% 원천 봉쇄(type(e).__name__ 폴백 결속).
 # 🚨 NEW: [스레드 풀 고갈(Thread Leak) 궁극 수술] 하위 KIS 통신 지연(최대 35초) 시 상위 `wait_for`가 10~15초 만에 코루틴을 취소시켜 발생하는 '좀비 스레드 누적 및 교착(Deadlock)' 대참사를 원천 봉쇄하기 위해, 모든 비동기 I/O 래퍼의 타임아웃을 45.0초로 상향 팩트 하드 캡핑 완료.
 # 🚨 MODIFIED: [오인 패러독스 방어] 15:26 EST 본진 덫 투하 기상 시, 가동할 V-REV 종목이 모두 매매 잠금(is_locked=True) 상태로 퇴근했다면 맹목적인 "투하 개시" 브로드캐스트를 전면 묵살하고 스케줄러 자체를 조용히 바이패스(Bypass)하도록 팩트 방어막 결속 완료.
+# 🚨 v1.0.4 (2026-11-19): [audit-fix 1-1] 잔고 조회 결과에서 보유(holdings)가 None 이거나 형식이 깨지면 {} 로 바꾸지 않고 '보유 조회 실패'로 기록·중단 (주문 계획을 짜지 않음).
 # ==========================================================
 import logging
 import datetime
@@ -85,14 +87,14 @@ async def scheduled_early_regular_trade(context):
             break
         except asyncio.TimeoutError:
             if attempt == 2:
-                logging.error("⚠️ is_market_open 달력 API 타임아웃. 평일이므로 강제 개장 처리합니다.")
+                logging.error("⚠️ is_market_open 달력 API 타임아웃. 이번 회차 주문 보류(audit-fix 1-5).")
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
         except Exception:
             if attempt == 2:
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
@@ -146,7 +148,8 @@ async def scheduled_early_regular_trade(context):
                     # 🚨 MODIFIED: [스레드 풀 고갈 붕괴 수술] 15.0 -> 45.0 강제 상향
                     res = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=45.0)
                     cash = _safe_float(res[0]) if isinstance(res, (list, tuple)) and len(res) > 0 else 0.0
-                    holdings = res[1] if isinstance(res, (list, tuple)) and len(res) > 1 else {}
+                    # audit-fix 1-1: 형식이 깨졌거나 holdings 가 dict 가 아니면 {}(보유 없음)로 바꾸지 않고 None(실패)로 둔다.
+                    holdings = res[1] if isinstance(res, (list, tuple)) and len(res) > 1 and isinstance(res[1], dict) else None
                     break
                 except asyncio.TimeoutError:
                     if attempt == 2: return False, "잔고 조회 타임아웃"
@@ -156,7 +159,9 @@ async def scheduled_early_regular_trade(context):
                     else: await asyncio.sleep(1.0 * (2 ** attempt))
             
             if holdings is None:
-                return False, "❌ 계좌 정보를 불러오지 못했습니다."
+                # audit-fix 1-1: 보유 조회 실패 — 주문 계획을 짜지 않고 실패로 기록 (바깥 재시도 루프가 다시 시도)
+                logging.error("🚨 [보유 조회 실패] holdings=None — 이번 회차 주문 계획 생성 중단")
+                return False, "❌ 보유 조회 실패 (계좌 정보를 불러오지 못했습니다). 주문 계획을 만들지 않았습니다."
             
             safe_holdings = holdings if isinstance(holdings, dict) else {}
             
@@ -233,6 +238,15 @@ async def scheduled_early_regular_trade(context):
                         except Exception:
                             pass
                         await asyncio.sleep(1.0 * (2**_api_retry))
+
+                    # audit-fix 1-3: 현재가·전일종가 조회 실패(0)로 빈 계획을 만들어 '성공' 처리하지 않는다 — 실패로 기록, 바깥 재시도 루프가 다시 시도
+                    if curr_p <= 0 or prev_c <= 0:
+                        logging.error(f"🚨 [{t}] 시세 조회 실패 (현재가={curr_p}, 전일종가={prev_c}) — 주문 계획 생성 중단")
+                        msgs[t] += f"🚨 <b>[{t}] 시세 조회 실패 (현재가/전일종가). 주문 계획을 만들지 않았습니다.</b>\n"
+                        all_success_map[t] = False
+                        loop_fully_successful = False
+                        loop_fail_reason = f"[{t}] 시세 조회 실패"
+                        continue
 
                     ma_5day = 0.0
                     for attempt in range(3):
@@ -440,12 +454,12 @@ async def scheduled_regular_trade_delayed(context):
         except asyncio.TimeoutError:
             if attempt == 2:
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
         except Exception:
             if attempt == 2:
                 est = ZoneInfo('America/New_York')
-                is_open = datetime.datetime.now(est).weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
@@ -513,14 +527,17 @@ async def scheduled_regular_trade_delayed(context):
                     # 🚨 MODIFIED: 15.0 -> 45.0
                     res = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=45.0)
                     cash = _safe_float(res[0]) if isinstance(res, (list, tuple)) and len(res) > 0 else 0.0
-                    holdings = res[1] if isinstance(res, (list, tuple)) and len(res) > 1 else {}
+                    # audit-fix 1-1: 형식이 깨졌거나 holdings 가 dict 가 아니면 {}(보유 없음)로 바꾸지 않고 None(실패)로 둔다.
+                    holdings = res[1] if isinstance(res, (list, tuple)) and len(res) > 1 and isinstance(res[1], dict) else None
                     break
                 except Exception as e:
                     if attempt == 2: return False, f"잔고 조회 오류: {html.escape(str(e))}"
                     else: await asyncio.sleep(1.0 * (2 ** attempt))
             
             if holdings is None:
-                return False, "❌ 계좌 정보를 불러오지 못했습니다."
+                # audit-fix 1-1: 보유 조회 실패 — 주문 계획을 짜지 않고 실패로 기록 (바깥 재시도 루프가 다시 시도)
+                logging.error("🚨 [보유 조회 실패] holdings=None — 이번 회차 주문 계획 생성 중단")
+                return False, "❌ 보유 조회 실패 (계좌 정보를 불러오지 못했습니다). 주문 계획을 만들지 않았습니다."
             
             safe_holdings = holdings if isinstance(holdings, dict) else {}
             
@@ -635,6 +652,15 @@ async def scheduled_regular_trade_delayed(context):
                         except Exception:
                             pass
                         await asyncio.sleep(1.0 * (2**_api_retry))
+
+                    # audit-fix 1-3: 현재가·전일종가 조회 실패(0)로 빈 계획을 만들어 '성공' 처리하지 않는다 — 실패로 기록, 바깥 재시도 루프가 다시 시도
+                    if curr_p <= 0 or prev_c <= 0:
+                        logging.error(f"🚨 [{t}] 시세 조회 실패 (현재가={curr_p}, 전일종가={prev_c}) — 주문 계획 생성 중단")
+                        msgs[t] += f"🚨 <b>[{t}] 시세 조회 실패 (현재가/전일종가). 주문 계획을 만들지 않았습니다.</b>\n"
+                        all_success_map[t] = False
+                        loop_fully_successful = False
+                        loop_fail_reason = f"[{t}] 시세 조회 실패"
+                        continue
 
                     ma_5day = 0.0
                     for attempt in range(3):

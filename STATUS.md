@@ -1,49 +1,60 @@
 # STATUS — 서버가 자동으로 쓰는 현재 상태
 
-> ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
+> 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-16 06:10 (KST) · 계기: 매일 점검
+- 갱신: 2026-11-21 11:08 (KST) · 계기: 업데이트 적용 (staging: 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·선택 버튼·업데이트 알림 판 번호). 검증: 새 시험 18개 통과, 기존 시험 40개 통과·3개 실패(의도한 변경), 해시 전부 일치, 비밀 0건.)
 
 ## 봇별 현재 상태
 
 | 봇 | 서비스 | 상태 | 버전 | 마지막 적용 | 내용 |
 |---|---|---|---|---|---|
-| 1번 한투 라오어 | `han4384tubot` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.0.3 | 2026-11-01 17:16 | feat: alert-hub 연동 3차 — 1번 한투 자율 알림 |
-| 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.2.7 | 2026-11-13 15:23 | sniper: plugin_updater commits synced files after direct ups |
-| 6번 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.2.8 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
-| 3번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-15 14:21 KST부터) | v4.3.6 | 2026-11-14 14:48 | bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황 |
-| 7번 메리츠 무매 | `meritz_laoer` | 🟢 실행 중 (11-15 14:21 KST부터) | v1.0.4 | 2026-11-14 13:57 | bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT) |
-| 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 📁 파일 묶음 | v1.8.8 | 2026-11-15 13:49 | 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영 |
+| 1번 한투 라오어 | `han4384tubot` | 실행 중 (11-20 13:53 KST부터) | v1.0.6 | 2026-11-20 13:53 | audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6 |
+| 2번 토스 스나이퍼 | `toss_sniper` | 실행 중 (11-19 12:46 KST부터) | v1.2.8 | 2026-11-18 19:45 | toss: 공유 토큰 복원 (a) + 동기화 뒤 훅 자동 재적용 Q5 (방 room2-toss-sniper) |
+| 6번 메리츠 적립 | `meritz_dca` | 실행 중 (11-20 13:53 KST부터) | v1.3.4 | 2026-11-20 13:53 | audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6 |
+| 3번 빗썸 적립 | `bithumb_bot` | 실행 중 (11-20 12:16 KST부터) | v4.4.1 | 2026-11-20 12:17 | audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, |
+| 7번 메리츠 SOXL 탑쌓기 | `meritz_laoer` | 실행 중 (11-21 11:08 KST부터) | v1.2.9 | 2026-11-21 11:08 | 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층· |
+| 9번 브리핑 | `briefing` | 꺼짐 | v1.0.1 | 2026-11-20 12:26 | 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1 |
+| 사무실 파일(bot_office) | `bot-office` (서비스 없음) | 파일 묶음 | v1.9.7 | 2026-11-21 11:08 | 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층· |
 
 ## 사무실 상시 서비스
 
-- 8번 비서(SGOV) `bot-office-secretary`: 🟢 실행 중 (11-15 14:21 KST부터)
-- 4번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-15 14:21 KST부터)
-- 9번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-15 16:17 KST부터)
+- 8번 비서(SGOV) `bot-office-secretary`: 실행 중 (11-20 12:17 KST부터)
+- 4번 팬딩 가격표 `bot-office-fanding`: 실행 중 (11-19 15:40 KST부터)
+- 9번 업데이트 비서 `bot-updater`: 실행 중 (11-20 12:26 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
-- 디스크 사용: 40% (남은 12.4GB)
+- 디스크 사용: 72% (남은 5.8GB)
 
 ## 최근 적용 10건
 
-- 2026-11-15 13:49 · 사무실 파일(bot_office) v1.8.8 · bot_updater.py · 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영
-- 2026-11-14 14:48 · 3번 빗썸 적립 v4.3.6 · b_core.py, b_ui.py, main.py · bithumb-bottomkb: 하단 키보드 [🪙 BTC 설정][🪙 ETH 설정] 1줄·2개 + 코인별 상황
-- 2026-11-14 14:21 · 사무실 파일(bot_office) v1.8.7 · board.html, bot_updater.py, login.html, office_board.py, off · web-office-remove: 웹 사무실 완전 제거 + 8번 비서 SGOV 전용 (vNEXT)
-- 2026-11-14 14:12 · 3번 빗썸 적립 v4.3.5 · b_core.py, b_ui.py, main.py · bithumb-menu: 처음 화면을 BTC·ETH 설정 중심으로 (v4.3.5)
-- 2026-11-14 13:57 · 사무실 파일(bot_office) v1.8.6 · bot_updater.py, fanding_trade.py, office_briefing.py, office · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
-- 2026-11-14 13:57 · 7번 메리츠 무매 v1.0.4 · main.py, notifier.py, tg_menu.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
-- 2026-11-14 13:57 · 6번 메리츠 적립 v1.2.8 · t_core.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
-- 2026-11-14 13:57 · 3번 빗썸 적립 v4.3.4 · b_core.py, main.py · bot-names-renumber: 새 1~9번 목록으로 봇 이름·번호 정리 (vNEXT)
-- 2026-11-14 13:30 · 사무실 파일(bot_office) v1.8.5 · bot_updater.py, fanding_direct_upload.py, office_url.py · web-server-off-prep: office health check off, intentional-st
-- 2026-11-14 10:54 · 사무실 파일(bot_office) v1.8.4 · office_sgov.py · meritz_dca_bot v1.2.7 + office vNEXT: SGOV 회차 알림을 4번 방 대신 br
+- 2026-11-21 11:08 · 사무실 파일(bot_office) v1.9.7 · bot_updater.py · 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·
+- 2026-11-21 11:08 · 7번 메리츠 SOXL 탑쌓기 v1.2.9 · main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_stra · 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·
+- 2026-11-21 09:05 · 7번 메리츠 SOXL 탑쌓기 v1.2.8 · main.py, sniper_mode.py, tg_menu.py · meritz_laoer v2.3.0 (판 23 수정1: 장중 환전 고침 제외·하루 매수 층 수 제한·B3 미
+- 2026-11-20 19:09 · 7번 메리츠 SOXL 탑쌓기 v1.2.6 · main.py, tg_menu.py · meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개
+- 2026-11-20 19:00 · 7번 메리츠 SOXL 탑쌓기 v1.2.5 · config.py, main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sel
+- 2026-11-20 18:02 · 7번 메리츠 SOXL 탑쌓기 v1.2.4 · main.py, tower_strategy.py · meritz_laoer v2.2.15 (판 19 오늘 계획 미리보기에 탑 진행률): plan_head 한 곳
+- 2026-11-20 16:46 · 7번 메리츠 SOXL 탑쌓기 v1.2.3 · main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.14 (판 17 시초가 상한): 오늘 채우는 층의 안 산 칸이 시초가를 넘지
+- 2026-11-20 13:53 · 7번 메리츠 SOXL 탑쌓기 v1.2.2 · main.py, tg_menu.py · audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
+- 2026-11-20 13:53 · 6번 메리츠 적립 v1.3.4 · main.py, t_core.py · audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
+- 2026-11-20 13:53 · 1번 한투 라오어 v1.0.6 · kis_order_engine.py · audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
 - 없음
 
+## 보류 중인 봇 업데이트 (매매 중·일시중지 대기는 풀리면 자동 재시도 · 앞섬은 사람 승인 필요)
+
+- 없음
+
+## 2번 스나이퍼 (관찰 전용 — 업데이트 비서가 적용하지 않음)
+
+- 서버 스나이퍼 최신 커밋: 04f775de sniper: upstream c14debe direct sync
+- 원작 기준 커밋: 45d0e4c
+- 자동 업뎃: 기록 없음
+
 ## AI·사람 작업 순서 (요약)
 
 1. 이 파일과 START.md 를 먼저 읽는다. 위 표가 서버의 실제 상태다 (다른 문서의 '현재 상태'보다 우선).
 2. 고칠 파일은 **main 의 최신본**을 받아서 고친다 (기억·예전 대화의 파일로 고치지 않는다).
-3. 고친 파일은 staging 에 올리고 9. Update 에서 승인한다. 예전 파일로 덮어쓰면 승인 알림에 🚨 경고가 뜬다.
+3. 고친 파일은 staging 에 올리고 9. Update 에서 승인한다. 예전 파일로 덮어쓰면 승인 알림에 경고가 뜬다.
 4. 작업 기록은 docs/log/날짜_AI이름_작업.md 새 파일로 남긴다 (공용 문서를 여럿이 고치지 않는다).

@@ -1,6 +1,18 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v1.0.2)
-# 메리츠 SOXL 무한매수(V14) 새 봇 — 설정·장부
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.2.20)
+# v2.2.20 (2026-11-21, 판 22 듀얼 모드): SAFE_DEFAULTS 에 trading_mode("tower" 기본 | "sniper") · sniper_tp_l1_pct(1.5) · sniper_tp_upper_pct(1.0) 추가. validate_settings 가 trading_mode 값(sniper|tower)·익절 % (0 초과 50 이하)를 검사하고, 스나이퍼 모드는 order_type=LIMIT · intraday_sell_check_sec>=30 이어야 통과(탑쌓기 모드는 예전 그대로). 나머지는 그대로
+# v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): validate_settings 에 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day 검사 추가 — 없으면 통과(기본 1), 있으면 1~3 정수만 (0·4 이상·소수·글자·true/false 는 문제 목록에 넣어 주문 전에 막음). DEFAULTS 에는 안 넣음(없을 때 코드가 1 로 읽음). 나머지는 그대로
+# v2.2.9 (2026-11-20, audit-fix 7번 3차 — 풀이님 결정 10:14): 사다리 삭제로 탑쌓기 전용 — credit_problems·CHOICES(unit_base·first_buy_mode)·ladder_levels·적립 상태(accum_state.json: get_accum/save_accum/accum_or_start)·사다리 설정 키·start.mode/filled_levels/rebuy_*/first_round_credit_usd 제거. validate_settings(s) 는 사다리 값을 안 보고, tower_gap_usd(1 이상 정수)·tower_floor_usd(>0)·tower_floors(1 이상 정수) 와 strategy("tower" 가 아니면 차단)를 검사. order_type(LOC|LIMIT) 검사는 그대로
+# v2.2.6 (2026-11-20, 판 16 본격): ① intraday_sell_check_sec 기본 120 → 30 (코드 검증 하한 — 체결 알림 간격과 같게) ② apply_fill: 같은 체결(exec_id)을 장부 파일(position.json)의 applied_ids 로도 막고(원금·수량이 먼저 저장돼 중복·누락이 안 생김),
+#   매도 때 층별 매도의 '뺀 원가'(cost_removed)를 받으면 평단 비례 대신 그 값을 씀 (층 합계와 장부 원금이 어긋나지 않게). 호출 형식은 그대로(새 인자는 선택)
+# v2.2.1 (2026-11-19, audit-fix 7-1): credit_problems 추가 + validate_settings(s, fx=None) — 환율을 알면 start.first_round_credit_usd < 1회차 단위액(total_krw÷split_count÷환율) 검사. 그 외 검증은 그대로
+# v2.0.3 (2026-11-18): 설정 intraday_sell_check_sec 추가(당일 매도 확인 간격 초, 기본 120, 0 이면 끔) + validate_settings 에 그 값 검사 한 줄. 나머지 검증·장부 함수는 그대로
+# 메리츠 속쓸 적립봇(SOXL 분할매수·부분매도) — 설정·장부
+# v2.0.1 (2026-11-18): update_settings 추가 (텔레그램 설정 메뉴용 — 설정 파일 일부 키만 바꿔 저장), _merge 분리. 검증·장부·기존 함수는 그대로
+# v2.0.0 (2026-11-18): 적립봇 전환. 설정 키 추가(total_krw·ladder_*·sell_*·rebuy_drop_usd·unit_base·first_buy_mode·max_rounds_per_day·
+#   order_type·allow_consecutive_sell, start.mode·filled_levels·rebuy_anchor_usd·rebuy_k), validate_settings 새로 씀,
+#   적립 상태 파일 data/accum_state.json (get_accum/save_accum), inject_start 가 상태도 같이 시작.
+#   장부(position·ledger)·apply_fill·add_shares·halt 와 V14 용 함수들은 그대로(V14 함수는 이제 안 불림)
 # v1.0.2 (2026-11-08): add_shares 추가 — 사용자가 직접 산 주식을 지정 평단으로 장부에 더함 (기존 장부 형식 그대로)
 # v1.0.0 (2026-11-08): 첫 버전. hantu_laoer/config.py 에서 V14 가 쓰는 함수만 같은 이름·같은 동작으로 옮김
 #   - 옮긴 함수(동작 그대로): get_reverse_state, set_reverse_state, apply_reverse_daily_settlement,
@@ -31,8 +43,23 @@ SAFE_DEFAULTS = {
     "symbol": "SOXL",
     "price_market": "AX",                  # 메리츠 시세 조회용 거래소 구분 (bot_office/fanding_trade.py 와 같음)
     "exch_id": "",                         # 주문용 거래소 번호. 비우면 잔고 행에서 찾음
-    "split_count": None,                   # 20/40/80 — 이체 후 결정. 비어 있으면 주문 안 함
-    "seed_usd": None,                      # 총 시드(USD). 실제 환전 USD 로 확정. 비어 있으면 주문 안 함
+    "split_count": None,                   # 적립봇: 10 (총 투자금을 10 등분). 비어 있으면 주문 안 함
+    "seed_usd": None,                      # (V14 용, 적립봇은 안 씀)
+    # ---- 적립봇 (노션 '메리츠 속쓸 적립봇' 2026-11-18)
+    "total_krw": None,                     # 총 투자금(원). 금액은 기본값 없음 — 설정 필수
+    "tower_floor1_start_usd": 0,           # 탑쌓기 1층 시작가 (v2.2.4). 0 = 안 정함 — 평단 기준. 정하면 1층 칸이 시작가 기준
+    "sell_profit_pct": 10,                 # 평단 대비 평가 이익 이 % 에 매도
+    "sell_fraction_pct": 50,               # 보유의 이 % 매도 (정수 주 내림)
+    "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
+    "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
+    "trading_mode": "tower",               # v2.2.20 판 22: "tower"(탑쌓기, 기본) | "sniper"(스나이퍼). 바꾸면 다음 매매 판단부터 적용 (이미 낸 주문은 안 건드림). 층 장부는 두 모드가 같이 씀
+    "sniper_tp_l1_pct": 1.5,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 층) 익절 % (층 평단 +이 % 에 그 층 전량)
+    "sniper_tp_upper_pct": 1.0,            # v2.2.20 스나이퍼 상단층 익절 %
+    "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
+    # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
+    "auto_fx_enabled": False,              # true 면 오늘 매수에 달러가 모자랄 때 원화→달러 환전 신청 (실주문 모드에서만)
+    "auto_fx_buffer_pct": None,            # 부족 달러에 더할 여유 % (환율·체결가 변동 대비)
+    "auto_fx_max_usd_per_day": None,       # 하루 환전 상한 (달러, 정수)
     # 익절 %: hantu_laoer/config.py DEFAULT_TARGET["SOXL"] (main c53f8d4 기준). 서버 data/profit_config.json 값은 확인 필요
     "target_profit_pct": 12.0,
     # 복리 %: hantu_laoer/config.py DEFAULT_COMPOUND["SOXL"] (익절 이익 중 다음 시드에 더하는 비율)
@@ -51,12 +78,8 @@ SAFE_DEFAULTS = {
 }
 
 
-def load_settings(path=None):
-    p = path or SETTINGS_PATH
-    with open(p, "r", encoding="utf-8") as f:
-        user = json.load(f)
-    if not isinstance(user, dict):
-        raise ValueError("설정 파일 형식 오류 (JSON 객체 아님)")
+def _merge(user):
+    """설정 파일 내용(user) 위에 기본값을 깐 전체 설정"""
     s = json.loads(json.dumps(SAFE_DEFAULTS))
     for k, v in user.items():
         if k == "start" and isinstance(v, dict):
@@ -64,6 +87,15 @@ def load_settings(path=None):
         else:
             s[k] = v
     return s
+
+
+def load_settings(path=None):
+    p = path or SETTINGS_PATH
+    with open(p, "r", encoding="utf-8") as f:
+        user = json.load(f)
+    if not isinstance(user, dict):
+        raise ValueError("설정 파일 형식 오류 (JSON 객체 아님)")
+    return _merge(user)
 
 
 def _f(v):
@@ -74,27 +106,144 @@ def _f(v):
         return 0.0
 
 
+def update_settings(changes, path=None, dry=False):
+    """v2.0.1 텔레그램 메뉴용: 설정 파일(JSON)에서 changes 의 키만 바꿔 저장 → {키: (이전 값, 새 값)}.
+    - 파일에 적힌 키만 건드림 (기본값을 섞어 쓰지 않음). 바꾼 뒤 validate_settings 에 '새로 생기는' 문제가 있으면 ValueError (저장 안 함)
+    - dry=True 면 검사만 하고 쓰지 않음
+    - 원자적 저장(같은 폴더 임시 파일 → replace, 권한 유지). 폴더 쓰기 권한이 없으면 파일 자체에 덮어씀. 둘 다 안 되면 OSError
+    - 저장 전 원본을 state_dir/data/settings_before_change.json 에 복사, 바꾼 내용을 data/settings_change_log.json 에 기록 (실패해도 무시)"""
+    p = path or SETTINGS_PATH
+    with GlobalThrottle.get_file_lock(p):
+        with open(p, "r", encoding="utf-8") as f:
+            text = f.read()
+        raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError("설정 파일 형식 오류 (JSON 객체 아님)")
+        before = _merge(raw)
+        new_raw = dict(raw)
+        new_raw.update(changes)
+        after = _merge(new_raw)
+        old_bad = validate_settings(before)
+        new_bad = [b for b in validate_settings(after) if b not in old_bad]
+        if new_bad:
+            raise ValueError("; ".join(new_bad))
+        result = {k: (before.get(k), after.get(k)) for k in changes}
+        if dry:
+            return result
+        data = json.dumps(new_raw, ensure_ascii=False, indent=2) + "\n"
+        sd = str(after.get("state_dir") or "")
+        try:
+            os.makedirs(os.path.join(sd, "data"), exist_ok=True)
+            with open(os.path.join(sd, "data", "settings_before_change.json"), "w", encoding="utf-8") as f:
+                f.write(text)
+            lp = os.path.join(sd, "data", "settings_change_log.json")
+            try:
+                with open(lp, "r", encoding="utf-8") as f:
+                    log = json.load(f)
+                if not isinstance(log, list):
+                    log = []
+            except (OSError, ValueError):
+                log = []
+            log.append({"at": datetime.datetime.now(EST).isoformat(), "changes": {k: {"old": o, "new": n} for k, (o, n) in result.items()}})
+            with open(lp, "w", encoding="utf-8") as f:
+                json.dump(log[-200:], f, ensure_ascii=False, indent=2)
+        except (OSError, ValueError):
+            pass
+        try:
+            d = os.path.dirname(os.path.abspath(p))
+            fd, tmp = tempfile.mkstemp(dir=d, text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                st = os.stat(p)
+                os.chmod(tmp, st.st_mode & 0o7777)
+                try:
+                    os.chown(tmp, st.st_uid, st.st_gid)
+                except OSError:
+                    pass
+                os.replace(tmp, p)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+        except PermissionError:
+            with open(p, "w", encoding="utf-8") as f:     # 폴더는 못 써도 파일은 쓸 수 있는 경우
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        return result
+
+
 def validate_settings(s):
-    """주문 전에 꼭 있어야 하는 값 검사 → 문제 목록 (빈 목록이면 통과)"""
+    """주문 전에 꼭 있어야 하는 값 검사 → 문제 목록 (빈 목록이면 통과). v2.2.9: 탑쌓기 전용 — 사다리 값(회차·시작가·간격·재매수·하루 회차 등)은 검사하지 않음"""
     bad = []
-    sc = s.get("split_count")
-    if sc is None or _f(sc) < 2 or _f(sc) != int(_f(sc)):
-        bad.append("split_count 없음 또는 정수 아님 (20/40/80 중 결정 후 입력)")
-    if s.get("seed_usd") is None or _f(s.get("seed_usd")) <= 0:
-        bad.append("seed_usd 없음 (실제 환전 USD 로 확정 후 입력)")
+    if str(s.get("strategy") or "").strip().lower() not in ("", "tower"):
+        bad.append("strategy 값이 남아 있음 — 7번은 탑쌓기만 써요 (사다리 삭제). 설정 파일에서 strategy 를 지우거나 \"tower\" 로 고쳐 주세요")
+    if s.get("total_krw") is None or _f(s.get("total_krw")) <= 0:
+        bad.append("total_krw 없음 (총 투자금, 원)")
+    if _f(s.get("tower_floor1_start_usd")) < 0:
+        bad.append("tower_floor1_start_usd 는 0 이상 (0 = 안 정함)")
+    for k in ("sell_profit_pct",):
+        if _f(s.get(k)) <= 0:
+            bad.append(f"{k} 0 이하 또는 없음")
+    g = s.get("tower_gap_usd")      # v2.2.9: 탑쌓기 층 간격 — 없으면 기본값 $5, 있으면 1 이상 정수 (메뉴·설정 파일 같은 조건)
+    if g is not None and (isinstance(g, bool) or _f(g) < 1 or _f(g) != int(_f(g))):
+        bad.append("tower_gap_usd 는 1 이상 정수 (층 간격, 달러)")
+    fu = s.get("tower_floor_usd")
+    if fu is not None and (isinstance(fu, bool) or _f(fu) <= 0):
+        bad.append("tower_floor_usd 는 0 보다 큰 숫자 (한 층 금액, 달러)")
+    fl = s.get("tower_floors")
+    if fl is not None and (isinstance(fl, bool) or _f(fl) < 1 or _f(fl) != int(_f(fl))):
+        bad.append("tower_floors 는 1 이상 정수 (층 수)")
+    for k, nm in (("tower_max_buy_layers_per_day", "하루 매수 층 수"), ("tower_max_sell_layers_per_day", "하루 매도 층 수")):      # v2.2.17: 없으면 기본 1, 있으면 1~3 정수만
+        v = s.get(k)
+        if v is not None and (isinstance(v, bool) or not (1 <= _f(v) <= 3) or _f(v) != int(_f(v))):
+            bad.append(f"{k} 는 1~3 정수 ({nm})")
+    if not (0 < _f(s.get("sell_fraction_pct")) < 100):
+        bad.append("sell_fraction_pct 는 0 초과 100 미만")
+    if s.get("order_type") not in ("LOC", "LIMIT"):
+        bad.append("order_type 미정 (LOC | LIMIT 중 Muse 결정 필요 — 노션 질문)")
+    if not isinstance(s.get("allow_consecutive_sell"), bool):
+        bad.append("allow_consecutive_sell 미정 (true | false, Muse 결정 필요 — 노션 질문)")
+    isec = s.get("intraday_sell_check_sec")
+    if isinstance(isec, bool) or not isinstance(isec, (int, float)) or not (isec == 0 or 30 <= isec <= 3600):
+        bad.append("intraday_sell_check_sec 는 0(끔) 또는 30~3600 (초)")
+    tm = s.get("trading_mode")      # v2.2.20: 없으면 탑쌓기 (예전 동작)
+    if tm is not None and str(tm).strip().lower() not in ("sniper", "tower"):
+        bad.append("trading_mode 는 sniper | tower")
+    for k in ("sniper_tp_l1_pct", "sniper_tp_upper_pct"):
+        v = s.get(k)
+        if v is not None and (isinstance(v, bool) or not (0 < _f(v) <= 50)):
+            bad.append(f"{k} 는 0 초과 50 이하 (익절 %)")
+    if str(tm or "tower").strip().lower() == "sniper":
+        if s.get("order_type") != "LIMIT":
+            bad.append("스나이퍼 모드는 order_type=LIMIT 이어야 해요 (장중 지정가 매매)")
+        if isinstance(isec, bool) or not isinstance(isec, (int, float)) or isec < 30:
+            bad.append("스나이퍼 모드는 intraday_sell_check_sec 30 이상이어야 해요 (0=끔 불가)")
+    if not isinstance(s.get("auto_fx_enabled"), bool):
+        bad.append("auto_fx_enabled 는 true | false")
+    elif s.get("auto_fx_enabled"):
+        if s.get("auto_fx_buffer_pct") is None or _f(s.get("auto_fx_buffer_pct")) < 0:
+            bad.append("auto_fx_enabled=true 인데 auto_fx_buffer_pct 없음 (0 이상, 노션 질문 Q11)")
+        if s.get("auto_fx_max_usd_per_day") is None or _f(s.get("auto_fx_max_usd_per_day")) <= 0:
+            bad.append("auto_fx_enabled=true 인데 auto_fx_max_usd_per_day 없음 (0 초과, 노션 질문 Q11)")
     st = s.get("start") or {}
     q, pr, av = st.get("qty"), st.get("principal_usd"), st.get("avg_usd")
-    if q is None or int(_f(q)) <= 0 or _f(q) != int(_f(q)):
-        bad.append("start.qty 없음")
-    if pr is None or _f(pr) <= 0:
-        bad.append("start.principal_usd 없음")
+    if q is None or int(_f(q)) < 0 or _f(q) != int(_f(q)):
+        bad.append("start.qty 없음 (0 이상 정수)")
+    if pr is None or _f(pr) < 0:
+        bad.append("start.principal_usd 없음 (0 이상)")
+    if q is not None and int(_f(q)) > 0 and (pr is None or _f(pr) <= 0):
+        bad.append("start.qty > 0 인데 principal_usd 가 0 이하")
     if q and pr and av is not None and _f(av) > 0 and int(_f(q)) > 0:
         if abs(_f(pr) / int(_f(q)) - _f(av)) > 0.01:
             bad.append("start.avg_usd 가 principal_usd ÷ qty 와 0.01 넘게 다름 — 숫자 확인")
-    if _f(s.get("target_profit_pct")) <= 0:
-        bad.append("target_profit_pct 0 이하")
     if str(s.get("symbol", "")).upper() != "SOXL":
-        bad.append("이 봇은 SOXL 전용 (TQQQ 는 나중에 별도)")
+        bad.append("이 봇은 SOXL 전용")
     return bad
 
 
@@ -318,19 +467,27 @@ class ConfigManager:
         q = int(_f((pos or {}).get("qty")))
         return round(_f(pos.get("principal")) / q, 4) if q > 0 else 0.0
 
-    def apply_fill(self, side, qty, price, date_et, is_reverse, exec_id):
-        """체결 1건 반영 → (새 장부, 끝난 사이클 기록 또는 None). 같은 exec_id 는 한 번만"""
+    def apply_fill(self, side, qty, price, date_et, is_reverse, exec_id, cost_removed=None):
+        """체결 1건 반영 → (새 장부, 끝난 사이클 기록 또는 None). 같은 exec_id 는 한 번만.
+        v2.2.6: 한 번 반영한 exec_id 는 position.json 의 applied_ids 에 함께 저장 (원금·수량과 한 파일이라 같이 저장됨) — 원금·수량을 먼저, 거래 기록을 나중에 쓰므로
+        중간에 멈춰도 다시 부르면 빠진 쪽만 채움 (원금·수량은 두 번 안 바뀜). cost_removed: 매도 때 줄일 원가 (층별 매도가 계산한 값. 없으면 예전처럼 평단 × 수량)"""
         with GlobalThrottle.get_file_lock(self.FILES["POSITION"]):
             pos = self.get_position()
             if not pos:
                 raise RuntimeError("장부 없음 (start 주입 전)")
             ledger = self._load_json(self.FILES["LEDGER"], [])
-            if any(isinstance(r, dict) and r.get("exec_id") == exec_id for r in ledger):
-                return pos, None
+            in_ledger = any(isinstance(r, dict) and r.get("exec_id") == exec_id for r in ledger)
+            ids = pos.get("applied_ids") if isinstance(pos.get("applied_ids"), list) else []
             qty, price = int(qty), _f(price)
             if qty <= 0 or price <= 0:
                 return pos, None
             avg = self.avg_price(pos)
+            if exec_id in ids or in_ledger:                          # 이미 반영됨 (새 코드는 원금·수량을 먼저 저장하므로 거래 기록이 있으면 원금·수량도 반영된 것. 예전 장부는 applied_ids 가 없어 거래 기록으로 판단)
+                if not in_ledger:                                    # 원금·수량은 저장됐는데 거래 기록만 빠진 경우 (중간에 멈춤) → 기록만 채움
+                    ledger.append({"id": len(ledger) + 1, "date": date_et, "ticker": pos["ticker"], "side": side,
+                                   "price": price, "qty": qty, "avg_price": avg, "exec_id": exec_id, "is_reverse": bool(is_reverse), "late_record": True})
+                    self._save_json(self.FILES["LEDGER"], ledger)
+                return pos, None
             if side == "BUY":
                 pos["qty"] += qty
                 pos["principal"] = round(pos["principal"] + qty * price, 4)
@@ -339,8 +496,11 @@ class ConfigManager:
                 if qty > pos["qty"]:
                     raise RuntimeError(f"매도 체결 {qty}주가 장부 {pos['qty']}주보다 많음")
                 pos["qty"] -= qty
-                pos["principal"] = round(max(0.0, pos["principal"] - qty * avg), 4) if pos["qty"] > 0 else 0.0
+                out = qty * avg if cost_removed is None else _f(cost_removed)
+                pos["principal"] = round(max(0.0, pos["principal"] - out), 4) if pos["qty"] > 0 else 0.0
                 pos["cycle_sell_total"] = round(pos["cycle_sell_total"] + qty * price, 4)
+            pos["applied_ids"] = (ids + [exec_id])[-300:]
+            self._save_json(self.FILES["POSITION"], dict(pos))        # 원금·수량 먼저 (exec_id 와 같은 파일)
             ledger.append({"id": len(ledger) + 1, "date": date_et, "ticker": pos["ticker"], "side": side,
                            "price": price, "qty": qty, "avg_price": avg, "exec_id": exec_id, "is_reverse": bool(is_reverse)})
             self._save_json(self.FILES["LEDGER"], ledger)
