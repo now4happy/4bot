@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: main.py
 # ==========================================================
+# 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-5] 달력 폴백 평일=장 열림 가정 제거 → 휴장 처리(Fail-Closed), 안내 문구 정리
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 40대 엣지 케이스 완벽 결속 교차 검증 완료.
 # 🚨 MODIFIED: [Event Loop 교착 수술] post_init 내부 commands_handler 및 콜백 하위 도메인 락온 전파 누락 맹점 원천 봉쇄.
 # 🚨 MODIFIED: [Phase 3 스케줄러 디커플링 대통합] 20:05 EST 애프터 정산(scheduled_aftermarket_sync) 크론 스케줄 영구 소각.
@@ -125,25 +126,25 @@ async def scheduled_volatility_scan(context):
     try:
         is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
     except asyncio.TimeoutError:
-        logging.error("⚠️ [volatility_scan] 달력 API 타임아웃. 평일 강제 개장 처리합니다.")
+        logging.error("⚠️ [volatility_scan] 달력 API 타임아웃. 이번 회차 주문 보류(audit-fix 1-5).")
         est = ZoneInfo('America/New_York')
-        is_open = datetime.datetime.now(est).weekday() < 5
+        is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
         # 🚨 MODIFIED: [관제 타전 누수 방어] Fail-Open 가동 시 텔레그램 관리자 즉각 타전망 주입
         try:
             if context.job and context.job.chat_id:
-                await context.bot.send_message(chat_id=context.job.chat_id, text="⚠️ <b>[시스템 경고] 달력 API 통신 타임아웃!</b>\n▫️ 평일 강제 개장(Fail-Open) 로직이 가동되었습니다.", parse_mode='HTML')
-                _hub_alert("1번 한투 라오어", "warning", "[시스템 경고] 달력 API 통신 타임아웃, 평일 강제 개장 로직 가동.")
+                await context.bot.send_message(chat_id=context.job.chat_id, text="⚠️ <b>[시스템 경고] 달력 API 통신 타임아웃!</b>\n▫️ 달력 확인 실패 — 이번 회차 주문을 보류했습니다(Fail-Closed).", parse_mode='HTML')
+                _hub_alert("1번 한투 라오어", "warning", "[시스템 경고] 달력 API 통신 타임아웃, 이번 회차 주문 보류(Fail-Closed).")
         except Exception: pass
     except Exception as e:
-        logging.error(f"⚠️ [volatility_scan] 달력 API 에러. 평일 강제 개장 처리합니다: {e}")
+        logging.error(f"⚠️ [volatility_scan] 달력 API 에러. 이번 회차 주문 보류(audit-fix 1-5): {e}")
         est = ZoneInfo('America/New_York')
-        is_open = datetime.datetime.now(est).weekday() < 5
+        is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
         # 🚨 MODIFIED: [관제 타전 누수 방어] Fail-Open 가동 시 텔레그램 관리자 즉각 타전망 주입
         try:
             if context.job and context.job.chat_id:
                 safe_err = html.escape(str(e))
-                await context.bot.send_message(chat_id=context.job.chat_id, text=f"⚠️ <b>[시스템 경고] 달력 API 통신 에러!</b>\n▫️ 사유: {safe_err}\n▫️ 평일 강제 개장(Fail-Open) 로직이 가동되었습니다.", parse_mode='HTML')
-                _hub_alert("1번 한투 라오어", "warning", "[시스템 경고] 달력 API 통신 에러, 평일 강제 개장 로직 가동.")
+                await context.bot.send_message(chat_id=context.job.chat_id, text=f"⚠️ <b>[시스템 경고] 달력 API 통신 에러!</b>\n▫️ 사유: {safe_err}\n▫️ 달력 확인 실패 — 이번 회차 주문을 보류했습니다(Fail-Closed).", parse_mode='HTML')
+                _hub_alert("1번 한투 라오어", "warning", "[시스템 경고] 달력 API 통신 에러, 이번 회차 주문 보류(Fail-Closed).")
         except Exception: pass
         
     if not is_open:

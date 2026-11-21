@@ -1,4 +1,54 @@
-# 사무실 비서(번호 없음) 변경 기록
+# 사무실 파일(bot_office) 변경 기록
+
+## v1.9.7 · 2026-11-21 11:08 (KST)
+- 파일: bot_updater.py
+- 내용: 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·선택 버튼·업데이트 알림 판 번호). 검증: 새 시험 18개 통과, 기존 시험 40개 통과·3개 실패(의도한 변경), 해시 전부 일치, 비밀 0건.
+- 브랜치: staging
+
+## v1.9.6 · 2026-11-20 12:26 (KST)
+- 파일: bot_updater.py
+- 내용: 7번 이름 변경: 속쓸 적립봇 → SOXL 탑쌓기, 7번 v2.2.11, 사무실 v1.9.6, 브리핑 1.1.1
+- 브랜치: staging
+
+## v1.9.5 · 2026-11-20 12:17 (KST)
+- 파일: bot_updater.py, fanding_fetch_server.py, office_briefing.py, office_secretary.py, office_sgov.py, test_audit_fix_v2.py, test_fanding_fetch_server.py
+- 내용: audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, 사무실 v1.9.5 (bot_updater 병합)
+- 브랜치: staging
+
+## v1.9.4 · 2026-11-20 11:55 (KST)
+- 파일: bot_updater.py
+- 내용: 텔레그램 브리핑 봇 v1.1.2: 9번 브리핑 패키지 + 사무실 v1.9.4 (health_units briefing 제외)
+- 브랜치: staging
+
+## v1.9.3 · 2026-11-19 17:40 (KST)
+- 파일: bot_updater.py, sniper_upstream.py
+- 내용: updater redesign pan2 v2: sniper sync via plugin_updater CLI --base-dir; record all-held to holds list
+- 브랜치: staging
+
+## v1.9.2 · 2026-11-19 15:40 (KST)
+- 파일: bot_updater.py, fanding_trade.py, fanding_vr6.py, office_secretary.py, office_sgov.py
+- 내용: 텔레그램 매매봇 메뉴 정리 3차 v2 (7번 제외): 첫 화면 4칸·금액 메뉴 설명·범위 표시·이모티콘 제거
+- 브랜치: staging
+
+## v1.9.1 · 2026-11-18 10:44 (KST)
+- 파일: fanding_trade.py
+- 내용: fanding_trade v1.5.9: 자동주문 모드 A 판독후 30분 (방 fanding-autoorder-read30)
+- 브랜치: staging
+
+## v1.9.0 · 2026-11-17 16:18 (KST)
+- 파일: bot_updater.py, fanding_trade.py, fanding_vault.py
+- 내용: fanding_vault v0.1.1-shadow: 매수 현금 한도 + 8,000 한도 기록 (방: P매매 SOXL 수익금 분리 백테스트)
+- 브랜치: staging
+
+## v1.8.9 · 2026-11-16 11:14 (KST)
+- 파일: office_briefing.py
+- 내용: 사무실 vNEXT: 4번 메리츠 need 시세 조회 거래소 폴백 (OQ→NY→AX)
+- 브랜치: staging
+
+## v1.8.8 · 2026-11-15 13:49 (KST)
+- 파일: bot_updater.py
+- 내용: 사무실 vNEXT: P1 매일 점검·P2 watchdog 제거·P4 captures 제외 (한 달 무인 운영 점검 v2)
+- 브랜치: staging
 
 ## v1.8.7 · 2026-11-14 14:21 (KST)
 - 파일: board.html, bot_updater.py, login.html, office_board.py, office_secretary.py, office_sgov.py, office_url.py, pc_monitor.py, server.py, sniper_picture.html, test_asset_board.py, thought_mindmap.html

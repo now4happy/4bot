@@ -41,10 +41,19 @@ from quant_engine_core import (
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
+    PRIMER_1SH_LOT_TAG,
+    PRIMER_1SH_MAX_INV_DROP_PCT,
+    PRIMER_1SH_MIN_L1_GAP_PCT,
+    PRIMER_1SH_MIN_LOCKED_LOTS,
+    PRIMER_1SH_VAC_LOT_TAG,
+    PRIMER_MODE_AUTO_SMART,
+    PRIMER_MODE_OFF,
     REANCHOR_NET_BUFFER_MULT,
     REENTRY_BREAKOUT_MAX_RSI_50,
     REENTRY_BREAKOUT_RISE_PCT,
     REENTRY_PULLBACK_DROP_PCT,
+    REG_OPEN_VWAP_SHIELD_END_HM,
+    REG_OPEN_VWAP_SHIELD_START_HM,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
     ROUND_TRIP_FEE_RATE_PCT,
     SNIPER_L1_TRAIL_BOOST_TIER2_PCT,
@@ -75,16 +84,20 @@ from quant_engine_core import (
     SUB_UNLOCK_DROP_FROM_L1_PCT,
     SUB_UNLOCK_FROZEN_DAYS_10,
     VALID_PORTION_MODES,
+    VALID_PRIMER_MODES,
     StratumBucket,
     buckets_from_dicts,
     buckets_to_dicts,
     compute_golden8_quota_qty,
+    compute_inverse_primer_buy_price,
     compute_reserve_repayment_on_zero,
     compute_sub4_quota_qty,
     compute_sub_grid_available_idle_cash,
     enforce_true_breakeven_floor_on_buckets,
     evaluate_guard30_and_reserve_injection,
     evaluate_l2_only_hybrid_reentry_signal,
+    evaluate_l2_vacant_low_break_signal,
+    evaluate_smart_primer_1sh_signal,
     evaluate_step_up_2x_dip_signal,
     evaluate_sub_grid_dip_signal,
     get_golden8_prog_thresholds,
@@ -93,6 +106,8 @@ from quant_engine_core import (
     has_active_l1_bucket,
     has_active_l2_bucket,
     is_barbell_mode,
+    is_l1_held_primer_allowed_by_vacancy,
+    is_primer_1sh_tag,
     is_simple_income_mode,
     is_upper_grid_tier,
     is_vacant_l2_upper_slice,
@@ -103,6 +118,8 @@ from quant_engine_core import (
     resolve_affordable_buy_qty,
     resolve_effective_round_trip_fee_rate_pct,
     resolve_portion_budget_base_equity,
+    resolve_smart_primer_policy,
+    safe_bucket_lot_count,
     set_runtime_round_trip_fee_rate_pct,
 )
 from toss_api import EST_TZ, safe_float, safe_int
@@ -121,6 +138,7 @@ def vrev_add_quota_lot_and_merge_2tier(
     lot_type: str = "QUOTA_L1",
     max_tiers: int = MAX_GRID_TIERS_7,
     merge_mode: str = DEFAULT_GRID_MERGE_MODE,
+    absorb_primer_on_dip: bool = True,
 ) -> List[StratumBucket]:
     q_int = max(1, safe_int(buy_qty, 1))
     p_val = round(max(0.0001, safe_float(buy_price, 0.01)), 4)
@@ -135,14 +153,20 @@ def vrev_add_quota_lot_and_merge_2tier(
     tag = str(lot_type or "QUOTA_L1").upper().strip()
     if is_upper_grid_tier(tag):
         tag = "QUOTA_L1"
+    is_primer_buy = is_primer_1sh_tag(tag)
+    norm_l1_tag = (
+        PRIMER_1SH_LOT_TAG
+        if is_primer_buy
+        else ("REENTRY_1FL" if tag == "TOPUP_1FL" else tag)
+    )
 
     new_l1 = StratumBucket(
         qty=q_int,
         book_price=pure_p,
         book_invested_usd=spent,
         actual_cost_usd=spent,
-        lot_count=1,
-        lot_type=(tag if tag != "TOPUP_1FL" else "REENTRY_1FL"),
+        lot_count=(0 if is_primer_buy else 1),
+        lot_type=norm_l1_tag,
     )
 
     existing = [
@@ -159,7 +183,7 @@ def vrev_add_quota_lot_and_merge_2tier(
     )
 
     if not has_active_l1_bucket(existing):
-        if tag in ("REENTRY_1FL", "TOPUP_1FL") or (
+        if tag in ("REENTRY_1FL", "TOPUP_1FL", PRIMER_1SH_LOT_TAG, PRIMER_1SH_VAC_LOT_TAG) or (
             pure_p <= existing[0].book_price + 1e-6
         ):
             preserved_uppers = relabel_upper_grid_tiers(
@@ -197,6 +221,34 @@ def vrev_add_quota_lot_and_merge_2tier(
         )
         return [merged_l1] + preserved_uppers
 
+    # MODIFIED [Case 110 · Audit-110-01]: 진성 하방 추매(pure_p <= 1층 마중물 단가)일 때만 1층 무승격 흡수 합산 (고가 수동매수 시 1층>2층 단가역전 차단)
+    if (
+        (not is_primer_buy)
+        and tag != "TOPUP_1FL"
+        and is_primer_1sh_tag(existing[0])
+        and absorb_primer_on_dip
+        and pure_p <= existing[0].book_price + 1e-6
+    ):
+        old_p1 = existing[0]
+        abs_qty = old_p1.qty + q_int
+        abs_cost = round(old_p1.actual_cost_usd + spent, 4)
+        abs_p = round(max(0.0001, abs_cost / float(abs_qty)), 4)
+        absorbed_l1 = StratumBucket(
+            qty=abs_qty,
+            book_price=abs_p,
+            book_invested_usd=abs_cost,
+            actual_cost_usd=abs_cost,
+            lot_count=1,
+            lot_type=norm_l1_tag,
+        )
+        preserved_uppers = relabel_upper_grid_tiers(
+            existing[1:],
+            max_tiers=eff_max_tiers,
+            merge_mode=eff_merge_mode,
+            preserve_vacant_l2=None,
+        )
+        return [absorbed_l1] + preserved_uppers
+
     if eff_max_tiers <= 2:
         old_total_qty = sum(b.qty for b in existing)
         old_actual_cost = round(sum(b.actual_cost_usd for b in existing), 4)
@@ -227,8 +279,8 @@ def vrev_add_quota_lot_and_merge_2tier(
                 book_price=lowest_b.book_price,
                 book_invested_usd=lowest_b.book_invested_usd,
                 actual_cost_usd=lowest_b.actual_cost_usd,
-                lot_count=max(1, lowest_b.lot_count),
-                lot_type=tag,
+                lot_count=safe_bucket_lot_count(lowest_b),
+                lot_type=norm_l1_tag,
             )
         sorted_uppers = relabel_upper_grid_tiers(
             combined[1:], max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
@@ -236,7 +288,10 @@ def vrev_add_quota_lot_and_merge_2tier(
         return [lowest_b] + sorted_uppers
 
     shifted_uppers = relabel_upper_grid_tiers(
-        existing, max_tiers=eff_max_tiers, merge_mode=eff_merge_mode
+        existing,
+        max_tiers=eff_max_tiers,
+        merge_mode=eff_merge_mode,
+        preserve_vacant_l2=False,
     )
     return [new_l1] + shifted_uppers
 
@@ -543,7 +598,7 @@ def match_and_remove_sold_buckets_7tier(
                 book_price=round(sold_cost_part / float(sold_q_part), 4),
                 book_invested_usd=sold_cost_part,
                 actual_cost_usd=sold_cost_part,
-                lot_count=1,
+                lot_count=safe_bucket_lot_count(b),
                 lot_type=b.lot_type,
             )
         )
@@ -554,7 +609,7 @@ def match_and_remove_sold_buckets_7tier(
                 book_price=round(keep_cost_part / float(keep_q), 4),
                 book_invested_usd=keep_cost_part,
                 actual_cost_usd=keep_cost_part,
-                lot_count=max(1, b.lot_count),
+                lot_count=safe_bucket_lot_count(b),
                 lot_type=b.lot_type,
             ),
         )
@@ -781,7 +836,7 @@ def compute_upper_2_to_12_moving_avg(
         if b_l2 is not None else 0.0
     )
     iq = sum(b.qty for b in inv_3_7)
-    il = sum(max(1, b.lot_count) for b in inv_3_7)
+    il = sum(safe_bucket_lot_count(b) for b in inv_3_7)
     ic = round(sum(b.actual_cost_usd for b in inv_3_7), 4)
     iw_p = round(ic / float(iq), 4) if iq > 0 else 0.0
     iw_t = (
@@ -789,7 +844,7 @@ def compute_upper_2_to_12_moving_avg(
         if iw_p > 0.0 else 0.0
     )
     cq = iq if iq > 0 else (b_l2.qty if b_l2 else 0)
-    cl = il if iq > 0 else (max(1, b_l2.lot_count) if b_l2 else 0)
+    cl = il if iq > 0 else (safe_bucket_lot_count(b_l2) if b_l2 else 0)
     cc = ic if iq > 0 else (round(b_l2.actual_cost_usd, 4) if b_l2 else 0.0)
     cw_p = iw_p if iq > 0 else (b_l2.book_price if b_l2 else 0.0)
     cw_t = iw_t if iq > 0 else l2_raw_t
@@ -1229,6 +1284,7 @@ def summarize_stratum_portfolio(
     closed_ha_shaved_bear: Optional[bool] = None,
     closed_ha_bull: Optional[bool] = None,
     closed_ha_ready: bool = True,
+    session_vwap: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     # MODIFIED [🎯 1 ~ 🎯 5 & Case 59 ~ 92 + 바벨 모드(BARBELL_60_30_10) 확장 통합 요약기]:
@@ -1333,7 +1389,9 @@ def summarize_stratum_portfolio(
 
     if is_barbell:
         cyc_loss_adj = min(
-            0.0, safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            0.0,
+            safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            - max(0.0, safe_float(st.get("cycle_vaulted_locked_usd"), 0.0)),
         )
         expected_free_cash = round(
             max(
@@ -1367,7 +1425,7 @@ def summarize_stratum_portfolio(
     sub_held_shares = sum(sb.qty for sb in sub_buckets)
     total_held_shares = held_shares + sub_held_shares
 
-    held_lots = sum(max(1, b.lot_count) for b in buckets)
+    held_lots = sum(safe_bucket_lot_count(b) for b in buckets)
     held_tiers = len(buckets)
 
     sub_held_lots = sum(max(1, sb.lot_count) for sb in sub_buckets)
@@ -1456,7 +1514,11 @@ def summarize_stratum_portfolio(
     raw_l1_target_q = max(0, safe_int(st.get("l1_target_quota_qty"), 0))
     if active_l1 and buckets:
         l1_cur_qty = buckets[0].qty
-        l1_target_quota_qty = max(l1_cur_qty, raw_l1_target_q)
+        l1_target_quota_qty = (
+            l1_cur_qty
+            if is_primer_1sh_tag(buckets[0])
+            else max(l1_cur_qty, raw_l1_target_q)
+        )
         l1_rem_quota_qty = max(0, l1_target_quota_qty - l1_cur_qty)
     else:
         l1_cur_qty = 0
@@ -1580,6 +1642,25 @@ def summarize_stratum_portfolio(
         portion_mode=portion_mode,
     )
 
+    eff_sess_vwap = (
+        round(max(0.0, safe_float(session_vwap, 0.0)), 4)
+        if session_vwap is not None
+        else (
+            round(max(0.0, safe_float(st.get("session_vwap"), 0.0)), 4)
+            if st.get("session_vwap") is not None
+            else None
+        )
+    )
+    eff_hm_for_re = (
+        hm_now
+        if (
+            dt_now.weekday() < 5
+            and (407 <= hm_now <= 1600)
+            and eff_sess_vwap is not None
+        )
+        else None
+    )
+
     reentry_sig = evaluate_l2_only_hybrid_reentry_signal(
         live_price=lp,
         anchor_price=anchor_p,
@@ -1593,6 +1674,18 @@ def summarize_stratum_portfolio(
         is_late_cutoff=is_late_cutoff,
         rsi_14=eff_rsi_14,
         breakout_max_rsi=REENTRY_BREAKOUT_MAX_RSI_50,
+        closed_ha_shaved_bear=closed_ha_shaved_bear,
+        closed_ha_bull=closed_ha_bull,
+        closed_ha_ready=closed_ha_ready,
+        session_vwap=eff_sess_vwap,
+        hm=eff_hm_for_re,
+        cycle_min_buy_price=(cycle_min_p if cycle_min_p > 0.0 else None),
+    )
+    l2_vac_low_brk_sig = evaluate_l2_vacant_low_break_signal(
+        live_price=lp,
+        buckets=buckets,
+        cycle_min_buy_price=cycle_min_p,
+        cycle_ratchet_max_lots=cycle_ratchet_max_lots,
         closed_ha_shaved_bear=closed_ha_shaved_bear,
         closed_ha_bull=closed_ha_bull,
         closed_ha_ready=closed_ha_ready,
@@ -1671,6 +1764,42 @@ def summarize_stratum_portfolio(
     rebound_mult = safe_float(step_up_eval.get("rebound_mult"), 0.0)
     cash_ratio_pct = safe_float(step_up_eval.get("cash_ratio_pct"), 0.0)
 
+    primer_1sh_mode = (
+        str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART)
+        .upper()
+        .strip()
+    )
+    primer_eval = evaluate_smart_primer_1sh_signal(
+        live_price=lp,
+        buckets=buckets,
+        anchor_price=anchor_p,
+        cycle_min_buy_price=cycle_min_p,
+        drop_buy_pct=drop_buy_pct,
+        cycle_ratchet_max_lots=cycle_ratchet_max_lots,
+        portion_mode=portion_mode,
+        primer_1sh_mode=primer_1sh_mode,
+        hm=(hm_now if dt_now.weekday() < 5 and (407 <= hm_now <= 1600) else None),
+    )
+    primer_policy = dict(primer_eval.get("policy") or {})
+    primer_1sh_buy_events = max(
+        0, safe_int(st.get("primer_1sh_buy_events"), 0)
+    )
+    primer_1sh_sell_events = max(
+        0, safe_int(st.get("primer_1sh_sell_events"), 0)
+    )
+    primer_1sh_absorbed_events = max(
+        0, safe_int(st.get("primer_1sh_absorbed_events"), 0)
+    )
+    primer_1sh_realized_net_usd = round(
+        safe_float(st.get("primer_1sh_realized_net_usd"), 0.0), 4
+    )
+    daily_primer_1sh_buy_cnt = max(
+        0, safe_int(st.get("daily_primer_1sh_buy_cnt"), 0)
+    )
+    daily_primer_1sh_sell_cnt = max(
+        0, safe_int(st.get("daily_primer_1sh_sell_cnt"), 0)
+    )
+
     if is_l2_only:
         ref_buy_anchor = (
             reentry_ref_anchor
@@ -1691,9 +1820,12 @@ def summarize_stratum_portfolio(
             anchor_p if anchor_p > 0.0 else (lp if lp > 0.0 else 1.0)
         )
     elif is_l2_only:
+        q_ref_re = safe_float(
+            reentry_sig.get("quota_ref_price"), reentry_ref_anchor
+        )
         ref_for_quota = (
-            reentry_ref_anchor
-            if reentry_ref_anchor > 0.0
+            q_ref_re
+            if q_ref_re > 0.0
             else (lp if lp > 0.0 else active_buy_anchor)
         )
     elif bool(step_up_eval.get("is_step_up_unlock")) and stepped_min_price > 0.0:
@@ -1839,6 +1971,11 @@ def summarize_stratum_portfolio(
         closed_ha_shaved_bear=closed_ha_shaved_bear,
         closed_ha_bull=closed_ha_bull,
         closed_ha_ready=closed_ha_ready,
+        session_vwap=eff_sess_vwap,
+        hm=eff_hm_for_re,
+        cycle_min_buy_price=(
+            sub_cycle_min_p if sub_cycle_min_p > 0.0 else None
+        ),
     )
     sub_reentry_ref_anchor = safe_float(
         sub_reentry_sig.get("ref_anchor"), sub_anchor_p
@@ -1930,9 +2067,12 @@ def summarize_stratum_portfolio(
             else (lp if lp > 0.0 else active_buy_anchor)
         )
     elif is_sub_l2_only:
+        sub_q_ref_re = safe_float(
+            sub_reentry_sig.get("quota_ref_price"), sub_reentry_ref_anchor
+        )
         sub_ref_for_quota = (
-            sub_reentry_ref_anchor
-            if sub_reentry_ref_anchor > 0.0
+            sub_q_ref_re
+            if sub_q_ref_re > 0.0
             else (lp if lp > 0.0 else sub_active_buy_anchor)
         )
     elif (
@@ -2024,7 +2164,9 @@ def summarize_stratum_portfolio(
     if is_barbell:
         soxl_mark_net = (free_cash + market_eval_usd) - injected_reserve_usd
         cyc_loss_ref = min(
-            0.0, safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            0.0,
+            safe_float(st.get("cycle_realized_net_usd"), 0.0)
+            - max(0.0, safe_float(st.get("cycle_vaulted_locked_usd"), 0.0)),
         )
         prior_unvaulted_adj = (
             cum_realized - vaulted_profit_locked_usd
@@ -2423,6 +2565,22 @@ def summarize_stratum_portfolio(
         "reentry_breakout_max_rsi": reentry_breakout_max_rsi,
         "reentry_breakout_rsi_blocked": reentry_breakout_rsi_blocked,
         "reentry_pullback_ha_blocked": reentry_pullback_ha_blocked,
+        "reentry_pullback_vwap_blocked": bool(
+            reentry_sig.get("pullback_vwap_blocked", False)
+        ),
+        "reentry_reg_open_7m_shield": bool(
+            reentry_sig.get("reg_open_7m_shield_blocked", False)
+        ),
+        "session_vwap": safe_float(reentry_sig.get("session_vwap"), 0.0),
+        "l2_vacant_low_break_eligible": bool(
+            l2_vac_low_brk_sig.get("eligible", False)
+        ),
+        "l2_vacant_low_break_signal_type": str(
+            l2_vac_low_brk_sig.get("signal_type") or "NOT_ELIGIBLE"
+        ),
+        "sub_reentry_pullback_vwap_blocked": bool(
+            sub_reentry_sig.get("pullback_vwap_blocked", False)
+        ),
         "next_target_qty": next_target_qty,
         "anchor_quota_qty": anchor_quota_qty,
         "budget_cap_qty": budget_cap_qty,
@@ -2449,6 +2607,26 @@ def summarize_stratum_portfolio(
         "total_seed_protect_pass_cnt": total_seed_protect_pass_cnt,
         "extra_13plus_buy_events": extra_13plus_buy_events,
         "cumulative_leftover_saved_usd": cum_leftover_saved,
+        "primer_1sh_mode": str(primer_policy.get("primer_1sh_mode") or primer_1sh_mode),
+        "primer_policy_badge": str(primer_policy.get("policy_badge") or ""),
+        "primer_enabled": bool(primer_policy.get("enabled", True)),
+        "primer_vacancy_mode": str(primer_eval.get("vacancy_mode") or "OFF"),
+        "primer_allow_vacant_l1_rescue": bool(primer_policy.get("allow_vacant_l1_rescue", False)),
+        "primer_allow_new_sub_entry": bool(primer_policy.get("allow_new_sub_entry", True)),
+        "is_l1_primer_1sh": bool(primer_eval.get("is_l1_primer_1sh", False)),
+        "primer_eligible": bool(primer_eval.get("eligible", False)),
+        "primer_should_buy": bool(primer_eval.get("should_buy", False)),
+        "primer_signal_type": str(primer_eval.get("signal_type") or "PRIMER_DISABLED"),
+        "primer_trigger_price": safe_float(primer_eval.get("trigger_price"), 0.0),
+        "primer_inv_price": safe_float(primer_eval.get("inv_target_price"), 0.0),
+        "primer_gap_price": safe_float(primer_eval.get("gap_target_price"), 0.0),
+        "primer_eff_gap_pct": safe_float(primer_eval.get("eff_gap_pct"), 3.50),
+        "primer_1sh_buy_events": primer_1sh_buy_events,
+        "primer_1sh_sell_events": primer_1sh_sell_events,
+        "primer_1sh_absorbed_events": primer_1sh_absorbed_events,
+        "primer_1sh_realized_net_usd": primer_1sh_realized_net_usd,
+        "daily_primer_1sh_buy_cnt": daily_primer_1sh_buy_cnt,
+        "daily_primer_1sh_sell_cnt": daily_primer_1sh_sell_cnt,
     }
 
 
@@ -2631,6 +2809,78 @@ def run_quant_engine_tdd() -> bool:
             and sig_pull_ha_bull["pullback_ha_blocked"] is False
         )
 
+        # Case 105 TDD: 1) 눌림 > 세션VWAP 패스 & 09:30~09:36 7분 타임쉴드 & 2) 본(1·2층공석)/서브(1층공석) 최저가 돌파매수
+        sig_vwap_blk = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=51.67,
+            anchor_price=52.30,
+            min_upper_tier_price=54.00,
+            closed_ha_shaved_bear=False,
+            closed_ha_bull=False,
+            closed_ha_ready=True,
+            session_vwap=50.75,
+            hm=1136,
+            cycle_min_buy_price=50.39,
+        )
+        assert (
+            sig_vwap_blk["should_buy"] is False
+            and sig_vwap_blk["signal_type"] == "HOLD_PULLBACK_ABOVE_SESSION_VWAP"
+        )
+        sig_7m_blk = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=50.50,
+            anchor_price=52.30,
+            min_upper_tier_price=54.00,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+            session_vwap=51.00,
+            hm=935,
+            cycle_min_buy_price=50.39,
+        )
+        assert (
+            sig_7m_blk["should_buy"] is False
+            and sig_7m_blk["signal_type"] == "HOLD_REG_OPEN_7M_VWAP_SHIELD"
+        )
+        sig_lb_l1 = evaluate_l2_only_hybrid_reentry_signal(
+            live_price=50.25,
+            anchor_price=50.60,
+            min_upper_tier_price=54.00,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+            session_vwap=50.80,
+            hm=1030,
+            cycle_min_buy_price=50.39,
+        )
+        assert (
+            sig_lb_l1["should_buy"] is True
+            and sig_lb_l1["signal_type"] == "LOW_BREAK_RELOAD"
+            and abs(sig_lb_l1["quota_ref_price"] - 50.39) < 1e-6
+        )
+        l2_vac_buckets = [
+            StratumBucket(10, 51.00, 510.0, 510.0, 1, "REENTRY_1FL"),
+            StratumBucket(10, 54.00, 540.0, 540.0, 1, "GRID_L3"),
+        ]
+        sig_l2_vac_sh = evaluate_l2_vacant_low_break_signal(
+            live_price=48.75,
+            buckets=l2_vac_buckets,
+            cycle_min_buy_price=50.39,
+            cycle_ratchet_max_lots=3,
+            closed_ha_shaved_bear=True,
+            closed_ha_ready=True,
+        )
+        sig_l2_vac_ok = evaluate_l2_vacant_low_break_signal(
+            live_price=48.75,
+            buckets=l2_vac_buckets,
+            cycle_min_buy_price=50.39,
+            cycle_ratchet_max_lots=3,
+            closed_ha_shaved_bear=False,
+            closed_ha_ready=True,
+        )
+        assert (
+            sig_l2_vac_sh["should_buy"] is False
+            and sig_l2_vac_sh["signal_type"] == "HOLD_LOW_BREAK_SHAVED_HA_BEAR"
+            and sig_l2_vac_ok["should_buy"] is True
+            and sig_l2_vac_ok["signal_type"] == "LOW_BREAK_L2_VAC_RELOAD"
+        )
+
         # 6) Case 88 & Case 91 인출형(단리) 및 바벨 모드(60/30/10) 검증
         mock_simple_st = {
             "buckets": [],
@@ -2681,6 +2931,139 @@ def run_quant_engine_tdd() -> bool:
             and abs(barbell_sum["reserved_for_main_usd"] - 240.0) < 1e-4
             and abs(barbell_sum["mark_equity_usd"] - 10250.0) < 1e-4
         ), f"TDD 실패(바벨 모드 60% 코어 정량 및 격리수익 평가 일치 오류): {barbell_sum}"
+
+        # 8) Case 110 옵션 3 스마트 연동 역산 1주 마중물 · 무합병(NO_7FULL_MERGE) · 1층공석 구제 · 무승격 흡수합산 검증
+        inv_4694 = compute_inverse_primer_buy_price(44.36, 5.50)
+        assert abs(inv_4694 - 46.94) < 1e-6, f"역산 타점 오류($46.94 기대): {inv_4694}"
+
+        b_full7 = [
+            StratumBucket(14, 50.00, 700.0, 700.0, 1, "REENTRY_1FL"),
+            StratumBucket(10, 52.00, 520.0, 520.0, 1, "GRID_L2"),
+            StratumBucket(10, 54.00, 540.0, 540.0, 2, "GRID_L3"),
+            StratumBucket(10, 56.00, 560.0, 560.0, 2, "GRID_L4"),
+            StratumBucket(10, 58.00, 580.0, 580.0, 2, "GRID_L5"),
+            StratumBucket(10, 60.00, 600.0, 600.0, 2, "GRID_L6"),
+            StratumBucket(10, 62.00, 620.0, 620.0, 2, "GRID_L7"),
+        ]
+        sig_cmp_7f = evaluate_smart_primer_1sh_signal(
+            live_price=46.90,
+            buckets=b_full7,
+            anchor_price=50.00,
+            cycle_min_buy_price=44.36,
+            drop_buy_pct=-5.50,
+            cycle_ratchet_max_lots=12,
+            portion_mode="COMP_08PCT",
+            primer_1sh_mode="AUTO_SMART",
+            hm=1030,
+        )
+        sig_bar_7f = evaluate_smart_primer_1sh_signal(
+            live_price=46.90,
+            buckets=b_full7,
+            anchor_price=50.00,
+            cycle_min_buy_price=44.36,
+            drop_buy_pct=-5.50,
+            cycle_ratchet_max_lots=12,
+            portion_mode="BARBELL_60_30_10",
+            primer_1sh_mode="AUTO_SMART",
+            hm=1030,
+        )
+        assert (
+            sig_cmp_7f["should_buy"] is False
+            and sig_cmp_7f["signal_type"] == "BLOCKED_BY_VACANCY_MODE"
+        ), f"복리 7층만석 차단 실패: {sig_cmp_7f}"
+        assert (
+            sig_bar_7f["should_buy"] is True
+            and sig_bar_7f["signal_type"] == "PRIMER_1SH_L1_HELD"
+            and abs(sig_bar_7f["trigger_price"] - 46.94) < 1e-6
+        ), f"바벨 만석 출동 실패: {sig_bar_7f}"
+
+        # 6층 이하(무합병)일 때는 복리에서도 정상 출동 + 진입 후 중복 출동 자가잠금 + 추매 시 무승격 흡수 검증
+        b_6t = b_full7[:6]
+        sig_cmp_6t = evaluate_smart_primer_1sh_signal(
+            live_price=46.90,
+            buckets=b_6t,
+            anchor_price=50.00,
+            cycle_min_buy_price=44.36,
+            drop_buy_pct=-5.50,
+            cycle_ratchet_max_lots=11,
+            portion_mode="COMP_08PCT",
+            hm=1030,
+        )
+        assert sig_cmp_6t["should_buy"] is True
+
+        after_p1 = vrev_add_quota_lot_and_merge_2tier(
+            queue=b_6t,
+            buy_qty=1,
+            buy_price=46.90,
+            lot_type="PRIMER_1SH",
+        )
+        assert (
+            len(after_p1) == 7
+            and after_p1[0].is_primer_1sh is True
+            and after_p1[0].lot_count == 0
+        ), f"PRIMER_1SH 진입 lot_count=0 실패: {after_p1[0]}"
+        sig_dup_lock = evaluate_smart_primer_1sh_signal(
+            live_price=46.50,
+            buckets=after_p1,
+            anchor_price=46.90,
+            cycle_min_buy_price=44.36,
+            drop_buy_pct=-5.50,
+            cycle_ratchet_max_lots=11,
+            portion_mode="BARBELL_60_30_10",
+            hm=1040,
+        )
+        assert sig_dup_lock["should_buy"] is False and sig_dup_lock["signal_type"] == "LOCKED_L1_ALREADY_PRIMER_1SH"
+
+        after_dip_abs = vrev_add_quota_lot_and_merge_2tier(
+            queue=after_p1,
+            buy_qty=14,
+            buy_price=41.90,
+            lot_type="DIP_1FL",
+        )
+        assert (
+            len(after_dip_abs) == 7
+            and after_dip_abs[0].qty == 15
+            and after_dip_abs[0].lot_count == 1
+            and (not after_dip_abs[0].is_primer_1sh)
+        ), f"무승격 흡수합산 실패: {after_dip_abs[0]}"
+
+        # [1층 공석] 쌍바닥 구제: 바벨 ON vs 복리 OFF 검증
+        b_vac_l1 = b_full7[1:]
+        sig_vac_bar = evaluate_smart_primer_1sh_signal(
+            live_price=46.90,
+            buckets=b_vac_l1,
+            anchor_price=50.50,
+            cycle_min_buy_price=44.36,
+            drop_buy_pct=-5.50,
+            cycle_ratchet_max_lots=12,
+            portion_mode="BARBELL_60_30_10",
+            hm=1050,
+        )
+        sig_vac_cmp = evaluate_smart_primer_1sh_signal(
+            live_price=46.90,
+            buckets=b_vac_l1,
+            anchor_price=50.50,
+            cycle_min_buy_price=44.36,
+            drop_buy_pct=-5.50,
+            cycle_ratchet_max_lots=12,
+            portion_mode="COMP_08PCT",
+            hm=1050,
+        )
+        assert sig_vac_bar["should_buy"] is True and sig_vac_bar["signal_type"] == "PRIMER_1SH_VAC_L1_RESCUE"
+        assert sig_vac_cmp["should_buy"] is False and sig_vac_cmp["signal_type"] == "VACANT_L1_RESCUE_OFF_IN_COMPOUND"
+
+        # [Audit-110-01] PRIMER_1SH 보유 중 고가 수동매수 유입 시 1층 마중물 보존 및 지층 단가역전 원천 차단 검증
+        b_hi_manual = vrev_add_quota_lot_and_merge_2tier(
+            queue=after_p1,
+            buy_qty=10,
+            buy_price=65.00,
+            lot_type="MANUAL_SYNC_L1",
+        )
+        assert (
+            b_hi_manual[0].is_primer_1sh is True
+            and abs(b_hi_manual[0].book_price - 46.90) < 1e-4
+            and b_hi_manual[0].book_price <= b_hi_manual[1].book_price + 1e-6
+        ), f"Audit-110-01 고가 수동매수 단가역전 방어 실패: {b_hi_manual[:3]}"
 
     finally:
         set_runtime_round_trip_fee_rate_pct(prev_rt, us_commission_rate=prev_one)

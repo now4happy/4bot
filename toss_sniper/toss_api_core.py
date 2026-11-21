@@ -24,7 +24,7 @@ import shutil
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -99,6 +99,16 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = 0.95
 
 # [Case 84 : 정규장 마감 30분 전(15:30 ~ 16:00 EST) 본·서브 0주 새 사이클 첫 1층 진입 및 상단층 보유 중 1층 공석 +1.0% 돌파 추격 동시 차단 기준 시각(HHMM)]
 NEW_CYCLE_BUY_CUTOFF_HM: int = 1530
+
+# NEW [Case 110 : 옵션 3 운용모드별 스마트 연동 역산 5.50% · -3.50% 가드 1주 마중물(Smart Primer 1-Share) 전역 상수]
+PRIMER_1SH_MIN_L1_GAP_PCT: float = 3.50
+PRIMER_1SH_MAX_INV_DROP_PCT: float = 5.50
+PRIMER_1SH_MIN_LOCKED_LOTS: int = 2
+PRIMER_1SH_LOT_TAG: str = "PRIMER_1SH"
+PRIMER_1SH_VAC_LOT_TAG: str = "PRIMER_1SH_VAC_L1"
+PRIMER_MODE_AUTO_SMART: str = "AUTO_SMART"
+PRIMER_MODE_OFF: str = "OFF"
+VALID_PRIMER_MODES: Tuple[str, ...] = (PRIMER_MODE_AUTO_SMART, PRIMER_MODE_OFF)
 
 LOCKED_BUY_INTERVAL_MIN: int = 10
 LOCKED_SELL_INTERVAL_MIN: int = 1
@@ -188,6 +198,118 @@ def next_cycled_portion_mode(cur_mode: Any) -> str:
     if is_simple_income_mode(cur_mode):
         return PORTION_MODE_BARBELL
     return PORTION_MODE_SIMPLE
+
+
+def is_primer_1sh_tag(bucket_or_tag: Any) -> bool:
+    """
+    # NEW [Case 110]: 버킷 객체/딕셔너리/문자열이 1주 마중물(PRIMER_1SH / PRIMER_1SH_VAC_L1)인지 판별한다.
+    """
+    if isinstance(bucket_or_tag, dict):
+        raw_t = str(bucket_or_tag.get("lot_type") or "")
+    elif hasattr(bucket_or_tag, "lot_type"):
+        raw_t = str(getattr(bucket_or_tag, "lot_type", "") or "")
+    else:
+        raw_t = str(bucket_or_tag or "")
+    return raw_t.upper().strip() in (PRIMER_1SH_LOT_TAG, PRIMER_1SH_VAC_LOT_TAG)
+
+
+def safe_bucket_lot_count(bucket_or_dict: Any) -> int:
+    """
+    # NEW [Case 110]: 1주 마중물(PRIMER_1SH) 버킷의 lot_count=0 을 보존하여 회차 래칫 부풀림을 원천 차단한다.
+    """
+    if isinstance(bucket_or_dict, dict):
+        raw_lc = safe_int(
+            bucket_or_dict.get("lot_count"),
+            0 if is_primer_1sh_tag(bucket_or_dict) else 1,
+        )
+    elif hasattr(bucket_or_dict, "lot_count"):
+        raw_lc = safe_int(
+            getattr(bucket_or_dict, "lot_count", None),
+            0 if is_primer_1sh_tag(bucket_or_dict) else 1,
+        )
+    else:
+        raw_lc = safe_int(bucket_or_dict, 1)
+    if is_primer_1sh_tag(bucket_or_dict) and raw_lc <= 0:
+        return 0
+    return max(1, raw_lc)
+
+
+def resolve_smart_primer_policy(
+    portion_mode: Any,
+    primer_1sh_mode: Any = PRIMER_MODE_AUTO_SMART,
+) -> Dict[str, Any]:
+    """
+    # NEW [Case 110 · 옵션 3 운용모드별 스마트 연동 정책 해석기]:
+    - BARBELL_60_30_10 / SIMPLE_08PCT ➔ ALL_PLUS_L1_VAC (-3.50% 가드 · 전상태 + 1층공석 쌍바닥구제 · 서브ON)
+    - COMP_08PCT (연속 복리)          ➔ NO_7FULL_MERGE (-3.50% 가드 · 6층이하/2층공석만 출동[7층만석 합병차단] · 서브신규진입OFF)
+    - primer_1sh_mode == OFF          ➔ 1주 마중물 비활성화 (기존 v3.0 정본 동작 유지)
+    """
+    raw_pm = str(primer_1sh_mode or PRIMER_MODE_AUTO_SMART).upper().strip()
+    is_off = raw_pm in ("OFF", "FALSE", "0", "DISABLED", "NONE")
+    is_barbell = is_barbell_mode(portion_mode)
+    is_simple = (not is_barbell) and is_simple_income_mode(portion_mode)
+    if is_off:
+        return {
+            "primer_1sh_mode": PRIMER_MODE_OFF,
+            "enabled": False,
+            "vacancy_mode": "OFF",
+            "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
+            "allow_vacant_l1_rescue": False,
+            "block_7full_merge": True,
+            "allow_new_sub_entry": True,
+            "policy_badge": "🔴OFF(마중물정지)",
+        }
+    if is_barbell or is_simple:
+        return {
+            "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
+            "enabled": True,
+            "vacancy_mode": "ALL_PLUS_L1_VAC",
+            "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
+            "allow_vacant_l1_rescue": True,
+            "block_7full_merge": False,
+            "allow_new_sub_entry": True,
+            "policy_badge": "🧠스마트ON(만석+1층공석구제·서브ON)",
+        }
+    return {
+        "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
+        "enabled": True,
+        "vacancy_mode": "NO_7FULL_MERGE",
+        "min_l1_gap_pct": PRIMER_1SH_MIN_L1_GAP_PCT,
+        "allow_vacant_l1_rescue": False,
+        "block_7full_merge": True,
+        "allow_new_sub_entry": False,
+        "policy_badge": "🧠스마트ON(무합병6층↓·서브신규OFF)",
+    }
+
+
+def resolve_trading_session_date_est(
+    now_est: Optional[datetime] = None,
+    after_1600_close: bool = False,
+    last_closing_report_date: str = "",
+) -> str:
+    """
+    24시간 통합 거래일(16:01 EST 애프터·데이장 ~ 익일 16:00 EST 정규장 마감) 산출기:
+    - 평일 16:00 EST 마감 결산 완료 직후(또는 17:00 EST 이후)부터 차기 미국 평일(금요일은 월요일)로 귀속한다.
+    """
+    dt = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
+    wd = dt.weekday()
+    if wd == 5:
+        return (dt + timedelta(days=2)).strftime("%Y-%m-%d")
+    if wd == 6:
+        return (dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    today_s = dt.strftime("%Y-%m-%d")
+    hm = dt.hour * 100 + dt.minute
+    closed_today = bool(
+        after_1600_close
+        or (
+            last_closing_report_date
+            and str(last_closing_report_date).strip() == today_s
+        )
+    )
+    if hm >= 1700 or (hm >= 1600 and closed_today):
+        add_days = 3 if wd == 4 else 1
+        return (dt + timedelta(days=add_days)).strftime("%Y-%m-%d")
+    return today_s
 
 
 def _read_env_us_commission_rates() -> Tuple[float, float]:
@@ -617,7 +739,9 @@ class SoxlStratumLedger:
         folder_slug: str = "default_bot",
         initial_seed: float = DEFAULT_INITIAL_SEED_USD,
     ) -> Dict[str, Any]:
-        today_est = datetime.now(EST_TZ).strftime("%Y-%m-%d")
+        now_dt_est = datetime.now(EST_TZ)
+        today_est = now_dt_est.strftime("%Y-%m-%d")
+        sess_est = resolve_trading_session_date_est(now_dt_est)
         clean_seed = (
             round(initial_seed, 4)
             if initial_seed >= 100.0
@@ -636,6 +760,7 @@ class SoxlStratumLedger:
             # [Case 91 + 바벨 확장]: COMP_08PCT / SIMPLE_08PCT / BARBELL_60_30_10 및 격리 수익금 오프셋
             "portion_mode": PORTION_MODE_COMPOUND,
             "vaulted_profit_locked_usd": 0.0,
+            "cycle_vaulted_locked_usd": 0.0,
             "threshold_mode": "WIDE_RUNWAY",
             "reentry_mode": "HYBRID_PULL_OR_BRK",
             "grid_merge_mode": DEFAULT_GRID_MERGE_MODE,
@@ -678,6 +803,13 @@ class SoxlStratumLedger:
             "daily_sub_realized_net_usd": 0.0,
             "daily_main_buy_cnt": 0,
             "daily_main_sell_cnt": 0,
+            "primer_1sh_mode": PRIMER_MODE_AUTO_SMART,
+            "primer_1sh_buy_events": 0,
+            "primer_1sh_sell_events": 0,
+            "primer_1sh_absorbed_events": 0,
+            "primer_1sh_realized_net_usd": 0.0,
+            "daily_primer_1sh_buy_cnt": 0,
+            "daily_primer_1sh_sell_cnt": 0,
             "unlock_mode": DEFAULT_UNLOCK_MODE,
             "buy_interval_min": LOCKED_BUY_INTERVAL_MIN,
             "sell_interval_min": LOCKED_SELL_INTERVAL_MIN,
@@ -721,7 +853,7 @@ class SoxlStratumLedger:
             "last_reserve_check_ts": 0.0,
             "last_evaluated_buy_bucket_id": -1,
             "last_evaluated_date": today_est,
-            "logical_date": today_est,
+            "logical_date": sess_est,
             "last_closing_report_date": "",
             "last_tg_update_id": 0,
             "total_buy_events": 0,
@@ -821,8 +953,10 @@ class SoxlStratumLedger:
                     + safe_float(high_b.get("actual_cost_usd"), 0.0),
                     4,
                 )
-                tot_lc = max(1, safe_int(low_b.get("lot_count"), 1)) + max(
-                    1, safe_int(high_b.get("lot_count"), 1)
+                tot_lc = max(
+                    1,
+                    safe_bucket_lot_count(low_b)
+                    + safe_bucket_lot_count(high_b),
                 )
                 overall_book_avg = (
                     float(q_low) * safe_float(low_b.get("book_price"), 0.0)
@@ -858,8 +992,8 @@ class SoxlStratumLedger:
                     ),
                     4,
                 )
-                tot_lc = sum(
-                    max(1, safe_int(b.get("lot_count"), 1)) for b in overflow
+                tot_lc = max(
+                    1, sum(safe_bucket_lot_count(b) for b in overflow)
                 )
                 pure_p = round(max(0.01, tot_ac / float(max(1, tot_q))), 4)
                 merged_top = {
@@ -1039,6 +1173,35 @@ class SoxlStratumLedger:
         st["sub_max_tiers"] = SUB_MAX_TIERS_3
         st["sub_max_total_lots"] = SUB_MAX_TOTAL_LOTS_4
 
+        raw_primer_m = (
+            str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART)
+            .upper()
+            .strip()
+        )
+        st["primer_1sh_mode"] = (
+            PRIMER_MODE_OFF
+            if raw_primer_m in ("OFF", "FALSE", "0", "DISABLED", "NONE")
+            else PRIMER_MODE_AUTO_SMART
+        )
+        st["primer_1sh_buy_events"] = max(
+            0, safe_int(st.get("primer_1sh_buy_events"), 0)
+        )
+        st["primer_1sh_sell_events"] = max(
+            0, safe_int(st.get("primer_1sh_sell_events"), 0)
+        )
+        st["primer_1sh_absorbed_events"] = max(
+            0, safe_int(st.get("primer_1sh_absorbed_events"), 0)
+        )
+        st["primer_1sh_realized_net_usd"] = round(
+            safe_float(st.get("primer_1sh_realized_net_usd"), 0.0), 4
+        )
+        st["daily_primer_1sh_buy_cnt"] = max(
+            0, safe_int(st.get("daily_primer_1sh_buy_cnt"), 0)
+        )
+        st["daily_primer_1sh_sell_cnt"] = max(
+            0, safe_int(st.get("daily_primer_1sh_sell_cnt"), 0)
+        )
+
         st["cond_unlock_buy_events"] = max(
             0, safe_int(st.get("cond_unlock_buy_events"), 0)
         )
@@ -1143,8 +1306,14 @@ class SoxlStratumLedger:
                         ),
                         4,
                     )
-                    lc = max(1, safe_int(b.get("lot_count"), 1))
                     lt = str(b.get("lot_type") or "QUOTA_L1").upper().strip()
+                    if lt == PRIMER_1SH_VAC_LOT_TAG:
+                        lt = PRIMER_1SH_LOT_TAG
+                    lc = (
+                        0
+                        if (lt == PRIMER_1SH_LOT_TAG and safe_int(b.get("lot_count"), 0) <= 0)
+                        else max(1, safe_int(b.get("lot_count"), 1))
+                    )
                     pure_avg_p = round(max(0.01, ac / float(q)), 4)
                     clean_buckets.append(
                         {
@@ -1212,7 +1381,7 @@ class SoxlStratumLedger:
         st["sub_buckets"] = clean_sub_buckets
 
         held_lots_now = sum(
-            max(1, safe_int(b.get("lot_count"), 1)) for b in clean_buckets
+            safe_bucket_lot_count(b) for b in clean_buckets
         )
         raw_ratchet_lots = max(
             0, safe_int(st.get("cycle_ratchet_max_lots"), 0)
@@ -1287,6 +1456,8 @@ class SoxlStratumLedger:
                             ord_q_pending if ord_q_pending > 0 else cur_l1_q
                         )
                     )
+                elif is_primer_1sh_tag(clean_buckets[0]):
+                    st["l1_target_quota_qty"] = cur_l1_q
                 else:
                     st["l1_target_quota_qty"] = max(cur_l1_q, raw_target_q)
             else:
@@ -1475,6 +1646,7 @@ class SoxlStratumLedger:
             st["cycle_sub_realized_net_usd"] = 0.0
             st["cycle_sell_events"] = 0
             st["cycle_leftover_saved_usd"] = 0.0
+            st["cycle_vaulted_locked_usd"] = 0.0
         else:
             st["cycle_realized_gross_usd"] = round(
                 safe_float(st.get("cycle_realized_gross_usd"), 0.0), 4
@@ -1494,6 +1666,16 @@ class SoxlStratumLedger:
             st["cycle_leftover_saved_usd"] = round(
                 safe_float(st.get("cycle_leftover_saved_usd"), 0.0), 4
             )
+            st["cycle_vaulted_locked_usd"] = round(
+                min(
+                    st["vaulted_profit_locked_usd"],
+                    max(
+                        0.0,
+                        safe_float(st.get("cycle_vaulted_locked_usd"), 0.0),
+                    ),
+                ),
+                4,
+            )
 
         # 🚨 [Case 77, Case 88, Case 91 & 바벨 모드(60% SOXL 분리 · 별도 수익금고 격리) 통합 회계 항등식 강제]
         actual_inv_buckets = round(
@@ -1512,8 +1694,11 @@ class SoxlStratumLedger:
 
         if is_barbell_mode(st["portion_mode"]):
             soxl_core_60 = round(init_seed * BARBELL_SOXL_WEIGHT, 4)
+            # MODIFIED [Case 94]: 선행 익절 격리분 차감 결손 보전으로 유령현금 0% 항등식 유지
             cyc_loss_adj = min(
-                0.0, safe_float(st.get("cycle_realized_net_usd"), 0.0)
+                0.0,
+                safe_float(st.get("cycle_realized_net_usd"), 0.0)
+                - safe_float(st.get("cycle_vaulted_locked_usd"), 0.0),
             )
             total_pool_equity = (
                 max(0.0, soxl_core_60 + cyc_loss_adj) + inj_res_usd
@@ -1671,7 +1856,7 @@ class SoxlStratumLedger:
                         for b in sanitized.get("buckets", [])
                     )
                     held_l = sum(
-                        max(1, safe_int(b.get("lot_count"), 1))
+                        safe_bucket_lot_count(b)
                         for b in sanitized.get("buckets", [])
                     )
                     ratchet_l = safe_int(
@@ -1996,6 +2181,7 @@ class SoxlStratumLedger:
             initial_seed_usd=round(init_seed, 4),
             cumulative_realized_net_usd=round(cum_net, 4),
             vaulted_profit_locked_usd=round(v_locked, 4),
+            cycle_vaulted_locked_usd=0.0,
             cycle_realized_gross_usd=0.0,
             cycle_realized_fee_usd=0.0,
             cycle_realized_net_usd=0.0,
@@ -2059,6 +2245,7 @@ class SoxlStratumLedger:
             kw["cumulative_realized_gross_usd"] = 0.0
             kw["cumulative_realized_fee_usd"] = 0.0
             kw["vaulted_profit_locked_usd"] = 0.0
+            kw["cycle_vaulted_locked_usd"] = 0.0
             kw["cycle_realized_gross_usd"] = 0.0
             kw["cycle_realized_fee_usd"] = 0.0
             kw["cycle_realized_net_usd"] = 0.0
@@ -2104,42 +2291,70 @@ class SoxlStratumLedger:
             next_mode = next_cycled_portion_mode(cur_mode)
         return await self.update_state(TARGET_SYMBOL, portion_mode=next_mode)
 
+    async def toggle_primer_1sh_mode(
+        self, target_mode: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        # NEW [Case 110]: 1주 마중물 스마트 연동(AUTO_SMART) ⇄ 정지(OFF) 토글기
+        """
+        st = self.get_state(TARGET_SYMBOL)
+        cur_pm = str(st.get("primer_1sh_mode") or PRIMER_MODE_AUTO_SMART).upper().strip()
+        if target_mode is not None and str(target_mode).strip():
+            t_up = str(target_mode).upper().strip()
+            next_pm = (
+                PRIMER_MODE_OFF
+                if t_up in ("OFF", "FALSE", "0", "DISABLED", "NONE")
+                else PRIMER_MODE_AUTO_SMART
+            )
+        else:
+            next_pm = (
+                PRIMER_MODE_OFF
+                if cur_pm == PRIMER_MODE_AUTO_SMART
+                else PRIMER_MODE_AUTO_SMART
+            )
+        return await self.update_state(TARGET_SYMBOL, primer_1sh_mode=next_pm)
+
     async def rollover_daily_counters_if_needed(
         self, logical_date: str
     ) -> Dict[str, Any]:
         st = self.get_state(TARGET_SYMBOL)
-        cur_date = str(st.get("logical_date") or "")
-        if cur_date == str(logical_date):
+        target_d = str(logical_date or "").strip()
+        cur_date = str(st.get("logical_date") or "").strip()
+        if not target_d or (cur_date and cur_date >= target_d):
             return st
-        return await self.update_state(
-            TARGET_SYMBOL,
-            logical_date=str(logical_date),
-            daily_buy_events=0,
-            daily_unlock_buy_events=0,
-            daily_sub_buy_cnt=0,
-            daily_sub_buy_events=0,
-            daily_sub_sell_cnt=0,
-            daily_sub_sell_events=0,
-            daily_sub_unlock_events=0,
-            daily_sub_realized_net_usd=0.0,
-            daily_main_buy_cnt=0,
-            daily_main_sell_cnt=0,
-            daily_reserve_injected_cnt=0,
-            daily_dust_guard_blocked_cnt=0,
-            daily_sell_events=0,
-            daily_indiv_grid_sell_cnt=0,
-            daily_wma_grad_sell_cnt=0,
-            daily_seed_protect_pass_cnt=0,
-            daily_reanchor_cnt=0,
-            daily_leftover_saved_usd=0.0,
-            daily_realized_net_usd=0.0,
-            last_evaluated_buy_bucket_id=-1,
-            last_evaluated_date=str(logical_date),
-            sub_last_evaluated_buy_bucket_id=-1,
-            sub_last_evaluated_date=str(logical_date),
-            last_reentry_eval_ts=0.0,
-            last_sub_reentry_eval_ts=0.0,
-        )
+        cal_today = datetime.now(EST_TZ).strftime("%Y-%m-%d")
+        upd_kw: Dict[str, Any] = {
+            "logical_date": target_d,
+            "daily_buy_events": 0,
+            "daily_unlock_buy_events": 0,
+            "daily_sub_buy_cnt": 0,
+            "daily_sub_buy_events": 0,
+            "daily_sub_sell_cnt": 0,
+            "daily_sub_sell_events": 0,
+            "daily_sub_unlock_events": 0,
+            "daily_sub_realized_net_usd": 0.0,
+            "daily_main_buy_cnt": 0,
+            "daily_main_sell_cnt": 0,
+            "daily_primer_1sh_buy_cnt": 0,
+            "daily_primer_1sh_sell_cnt": 0,
+            "daily_reserve_injected_cnt": 0,
+            "daily_dust_guard_blocked_cnt": 0,
+            "daily_sell_events": 0,
+            "daily_indiv_grid_sell_cnt": 0,
+            "daily_wma_grad_sell_cnt": 0,
+            "daily_seed_protect_pass_cnt": 0,
+            "daily_reanchor_cnt": 0,
+            "daily_leftover_saved_usd": 0.0,
+            "daily_realized_net_usd": 0.0,
+            "last_reentry_eval_ts": 0.0,
+            "last_sub_reentry_eval_ts": 0.0,
+        }
+        if cal_today >= target_d:
+            upd_kw["last_evaluated_buy_bucket_id"] = -1
+            upd_kw["last_evaluated_date"] = cal_today
+            upd_kw["sub_last_evaluated_buy_bucket_id"] = -1
+            upd_kw["sub_last_evaluated_date"] = cal_today
+        return await self.update_state(TARGET_SYMBOL, **upd_kw)
 
 
 # 하위 호환 별칭 (타 모듈 임포트 호환 100% 보장)

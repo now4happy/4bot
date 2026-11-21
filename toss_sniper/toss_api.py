@@ -25,6 +25,7 @@ import json
 import logging
 import math
 import os
+import ssl
 import threading
 import time
 import urllib.error
@@ -37,6 +38,19 @@ try:
     import fcntl
 except ImportError:
     fcntl = None  # type: ignore
+
+try:
+    import httpx  # type: ignore
+
+    _HTTPX_KEEPALIVE_OK = True
+except Exception:
+    httpx = None  # type: ignore
+    _HTTPX_KEEPALIVE_OK = False
+
+try:  # [🔗토스 토큰 공유 HOOK] 2번 스나이퍼·live_board·브리핑이 같은 토큰 1개를 같이 씀 (없으면 원작 그대로 직접 발급)
+    import toss_token_share as _TTS
+except Exception:
+    _TTS = None
 
 from toss_api_core import (
     ALLOWED_SYMBOLS,
@@ -69,6 +83,13 @@ from toss_api_core import (
     PORTION_MODE_COMPOUND,
     PORTION_MODE_SIMPLE,
     PORTION_RATIO_LOCKED,
+    PRIMER_1SH_LOT_TAG,
+    PRIMER_1SH_MAX_INV_DROP_PCT,
+    PRIMER_1SH_MIN_L1_GAP_PCT,
+    PRIMER_1SH_MIN_LOCKED_LOTS,
+    PRIMER_1SH_VAC_LOT_TAG,
+    PRIMER_MODE_AUTO_SMART,
+    PRIMER_MODE_OFF,
     REAL_ALLOWED_SYMBOLS,
     REANCHOR_NET_BUFFER_MULT,
     RESERVE_DEPOSIT_TOLERANCE_RATIO,
@@ -94,6 +115,7 @@ from toss_api_core import (
     TARGET_SYMBOL,
     TOSS_OPENAPI_BASE_URL,
     VALID_PORTION_MODES,
+    VALID_PRIMER_MODES,
     _HybridFileLock,
     _NonRetryableApiError,
     _load_env_files_into_environ,
@@ -105,15 +127,24 @@ from toss_api_core import (
     get_runtime_round_trip_fee_rate_pct,
     get_runtime_us_commission_rate,
     is_barbell_mode,
+    is_primer_1sh_tag,
     is_simple_income_mode,
     next_cycled_portion_mode,
     resolve_folder_isolated_ledger_paths,
+    resolve_smart_primer_policy,
+    resolve_trading_session_date_est,
+    safe_bucket_lot_count,
     safe_float,
     safe_int,
     set_runtime_round_trip_fee_rate_pct,
 )
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("toss_sniper.toss_api")
+
+# NEW: 프로세스당 단 1회 루트 CA 인증서 번들 로드 (매 요청 디스크/CA 재파싱 원천 차단)
+_SHARED_SSL_CONTEXT: ssl.SSLContext = ssl.create_default_context()
 
 # NEW: /dev/shm 프로세스 간 무계좌 시세·정찰 공유 버스 코어
 _SHM_BUS_DIR: str = os.environ.get(
@@ -121,6 +152,7 @@ _SHM_BUS_DIR: str = os.environ.get(
     "/dev/shm/toss_sniper_bus_v3",
 )
 PRICE_SHM_TTL_SEC: float = 1.15
+TRADES_SHM_TTL_SEC: float = 0.95
 CANDLE_1M_SHM_TTL_SEC: float = 4.20
 CANDLE_1D_SHM_TTL_SEC: float = 30.0
 
@@ -316,7 +348,16 @@ def _shm_commit_prices_and_unlock_sync(
             if fd < 0 and fcntl is not None:
                 lock_fp = os.path.join(bdir, "prices_v3.lock")
                 temp_fd = _open_shm_lock_fd_sync(lock_fp)
-                fcntl.flock(temp_fd, fcntl.LOCK_EX)
+                try:
+                    # MODIFIED: 실주문 2차 호가(SOLO) 커밋 시 락 경합 지연 0ms 차단
+                    fcntl.flock(temp_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (BlockingIOError, OSError):
+                    try:
+                        os.close(temp_fd)
+                    except Exception:
+                        pass
+                    temp_fd = -1
+                    return
             data_fp = os.path.join(bdir, "prices_v3.json")
             cur = _shm_read_json_sync(data_fp)
             now_t = time.time()
@@ -388,6 +429,7 @@ class TossApiClient:
 
         self._access_token: str = ""
         self._token_expires_mono: float = 0.0
+        self._tts_bad_token: str = ""  # [🔗토스 토큰 공유 HOOK] 401 로 거절된 토큰 (공유 토큰 재발급 판단용)
         self._token_lock: asyncio.Lock = asyncio.Lock()
 
         self.account_seq: Optional[int] = None
@@ -404,6 +446,10 @@ class TossApiClient:
         self._fx_cache_rate: float = KRW_PER_USD_DEFAULT
         self._fx_cache_mono: float = 0.0
 
+        # NEW: Keep-Alive 영구 커넥션 풀 슬롯 (TLS 핸드셰이크 CPU 포식 소거)
+        self._http_pool_lock: threading.Lock = threading.Lock()
+        self._http_client: Optional[Any] = None
+
     def _assert_real_order_symbol(
         self, symbol: str, allow_barbell_sgov: bool = False
     ) -> str:
@@ -419,6 +465,36 @@ class TossApiClient:
     # -----------------------------------------------------------------------
     # 내부 저수준 HTTP 실행기 (제1헌법: GlobalThrottle.wait_api_sync + asyncio.to_thread)
     # -----------------------------------------------------------------------
+    def _get_or_create_http_client_sync(self) -> Optional[Any]:
+        if not _HTTPX_KEEPALIVE_OK or httpx is None:
+            return None
+        with self._http_pool_lock:
+            if self._http_client is None or getattr(
+                self._http_client, "is_closed", False
+            ):
+                limits = httpx.Limits(
+                    max_keepalive_connections=8,
+                    max_connections=16,
+                    keepalive_expiry=30.0,
+                )
+                self._http_client = httpx.Client(
+                    verify=_SHARED_SSL_CONTEXT,
+                    limits=limits,
+                    timeout=httpx.Timeout(10.0, connect=5.0),
+                    headers={"Connection": "keep-alive"},
+                )
+            return self._http_client
+
+    def _reset_http_client_sync(self) -> None:
+        with self._http_pool_lock:
+            cli = self._http_client
+            self._http_client = None
+        if cli is not None:
+            try:
+                cli.close()
+            except Exception:
+                pass
+
     def _execute_http_sync(
         self,
         method: str,
@@ -428,15 +504,55 @@ class TossApiClient:
         rate_group: str,
         timeout_sec: float,
     ) -> Tuple[int, Dict[str, Any]]:
+        # MODIFIED: Keep-Alive 커넥션 풀 최우선 사용 (유휴 소켓 단절 시 자동 재연결 + urllib 폴백)
         GlobalThrottle.wait_api_sync(rate_group)
+        m_up = method.upper()
+        cli = self._get_or_create_http_client_sync()
+        if cli is not None and httpx is not None:
+            for ka_try in range(2):
+                try:
+                    resp = cli.request(
+                        method=m_up,
+                        url=url,
+                        content=body_bytes,
+                        headers=headers,
+                        timeout=timeout_sec,
+                    )
+                    status_code = int(resp.status_code or 200)
+                    raw_bytes = resp.content
+                    if not raw_bytes:
+                        return status_code, {}
+                    text = raw_bytes.decode("utf-8", errors="replace").strip()
+                    if not text:
+                        return status_code, {}
+                    if 200 <= status_code < 300:
+                        return status_code, json.loads(text)
+                    try:
+                        err_obj = json.loads(text)
+                        return (
+                            status_code,
+                            err_obj if isinstance(err_obj, dict) else {},
+                        )
+                    except Exception:
+                        return status_code, {}
+                except Exception as hx_exc:
+                    self._reset_http_client_sync()
+                    if ka_try == 0 and m_up == "GET":
+                        cli = self._get_or_create_http_client_sync()
+                        if cli is not None:
+                            continue
+                    raise hx_exc
+
         req = urllib.request.Request(
             url=url,
             data=body_bytes,
             headers=headers,
-            method=method.upper(),
+            method=m_up,
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            with urllib.request.urlopen(
+                req, timeout=timeout_sec, context=_SHARED_SSL_CONTEXT
+            ) as resp:
                 status_code = int(resp.getcode() or 200)
                 raw_bytes = resp.read()
                 if not raw_bytes:
@@ -504,18 +620,47 @@ class TossApiClient:
                 "Accept": "application/json",
             }
 
-            status_code, payload = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._execute_http_sync,
-                    "POST",
-                    url,
-                    headers,
-                    form_data,
-                    "AUTH",
-                    10.0,
-                ),
-                timeout=12.0,
-            )
+            # [🔗토스 토큰 공유 HOOK] 직접 발급하면 다른 곳(live_board·브리핑)의 토큰이 취소(401)되므로
+            # 공유 토큰을 먼저 가져온다. 이미 다른 곳이 새로 받아 둔 토큰이면 그대로 쓰고,
+            # 거절된 바로 그 토큰이 아직 공유 토큰일 때만 새로 발급한다. 공유 불가(None)면 아래 원작 직접 발급으로 간다.
+            _bad = self._tts_bad_token or self._access_token
+            _sh = None
+            if _TTS is not None:
+                try:
+                    _sh = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            _TTS.try_acquire,
+                            self.base_url,
+                            self.client_id,
+                            self.client_secret,
+                            bool(force_refresh or _bad),
+                            _bad,
+                            "2번 스나이퍼",
+                        ),
+                        timeout=15.0,
+                    )
+                except Exception:
+                    _sh = None
+            if _sh and _sh[0] == "ok":
+                self._access_token = _sh[1]
+                self._token_expires_mono = time.monotonic() + float(_sh[2])
+                self._tts_bad_token = ""
+                return self._access_token
+            if _sh and _sh[0] == "fail":
+                status_code, payload = _sh[1], _sh[2]
+            else:
+                status_code, payload = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._execute_http_sync,
+                        "POST",
+                        url,
+                        headers,
+                        form_data,
+                        "AUTH",
+                        10.0,
+                    ),
+                    timeout=12.0,
+                )
             if status_code != 200 or not isinstance(payload, dict):
                 err_code = str(payload.get("error") or f"http-{status_code}")
                 err_desc = str(
@@ -534,6 +679,7 @@ class TossApiClient:
 
             self._access_token = token
             self._token_expires_mono = time.monotonic() + float(expires_in)
+            self._tts_bad_token = ""
             return self._access_token
 
     async def ensure_account_seq(self) -> int:
@@ -603,10 +749,10 @@ class TossApiClient:
             if not force_refresh and self._commission_locked:
                 return self.us_commission_rate, self.round_trip_fee_rate_pct
 
+            # MODIFIED [Case 86]: KST 종료일 만료 수수료율 오락온 차단(원장 폴백 보존)
             items = await self.get_commissions()
             today_kst = datetime.now(KST_TZ).strftime("%Y-%m-%d")
             found_us_rate = 0.0
-            fallback_us_rate = 0.0
             for it in items:
                 mkt = str(it.get("marketCountry") or "").upper().strip()
                 if mkt == "US":
@@ -618,13 +764,9 @@ class TossApiClient:
                     if s_dt and len(s_dt) == 10 and today_kst < s_dt:
                         continue
                     if e_dt and len(e_dt) == 10 and today_kst > e_dt:
-                        if fallback_us_rate <= 0.0:
-                            fallback_us_rate = round(r_val, 6)
                         continue
                     found_us_rate = round(r_val, 6)
                     break
-            if found_us_rate <= 0.0 and fallback_us_rate > 0.0:
-                found_us_rate = fallback_us_rate
 
             if found_us_rate > 0.0:
                 rt_pct = round(found_us_rate * 200.0, 4)
@@ -740,6 +882,7 @@ class TossApiClient:
                 )
 
                 if status_code == 401 and attempt < max_retries:
+                    self._tts_bad_token = token  # [🔗토스 토큰 공유 HOOK] 거절된 토큰 기억 (비우기 전에)
                     self._access_token = ""
                     force_token_refresh = True
                     last_exc = None
@@ -862,27 +1005,149 @@ class TossApiClient:
         sym_k = str(symbol).upper().strip()
         return safe_float(p_map.get(sym_k), 0.0)
 
+    @staticmethod
+    def _shm_begin_trades_sync(
+        sym_c: str, req_cnt: int, ttl_s: float
+    ) -> Tuple[str, List[Dict[str, Any]], int]:
+        try:
+            bdir = _resolve_shm_bus_dir_sync()
+            dfp = os.path.join(bdir, f"trades_v3_{sym_c}.json")
+            now_t = time.time()
+            cur = _shm_read_json_sync(dfp)
+            ts_v = safe_float(cur.get("ts"), 0.0)
+            c_req = safe_int(cur.get("req_cnt"), 0)
+            items = cur.get("items")
+            if (
+                (now_t - ts_v) <= ttl_s
+                and c_req >= req_cnt
+                and isinstance(items, list)
+                and items
+            ):
+                sliced = [
+                    dict(x) for x in items[:req_cnt] if isinstance(x, dict)
+                ]
+                if sliced:
+                    return "HIT", sliced, -1
+            if fcntl is None:
+                return "SOLO", [], -1
+            lfp = os.path.join(bdir, f"trades_v3_{sym_c}.lock")
+            fd = _open_shm_lock_fd_sync(lfp)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return "LEADER", [], fd
+            except (BlockingIOError, OSError):
+                _unlock_shm_fd_now(fd)
+                return "FOLLOWER", [], -1
+        except Exception:
+            return "SOLO", [], -1
+
+    @staticmethod
+    def _shm_poll_trades_sync(
+        sym_c: str, req_cnt: int, min_ts: float
+    ) -> Optional[List[Dict[str, Any]]]:
+        try:
+            bdir = _resolve_shm_bus_dir_sync()
+            dfp = os.path.join(bdir, f"trades_v3_{sym_c}.json")
+            cur = _shm_read_json_sync(dfp)
+            ts_v = safe_float(cur.get("ts"), 0.0)
+            c_req = safe_int(cur.get("req_cnt"), 0)
+            items = cur.get("items")
+            if (
+                ts_v >= min_ts
+                and c_req >= req_cnt
+                and isinstance(items, list)
+                and items
+            ):
+                return [
+                    dict(x) for x in items[:req_cnt] if isinstance(x, dict)
+                ]
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _shm_end_trades_sync(
+        fd: int,
+        sym_c: str,
+        req_cnt: int,
+        items: List[Dict[str, Any]],
+    ) -> None:
+        temp_fd = -1
+        try:
+            if items:
+                bdir = _resolve_shm_bus_dir_sync()
+                if fd < 0 and fcntl is not None:
+                    lfp = os.path.join(bdir, f"trades_v3_{sym_c}.lock")
+                    temp_fd = _open_shm_lock_fd_sync(lfp)
+                    fcntl.flock(temp_fd, fcntl.LOCK_EX)
+                dfp = os.path.join(bdir, f"trades_v3_{sym_c}.json")
+                _shm_write_json_sync(
+                    dfp,
+                    {
+                        "ts": time.time(),
+                        "req_cnt": int(req_cnt),
+                        "items": items,
+                    },
+                )
+        except Exception:
+            pass
+        finally:
+            _unlock_shm_fd_now(temp_fd)
+            _unlock_shm_fd_now(fd)
+
     async def get_recent_trades(
         self, symbol: str = TARGET_SYMBOL, count: int = 50
     ) -> List[Dict[str, Any]]:
+        # MODIFIED: 다중 봇 윗꼬리 체결틱 스캔 중복 TLS 호출 차단용 0.95s SHM 공유 캐시
+        sym_c = str(symbol or TARGET_SYMBOL).upper().strip()
         q_cnt = max(1, min(50, safe_int(count, 50)))
+        role, hit_t, lfd = await asyncio.to_thread(
+            self._shm_begin_trades_sync,
+            sym_c,
+            q_cnt,
+            TRADES_SHM_TTL_SEC,
+        )
+        if role == "HIT":
+            return hit_t
+        if role == "FOLLOWER":
+            min_t = time.time() - TRADES_SHM_TTL_SEC
+            for _ in range(12):
+                await asyncio.sleep(0.02)
+                polled = await asyncio.to_thread(
+                    self._shm_poll_trades_sync,
+                    sym_c,
+                    q_cnt,
+                    min_t,
+                )
+                if polled is not None:
+                    return polled
+        fetched: List[Dict[str, Any]] = []
         try:
             res = await self._request(
                 method="GET",
                 path="/api/v1/trades",
-                params={
-                    "symbol": str(symbol or TARGET_SYMBOL).upper().strip(),
-                    "count": q_cnt,
-                },
+                params={"symbol": sym_c, "count": q_cnt},
                 require_account=False,
                 rate_group="MARKET_DATA",
             )
             items = res.get("result") if isinstance(res, dict) else []
             if isinstance(items, list):
-                return [t for t in items if isinstance(t, dict)]
+                fetched = [t for t in items if isinstance(t, dict)]
+            return fetched
         except Exception as exc:
             logger.debug("get_recent_trades 예외(묵음): %s", exc)
-        return []
+            return []
+        finally:
+            try:
+                await asyncio.to_thread(
+                    self._shm_end_trades_sync,
+                    lfd,
+                    sym_c,
+                    q_cnt,
+                    fetched,
+                )
+            except BaseException:
+                _unlock_shm_fd_now(lfd)
 
     @staticmethod
     def _parse_iso_timestamp_to_epoch(ts_val: Any) -> float:
@@ -2092,6 +2357,7 @@ class TossApiClient:
         return canceled
 
     async def close(self) -> None:
+        await asyncio.to_thread(self._reset_http_client_sync)
         return None
 
 

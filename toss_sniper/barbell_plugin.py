@@ -55,6 +55,7 @@ from toss_api import (
     generate_client_order_id,
     get_bot_base_dir,
     get_folder_slug,
+    resolve_trading_session_date_est,
     safe_float,
     safe_int,
 )
@@ -188,13 +189,13 @@ class BarbellLedger:
     ) -> Dict[str, Any]:
         splits = compute_barbell_seed_splits(seed_usd)
         now_est = datetime.now(EST_TZ)
-        today_str = now_est.strftime("%Y-%m-%d")
+        sess_str = resolve_trading_session_date_est(now_est)
         return {
             "symbol": BARBELL_SAFE_SYMBOL,
             "folder_slug": self.folder_slug,
             "initial_seed_usd": splits["total_seed_usd"],
             "is_initialized": False,
-            "logical_date": today_str,
+            "logical_date": sess_str,
             # 현금 10% 대기 버킷 상태
             "cash_bucket_usd": splits["cash_seed_10_usd"],
             "cash_injected_to_soxl_usd": 0.0,
@@ -505,10 +506,12 @@ class BarbellLedger:
         self, logical_date: str
     ) -> Dict[str, Any]:
         st = self.get_state()
-        if str(st.get("logical_date") or "") == str(logical_date):
+        target_d = str(logical_date or "").strip()
+        cur_d = str(st.get("logical_date") or "").strip()
+        if not target_d or (cur_d and cur_d >= target_d):
             return st
         return await self.update_state(
-            logical_date=str(logical_date),
+            logical_date=target_d,
             daily_vaulted_profit_usd=0.0,
         )
 
@@ -1067,7 +1070,13 @@ async def record_barbell_realized_profit(
     eff_cyc_net = (
         safe_float(cycle_realized_net_override, 0.0)
         if cycle_realized_net_override is not None
-        else safe_float(st_soxl.get("cycle_realized_net_usd"), 0.0)
+        else round(
+            safe_float(st_soxl.get("cycle_realized_net_usd"), 0.0)
+            - max(
+                0.0, safe_float(st_soxl.get("cycle_vaulted_locked_usd"), 0.0)
+            ),
+            4,
+        )
     )
 
     sgov_q = max(0, safe_int(bst.get("sgov_held_qty"), 0))
@@ -2068,12 +2077,59 @@ async def _sync_pending_sgov_orders(
             last_sgov_action_mono=time.monotonic(),
             last_settled_sgov_order_ids=settled_oids[-50:],
         )
+        # MODIFIED [Audit-03]: SGOV 매도 차익(sgov_gain > 0) 발생 시 스나이퍼 원장 vaulted_profit_locked_usd 동기화
+        st_soxl_post_sg = context.ledger.get_state(TARGET_SYMBOL)
+        sgov_gain_sync_kw: Dict[str, Any] = {}
+        if sgov_gain > 0.0:
+            sgov_gain_sync_kw = {
+                "vaulted_profit_locked_usd": round(
+                    max(
+                        0.0,
+                        safe_float(
+                            st_soxl_post_sg.get("vaulted_profit_locked_usd"),
+                            0.0,
+                        ),
+                    )
+                    + sgov_gain,
+                    4,
+                ),
+                "cumulative_realized_gross_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("cumulative_realized_gross_usd"),
+                        0.0,
+                    )
+                    + safe_float(pnl_info.get("gross_pnl_usd"), sgov_gain),
+                    4,
+                ),
+                "cumulative_realized_fee_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("cumulative_realized_fee_usd"), 0.0
+                    )
+                    + safe_float(pnl_info.get("fee_usd"), 0.0),
+                    4,
+                ),
+                "cumulative_realized_net_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("cumulative_realized_net_usd"), 0.0
+                    )
+                    + sgov_gain,
+                    4,
+                ),
+                "daily_realized_net_usd": round(
+                    safe_float(
+                        st_soxl_post_sg.get("daily_realized_net_usd"), 0.0
+                    )
+                    + sgov_gain,
+                    4,
+                ),
+            }
         await context.ledger.update_state(
             TARGET_SYMBOL,
             waiting_reserve_deposit=False,
             waiting_reserve_deposit_alert_sent=False,
             required_reserve_deposit_usd=0.0,
             last_reserve_check_ts=0.0,
+            **sgov_gain_sync_kw,
         )
         context.wakeup_event.set()
         if hasattr(context, "send_slim_alert"):
@@ -2091,7 +2147,11 @@ async def _sync_pending_sgov_orders(
             )
         return {"status": "SGOV_SELL_FILLED", "qty": eff_q, "price": eff_p}
 
-    if need_timeout_cancel or ord_status in ("CANCELED", "REJECTED"):
+    if need_timeout_cancel or ord_status in (
+        "CANCELED",
+        "REJECTED",
+        "REPLACED",
+    ):
         await b_ledger.update_state(
             sgov_buy_order_id="",
             sgov_sell_order_id="",
@@ -2122,9 +2182,20 @@ async def execute_barbell_sgov_tick_plugin(
         return {"status": "NOT_BARBELL_MODE"}
 
     dt_now = now_est.astimezone(EST_TZ) if now_est else datetime.now(EST_TZ)
-    today_str = dt_now.strftime("%Y-%m-%d")
+    sess_date_str = resolve_trading_session_date_est(
+        dt_now,
+        last_closing_report_date=str(
+            st_soxl.get("last_closing_report_date") or ""
+        ),
+    )
+    if str(st_soxl.get("logical_date") or "") < sess_date_str and hasattr(
+        context.ledger, "rollover_daily_counters_if_needed"
+    ):
+        st_soxl = await context.ledger.rollover_daily_counters_if_needed(
+            sess_date_str
+        )
     b_ledger = ensure_barbell_ledger(context)
-    bst = await b_ledger.rollover_daily_if_needed(today_str)
+    bst = await b_ledger.rollover_daily_if_needed(sess_date_str)
 
     if not bool(bst.get("is_initialized", False)):
         bst = await initialize_or_sync_barbell_on_mode_enter(context)

@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: scheduler_vwap.py
 # ==========================================================
+# 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-5] 달력 폴백 평일=장 열림 가정 제거 → 휴장 처리(Fail-Closed)
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 39대 엣지 케이스 완벽 결속 교차 검증 완료.
 # 🚨 MODIFIED: [Thundering Herd 영구 소각] 달력 API(mcal) 스캔 전 부여되던 파편화된 time.sleep(0.06)을 전면 소각.
 # 🚨 MODIFIED: [중앙 통제소 락온] GlobalThrottle.wait_api_sync()를 주입하여 Thread-Safe 한 100% 중앙 집중형 TPS 방어망 결속 완료.
@@ -104,11 +105,11 @@ async def scheduled_vwap_init_and_cancel(context):
             break
         except asyncio.TimeoutError:
             if attempt == 2:
-                is_open = now_est.weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
         except Exception:
             if attempt == 2:
-                is_open = now_est.weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
@@ -200,11 +201,11 @@ async def scheduled_vwap_trade(context):
             break
         except asyncio.TimeoutError:
             if attempt == 2:
-                is_open = now_est.weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
         except Exception:
             if attempt == 2:
-                is_open = now_est.weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
@@ -268,11 +269,11 @@ async def scheduled_aftermarket_vrev_trade(context):
             break
         except asyncio.TimeoutError:
             if attempt == 2:
-                is_open = now_est.weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
         except Exception:
             if attempt == 2:
-                is_open = now_est.weekday() < 5
+                is_open = False  # audit-fix 1-5: 달력 확인 실패 시 보수적으로 주문 보류
             else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:

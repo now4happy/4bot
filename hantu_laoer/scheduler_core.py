@@ -1,6 +1,7 @@
 # ==========================================================
 # FILE: scheduler_core.py
 # ==========================================================
+# 🚨 v1.0.5 (2026-11-20): [audit-fix-v2 1-5] is_market_open 달력 조회 실패 시 False(주문 보류, Fail-Closed) · 실패 결과는 캐시하지 않음
 # 🚨 MODIFIED: [제1헌법 철저 준수] is_market_open 내부 달력 API(mcal) 스캔 전 파편화된 time.sleep(0.06)을 영구 소각하고, GlobalThrottle.wait_api_sync() 중앙 통제소 락온 완료.
 # 🚨 MODIFIED: [Lost Update 궁극 방어] scheduled_auto_sync 내부 _check_and_set_lock에서 sync_lock.json 생성 및 갱신 시 GlobalThrottle.get_file_lock() 100% 팩트 래핑 완료.
 # 🚨 MODIFIED: [본진 졸업 마비 패러독스 수술] 암살자가 오버나이트를 수행하여 계좌에 물량이 남아있더라도, `process_realtime_graduation`에서 KIS 잔고에서 암살자 장부(`AssassinLedger`) 수량을 차감하여 본진 물량만을 정확히 추출, 0주 새출발 졸업망이 정상 가동되도록 팩트 락온. 단, 음수가 발생할 경우 큐 장부를 교차 검증하여 조기 졸업을 안전하게 차단(Bypass).
@@ -96,10 +97,12 @@ def is_market_open():
             return is_open
         except Exception as e:
             if attempt == 2:
-                fail_open = True
-                _MCAL_CACHE[date_str] = fail_open # 🚨 Fail-Open 캐싱
-                return fail_open
+                # audit-fix 1-5: 달력 조회 실패 시 평일=열린 장(Fail-Open)으로 보지 않는다. 보수적으로 '닫힘'(주문 보류)을 반환하고,
+                # 실패 결과는 캐시하지 않아 다음 호출 때 다시 조회한다(하루 종일 고정 방지).
+                logging.error(f"🚨 [달력 조회 실패] NYSE 달력 3회 실패 — 이번 회차 주문 보류(캐시 안 함): {e}")
+                return False
             time.sleep(1.0 * (2 ** attempt))
+    return False  # audit-fix 1-5: 도달 불가 방어 — 루프를 빠져나오면 닫힘
 
 def get_budget_allocation(cash, tickers, cfg):
     sorted_tickers = sorted(tickers or [], key=lambda x: 0 if x == "SOXL" else (1 if x == "TQQQ" else 2))

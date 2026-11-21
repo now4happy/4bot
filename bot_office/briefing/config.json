@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "paths": {
+    "need_json": "/home/gieokkim/need.json",
+    "state_dir": "~/briefing_state",
+    "telegram_cfg": "/etc/bot-office/telegram.json",
+    "toss_dir": "/opt/bot-office/toss_sniper",
+    "meritz_dca_dir": "/opt/bot-office/meritz_dca_bot",
+    "meritz_laoer_dir": "/opt/bot-office/meritz_laoer",
+    "kiwoom_fixed": "~/briefing_state/kiwoom_fixed.json",
+    "targets": "portfolio_targets.json"
+  },
+  "kiwoom": {
+    "mode": "fixed",
+    "fixed_as_of": "2026-11-06"
+  },
+  "reissue": {
+    "cmd": [
+      "/usr/bin/python3",
+      "/opt/bot-office/office_briefing.py",
+      "--print"
+    ],
+    "wait_sec": 0,
+    "timeout_sec": 120
+  },
+  "schedule": {
+    "late_cutoff_cst": "12:00",
+    "parallel_days": 3,
+    "kiwoom_shadow_days": 5,
+    "snapshot_retention_days": 90
+  },
+  "need": {
+    "barbell_match": "^바벨 씨드$",
+    "account_rules": [
+      {
+        "account": "^메리츠$",
+        "line": "^P$",
+        "label": "메리츠 P",
+        "kind": "normal"
+      },
+      {
+        "account": "^메리츠$",
+        "line": "^VR6$",
+        "label": "메리츠 VR6",
+        "kind": "normal"
+      },
+      {
+        "account": "^메리츠$",
+        "line": "^3번$",
+        "label": "메리츠 4번",
+        "kind": "meritz4"
+      }
+    ],
+    "soxl3_seed": {
+      "path": "/etc/meritz-laoer/settings.json",
+      "total_key": "total_krw",
+      "split_key": "split_count"
+    },
+    "soxl3_label": "메리츠 SOXL 3번"
+  },
+  "portfolio": {
+    "gold_bucket_key": "gold",
+    "price_source": "none",
+    "denominator_complete": false,
+    "bucket_highlight_pp": null
+  },
+  "_unverified": [
+    "paths.toss_dir (= live_board 의 TOSS_DIR 값은 발췌에 없음) · paths.meritz_dca_dir·meritz_laoer_dir 서버 경로",
+    "need.soxl3_seed.path 를 브리핑 실행 계정(gieokkim)이 읽을 수 있는지 (/etc/meritz-laoer/settings.json 권한)",
+    "reissue.cmd 를 gieokkim 이 실행할 수 있는지 (/opt/bot-office/office_briefing.py 권한, 설치 단계)",
+    "portfolio.price_source / denominator_complete (Q5 미확인 — false 유지하면 버킷 % 는 '—')",
+    "kiwoom.fixed_as_of (지시문의 2026-11-06 스냅샷 날짜를 그대로 적음)"
+  ]
+}
