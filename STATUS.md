@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-21 11:18 (KST) · 계기: 업데이트 적용 (captures/p-trading-soxl-sgov-profit-vault: update: main 기준으로 선택한 이전 변경 정리)
+- 갱신: 2026-11-21 11:19 (KST) · 계기: 업데이트 적용 (captures/honginki-daytrade-auto: update: main 기준으로 선택한 이전 변경 정리)
 
 ## 봇별 현재 상태
 
@@ -41,7 +41,7 @@
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
-- `captures/honginki-daytrade-auto`: captures/honginki-daytrade-auto/honginki_bot_v1_honginki-daytrade-auto.zip, captures/honginki-daytrade-auto/honginki_collector_v2_honginki-daytrade-auto.zip
+- 없음
 
 ## AI·사람 작업 순서 (요약)
 
