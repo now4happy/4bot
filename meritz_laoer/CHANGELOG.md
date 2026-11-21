@@ -1,3 +1,10 @@
+# 메리츠 SOXL 무매 변경 기록
+
+## v1.3.0 · 2026-11-21 13:44 (KST)
+- 파일: config.py, main.py, notifier.py, sniper_mode.py, sub_grid.py, tg_menu.py, tower_strategy.py
+- 내용: 판 25 meritz_laoer v2.5.0 (박스·층 하이브리드, 토스 스나이퍼 이식, 돌파 매수액 설정)
+- 브랜치: staging
+
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
 ## v1.3.0 · 2026-11-21 (KST) — 판 25 (meritz_laoer v2.5.0)
