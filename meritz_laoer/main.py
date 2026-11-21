@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.6.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0)
+# v2.7.0 (2026-11-21, 판 27 층 간격 설정·버튼 제거): 계획 미리보기 '새 층 가격' 줄(간격 기준) 삭제 · 탑쌓기 계획 머리 '간격' 표시 삭제. 간격은 내부 고정값 GAP_USD=5로만 씀.
 # v2.6.0 (2026-11-21, 판 26 박스별 매도·매수 비율 설정): 박스별 매도 주문의 중복 방지를 박스 단위로(sold_box_keys_today·busy_boxes·거절 기록 키 '층:박스') · 매도 체결 알림 글자(박스만 줄임) · 계획 미리보기에 박스별 목표 줄. 층 단위 주문(탑 매도)은 예전 그대로.
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층 — 토스 스나이퍼 이식): ① 매수 = 신호 1번에 박스 시드의 8%(sniper_mode.plan_buy) · 서브 그리드 4%(sub_grid.py) ② 박스 안 매도(+1.5%/+1.0%, 박스 전체) 자동으로 복귀 — 판 24 선택 질문(pick_scan) 호출 삭제(코드는 남김)
 #   ③ 하루 매수 층 수 제한(buy_layer_limit_hit)은 스나이퍼 매수에 안 씀 ④ 서브 상태 동기화(sync_sub)·10분 게이트(mark_sub_gate) ⑤ 지하층 → 공사중. 계좌·API·16:10 동기화·장부=잔고 정지·주문 시간은 안 바꿈
@@ -8,7 +9,7 @@
 #   ② 스나이퍼 목표가에 닿으면 자동 매도 대신 텔레그램 버튼(스나이퍼/탑쌓기) 선택 (run_sniper_tick·apply_pick) ③ 잠긴 층은 탑 매도만 ④ 지하층부터 스나이퍼 매수. 업데이트 알림 판 번호는 bot_office/bot_updater.py
 # v2.3.0 수정1 (2026-11-21, 판 23 수정1 — 버전 그대로): 하루 매수 층 수 제한(buy_layer_limit_hit, 기존 설정 tower_max_buy_layers_per_day) · B3 미체결 조회 · B7 모의 스나이퍼(run_sniper_dry) · S3 사이클 최고 층수 잠금 · S1 16:10 뒤 체결 다음 날 반영(run_late_fills) · '목표 도달' 라벨 · 죽은 코드 defer_sell·limit_morning_sells 제거
 # v2.3.0 (2026-11-21, 판 23 하이브리드 — 스나이퍼 매수 + 탑 매도): 모드 선택(trading_mode) 삭제, 항상 하이브리드. 사기=스나이퍼(눌림·돌파)만, 층 시드(기본 $15,000)에 닿은 층은 '완성'이라 탑 매도(층 평단 +10% → 50%), 미완성 층(재매수 대기 포함)은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·층 전량).
-#   총 시드·층 수 한도 없음(total_krw 선택). 새 층 = 가장 낮은 층 평단 − tower_gap_usd(기본 5) 이하일 때. 탑 매도 체결도 스나이퍼 기준가(직전 익절) 갱신. 같은 날 한 층에 매도 주문이 이미 있었으면(탑 매도 일부 체결 뒤 남은 몫 포함) 그 층은 그날 다시 안 팖.
+#   총 시드·층 수 한도 없음(total_krw 선택). 새 박스·층은 스나이퍼 신호가 뜰 때 만듦 (v2.7.0 판 27: 층 간격 규칙 삭제 — 간격은 내부 고정값 GAP_USD=5로 칸 만들기에만 씀). 탑 매도 체결도 스나이퍼 기준가(직전 익절) 갱신. 같은 날 한 층에 매도 주문이 이미 있었으면(탑 매도 일부 체결 뒤 남은 몫 포함) 그 층은 그날 다시 안 팖.
 #   환전: 아침 = 층 시드 × tower_max_buy_layers_per_day (휴장 전날은 × 회차), 장중 매수 신호 때 달러 부족하면 자동환전(실시간 환전 시간만), 마감 60분 전 달러부족 알림 유지. --check 환전 표시 고침(부족 달러 shortfall_usd). 계좌·종목·API·스나이퍼 신호 숫자·매도 %·16:10 동기화·장부=잔고 정지·중복 체결 방지·주문 시간은 안 바꿈.
 # v2.2.20 (2026-11-21, 판 22 메리츠 3번 계좌 SOXL 듀얼 모드 — 스나이퍼 + 탑쌓기): 설정 trading_mode(tower 기본 | sniper). 탑쌓기는 v2.2.18 그대로 (run_order_day·run_intraday_sell·run_sync·16:10 동기화·장부=잔고 정지 규칙 안 바꿈).
 #   스나이퍼(새 파일 sniper_mode.py): loop 가 run_sniper_tick(30초 간격, 정규장 09:30~16:00 ET 매수 · 정규장+장후 16:10 까지 매도) 를 부름. 하루 기록 파일(orders_<날짜>.json)을 탑쌓기와 같이 씀 — 스나이퍼 매도·스나이퍼 매수 체결은 확인 즉시 장부·층에 반영, 탑쌓기 매수는 그대로 run_sync 가 반영.
@@ -127,7 +128,7 @@ from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # n
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
-BOT_VERSION = "v2.6.0"
+BOT_VERSION = "v2.7.0"
 EST = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")          # v2.0.7: 한국시간은 서머타임이 없음 → 미국 서머타임(EST 19시/EDT 20시)은 시계가 알아서 처리 (고정 시차를 코드에 박지 않음)
 OPEN_TIME_ET = datetime.time(9, 30)  # v2.2.14 시초가 = 이 시각 이후 처음 확인한 현재가 (정규장 개장 09:30 ET)
@@ -445,9 +446,6 @@ def sniper_plan_head(plan, s):
     fl = i.get("fill")
     if fl:
         head += f"\n채우는 층 {fl['no']}층{' (재매수 대기)' if fl['rebuy'] else ''}: 채움 {fl['ratio'] * 100:.0f}% (원가 ${fl['cost']:,.0f} / 층 시드 ${fl['target']:,.0f})"
-    cap = sg.get("cap_price") or 0.0
-    if cap > 0:
-        head += f"\n새 층 가격 ${cap - i.get('gap', 0):.2f} (가장 낮은 층 평단 ${cap:.2f} − 간격 ${i.get('gap', 0)})"
     head += f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['need_usd'] - i['usd_cash']):,}" if i['need_usd'] > i['usd_cash'] + 1e-9 else "")
     return head
 
@@ -467,7 +465,6 @@ def plan_head(plan, s):
             + act_txt + "\n"
             + ("매도 목표 " + " · ".join(f"{r['id']}층 ${r['target']:.2f}" for r in i["sells"]) if i.get("sells") else f"매도 목표 ${i['sell_target']:.2f}")
             + (f" · 칸당 " + " / ".join(f"{ly['id']}층 ${ly.get('unit_usd', 0):,.0f}" for ly in tw["layers"]) if len(tw.get("layers") or []) > 1 else f" · 칸당 ${i.get('unit_usd', 0):,.0f}")   # v2.2.17: 여러 층이면 층마다
-            + f" · 간격 ${tw.get('gap', 0)}"
             + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else ""))
     for ly in layers:   # v2.2.3: 다음 회차 가격별 배정 (v2.2.17: 오늘 사는 층마다 floor_id 를 적어 1층·2층이 같이 나가는 게 보이게)
         cells = ly.get("cells") or []

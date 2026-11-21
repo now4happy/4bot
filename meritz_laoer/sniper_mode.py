@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.6.0)
+# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.7.0)
+# v2.7.0 (2026-11-21, 판 27): 층 간격 설정 제거 — make_plan info에서 'gap' 키 삭제 (계획 미리보기 '새 층 가격' 줄이 없어져서 안 씀). 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params).
 # v2.6.0 (2026-11-21, 판 26): ① 박스별 매도 — box_rows(박스마다 평단 +1.5%(그 층 안 최저 평단 L1) / +1.0%) · plan_sells 가 닿은 박스만 그 박스 전량 주문(floor_id + box_id) · sell_rows 층 행에 boxes 추가 ② 눌림 매수% = TW.portion_pct(s) (설정 sniper_portion_pct, 기본 8) ③ trigger_lines 박스별 줄 · make_plan info['boxes']
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층 — 토스 스나이퍼 이식): ① 매수 = 신호 1번에 박스 시드의 8%(단리 고정, plan_buy: min(8%, 박스 남은 시드) → 13번째가 나머지) ② 새 박스 가격은 신호가 뜰 때 정해짐 — 층 간격(tower_gap_usd)·'새 층 보류' 규칙 삭제, 시초가 상한은 호출한 쪽(main)이 그대로
 #   ③ 박스 안 매도(미완성 층 +1.5% 공격 박스 / +1.0% 위 박스, 박스 전체 전량)는 다시 자동 매도 — 판 24 선택 대기(pick_scan·pick_resolve) 코드는 그대로 두고 부르지 않음, plan_buy 도 선택 대기 층을 안 봄
@@ -442,10 +443,10 @@ def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, 
     q, principal = TW.totals(st)
     avg = round(principal / q, 4) if q > 0 else 0.0
     rows = sell_rows(st, s, price)
-    fu, _nfl, gap = TW.params(s)
+    fu, _nfl, _gap = TW.params(s)
     info = {"mode": MODE_SNIPER, "price": _f(price), "avg": avg, "qty": q, "profit_pct": (round((_f(price) / avg - 1) * 100, 2) if avg > 0 and _f(price) > 0 else None),
             "sells": rows, "boxes": box_rows(st, s, price), "sell_target": min((r["target"] for r in rows), default=0.0), "profit_reached": any(r["reached"] for r in rows),
-            "signal": buy["signal"], "buy_target": buy["target"], "n_layers": len(fl), "depth_layers": depth_layers(state, len(fl)), "floor_usd": fu, "gap": gap, "tower_sells": trows,
+            "signal": buy["signal"], "buy_target": buy["target"], "n_layers": len(fl), "depth_layers": depth_layers(state, len(fl)), "floor_usd": fu, "tower_sells": trows,
             "tower_pct": [_f(s.get("sell_profit_pct")), _f(s.get("sell_fraction_pct"))],
             "hits": [{"no": r["no"], "avg": r["avg"], "target": r["target"], "pending": (((state or {}).get("picks") or {}).get(pick_key(r["avg"])) or {}).get("status") == "pending"}
                      for r in rows if r["reached"] and not r["complete"]],                       # v2.4.0: 목표에 닿은 스나이퍼 층 (자동 매도 없음 — 선택 대기 중이면 pending)

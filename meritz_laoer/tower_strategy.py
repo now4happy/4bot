@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.6.0)
+# FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.7.0)
+# v2.7.0 (2026-11-21, 판 27): 층 간격 사용자 설정(tower_gap_usd) 제거 — params()는 간격을 내부 고정값 GAP_USD=5로만 돌려줌 (층 칸(levels) 만들기에만 씀, 매매 규칙 아님). 설정 파일에 tower_gap_usd가 남아 있어도 무시함.
 # v2.6.0 (2026-11-21, 판 26): ① 박스 모델 — 미완성 층 floor['boxes'] = [{id, qty, cost, ono}] (매수 체결 1건 = 박스 1개, 층 qty·cost = 박스 합, 예전 상태·불일치는 층 전체 1박스 id 0) · boxes_view·sync_boxes·fit_boxes·next_box_id · _apply_sell 박스별(층 원가·수량은 판 박스 몫만) · 병합·장부 조정·입고가 박스 유지 ② portion_pct(s) 추가, portion_usd(s) 가 설정 비율 사용 (PORTION_PCT=8.0 은 기본값) · percent_plan(portion_pct_=)
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층): ① 박스 시드 box_seed(s)(tower_box_seed_usd, 기본 $15,000)·매수 분할 portion_usd(s)(박스 시드의 8%, 단리 고정)·서브 4% sub_portion_usd(s) 추가 ② 층 표현 = 평단 정수 달러(price_label·floor_labels, 소수점 버림 — 내부 id 는 그대로)
 #   ③ 탑 매도 체결 뒤 남은 층은 '잠금'을 풀어 공사중 박스로 되돌림(_apply_sell — 토스 스나이퍼가 비워진 부분을 다시 채우고, 채워지면 다시 완성 층) ④ percent_plan(남은 시드→나누는 비율 계산, 표시용 순수 계산) ⑤ view_lines 가 층을 평단 달러로 표시.
@@ -27,7 +28,7 @@
 # v2.2.0 (2026-11-19, 판 13): 새 파일 — 탑쌓기(동적 층 시스템) 계산부. 순수 계산 (파일·네트워크·시계 없음). 사다리는 v2.2.9 에서 삭제됨
 #   (v2.2.9: 7번은 탑쌓기만 씀 — 전환 설정 strategy 없음)
 # 설계 (판 13 지시):
-#   - 10층 · 한 층 $15,000 · 총 $150,000 · 층 간격 $5 (조정 가능: settings tower_gap_usd / tower_floor_usd / tower_floors, 없으면 기본값)
+#   - 10층 · 한 층 $15,000 · 총 $150,000 · 층 칸 수 GAP_USD=5 (v2.7.0 판 27: 내부 고정값, 사용자 설정 tower_gap_usd는 없앰) · 층 금액·층 수 (settings tower_floor_usd / tower_floors, 없으면 기본값)
 #   - 한 층 = 간격(달러) 칸. 칸마다 1달러씩 내려가며 분산 매수. 칸당 금액 = 층 금액 ÷ 간격 (반올림). 주식수도 반올림(0.5 는 올림)
 #   - 층은 동적: 층 투자금(실제 체결 수량×체결가)이 층 금액에서 TOL_USD 이내로 모자라거나 넘으면 완성. 그 층 평단(가중평균)이 기준 →
 #     다음 층 첫 칸 = 기준 평단 − 간격 (이어서 1달러씩 아래로 간격 칸)
@@ -46,7 +47,7 @@ import math
 
 FLOOR_USD = 15000.0        # 한 층 금액 (달러)
 FLOORS = 10                # 층 수 → 총 한도 = FLOOR_USD × FLOORS = $150,000
-GAP_USD = 5                # 층 간격 (달러) = 한 층의 칸 수
+GAP_USD = 5                # v2.7.0 판 27: 층 칸 수 (내부 고정값) — 한 층의 칸(levels) 수. 사용자 설정(tower_gap_usd)은 없앴고, 칸 만들기에만 씀 (매매 규칙 아님).
 TOL_USD = 100.0            # 완성 허용 오차: 층 투자금이 목표에서 이만큼 이내로 모자라면 완성 (슬리피지·반올림)
 BOX_SEED_USD = 15000.0     # v2.5.0 박스 시드 기본값 (달러) — 설정 tower_box_seed_usd. 풀이님 결정 2026-11-21 (Q9): 기존 완성 층($15,000)과 같은 금액
 PORTION_PCT = 8.0          # v2.5.0 신호 한 번에 사는 금액 = 박스 시드의 8% (토스 quant_engine.py:46 PORTION_RATIO_LOCKED = 0.08, 단리 고정 — 총자산 % 복리는 안 씀)
@@ -83,13 +84,11 @@ def floor_sell_qty(q, frac):
 
 
 def params(s):
-    """(층 금액, 층 수, 간격=칸 수). 설정에 없거나 이상하면 기본값. 간격은 1 이상 정수만"""
+    """(층 금액, 층 수, 간격=칸 수). 설정에 없거나 이상하면 기본값. v2.7.0 판 27: 간격은 사용자 설정이 아니라 내부 고정값 GAP_USD=5로만 돌려줌 (설정 파일에 tower_gap_usd가 남아 있어도 무시)."""
     s = s or {}
     fu = _f(s.get("tower_floor_usd")) or FLOOR_USD
     fl = int(_f(s.get("tower_floors"))) or FLOORS
-    g = _f(s.get("tower_gap_usd"))
-    g = int(g) if g >= 1 and g == int(g) else GAP_USD
-    return (fu if fu > 0 else FLOOR_USD), (fl if fl >= 1 else FLOORS), g
+    return (fu if fu > 0 else FLOOR_USD), (fl if fl >= 1 else FLOORS), GAP_USD
 
 
 def box_seed(s):
@@ -539,7 +538,7 @@ def make_plan(s, st, qty, principal, price, fx, usd_cash, sellable, ignore_auto_
     info["open_cap"] = first["oc"] if first else {"open": (round(_f(open_px), 4) if _f(open_px) > 0 else None), "applied": False, "planned_first": None, "first": None}
     if first:                                                        # 예전 키(levels·filled·unit_usd·open_cap)는 첫 층(맨 위) 기준 그대로
         info["levels"], info["filled"], info["unit_usd"] = first["levels"], first["filled"], first["f"]["base_usd"]
-    info["tower"] = {"gap": gap, "floor_usd": fu, "floors_max": nfl, "cap_usd": cap_total, "active": (first["f"]["id"] if first else None),
+    info["tower"] = {"floor_usd": fu, "floors_max": nfl, "cap_usd": cap_total, "active": (first["f"]["id"] if first else None),
                      "new_floor": bool(new_floor), "new_floor_blocked": new_floor_blocked, "buy_layers": n_buy,
                      "floors": [{"id": f["id"], "qty": f["qty"], "cost": round(_f(f["cost"]), 2), "avg": floor_avg(f),
                                  "complete": is_complete(f), "target": _f(f.get("target") or FLOOR_USD), "closed": bool(f.get("closed")) or f["id"] in closes,

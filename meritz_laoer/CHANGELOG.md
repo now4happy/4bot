@@ -1,12 +1,9 @@
-# 메리츠 SOXL 무매 변경 기록
-
-## v1.3.1 · 2026-11-21 14:56 (KST)
-- 파일: config.py, main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_strategy.py
-- 내용: 판 26 meritz_laoer v2.6.0 (박스별 매도, 눌림 매수% 설정)
-- 브랜치: staging
-
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v1.5.0 · 2026-11-21 (KST) — 판 27 (meritz_laoer v2.7.0)
+- 파일: main.py, sniper_mode.py, tower_strategy.py, tg_menu.py, config.py, notifier.py, README.md, CHANGELOG.md, test_hybrid_v270.py(새). sub_grid.py 는 안 바뀜
+- 내용: 층 간격 사용자 설정(tower_gap_usd) 제거 — 텔레그램 '층 간격 변경' 버튼·설정 검사·설정 표시·계획 '새 층 가격' 줄 삭제. 간격은 내부 고정값 GAP_USD=5로 칸 만들기에만 씀 (tower_strategy.params가 항상 5를 돌려줌). 설정 파일에 tower_gap_usd가 남아 있어도 무시·통과. 매매 로직은 안 건드림.
+- 검증: test_hybrid_v270.py 통과 · 기존 시험(v260·v250) 통과 · pyflakes 새 경고 0. 자세한 건 VERIFY.md
 ## v1.4.0 · 2026-11-21 (KST) — 판 26 (meritz_laoer v2.6.0)
 - 파일: main.py, sniper_mode.py, tower_strategy.py, tg_menu.py, config.py, notifier.py, README.md, CHANGELOG.md, test_hybrid_v260.py(새). sub_grid.py 는 안 바뀜
 - 내용: ① 박스별 매도 — 미완성 층의 매수 1건 = 박스 1개(floor['boxes']), 박스마다 자기 평단 기준 매도(그 층 안 최저 평단 박스 +1.5% · 나머지 +1.0%, 그 박스 전량), 층 원가·수량은 판 박스 몫만 줄고 층 평단은 남은 박스 가중평균, 층 완성 → 탑 매도. 예전 상태(박스 없음)·탑 매도 잔여 = 박스 1개 ② 눌림 매수% 설정 sniper_portion_pct(기본 8, 0 초과 100 이하) + 텔레그램 '눌림 매수% 변경'. 돌파 16%·서브 4% 그대로
