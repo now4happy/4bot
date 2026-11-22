@@ -1,3 +1,10 @@
+# 5번 사무실 비서 변경 기록
+
+## v1.9.8 · 2026-11-22 14:07 (KST)
+- 파일: bot_updater.py
+- 내용: 사무실 vNEXT: meritz_laoer/ 하위 폴더(orig_sniper/) 배포 분류
+- 브랜치: staging
+
 # 사무실 파일(bot_office) 변경 기록
 
 ## v1.9.7 · 2026-11-21 11:08 (KST)
