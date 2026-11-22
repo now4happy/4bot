@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0)
+# v2.9.0 6차 (2026-11-22, 판 33): ① tower_buy_tick 신설 — 매매 모드가 tower 일 때 run_sniper_tick(실거래)·run_sniper_dry(모의)가 스나이퍼 신호 대신 하루 한 번 탑쌓기 매수(시초가 가까운 칸부터 아래로, 칸마다 같은 금액) ② run_sync 가 잔고 대조(TW.reconcile) 뒤 F 시드 조정(seed_adjust.adjust)을 부름. 모드 기본은 sniper(하이브리드 그대로). 매도·래칫·스토커·16:10 동기화 시각은 안 바꿈
 # v2.9.0 판 32 질문 4·5 (2026-11-22): 시세를 읽을 때마다 SN.trail_tick (실거래·모의 둘 다) — 1층 트레일링 슬롯은 메모리에만
 # v2.9.0 판 31 질문 3 (2026-11-22): 스나이퍼 매도 주문 전에 매도가능 수량을 2초(0.25초 간격) 기다리고(SN.wait_sellable), plan_sells 에 장외 여부(ext) 전달 — 원작 execute_bulletproof_sell_sweep 방식 부분 주문
 # v2.7.0 (2026-11-21, 판 27 층 간격 설정·버튼 제거): 계획 미리보기 '새 층 가격' 줄(간격 기준) 삭제 · 탑쌓기 계획 머리 '간격' 표시 삭제. 간격은 내부 고정값 GAP_USD=5로만 씀.
@@ -124,6 +125,7 @@ if HERE not in sys.path:
 import config as cfgmod                      # noqa: E402
 import tower_strategy as TW               # noqa: E402  탑쌓기 (v2.2.9 부터 7번은 탑쌓기만 씀)
 import sniper_mode as SN                  # noqa: E402  v2.2.20 스나이퍼 모드 계산부
+import seed_adjust as SA                  # noqa: E402  v2.9.0 6차 판 33 F 시드 조정
 from tower_strategy import ceil2          # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
@@ -1357,7 +1359,21 @@ def run_sniper_dry(s, api, note):
             rec.pop("reached", None)
             m["orders"].append(rec)
             out.append(rec)
-    if status == MKT_REGULAR and n.time() < datetime.time(16, 0):           # v2.5.0: 하루 매수 층 수 제한 없음
+    if status == MKT_REGULAR and n.time() < datetime.time(16, 0) and TW.trade_mode(s) == "tower":      # 판 33: 탑쌓기 매매 모의 — 하루 한 번 탑쌓기 매수를 기록만 (주문 안 냄)
+        if not m.get("tower_buy_sent"):
+            open_px = ensure_open_price(s, cfg, d, False, n, px, status)
+            try:
+                fx = float(api.fx_applied_rate())
+            except MeritzError:
+                fx = 0.0
+            if open_px > 0 and fx > 0:
+                pl = SN.plan_tower_buy(s, sim, q, principal, px, fx, api.usd_cash(), open_px)
+                m["tower_buy_sent"] = True
+                for o in pl["orders"]:
+                    rec = dict(o, sim=True, at=n.isoformat())
+                    m["orders"].append(rec)
+                    out.append(rec)
+    elif status == MKT_REGULAR and n.time() < datetime.time(16, 0):           # v2.5.0: 하루 매수 층 수 제한 없음
         rsi = SN.rsi_from_state(ss, now_t)[0]
         pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT", is_trading_day=us_trading_day)
         if pb["order"] and not any(o.get("side") == "BUY" and o.get("floor_id") == pb["order"]["floor_id"] and o.get("signal") == pb["order"].get("signal") for o in m["orders"]):
@@ -1452,6 +1468,43 @@ def run_ledger_migration(s, api, note, today):
               + "\n".join(f"- {i}층 {int(f['qty'])}주 · 원가 ${f['cost']:,.0f} · 평단 ${TW.floor_avg(f):.2f} (잠금 · 탑 매도)" for i, f in enumerate(fl, 1))
               + "\n- 공사중: 0주 · $0 (다음 스나이퍼 매수부터 채움)\n실제 잔고·주문은 안 건드렸어요. 정지 표시가 남아 있으면 확인한 뒤 직접 풀어 주세요.")
     return "완료"
+
+
+def tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, status, out):
+    """판 33 탑쌓기 매매 모드의 하루 한 번 매수: 시초가와 가장 가까운 칸부터 아래로 칸마다 같은 금액 지정가 (TW.make_plan 매수 계획 그대로).
+    이미 오늘 냈으면(tower_buy_sent) 다시 안 냄. 체결은 기존대로 run_sync 가 반영(탑쌓기 매수). 시초가·환율을 못 읽으면 내지 않고 다음 틱에 다시 시도"""
+    if m.get("tower_buy_sent"):
+        return out[0] if out else "탑쌓기 매수 오늘 완료"
+    open_px = ensure_open_price(s, cfg, d, True, n, px, status)
+    if not open_px > 0:
+        return out[0] if out else "시초가 대기"
+    try:
+        fx = float(api.fx_applied_rate())
+    except MeritzError as e:
+        logging.warning(f"탑쌓기 매수: 적용환율 조회 실패 {e}")
+        fx = 0.0
+    if not fx > 0:
+        return out[0] if out else "환율 실패"
+    if not exch:
+        _warn_once(cfg, mark, m, "exch", note, "거래소 번호를 알 수 없어 탑쌓기 매수를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
+        return "거래소"
+    cash = api.usd_cash()
+    pl = SN.plan_tower_buy(s, sim, q, pr, px, fx, cash, open_px)
+    if not pl["orders"]:
+        m["tower_buy_sent"] = True
+        cfg._save_json(mark, m)
+        note.send("탑쌓기 매수: 오늘 낼 주문 없음\n" + "\n".join("· " + x for x in pl["notes"]))
+        return out[0] if out else "탑쌓기 매수 없음"
+    m["tower_buy_sent"] = True          # 주문 전에 표시 → 도중에 멈춰도 같은 날 다시 안 냄
+    cfg._save_json(mark, m)
+    placed, errs = [], []
+    for o in pl["orders"]:
+        o = dict(o, ts=round(time.time(), 1))
+        if send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True) in ("ok", "unsure"):
+            placed.append(o)
+        time.sleep(0.3)
+    note.send(f"탑쌓기 매수 접수 {len(placed)}건 (시초가 ${open_px:.2f} 기준)\n" + fmt_orders(placed) + ("\n" + "\n".join("· " + x for x in pl["notes"]) if pl["notes"] else "") + ("\n" + "\n".join(errs) if errs else ""))
+    return "탑쌓기 매수 접수" if placed else "탑쌓기 매수 실패"
 
 
 def run_sniper_tick(s, api, note):
@@ -1600,6 +1653,8 @@ def run_sniper_tick(s, api, note):
             or now_t - float(ss.get("last_order_ts") or 0) < SN.ORDER_SHIELD_SEC or now_t < float(ss.get("buy_block_until") or 0)):
         return out[0] if out else "대기"
     _SNIPER["last_buy"] = now_t
+    if TW.trade_mode(s) == "tower":      # 판 33: 탑쌓기 매매 모드 — 스나이퍼 신호 대신 하루 한 번 탑쌓기 매수 (사용자가 확인 버튼으로 모드를 바꿨을 때만)
+        return tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, status, out)
     rsi = SN.rsi_from_state(ss, now_t)[0]
     cash_now = api.usd_cash()
     pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day)
@@ -2064,8 +2119,9 @@ def run_sync(s, api, note, mark_path):
     pos = cfg.get_position()
     if tst is not None:                   # 매일 동기화: 층 상태를 장부(실제 보유분)에 맞추고, 꼬인 층은 합침
         tst, tnotes = TW.reconcile(tst, int(pos["qty"]), float(pos["principal"]), TW.params(s)[2], s)
+        tst, snotes = SA.adjust(tst, s)               # 판 33: 잔고 동기화의 둘째 일 — F 시드 조정 (시드가 안 바뀌었으면 아무것도 안 함)
         cfg._save_json(TOWER_FILE, tst)
-        lines += [f"  {n}" for n in tnotes]
+        lines += [f"  {n}" for n in tnotes] + [f"  {n}" for n in snotes]
     try:                                            # v2.2.6 체결 알림: 장중에 못 보낸(또는 아직 안 보낸) 몫만 — 주문별 notified_qty 기준
         send_fill_alerts(s, api, note, cfg, m, mark_path, items, d, tst)
     except Exception as e:

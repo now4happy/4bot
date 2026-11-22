@@ -1,11 +1,10 @@
-# 메리츠 SOXL 무매 변경 기록
-
-## v1.3.5 · 2026-11-22 14:19 (KST)
-- 파일: main.py, ORIGIN.json, assassin_plugin.py, barbell_plugin.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_adapter.py, sniper_mode.py, sync_orig.py
-- 내용: 메리츠 v2.9.0 (판 32, 4차·5차): 스토커·래칫·하드캡 이식
-- 브랜치: staging
-
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
+
+## v2.0.0 · 2026-11-22 (KST) — 판 33 (meritz_laoer v2.9.0 6차, 탑쌓기 매매 모드 + 잔고 동기화 F 시드 조정)
+- 파일: main.py, sniper_mode.py, tower_strategy.py, config.py, tg_menu.py, notifier.py, seed_adjust.py(신설), CHANGELOG.md, test_hybrid_v330.py(신설), test_hybrid_v300.py(해시 고정 항목만 판 33 값도 허용). 안 바뀜: sniper_adapter.py, sub_grid.py, sync_orig.py, orig_sniper/*
+- 탑쌓기 매매 모드: 설정 trade_mode(sniper 기본 | tower), 텔레그램 [탑쌓기 매매 시작] → 확인 메시지 → [네, 바꿀게요] 를 눌러야만 바뀜 (스나이퍼로 돌아갈 때도 같음). tower 일 때 스나이퍼 신호 매수 대신 하루 한 번 탑쌓기 매수: 시초가 가까운 칸부터 $1씩 아래로 tower_buy_gap_usd 칸(기본 5, 1~10), F 시드(기본 $15,000)를 칸마다 균등. 매도는 기존 그대로.
+- F 시드 조정(잔고 동기화 둘째 일, 16:10 run_sync): 시드(F 시드·박스 시드)가 바뀌면 보유 주식을 높은 F 부터 새 시드로 다시 채움/나눔 (합계 그대로, 평단 다시 계산, 텔레그램에 F 개수·평단·늘어난 층). 처음엔 기록만.
+- 미실행: 서버 적용·실거래·푸시.
 
 ## v1.9.2 · 2026-11-22 (KST) — 판 32 3차 (meritz_laoer v2.9.0 5차, 래칫·하드캡·RSI 수확 거래 흐름 연결)
 - 파일: sniper_adapter.py, sniper_mode.py, main.py, CHANGELOG.md, test_hybrid_v320.py(저장소 밖). 안 바뀜: tg_menu.py, tower_strategy.py, orig_sniper/* 등

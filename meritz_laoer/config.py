@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.7.0)
+# v2.9.0 6차 (2026-11-22, 판 33): validate_settings 에 trade_mode(sniper|tower)·tower_buy_gap_usd(1~10 정수) 검사 추가 (없으면 통과 = 기본값)
 # v2.7.0 (2026-11-21, 판 27): 층 간격 설정(tower_gap_usd) 검사 제거 — 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params). 설정 파일에 tower_gap_usd가 남아 있어도 통과함 (무시).
 # v2.6.0 (2026-11-21, 판 26): validate_settings 에 sniper_portion_pct 검사 (없으면 통과·기본 8, 있으면 0 초과 100 이하 숫자)
 # v2.2.20 (2026-11-21, 판 22 듀얼 모드): SAFE_DEFAULTS 에 trading_mode("tower" 기본 | "sniper") · sniper_tp_l1_pct(1.5) · sniper_tp_upper_pct(1.0) 추가. validate_settings 가 trading_mode 값(sniper|tower)·익절 % (0 초과 50 이하)를 검사하고, 스나이퍼 모드는 order_type=LIMIT · intraday_sell_check_sec>=30 이어야 통과(탑쌓기 모드는 예전 그대로). 나머지는 그대로
@@ -205,6 +206,12 @@ def validate_settings(s):
     pp = s.get("sniper_portion_pct")      # v2.6.0: 눌림(본) 매수 비율 — 없으면 기본 8, 있으면 0 초과 100 이하 (돌파 매수% 검사와 같은 방식)
     if pp is not None and (isinstance(pp, bool) or not isinstance(pp, (int, float)) or not (0 < _f(pp) <= 100)):
         bad.append("sniper_portion_pct 는 0 초과 100 이하 (눌림 매수 비율, 박스 시드의 %)")
+    tm = s.get("trade_mode")      # v2.9.0 6차 판 33: 매매 모드 — 없으면 sniper(하이브리드 스나이퍼), 있으면 sniper | tower 만
+    if tm is not None and tm not in ("sniper", "tower"):
+        bad.append("trade_mode 는 sniper 또는 tower (매매 모드)")
+    bg = s.get("tower_buy_gap_usd")      # 탑쌓기 매매 매수 간격 — 없으면 5, 있으면 1~10 정수
+    if bg is not None and (isinstance(bg, bool) or not isinstance(bg, (int, float)) or not (1 <= _f(bg) <= 10) or _f(bg) != int(_f(bg))):
+        bad.append("tower_buy_gap_usd 는 1~10 정수 (탑쌓기 매매 매수 간격, 달러)")
     fl = s.get("tower_floors")
     if fl is not None and (isinstance(fl, bool) or _f(fl) < 1 or _f(fl) != int(_f(fl))):
         bad.append("tower_floors 는 1 이상 정수 (층 수)")

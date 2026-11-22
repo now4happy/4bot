@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.7.0)
+# v2.9.0 6차 (2026-11-22, 판 33): trade_mode(s)·buy_gap(s) 추가 — params 의 간격(칸 수)은 tower 모드에서만 설정 tower_buy_gap_usd(1~10, 기본 5), 스나이퍼 모드는 예전처럼 GAP_USD=5. 그 밖의 계산은 안 바꿈
 # v2.7.0 (2026-11-21, 판 27): 층 간격 사용자 설정(tower_gap_usd) 제거 — params()는 간격을 내부 고정값 GAP_USD=5로만 돌려줌 (층 칸(levels) 만들기에만 씀, 매매 규칙 아님). 설정 파일에 tower_gap_usd가 남아 있어도 무시함.
 # v2.6.0 (2026-11-21, 판 26): ① 박스 모델 — 미완성 층 floor['boxes'] = [{id, qty, cost, ono}] (매수 체결 1건 = 박스 1개, 층 qty·cost = 박스 합, 예전 상태·불일치는 층 전체 1박스 id 0) · boxes_view·sync_boxes·fit_boxes·next_box_id · _apply_sell 박스별(층 원가·수량은 판 박스 몫만) · 병합·장부 조정·입고가 박스 유지 ② portion_pct(s) 추가, portion_usd(s) 가 설정 비율 사용 (PORTION_PCT=8.0 은 기본값) · percent_plan(portion_pct_=)
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층): ① 박스 시드 box_seed(s)(tower_box_seed_usd, 기본 $15,000)·매수 분할 portion_usd(s)(박스 시드의 8%, 단리 고정)·서브 4% sub_portion_usd(s) 추가 ② 층 표현 = 평단 정수 달러(price_label·floor_labels, 소수점 버림 — 내부 id 는 그대로)
@@ -88,7 +89,20 @@ def params(s):
     s = s or {}
     fu = _f(s.get("tower_floor_usd")) or FLOOR_USD
     fl = int(_f(s.get("tower_floors"))) or FLOORS
-    return (fu if fu > 0 else FLOOR_USD), (fl if fl >= 1 else FLOORS), GAP_USD
+    return (fu if fu > 0 else FLOOR_USD), (fl if fl >= 1 else FLOORS), buy_gap(s)
+
+
+def trade_mode(s):
+    """v2.9.0 6차 판 33: 매매 모드 'sniper'(기본, 하이브리드) | 'tower'(탑쌓기 매매). 이상한 값은 sniper"""
+    return "tower" if str((s or {}).get("trade_mode") or "").strip().lower() == "tower" else "sniper"
+
+
+def buy_gap(s):
+    """판 33: 탑쌓기 매매 모드에서만 설정 tower_buy_gap_usd(1~10 정수, 기본 5) — 스나이퍼 모드는 예전처럼 내부 고정값 GAP_USD"""
+    if trade_mode(s) != "tower":
+        return GAP_USD
+    g = _f((s or {}).get("tower_buy_gap_usd"))
+    return int(g) if g == int(g) and 1 <= g <= 10 else GAP_USD
 
 
 def box_seed(s):

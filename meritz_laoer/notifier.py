@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.7.0)
+# v2.9.0 6차 (2026-11-22, 판 33): 화면 이름 표에 trade_mode(매매 모드)·tower_buy_gap_usd(탑쌓기 매수 간격) 추가
 # v2.7.0 (2026-11-21, 판 27): 설정 이름 표에서 tower_gap_usd('탑쌓기 간격') 제거 — 간격 설정이 없어졌음.
 # v2.6.0 (2026-11-21, 판 26): 설정 이름 표에 sniper_portion_pct → '눌림 매수%' 추가
 # v2.4.0 (2026-11-21, 판 24): send_buttons 추가 (인라인 버튼 알림 — 스나이퍼 가격 선택용). 기존 send 는 그대로.
@@ -61,7 +62,7 @@ _NAME_KO = {
     "toss_sniper_stopped_confirmed": "토스 스나이퍼 정지 확인", "key_file": "키 파일", "telegram_file": "텔레그램 설정 파일",
     "expected_key_fp": "키 지문 기대값", "forbid_key_files": "사용 금지 키 파일", "forbid_telegram_files": "사용 금지 텔레그램 파일",
     "state_dir": "장부 폴더", "symbol": "종목", "price_market": "시세 거래소", "exch_id": "거래소 번호",
-    "split_count": "회차 수", "total_krw": "시드", "tower_floor_usd": "층 금액", "tower_box_seed_usd": "박스 시드", "sniper_portion_pct": "눌림 매수%", "sniper_breakout_portion_pct": "돌파 매수%", "sniper_first_anchor_usd": "첫 기준가", "tower_remaining_seed_usd": "남은 시드", "tower_floors": "층 수",
+    "split_count": "회차 수", "total_krw": "시드", "tower_floor_usd": "층 금액", "trade_mode": "매매 모드", "tower_buy_gap_usd": "탑쌓기 매수 간격", "tower_box_seed_usd": "박스 시드", "sniper_portion_pct": "눌림 매수%", "sniper_breakout_portion_pct": "돌파 매수%", "sniper_first_anchor_usd": "첫 기준가", "tower_remaining_seed_usd": "남은 시드", "tower_floors": "층 수",
     "tower_floor1_start_usd": "1층 시작가", "strategy": "전략", "sell_profit_pct": "목표 이익률", "sell_fraction_pct": "매도 비중",
     "order_type": "주문 방식", "allow_consecutive_sell": "연속 매도", "auto_fx_enabled": "자동환전",
     "auto_fx_buffer_pct": "환전 여유%", "auto_fx_max_usd_per_day": "환전 하루 상한",

@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.9.0)
+# v2.9.0 6차 (2026-11-22, 판 33): plan_tower_buy 신설(탑쌓기 매매 매수 계획 = TW.make_plan 매수 쪽) · make_plan 미리보기가 tower 모드면 스나이퍼 매수 대신 탑쌓기 매수. 스나이퍼 매수·매도·래칫 계산은 안 바꿈
 # v2.9.0 판 32 질문 4·5 (2026-11-22): 1층(가장 낮은 박스) 고정 +1.5% 매도를 원작 트레일링(점화 +1.5% → 샤프 5단 보존선 · 하드캡 +6.0% · RSI 65 수확)으로 바꿈 — trail_tick 이 메모리 슬롯(상태 파일에 저장 안 함, 재시작하면 다시 계산)을 갱신, 원작 실호가 재확인·매도 하한가·2층 동반 졸업 따라감. box_rows 는 trail_tick 을 한 번이라도 부르면(main) 트레일링 방식, 안 부르면 예전 고정 방식
 # v2.9.0 판 31 질문 3 (2026-11-22): 원작식 부분 주문 — plan_sells 가 매도가능이 모자라면 평단 낮은 박스부터 가능한 만큼만(마지막 박스는 일부) 주문, 장외 매도가능 0이면 조용히 대기, 정규장 0이면 목표 수량 시도. main 이 주문 전에 매도가능을 2초(0.25초 간격) 기다림
 # v2.9.0 판 31 (2026-11-22): 매도 판정(box_rows)을 원작 evaluate_multi_grid_sell_targets(어댑터 sell_plan, 방식 B = 전체 층 그대로)로 바꿈 — 미완성 층 박스 전체 한 묶음: 1층 +1.5% · 2층 +1.0% · 3층 이상은 개별 매도 없음, 졸업(3층~끝 가중평단 +1.0%)에 닿으면 전량. 탑 매도·매수·서브는 안 바뀜
@@ -558,8 +559,13 @@ def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, 
     sells, snotes = plan_sells(s, st, price, max(0, int(_f(sellable))), skip_ids=skip_sell_ids, otype=otype, skip_boxes=skip_sell_boxes)     # v2.6.0: 박스별 매도 자동 (판 24 선택 대기 폐기)
     taken = sum(int(o["qty"]) for o in sells)
     tsells, tnotes, trows = tower_sells(s, st, price, max(0, int(_f(sellable)) - taken), skip_ids=skip_sell_ids)
-    buy = plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype=otype, is_trading_day=is_trading_day)
-    orders = list(sells) + [dict(o, type=otype) for o in tsells] + ([buy["order"]] if buy["order"] else [])
+    if TW.trade_mode(s) == "tower":      # 판 33: 탑쌓기 매매 — 스나이퍼 매수 대신 탑쌓기 매수 (미리보기는 시초가·환율을 몰라 계획 그대로)
+        _q, _p = TW.totals(st)
+        tb = plan_tower_buy(s, st, _q, _p, price, 1.0, usd_cash, 0.0)
+        buy = {"order": None, "signal": {"should_buy": False, "signal_type": "tower"}, "target": 0.0, "notes": ["탑쌓기 매매 모드 — 스나이퍼 매수 신호 안 씀"] + tb["notes"], "sub": None, "tower_orders": tb["orders"]}
+    else:
+        buy = plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype=otype, is_trading_day=is_trading_day)
+    orders = list(sells) + [dict(o, type=otype) for o in tsells] + ([buy["order"]] if buy["order"] else []) + list(buy.get("tower_orders") or [])
     fl = active_floors(st)
     q, principal = TW.totals(st)
     avg = round(principal / q, 4) if q > 0 else 0.0
@@ -578,6 +584,16 @@ def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, 
             "tp_l1": tp_pcts(s)[0], "tp_upper": tp_pcts(s)[1], "attack_id": attack_id(st), "rsi": rsi, "usd_cash": round(_f(usd_cash), 2),
             "need_usd": round(buy["order"]["qty"] * buy["order"]["price"], 2) if buy["order"] else 0.0}
     return {"orders": orders, "notes": snotes + tnotes + buy["notes"], "info": info}
+
+
+# ---------------------------------------------------------------- 판 33 탑쌓기 매매 모드
+def plan_tower_buy(s, st, qty, principal, price, fx, usd_cash, open_px):
+    """v2.9.0 6차 판 33 탑쌓기 매매: 스나이퍼 신호 대신 탑쌓기 매수 계획(TW.make_plan 의 매수 쪽)을 그대로 씀 — 시초가(open_px)와 가장 가까운 칸부터 간격(tower_buy_gap_usd, 기본 5칸·1달러씩)만큼 아래로,
+    채우는 F 의 시드(tower_floor_usd)를 칸마다 같은 금액으로 나눔. 매도는 안 만듦(sellable=0 — 매도는 기존 plan_sells·tower_sells 가 함). 시드를 다 채우면 F 완성 → 다음 날 계획이 다음 F 를 만듦. 계산만 (상태 안 바꿈)
+    → {"orders": [BUY 주문...], "notes": [...]}"""
+    pl = TW.make_plan(s, st, int(_f(qty)), _f(principal), _f(price), _f(fx), _f(usd_cash), 0, open_px=_f(open_px))
+    buys = [dict(o, mode="tower") for o in pl["orders"] if o.get("side") == "BUY"]
+    return {"orders": buys, "notes": [n for n in pl["notes"] if "매도" not in n]}
 
 
 # ---------------------------------------------------------------- 체결 뒤 기준가 갱신
