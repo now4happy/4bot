@@ -942,7 +942,7 @@ def add_holdings(st, qty, avg, s=None):
         f["boxes"] = []
         f["done"], f["closed"], f["levels"], f["settled"], f["carry_usd"] = True, False, [], [], 0.0
         f["rebuy_pending"] = False
-        tail = f"{floor_labels(st).get(int(_f(f["id"])), price_label(floor_avg(f)))}이 완성돼요"
+        tail = f"{floor_labels(st).get(int(_f(f['id'])), price_label(floor_avg(f)))}이 완성돼요"
     else:
         _topup_setup(f, gap, start_usd)
         tail = f"남은 빈칸 ${max(_f(f.get('target') or fu) - _f(f['cost']), 0):,.0f} 는 탑쌓기로 매수 (칸 {len(f['levels'])}개)"
