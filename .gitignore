@@ -44,6 +44,11 @@
 /meritz_laoer/*
 !/meritz_laoer/*.py
 !/meritz_laoer/README.md
+# 원작 스나이퍼 복사본 (판 29, orig_sniper/): 어댑터가 import하는 원작 파일 7개 + ORIGIN.json
+!/meritz_laoer/orig_sniper/
+/meritz_laoer/orig_sniper/*
+!/meritz_laoer/orig_sniper/*.py
+!/meritz_laoer/orig_sniper/ORIGIN.json
 
 # 한국단타봇 수집기: 패키지 안 .py만 (테스트·서비스 파일은 올리지 않음)
 !/honginki_collector/
