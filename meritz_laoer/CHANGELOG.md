@@ -1,3 +1,10 @@
+# 메리츠 SOXL 무매 변경 기록
+
+## v1.3.7 · 2026-11-22 17:52 (KST)
+- 파일: barbell_adapter.py, config.py, main.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.9.0 (판 34, 7차): 바벨·SGOV·SCHD·암살자 연결
+- 브랜치: staging
+
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
 ## v2.3.0 · 2026-11-22 (KST) — 판 34 3차 (meritz_laoer v2.9.0 7차, Q6~Q9 반영)
