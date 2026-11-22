@@ -1,3 +1,10 @@
+# 메리츠 SOXL 무매 변경 기록
+
+## v1.3.5 · 2026-11-22 14:19 (KST)
+- 파일: main.py, ORIGIN.json, assassin_plugin.py, barbell_plugin.py, quant_indicators_plugin.py, sniper_exit_plugin.py, sniper_adapter.py, sniper_mode.py, sync_orig.py
+- 내용: 메리츠 v2.9.0 (판 32, 4차·5차): 스토커·래칫·하드캡 이식
+- 브랜치: staging
+
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
 ## v1.9.2 · 2026-11-22 (KST) — 판 32 3차 (meritz_laoer v2.9.0 5차, 래칫·하드캡·RSI 수확 거래 흐름 연결)
