@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 vNEXT (2026-11-22): meritz_laoer/ 하위 폴더(orig_sniper/)도 메리츠 단위로 분류 — 원작 복사본 7개 + ORIGIN.json 배포 (9번 브리핑 방식)
 # 사무실 v1.9.7 (2026-11-13): 서버 미저장 변경 중단 안내에서 'Claude나 Gemini에게 확인을 요청해 주세요.' 문구 제거
 # 사무실 v1.6.9 (2026-11-12): 재시작 때 실행 중인 서비스는 enable도 같이 함 — 재부팅 뒤에도 살아남게 (7번 비서 재발 방지)
 # 사무실 v1.6.5 (2026-11-11): dirty 검사에서 생성 상태 파일(need.json·sniper_tiers.json) 제외 — 브리핑이 매번 다시 써서 업데이트가 멈추던 것 수정
@@ -227,10 +228,18 @@ def classify(files):
             continue
         absf = os.path.realpath(os.path.join(REPO, f)); d = os.path.dirname(absf); name = os.path.basename(f)
         unit = next((u for u, r in roots.items() if r == d), None)
+        if unit is None:
+            # meritz_laoer/ 하위 폴더(orig_sniper/ 등)도 메리츠 단위 (9번 브리핑 방식, v1.9.4)
+            mroot = roots.get("meritz_laoer.service")
+            if mroot and d.startswith(mroot + os.sep):
+                unit = "meritz_laoer.service"
         if name.endswith(".md"):
             if unit: units.setdefault(unit, [])
             continue
         if unit == OFFICE_UNIT and name.endswith(OFFICE_EXT):
+            units.setdefault(unit, []).append(f)
+        elif unit == "meritz_laoer.service" and name == "ORIGIN.json":
+            # 원작 복사본 목록(어댑터·sync_orig이 읽음). .py가 아니라서 따로 허용.
             units.setdefault(unit, []).append(f)
         elif unit and unit != OFFICE_UNIT and name.endswith(".py") and not name.startswith(("bot_office_", "test_")):
             units.setdefault(unit, []).append(f)
