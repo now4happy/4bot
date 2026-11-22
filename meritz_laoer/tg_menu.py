@@ -569,9 +569,9 @@ class MenuBot:
         else:
             lines.append("🎯 <b>[다음 매수 타점]</b>")
             anchor, kind = _SN.anchor_info(st, ss, s)
-            cap = min((_TW.floor_avg(f) for f in fl), default=0.0)
+            cap = _SN.lowest_layer_avg(fl)
             late = _SN.is_late_cutoff(o.now_et())
-            sig = _SN.buy_signal(px, anchor, kind, cap, _SN.depth_layers(ss, len(fl)), rsi, late)
+            sig = _SN.buy_signal(px, anchor, kind, cap, _SN.depth_layers(ss, _SN.layer_count(fl)), rsi, late)
             if anchor > 0:
                 brk = "돌파차단(15:30~)" if late else (f"돌파 <b>${sig['breakout_price']:.2f}</b> (RSI≤{_SN.BREAKOUT_MAX_RSI:g})" if sig["breakout_price"] else "돌파 없음")
                 lines.append(f"▫️ 눌림 <b>${sig['pullback_price']:.2f}</b> ({sig['drop_pct']:+.1f}%) / {brk} 시 매수")

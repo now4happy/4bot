@@ -1338,7 +1338,7 @@ def run_sniper_dry(s, api, note):
     if not isinstance(ss, dict):
         ss = copy.deepcopy(SN.load_state(cfg))                          # 처음엔 실거래 기준가를 복사해 시작 (이후 모의 파일만 씀)
     SN.series_add(ss, px, now_t)
-    SN.update_peak(ss, len(SN.active_floors(sim)), q)
+    SN.update_peak(ss, SN.layer_count(SN.active_floors(sim)), q)
     cfg._save_json(DRY_SNIPER_FILE, ss)
     done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is None}
     done_boxes = {(int(o["floor_id"]), int(o["box_id"])) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is not None}      # v2.6.0 박스별 매도: 박스 단위로 건너뜀
@@ -1511,14 +1511,16 @@ def run_sniper_tick(s, api, note):
     px = float(api.price(s["symbol"], s["price_market"])["price"])
     ss = SN.load_state(cfg)
     SN.series_add(ss, px, now_t)
-    SN.update_peak(ss, len(SN.active_floors(sim)), q)            # 판 23 수정1 S3: 이번 사이클 최고 층수 (눌림 깊이 잠금) — 상태 파일에 저장
+    SN.update_peak(ss, SN.layer_count(SN.active_floors(sim)), q)            # 판 23 수정1 S3: 이번 사이클 최고 층수 (눌림 깊이 잠금) — 상태 파일에 저장
     SN.save_state(cfg, ss)
     hold, sellable, exch_vid = api.holding(s["symbol"])
     if hold != q:
         _warn_once(cfg, mark, m, "hold", note, f"오늘 체결 반영 뒤 예상 {q}주 ≠ 메리츠 잔고 {hold}주 — 스나이퍼 매매를 보류하고 계속 확인해요 (체결 조회가 늦은 것일 수 있음)")
         return "잔고 불일치"
     exch = str(s.get("exch_id") or exch_vid or "")
-    if SN.sync_sub(ss, hold):                                   # v2.5.0 서브 버킷 수량을 실제 보유에 맞춤
+    ch_sub = SN.sync_sub(ss, hold)                              # v2.5.0 서브 버킷 수량을 실제 보유에 맞춤
+    ch_day = SN.seed_main_day(ss, sim, n.strftime("%Y-%m-%d"))  # 판 30 B4: 층이 있는데 본 매매일이 비어 있으면 오늘로 (서브 5영업일 시계 시작)
+    if ch_sub or ch_day:
         SN.save_state(cfg, ss)
     out = []
     # ---- 매도: 층 평단 + 익절% 에 닿은 층 전량. 이 층 매도가 이미 나가 있거나(미체결·응답 못 받음) 같은 목표가로 거절됐던 층은 건너뜀

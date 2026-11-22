@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.7.0)
+# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.9.0)
+# v2.9.0 (2026-11-22, 판 30): 신호 판정(buy_signal)을 원작 복사본(sniper_adapter → orig_sniper/quant_engine_core.evaluate_l2_only_hybrid_reentry_signal)으로 바꿈. B1 … B3b … (헤더 주석 1줄)
 # v2.7.0 (2026-11-21, 판 27): 층 간격 설정 제거 — make_plan info에서 'gap' 키 삭제 (계획 미리보기 '새 층 가격' 줄이 없어져서 안 씀). 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params).
 # v2.6.0 (2026-11-21, 판 26): ① 박스별 매도 — box_rows(박스마다 평단 +1.5%(그 층 안 최저 평단 L1) / +1.0%) · plan_sells 가 닿은 박스만 그 박스 전량 주문(floor_id + box_id) · sell_rows 층 행에 boxes 추가 ② 눌림 매수% = TW.portion_pct(s) (설정 sniper_portion_pct, 기본 8) ③ trigger_lines 박스별 줄 · make_plan info['boxes']
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층 — 토스 스나이퍼 이식): ① 매수 = 신호 1번에 박스 시드의 8%(단리 고정, plan_buy: min(8%, 박스 남은 시드) → 13번째가 나머지) ② 새 박스 가격은 신호가 뜰 때 정해짐 — 층 간격(tower_gap_usd)·'새 층 보류' 규칙 삭제, 시초가 상한은 호출한 쪽(main)이 그대로
@@ -25,6 +26,7 @@ import copy
 import datetime
 import math
 
+import sniper_adapter as AD
 import sub_grid as SG
 import tower_strategy as TW
 from tower_strategy import ceil2
@@ -61,6 +63,16 @@ def tp_pcts(s):
 def active_floors(st):
     """수량이 있는 층, 위(탑쌓기 번호 1 = 평단 가장 높은 층)부터"""
     return [f for f in TW.top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
+
+
+def layer_count(fl):
+    """보유 층(매수 1건 = 박스) 수 — 활성 F 들의 박스 합 (판 30 B1: 눌림 깊이는 F 개수가 아니라 층 수 = 회차 수). 박스 기록이 없는 F 는 1개로 셈 (boxes_view)"""
+    return sum(len(TW.boxes_view(f)) for f in fl)
+
+
+def lowest_layer_avg(fl):
+    """가장 낮은 층(박스) 평단 (판 30 B2: 상한 가드 기준 — 예전엔 F 평단 최소값). 층이 없으면 0.0"""
+    return min((TW.box_avg(b) for f in fl for b in TW.boxes_view(f)), default=0.0)
 
 
 def attack_id(st):
@@ -294,19 +306,15 @@ def buy_signal(price, anchor, kind, cap_price, n_layers, rsi, late_cutoff):
         return dict(base, signal_type="NO_PRICE")
     if anc <= 0:
         return dict(base, signal_type="NO_ANCHOR")
-    if cap > 0 and lp > cap + 1e-6:
-        return dict(base, signal_type="HOLD_PREVENT_INVERSION")
-    if lp <= pull + 1e-9:
-        return dict(base, should_buy=True, signal_type="PULLBACK_RELOAD")
-    if brk > 0 and lp >= brk - 1e-9:
-        if late_cutoff:
-            return dict(base, signal_type="HOLD_LATE_SESSION_BREAKOUT_CUTOFF")
-        if rsi is None:
-            return dict(base, signal_type="HOLD_BREAKOUT_RSI_UNKNOWN")
-        if rsi > BREAKOUT_MAX_RSI + 1e-6:
-            return dict(base, signal_type="HOLD_BREAKOUT_RSI_OVER_50")
-        return dict(base, should_buy=True, signal_type="BREAKOUT_RELOAD")
-    return dict(base, signal_type="HOLD_WAIT_GATE")
+    r = AD.reentry_signal(lp, anc, cap, rsi=rsi, late_cutoff=late_cutoff, pullback_drop_pct=drop)          # 원작 판정 (판 30) — 눌림·돌파는 % 로 비교, RSI 모르면 돌파 안 막음
+    typ = str(r.get("signal_type") or "")
+    if typ == "BREAKOUT_RELOAD" and brk <= 0:                                                            # 직전 매수가 기준이면 눌림만 (하이브리드 규칙 그대로)
+        typ = "HOLD_WAIT_GATE"
+    elif typ == "HOLD_BREAKOUT_RSI_OVER_50" and brk <= 0:
+        typ = "HOLD_WAIT_GATE"
+    elif typ == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF" and brk <= 0:
+        typ = "HOLD_WAIT_GATE"
+    return dict(base, should_buy=bool(typ in ("PULLBACK_RELOAD", "BREAKOUT_RELOAD") and r.get("should_buy")), signal_type=typ)
 
 
 SIGNAL_KO = {"NO_PRICE": "시세 없음", "NO_ANCHOR": "기준가 없음 (텔레그램 설정에서 첫 기준가를 정해 주세요)", "HOLD_PREVENT_INVERSION": "상한 가드 (가장 아래 층 평단 초과)",
@@ -364,11 +372,11 @@ def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_tradi
     fu, _nfl, _gap = TW.params(s)
     box, portion = TW.box_seed(s), TW.portion_usd(s)
     fl = active_floors(st)
-    n = len(fl)
+    n = layer_count(fl)
     px = _f(price)
     labs = TW.floor_labels(st)
     anchor, kind = anchor_info(st, state, s)
-    cap = min((TW.floor_avg(f) for f in fl), default=0.0)
+    cap = lowest_layer_avg(fl)
     sig = buy_signal(px, anchor, kind, cap, depth_layers(state, n), rsi, is_late_cutoff(now_et))
     out = {"order": None, "notes": [], "signal": sig, "target": None, "sub": None, "sub_gate": None}
     chosen = None
@@ -446,7 +454,7 @@ def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, 
     fu, _nfl, _gap = TW.params(s)
     info = {"mode": MODE_SNIPER, "price": _f(price), "avg": avg, "qty": q, "profit_pct": (round((_f(price) / avg - 1) * 100, 2) if avg > 0 and _f(price) > 0 else None),
             "sells": rows, "boxes": box_rows(st, s, price), "sell_target": min((r["target"] for r in rows), default=0.0), "profit_reached": any(r["reached"] for r in rows),
-            "signal": buy["signal"], "buy_target": buy["target"], "n_layers": len(fl), "depth_layers": depth_layers(state, len(fl)), "floor_usd": fu, "tower_sells": trows,
+            "signal": buy["signal"], "buy_target": buy["target"], "n_layers": layer_count(fl), "depth_layers": depth_layers(state, layer_count(fl)), "floor_usd": fu, "tower_sells": trows,
             "tower_pct": [_f(s.get("sell_profit_pct")), _f(s.get("sell_fraction_pct"))],
             "hits": [{"no": r["no"], "avg": r["avg"], "target": r["target"], "pending": (((state or {}).get("picks") or {}).get(pick_key(r["avg"])) or {}).get("status") == "pending"}
                      for r in rows if r["reached"] and not r["complete"]],                       # v2.4.0: 목표에 닿은 스나이퍼 층 (자동 매도 없음 — 선택 대기 중이면 pending)
@@ -522,6 +530,18 @@ def sync_sub(state, held_qty):
     return False
 
 
+def seed_main_day(state, st, today):
+    """판 30 B4: 층이 있는데 본 그리드 마지막 매매일(last_main_day)이 한 번도 안 찍혔으면(봇을 층 보유 중에 처음 켠 경우 등) 오늘로 찍어 '5영업일 무매매' 시계를 시작함 — 안 찍으면 영영 0일이라 서브가 안 깸. 바로 깨우지는 않음. 바뀌었으면 True"""
+    if not active_floors(st) or not today:
+        return False
+    sub = SG.norm(state.get("sub"))
+    if str(sub.get("last_main_day") or "").strip():
+        return False
+    sub["last_main_day"] = str(today)[:10]
+    state["sub"] = sub
+    return True
+
+
 def trigger_lines(s, st, state, now_et=None):
     """체결 알림·상황판용 '다음 매매' 글자: 층별 다음 매도(목표가·수량) + 다음 매수 타점(눌림/돌파·기준·상한). 상태는 안 바꿈"""
     lines = []
@@ -538,9 +558,9 @@ def trigger_lines(s, st, state, now_et=None):
             lines.append(f"다음 매도: {r['label']} 그 위 {len(bxs) - 4}개 박스는 같은 규칙")
     fl = active_floors(st)
     anchor, kind = anchor_info(st, state, s)
-    cap = min((TW.floor_avg(f) for f in fl), default=0.0)
+    cap = lowest_layer_avg(fl)
     if anchor > 0:
-        sig = buy_signal(0.0, anchor, kind, cap, depth_layers(state, len(fl)), None, False)
+        sig = buy_signal(0.0, anchor, kind, cap, depth_layers(state, layer_count(fl)), None, False)
         lines.append(f"다음 매수: 눌림 ${sig['pullback_price']:.2f} ({sig['drop_pct']:+.1f}%)" + (f" / 돌파 ${sig['breakout_price']:.2f} (RSI {BREAKOUT_MAX_RSI:g} 이하)" if sig["breakout_price"] > 0 else "")
                      + f" · 기준 ${anchor:.2f}" + (f" · 상한 ${cap:.2f}" if cap > 0 else ""))
     else:

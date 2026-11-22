@@ -1,12 +1,14 @@
-# 메리츠 SOXL 무매 변경 기록
-
-## v1.3.2 · 2026-11-21 15:13 (KST)
-- 파일: config.py, main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_strategy.py
-- 내용: 판 27 meritz_laoer v2.7.0 (층 간격 설정·버튼 제거)
-- 브랜치: staging
-
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v1.7.0 · 2026-11-22 (KST) — 판 30 (meritz_laoer v2.9.0 1차)
+- 파일: sniper_mode.py, main.py, tg_menu.py, sniper_adapter.py, README.md, CHANGELOG.md, test_hybrid_v300.py(새, 저장소 밖). 안 바뀜: tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*
+- 내용: 매수 신호 판정을 원작 복사본(어댑터 경유)으로 연결. B1 눌림 깊이 = 층(박스) 수 · B2 상한 = 가장 낮은 층 평단 · B3 눌림·돌파 % 비교 · B3b RSI 모르면 돌파 안 막음 · B4 서브 가동일 기록(seed_main_day). 매도·탑쌓기·서브 매수 규칙은 안 건드림
+- 검증: test_hybrid_v300.py 25개 통과 · v270 7개·v260 31개 통과 · v250 16개 중 2개 실패(B1 이 바꾼 가정 — 되돌리면 통과) · 실거래·서버 적용·push 없음
+
+## v1.6.0 · 2026-11-22 (KST) — 판 29 1차 (구조만, meritz_laoer v2.9.0 은 미완)
+- 파일(새): orig_sniper/{quant_engine_core.py, quant_engine.py, toss_api_core.py (원작 d9170fa 바이트 동일), toss_api.py (shim), ORIGIN.json}, sniper_adapter.py, sync_orig.py, test_hybrid_v290.py(저장소 밖). 바뀜: README.md, CHANGELOG.md. 매매 코드(main.py·sniper_mode.py 등)는 안 바뀜
+- 내용: 원작 순수 판정 함수 복사본 + 얇은 어댑터 + 원작 업뎃 적용 도구 + README 대응표(3단계 문서). 아직 매매에 연결 안 함 — 동작은 v2.7.0 과 같다. 미구현: 원작 이식 연결·스토커·래칫·바벨·탑쌓기 매매 모드·텔레그램 개편·잔고 동기화 시드 조정·용어(층·F) 변경 (VERIFY.md 미구현 절)
+- 검증: test_hybrid_v290.py 13개 통과 · 기존 시험 v270·v260·v250 은 이 세션에 파일이 없어 미실행 · pyflakes 새 경고 0 · 실거래·서버 적용·push 없음
 ## v1.5.0 · 2026-11-21 (KST) — 판 27 (meritz_laoer v2.7.0)
 - 파일: main.py, sniper_mode.py, tower_strategy.py, tg_menu.py, config.py, notifier.py, README.md, CHANGELOG.md, test_hybrid_v270.py(새). sub_grid.py 는 안 바뀜
 - 내용: 층 간격 사용자 설정(tower_gap_usd) 제거 — 텔레그램 '층 간격 변경' 버튼·설정 검사·설정 표시·계획 '새 층 가격' 줄 삭제. 간격은 내부 고정값 GAP_USD=5로 칸 만들기에만 씀 (tower_strategy.params가 항상 5를 돌려줌). 설정 파일에 tower_gap_usd가 남아 있어도 무시·통과. 매매 로직은 안 건드림.
