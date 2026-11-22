@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-22 19:41 (KST) · 계기: 업데이트 적용 (staging: 메리츠 이름 변경: 메리츠 SOXL 무매 → 메리츠 SOXL 하이브리드모드 (업데이트 비서 NAMES 한 줄))
+- 갱신: 2026-11-22 20:35 (KST) · 계기: 업데이트 적용 (staging: 메리츠 v2.9.0 (판 35 수정, 9차): 레이더 인라인 버튼 KeyError 고침)
 
 ## 봇별 현재 상태
 
@@ -14,7 +14,7 @@
 | 3번 토스 적립 | `toss_dca` | ⚪ 꺼짐 | - | - | - |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-20 12:16 KST부터) | v4.4.1 | 2026-11-20 12:17 | audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, |
 | 5번 사무실 비서 | `bot-office` | ⚪ 꺼짐 | v1.9.9 | 2026-11-22 19:41 | 메리츠 이름 변경: 메리츠 SOXL 무매 → 메리츠 SOXL 하이브리드모드 (업데이트 비서 NAMES 한 줄 |
-| 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-22 18:45 KST부터) | v1.3.8 | 2026-11-22 18:45 | 메리츠 v2.9.0 (판 35, 8차): 용어·텔레그램 개편 |
+| 메리츠 SOXL 하이브리드모드 | `meritz_laoer` | 🟢 실행 중 (11-22 20:34 KST부터) | v1.3.9 | 2026-11-22 20:35 | 메리츠 v2.9.0 (판 35 수정, 9차): 레이더 인라인 버튼 KeyError 고침 |
 | 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-20 13:53 KST부터) | v1.3.4 | 2026-11-20 13:53 | audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6 |
 
 ## 사무실 상시 서비스
@@ -22,22 +22,22 @@
 - 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-20 12:17 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-19 15:40 KST부터)
 - 사무실 터널 `bot-office-tunnel`: ⚪ 꺼짐
-- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-22 14:07 KST부터)
+- 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-22 19:41 KST부터)
 - 실패 상태로 남은 서비스·타이머: 없음
 - 디스크 사용: 73% (남은 5.6GB)
 
 ## 최근 적용 10건
 
+- 2026-11-22 20:35 · 메리츠 SOXL 하이브리드모드 v1.3.9 · tg_menu.py · 메리츠 v2.9.0 (판 35 수정, 9차): 레이더 인라인 버튼 KeyError 고침
 - 2026-11-22 19:41 · 5번 사무실 비서 v1.9.9 · bot_updater.py · 메리츠 이름 변경: 메리츠 SOXL 무매 → 메리츠 SOXL 하이브리드모드 (업데이트 비서 NAMES 한 줄
-- 2026-11-22 18:45 · 메리츠 SOXL 무매 v1.3.8 · config.py, main.py, notifier.py, seed_adjust.py, sniper_adap · 메리츠 v2.9.0 (판 35, 8차): 용어·텔레그램 개편
-- 2026-11-22 17:52 · 메리츠 SOXL 무매 v1.3.7 · barbell_adapter.py, config.py, main.py, tg_menu.py, tower_st · 메리츠 v2.9.0 (판 34, 7차): 바벨·SGOV·SCHD·암살자 연결
+- 2026-11-22 18:45 · 메리츠 SOXL 하이브리드모드 v1.3.8 · config.py, main.py, notifier.py, seed_adjust.py, sniper_adap · 메리츠 v2.9.0 (판 35, 8차): 용어·텔레그램 개편
+- 2026-11-22 17:52 · 메리츠 SOXL 하이브리드모드 v1.3.7 · barbell_adapter.py, config.py, main.py, tg_menu.py, tower_st · 메리츠 v2.9.0 (판 34, 7차): 바벨·SGOV·SCHD·암살자 연결
 - 2026-11-22 14:07 · 5번 사무실 비서 v1.9.8 · bot_updater.py · 사무실 vNEXT: meritz_laoer/ 하위 폴더(orig_sniper/) 배포 분류
-- 2026-11-21 11:08 · 메리츠 SOXL 무매 v1.2.9 · main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_stra · 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·
+- 2026-11-21 11:08 · 메리츠 SOXL 하이브리드모드 v1.2.9 · main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_stra · 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·
 - 2026-11-21 11:08 · 5번 사무실 비서 v1.9.7 · bot_updater.py · 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·
-- 2026-11-21 09:05 · 메리츠 SOXL 무매 v1.2.8 · main.py, sniper_mode.py, tg_menu.py · meritz_laoer v2.3.0 (판 23 수정1: 장중 환전 고침 제외·하루 매수 층 수 제한·B3 미
-- 2026-11-20 19:09 · 메리츠 SOXL 무매 v1.2.6 · main.py, tg_menu.py · meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개
-- 2026-11-20 19:00 · 메리츠 SOXL 무매 v1.2.5 · config.py, main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sel
-- 2026-11-20 18:02 · 메리츠 SOXL 무매 v1.2.4 · main.py, tower_strategy.py · meritz_laoer v2.2.15 (판 19 오늘 계획 미리보기에 탑 진행률): plan_head 한 곳
+- 2026-11-21 09:05 · 메리츠 SOXL 하이브리드모드 v1.2.8 · main.py, sniper_mode.py, tg_menu.py · meritz_laoer v2.3.0 (판 23 수정1: 장중 환전 고침 제외·하루 매수 층 수 제한·B3 미
+- 2026-11-20 19:09 · 메리츠 SOXL 하이브리드모드 v1.2.6 · main.py, tg_menu.py · meritz_laoer v2.2.18 (판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개
+- 2026-11-20 19:00 · 메리츠 SOXL 하이브리드모드 v1.2.5 · config.py, main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sel
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
