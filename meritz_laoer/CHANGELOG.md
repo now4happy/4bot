@@ -12,6 +12,12 @@
 
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v2.4.0 · 2026-11-22 (KST) — 판 35 수정 (meritz_laoer v2.9.0 9차, 레이더 인라인 버튼 KeyError 고침)
+- 파일: tg_menu.py, CHANGELOG.md, test_hybrid_v351_render.py(신설). 원작 orig_sniper/* 안 고침.
+- 고침: RADAR_INLINE의 "⚙️ 스나이퍼 설정" 문자열을 ("⚙️ 스나이퍼 설정", "스나이퍼 설정") 튜플로 고침. ikb()가 LABEL_IDX에서 이모티콘 붙은 글자를 못 찾아 KeyError가 나 스나이퍼 레이더·잔고 동기화·레이더 안 조회가 전부 죽던 문제. 보이는 글자는 그대로, 버튼 이름은 이모티콘 없는 "스나이퍼 설정".
+- 시험: 모든 인라인 키보드에 ikb()를 실제로 돌리는 렌더링 시험 신설(test_hybrid_v351_render.py 6개). v350이 bot.send를 mock으로 갈아끼워 ikb()를 안 타서 이 버그를 놓쳤던 걸 막음. v350 기대값도 튜플 형태로 고침(시험만, staging 안 올림).
+- 미실행: 서버·실거래·텔레그램 실발송.
+
 ## v2.4.0 · 2026-11-22 (KST) — 판 35 (meritz_laoer v2.9.0 8차, 용어 정리 + 텔레그램 개편)
 - 파일: main.py, seed_adjust.py, tower_strategy.py, tg_menu.py, sniper_mode.py, sniper_adapter.py, sub_grid.py, config.py, notifier.py, barbell_adapter.py, README.md, CHANGELOG.md, 옛 시험 8개(문구·해시 고정만), test_hybrid_v350.py(신설). 원작 orig_sniper/* 안 고침.
 - 용어(동작 변경 없음): "F 시드"→"F 완성 기준 금액", "층 $720"→"버킷 $720", "박스"→"버킷"(주석·문서·표시 문구, 11개 파일). 기준: 버킷 = 매수 1건(원작 StratumBucket) · 층 = 그리드 단계(원작 tier) · F = 탑쌓기 위치(하이브리드 전용). sniper_adapter.py 헤더 옛 문구·sniper_mode.py RSI 주석(판 30 Q2: RSI 모르면 돌파 안 막음) 고침. 설정 키 이름(tower_box_seed_usd 등)은 안 바꿈.
