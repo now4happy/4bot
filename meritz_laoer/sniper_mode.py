@@ -14,15 +14,15 @@
 #   신호 숫자·돌파 RSI·15:30~16:00 돌파 차단·상한 가드(buy_signal)는 그대로.
 # v2.4.0 (2026-11-21, 판 24): ① 잠긴 층(locked)은 스나이퍼 매도 안 함 — 탑 매도만 ② 스나이퍼 목표가에 닿아도 자동 매도 안 함: 층마다 선택 대기(picks) → 텔레그램 버튼 '스나이퍼/탑쌓기'(탑쌓기=잠금, 스나이퍼=층 그대로 + 닿은 목표가를 기준가로 하는 새 빈 층). 무응답=대기(탑쌓기 기본), 대기 중 매수 신호가 오면 바로 새 층 매수(다시 안 물음).
 #   ③ 지하층(빈 층, 0주·$0) = st["empty"]: 다음 스나이퍼 매수는 빈 층부터 채움.
-# v2.3.0 (2026-11-21, 판 23 하이브리드): 모드 선택 없음(trading_mode·get_mode·mode_ko 삭제) — 항상 하이브리드. 사기=스나이퍼만(눌림·돌파), 팔기: 완성 층(층 시드 도달)은 탑 매도(층 평단 +10% → 50%), 미완성 층(재매수 대기 포함)만 스나이퍼 매도.
+# v2.3.0 (2026-11-21, 판 23 하이브리드): 모드 선택 없음(trading_mode·get_mode·mode_ko 삭제) — 항상 하이브리드. 사기=스나이퍼만(눌림·돌파), 팔기: 완성 F(F 완성 기준 금액 도달)은 탑 매도(F 평단 +10% → 50%), 미완성 F(재매수 대기 포함)만 스나이퍼 매도.
 #   총 시드·층 수 한도 없음. 새 층은 '가장 낮은 층 평단 − 층 간격(tower_gap_usd, 기본 5)' 이하일 때만 만듦. 탑 매도 체결도 스나이퍼 기준가(직전 익절)를 갱신(note_fills 가 모든 SELL 체결을 받음 — 원래부터).
 # v2.2.20 (2026-11-21, 판 22 듀얼 모드): 새 파일 — 스나이퍼 모드 계산부. 순수 계산 + 상태 파일(data/sniper_state.json) 읽기·쓰기 도우미만 (네트워크·시계 없음, 시각은 호출한 쪽이 넘김).
 #   toss_sniper(참조, 고치지 않음)에서 가져온 규칙:
 #   - 채우기(층 사기): 직전 익절가(기준가) 대비 눌림목 또는 +1.0% 돌파 (quant_engine.evaluate_l2_only_hybrid_reentry_signal 규칙 — 돌파는 RSI(14) <= 50 필터·15:30~16:00 ET 돌파 차단·기준가의 2층 단가 상한 가드 Case 73).
 #     눌림 깊이는 보유 층 수에 따라 1-4층 -1.0% · 5-8층 -2.0% · 9-10층 -3.5% (quant_engine.get_golden8_prog_thresholds).
 #   - 비우기(층 팔기): 층 평단 + 익절% 에 닿으면 그 층 전량 (quant_engine.evaluate_multi_grid_sell_targets 의 1층 +1.5% · 상단층 +1.0% 개별 판정만. 2~7층 통합이평 졸업(WMA) 판정은 판 22 지시에 없어 안 가져옴).
-#   빼거나 바꾼 것(판 22 지시): 바벨·암살자·서브 그리드·지하층·복리(자산 % 회차 크기)·24시간 매도 창·1.5초 간격. 회차 크기는 자산 % 가 아니라 층 시드(tower_floor_usd, 기본 $15,000).
-#   층은 탑쌓기와 같은 층(tower_state.json)을 공유. 스나이퍼의 '1층' = 가장 아래 활성 층(평단이 가장 낮은 층 = 가장 최근에 채운 공격 층), 나머지는 상단층.
+#   빼거나 바꾼 것(판 22 지시): 바벨·암살자·서브 그리드·지하층·복리(자산 % 회차 크기)·24시간 매도 창·1.5초 간격. 회차 크기는 자산 % 가 아니라 F 완성 기준 금액(tower_floor_usd, 기본 $15,000).
+#   F는 탑쌓기와 같은 F(tower_state.json)를 공유. 스나이퍼의 '1층' = 가장 아래 활성 F(평단이 가장 낮은 F = 가장 최근에 채운 공격 층), 나머지는 상단층.
 #   RSI(14): 메리츠 분봉 API 는 근거 파일에 없어 미확인 → 봇이 시세를 읽을 때마다 1분 단위로 모은 종가(series)로 Wilder RSI(14)를 계산. 15개가 안 모이면 RSI 를 모른다고 보고 돌파를 막지 않음 (판 30 Q2 결정 — 원작처럼 RSI 를 모르면 돌파 필터만 건너뜀. 눌림은 RSI 무관).
 # 상태 파일: {"version": 1, "anchor": 기준가, "anchor_kind": "exit"|"buy"|"avg"|"", "anchor_at": ISO, "last_order_ts": 에포크초, "buy_block_until": 에포크초(매수 거절 뒤 쉬는 시각), "series": [[분 에포크, 종가], ...]}
 # ==========================================================
@@ -64,24 +64,24 @@ def tp_pcts(s):
     return (a if a > 0 else TP_L1_DEFAULT), (b if b > 0 else TP_UPPER_DEFAULT)
 
 
-# ---------------------------------------------------------------- 층 매핑
+# ---------------------------------------------------------------- F 매핑
 def active_floors(st):
-    """수량이 있는 층, 위(탑쌓기 번호 1 = 평단 가장 높은 층)부터"""
+    """수량이 있는 F, 위(탑쌓기 번호 1 = 평단 가장 높은 F)부터"""
     return [f for f in TW.top_down(st if isinstance(st, dict) else {}) if int(_f(f.get("qty"))) > 0]
 
 
 def layer_count(fl):
-    """보유 층(매수 1건 = 버킷) 수 — 활성 F 들의 버킷 합 (판 30 B1: 눌림 깊이는 F 개수가 아니라 층 수 = 회차 수). 버킷 기록이 없는 F 는 1개로 셈 (boxes_view)"""
+    """보유 버킷(매수 1건) 수 — 활성 F 들의 버킷 합 (판 30 B1: 눌림 깊이는 F 개수가 아니라 버킷 수 = 회차 수). 버킷 기록이 없는 F 는 1개로 셈 (boxes_view)"""
     return sum(len(TW.boxes_view(f)) for f in fl)
 
 
 def lowest_layer_avg(fl):
-    """가장 낮은 버킷 평단 (판 30 B2: 상한 가드 기준 — 예전엔 F 평단 최소값). 층이 없으면 0.0"""
+    """가장 낮은 버킷 평단 (판 30 B2: 상한 가드 기준 — 예전엔 F 평단 최소값). F가 없으면 0.0"""
     return min((TW.box_avg(b) for f in fl for b in TW.boxes_view(f)), default=0.0)
 
 
 def attack_id(st):
-    """스나이퍼 '1층'(공격 층) = 활성 층 중 평단이 가장 낮은 층 (같으면 번호가 큰 층). 활성 층이 없으면 None"""
+    """스나이퍼 '1층'(공격 층) = 활성 F 중 평단이 가장 낮은 F (같으면 번호가 큰 F). 활성 F가 없으면 None"""
     fl = active_floors(st)
     if not fl:
         return None
@@ -90,7 +90,7 @@ def attack_id(st):
 
 # ---------------------------------------------------------------- 비우기 (익절)
 def sniper_numbers(st):
-    """{탑쌓기 층 id: 스나이퍼 층 번호} — 번호는 평단 낮은 층부터 1, 2, 3 … (1 = 공격 층). 표시·알림 글자용 (주문·장부는 탑쌓기 id 그대로)"""
+    """{탑쌓기 층 id: 스나이퍼 층 번호} — 번호는 평단 낮은 F부터 1, 2, 3 … (1 = 공격 층). 표시·알림 글자용 (주문·장부는 탑쌓기 id 그대로)"""
     order = sorted(active_floors(st), key=lambda f: (TW.floor_avg(f), -int(_f(f.get("id")))))
     return {int(_f(f.get("id"))): i + 1 for i, f in enumerate(order)}
 
@@ -104,7 +104,7 @@ def trail_reset():
 
 
 def _src_boxes(st):
-    """미완성 층의 버킷 전체, 평단 오름차순([0] = 1층). box_rows 와 같은 정렬"""
+    """미완성 F의 버킷 전체, 평단 오름차순([0] = 1층). box_rows 와 같은 정렬"""
     src = [(f, b) for f in active_floors(st) if not TW.is_tower(f) for b in TW.boxes_view(f)]
     src.sort(key=lambda fb: (TW.box_avg(fb[1]), -int(fb[1]["id"]), -int(_f(fb[0].get("id")))))
     return src
@@ -162,8 +162,8 @@ def trail_tick(st, s, price, now_ts, state):
 
 
 def box_rows(st, s, price):
-    """v2.9.0(판 31) 버킷별 익절 행 — 원작 매도 판정(어댑터 sell_plan, 방식 B = 전체 층 그대로)으로 계산. 미완성 층의 버킷만 (완성·잠긴 층은 탑 매도): floor_id·box_id·label·qty·avg·cost·pct·target·role·reached·gain_pct·floor_avg.
-    미완성 층 전체 버킷을 평단 오름차순 한 묶음으로 봄: 가장 낮은 버킷 = L1(+1.5%) · 그 다음 = L2(+1.0%, 닿으면 L1 도 같이) · 3번째 이상은 개별 매도 없음, 졸업(3번째~끝 가중평단 +1.0%)에 닿으면 전 버킷 전량 (role 'grad', target = 졸업 목표가). reached = 원작 sold_indices. 계산만 함 (상태 안 바꿈)"""
+    """v2.9.0(판 31) 버킷별 익절 행 — 원작 매도 판정(어댑터 sell_plan, 방식 B = 전체 F 그대로)으로 계산. 미완성 F의 버킷만 (완성·잠긴 F는 탑 매도): floor_id·box_id·label·qty·avg·cost·pct·target·role·reached·gain_pct·floor_avg.
+    미완성 F 전체 버킷을 평단 오름차순 한 묶음으로 봄: 가장 낮은 버킷 = L1(+1.5%) · 그 다음 = L2(+1.0%, 닿으면 L1 도 같이) · 3번째 이상은 개별 매도 없음, 졸업(3번째~끝 가중평단 +1.0%)에 닿으면 전 버킷 전량 (role 'grad', target = 졸업 목표가). reached = 원작 sold_indices. 계산만 함 (상태 안 바꿈)"""
     tp1, tpu = tp_pcts(s)
     labs = TW.floor_labels(st)
     px = _f(price)
@@ -202,15 +202,15 @@ def box_rows(st, s, price):
 
 
 def sell_rows(st, s, price):
-    """층마다 익절 행 (미완성 층 = 스나이퍼 익절 %, 완성 층 = 탑 매도 %): id(탑쌓기 층 번호)·no(스나이퍼 층 번호 — 평단 낮은 층이 1)·qty·avg·pct(그 층 익절 %)·target(올림 2자리)·reached·gain_pct(현재가 대비 평단 %)·role(L1|upper)"""
+    """F마다 익절 행 (미완성 F = 스나이퍼 익절 %, 완성 F = 탑 매도 %): id(탑쌓기 F 번호)·no(스나이퍼 F 번호 — 평단 낮은 F가 1)·qty·avg·pct(그 F 익절 %)·target(올림 2자리)·reached·gain_pct(현재가 대비 평단 %)·role(L1|upper)"""
     tp1, tpu = tp_pcts(s)
     aid = attack_id(st)
     nos = sniper_numbers(st)
-    labs = TW.floor_labels(st)                                                   # v2.5.0: 층 표현 = 평단 정수 달러
+    labs = TW.floor_labels(st)                                                   # v2.5.0: F 표현 = 평단 정수 달러 + F + 번호
     px = _f(price)
     rows = []
     brows = {}
-    for br in box_rows(st, s, price):                                            # v2.6.0: 미완성 층은 버킷별 목표 (층 행의 목표·도달 = 그 층 버킷 중 가장 먼저 닿는 L1 버킷 기준, 도달 = 하나라도 닿음)
+    for br in box_rows(st, s, price):                                            # v2.6.0: 미완성 F는 버킷별 목표 (F 행의 목표·도달 = 그 F 버킷 중 가장 먼저 닿는 L1 버킷 기준, 도달 = 하나라도 닿음)
         brows.setdefault(br["floor_id"], []).append(br)
     for f in active_floors(st):
         fid, fa = int(_f(f.get("id"))), TW.floor_avg(f)
@@ -218,7 +218,7 @@ def sell_rows(st, s, price):
         pct = tp1 if role == "L1" else tpu
         if brows.get(fid):
             role, pct = "L1", brows[fid][0]["pct"]
-        if TW.is_tower(f):                # v2.4.0: 잠긴 층도 탑 매도 층. 판 23 수정1: 완성 층의 목표는 탑 매도 목표(평단 +sell_profit_pct%) — 스나이퍼 목표가를 '+10% 목표'로 적던 라벨 오류 고침. pct 도 탑 % 로
+        if TW.is_tower(f):                # v2.4.0: 잠긴 F도 탑 매도 F. 판 23 수정1: 완성 F의 목표는 탑 매도 목표(평단 +sell_profit_pct%) — 스나이퍼 목표가를 '+10% 목표'로 적던 라벨 오류 고침. pct 도 탑 % 로
             pct = _f(s.get("sell_profit_pct"))
         tg = ceil2(fa * (1 + pct / 100.0))
         if brows.get(fid):
@@ -236,8 +236,8 @@ def pick_key(avg):
 
 
 def pick_scan(state, st, s, price):
-    """스나이퍼 목표(1층 +1.5% · 상단 +1.0%)에 닿은 '잠기지 않은 미완성 층'을 찾아 선택 대기(picks)에 올림 → 새로 물어볼 층 목록(dict: key·no·avg·qty·target·pct).
-    이미 대기 중이면 다시 안 물음. 스나이퍼를 골랐던 층은 현재가가 목표 아래로 내려갔다가 다시 닿을 때만 다시 물음(무장). 없어진 층의 기록은 지움. state 를 바꿈(저장은 호출한 쪽)"""
+    """스나이퍼 목표(1층 +1.5% · 상단 +1.0%)에 닿은 '잠기지 않은 미완성 F'를 찾아 선택 대기(picks)에 올림 → 새로 물어볼 F 목록(dict: key·no·avg·qty·target·pct).
+    이미 대기 중이면 다시 안 물음. 스나이퍼를 골랐던 F는 현재가가 목표 아래로 내려갔다가 다시 닿을 때만 다시 물음(무장). 없어진 F의 기록은 지움. state 를 바꿈(저장은 호출한 쪽)"""
     picks = state.setdefault("picks", {})
     rows = [r for r in sell_rows(st, s, price) if not r["complete"]]
     live = {pick_key(r["avg"]): r for r in rows}
@@ -257,8 +257,8 @@ def pick_scan(state, st, s, price):
 
 
 def pick_resolve(state, st, key, choice, fu):
-    """선택 반영 (버튼). choice='t'(탑쌓기) → 그 층 잠금, 기록 'tower'. choice='s'(스나이퍼) → 층은 그대로, 닿은 목표가를 기준가로 하는 빈 층을 st['empty'] 에 추가, 기록 'sniper'.
-    대기 중이 아니면(이미 처리·없어진 층) None. → 알림 글자 또는 None. state(스나이퍼 상태)·st(탑쌓기 상태) 둘 다 바꿈"""
+    """선택 반영 (버튼). choice='t'(탑쌓기) → 그 F 잠금, 기록 'tower'. choice='s'(스나이퍼) → F는 그대로, 닿은 목표가를 기준가로 하는 빈 F를 st['empty'] 에 추가, 기록 'sniper'.
+    대기 중이 아니면(이미 처리·없어진 F) None. → 알림 글자 또는 None. state(스나이퍼 상태)·st(탑쌓기 상태) 둘 다 바꿈"""
     e = (state.get("picks") or {}).get(key)
     if not isinstance(e, dict) or e.get("status") != "pending":
         return None
@@ -267,13 +267,14 @@ def pick_resolve(state, st, key, choice, fu):
         state["picks"].pop(key, None)
         return None
     tgt = _f(e.get("target"))
+    lab = TW.floor_labels(st).get(int(_f(f.get("id")))) or TW.price_label(TW.floor_avg(f))
     if choice == "t":
         f["locked"] = True
         e["status"] = "tower"
-        return f"탑쌓기 선택 — 평단 ${TW.floor_avg(f):.2f} 층을 잠가 탑 매도(평단 +10% → 50%)로 넘겼어요"
+        return f"탑쌓기 선택 — {lab}을 잠가 탑 매도(평단 +10% → 50%)로 넘겼어요"
     e["status"] = "sniper"
     st.setdefault("empty", []).append({"kind": "pick", "ref_px": round(tgt, 2), "id": "p" + key})
-    return f"스나이퍼 선택 — 평단 ${TW.floor_avg(f):.2f} 층은 그대로 두고, 목표가 ${tgt:.2f} 를 기준가로 하는 새 층을 만들어 스나이퍼 매매를 해요"
+    return f"스나이퍼 선택 — {lab}은 그대로 두고, 목표가 ${tgt:.2f} 를 기준가로 하는 새 F를 만들어 스나이퍼 매매를 해요"
 
 
 SELLABLE_WAIT_SEC = 2.0            # 원작 SELLABLE_QTY_POLL_WAIT_SEC
@@ -391,7 +392,7 @@ def is_late_cutoff(now_et):
 
 
 def anchor_info(st, state, s=None):
-    """(기준가, 종류). 저장된 직전 익절/매수가가 있으면 그것, 없으면 가장 아래 활성 층 평단('avg'). 기준가도 층도 없을 때만(v2.5.0) 설정 sniper_first_anchor_usd('first' — 풀이님이 텔레그램 설정에서 정한 첫 기준가).
+    """(기준가, 종류). 저장된 직전 익절/매수가가 있으면 그것, 없으면 가장 아래 활성 F 평단('avg'). 기준가도 F도 없을 때만(v2.5.0) 설정 sniper_first_anchor_usd('first' — 풀이님이 텔레그램 설정에서 정한 첫 기준가).
     첫 매매 체결이 생기면 체결가가 기준가가 됨(note_fills — 토스 anchor_price = fill_p). 모두 없으면 (0.0, '')"""
     a = _f((state or {}).get("anchor"))
     if a > 0:
@@ -407,7 +408,7 @@ def anchor_info(st, state, s=None):
 
 def buy_signal(price, anchor, kind, cap_price, n_layers, rsi, late_cutoff):
     """재장전 신호 판정 (참조 evaluate_l2_only_hybrid_reentry_signal 규칙, 순수 계산) → dict(should_buy, signal_type, pullback_price, breakout_price, ...).
-    signal_type: NO_PRICE · NO_ANCHOR · HOLD_PREVENT_INVERSION(현재가 > 평단 가장 낮은 층 평단 = Case 73 상한) · PULLBACK_RELOAD · BREAKOUT_RELOAD ·
+    signal_type: NO_PRICE · NO_ANCHOR · HOLD_PREVENT_INVERSION(현재가 > 평단 가장 낮은 F 평단 = Case 73 상한) · PULLBACK_RELOAD · BREAKOUT_RELOAD ·
     HOLD_LATE_SESSION_BREAKOUT_CUTOFF · HOLD_BREAKOUT_RSI_OVER_50 · HOLD_BREAKOUT_RSI_UNKNOWN · HOLD_WAIT_GATE.
     돌파는 기준가가 익절가('exit')이거나 평단 대신 쓴 값('avg')·풀이님이 정한 첫 기준가('first', v2.5.0 — Muse 확인 필요)일 때만 (직전 매수가 기준이면 눌림만 — 추가 매수는 더 눌려야 함)"""
     lp, anc, cap = _f(price), _f(anchor), _f(cap_price)
@@ -431,14 +432,14 @@ def buy_signal(price, anchor, kind, cap_price, n_layers, rsi, late_cutoff):
     return dict(base, should_buy=bool(typ in ("PULLBACK_RELOAD", "BREAKOUT_RELOAD") and r.get("should_buy")), signal_type=typ)
 
 
-SIGNAL_KO = {"NO_PRICE": "시세 없음", "NO_ANCHOR": "기준가 없음 (텔레그램 설정에서 첫 기준가를 정해 주세요)", "HOLD_PREVENT_INVERSION": "상한 가드 (가장 아래 층 평단 초과)",
+SIGNAL_KO = {"NO_PRICE": "시세 없음", "NO_ANCHOR": "기준가 없음 (텔레그램 설정에서 첫 기준가를 정해 주세요)", "HOLD_PREVENT_INVERSION": "상한 가드 (가장 아래 F 평단 초과)",
              "PULLBACK_RELOAD": "눌림 재장전", "BREAKOUT_RELOAD": "돌파 재장전", "HOLD_LATE_SESSION_BREAKOUT_CUTOFF": "돌파 차단 (15:30~16:00)",
              "HOLD_BREAKOUT_RSI_OVER_50": "돌파 보류 (RSI 50 초과)", "HOLD_BREAKOUT_RSI_UNKNOWN": "돌파 보류 (RSI 모으는 중)", "HOLD_WAIT_GATE": "대기 (눌림·돌파 전)"}
 
 
 def plan_sub(s, st, price, state, usd_cash, now_et, is_trading_day=None):
     """v2.5.0 서브 그리드(Case 88) 매수 판정 — 본 신호가 없을 때만 부름. 상태·장부를 바꾸지 않음. → {"buy": bool, "tag": 글자, "gate": 열렸으면 {"bucket","date"}(호출한 쪽이 sub 상태에 저장), "info": dict}.
-    가동 조건: 층이 있고 (본 그리드 5영업일 무매매 또는 서브 버킷이 이미 있음). 서브 0주 = 첫 진입(15:30~16:00 차단 · 유휴 달러 ≥ max(현재가, 서브 1회 × 0.30)), 서브 있음 = 10분 게이트 · 한도 4회분 · 서브 추매 신호(SG.evaluate_dip).
+    가동 조건: F가 있고 (본 그리드 5영업일 무매매 또는 서브 버킷이 이미 있음). 서브 0주 = 첫 진입(15:30~16:00 차단 · 유휴 달러 ≥ max(현재가, 서브 1회 × 0.30)), 서브 있음 = 10분 게이트 · 한도 4회분 · 서브 추매 신호(SG.evaluate_dip).
     유휴 달러 = 예수금 − 본 1회분 × 0.5 (보호예수금). 서브 1회 = 버킷 시드 × 4%"""
     sub = SG.norm((state or {}).get("sub"))
     fl = active_floors(st)
@@ -481,7 +482,7 @@ def plan_sub(s, st, price, state, usd_cash, now_et, is_trading_day=None):
 def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_trading_day=None):
     """오늘 재장전 매수 계획 → {"order": 주문 또는 None, "notes", "signal", "target", "sub", "sub_gate"}. 상태·장부를 바꾸지 않음.
     v2.5.0 사는 금액 = min(신호 1번 몫, 그 버킷의 남은 시드): 몫 = 버킷 시드(tower_box_seed_usd, 기본 $15,000)의 8% (돌파 신호는 sniper_breakout_portion_pct, 기본 16%=$2,400 · 서브 신호는 4%) — 단리 고정. 시드 $15,000 이면 $1,200씩 12번, 13번째에 남은 $600 (13번은 정한 횟수가 아니라 계산 결과).
-    채울 버킷 = 빈 층(공사중, st["empty"]) → 위에서부터 첫 미완성 층(공사중) → 새 버킷(시드 = 버킷 시드). 새 버킷 가격은 신호 가격 (층 간격 규칙 없음). 신호 한 번에 1회분만 (여러 회분 한 번에 안 삼).
+    채울 버킷 = 빈 F(공사중, st["empty"]) → 위에서부터 첫 미완성 F(공사중) → 새 버킷(시드 = 버킷 시드). 새 버킷 가격은 신호 가격 (F 간격 규칙 없음). 신호 한 번에 1회분만 (여러 회분 한 번에 안 삼).
     주식수는 정수 내림(시드를 안 넘김), 달러 예수금이 모자라면 살 수 있는 만큼만. 주문 가격 = 현재가 (지정가). 본 신호가 없고 서브 신호가 나면 서브 4% (out["sub"])"""
     fu, _nfl, _gap = TW.params(s)
     box, portion = TW.box_seed(s), TW.portion_usd(s)
@@ -540,21 +541,21 @@ def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_tradi
 
 
 def tower_sells(s, st, price, sellable, skip_ids=()):
-    """v2.3.0 탑 매도: 완성 층만, 층 평단 +sell_profit_pct%(기본 10) 에 닿으면 그 층 보유의 sell_fraction_pct%(기본 50, 1주 층 제외). 목표에 닿은 층만 주문 → (주문 목록, 알림 글자 목록, 층별 행).
+    """v2.3.0 탑 매도: 완성 F만, F 평단 +sell_profit_pct%(기본 10) 에 닿으면 그 F 보유의 sell_fraction_pct%(기본 50, 1주 F 제외). 목표에 닿은 F만 주문 → (주문 목록, 알림 글자 목록, F별 행).
     TW.make_plan(sell_only, complete_only) 의 매도 계산을 그대로 씀 (계산만 — 상태 안 바꿈)"""
     q, _p = TW.totals(st)
     plan = TW.make_plan(s, st, q, _p, _f(price), 0.0, 0.0, sellable, complete_only=True, sell_only=True)
     skip = {int(x) for x in skip_ids}
     nos = sniper_numbers(st)
     tpp, tfr = _f(s.get("sell_profit_pct")), _f(s.get("sell_fraction_pct"))
-    orders = [dict(o, mode="tower", desc=f"탑 매도 {nos.get(int(o['floor_id']), o['floor_id'])}층(완성) 평단 ${o['floor_avg']:.2f} +{tpp:g}% → 보유의 {tfr:g}%")
+    orders = [dict(o, mode="tower", desc=f"탑 매도 {nos.get(int(o['floor_id']), o['floor_id'])}F(완성) 평단 ${o['floor_avg']:.2f} +{tpp:g}% → 보유의 {tfr:g}%")
               for o in plan["orders"] if o.get("reached") and int(o["floor_id"]) not in skip]
     return orders, plan["notes"], plan["info"].get("sells") or []
 
 
 def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, is_trading_day=None, skip_sell_ids=(), skip_sell_boxes=()):
     """오늘(지금) 하이브리드 계획 미리보기 — {"orders","notes","info"}. 상태·장부를 바꾸지 않음. 상황판·--check·텔레그램 오늘 계획용.
-    주문 = 버킷 안 매도(미완성 층, v2.5.0 자동) + 탑 매도(완성 층) + 스나이퍼 매수(본 8% 또는 서브 4%)"""
+    주문 = 버킷 안 매도(미완성 F, v2.5.0 자동) + 탑 매도(완성 F) + 스나이퍼 매수(본 8% 또는 서브 4%)"""
     otype = otype or s.get("order_type") or "LIMIT"
     sells, snotes = plan_sells(s, st, price, max(0, int(_f(sellable))), skip_ids=skip_sell_ids, otype=otype, skip_boxes=skip_sell_boxes)     # v2.6.0: 버킷별 매도 자동 (판 24 선택 대기 폐기)
     taken = sum(int(o["qty"]) for o in sells)
@@ -576,11 +577,11 @@ def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, 
             "signal": buy["signal"], "buy_target": buy["target"], "n_layers": layer_count(fl), "depth_layers": depth_layers(state, layer_count(fl)), "floor_usd": fu, "tower_sells": trows,
             "tower_pct": [_f(s.get("sell_profit_pct")), _f(s.get("sell_fraction_pct"))],
             "hits": [{"no": r["no"], "avg": r["avg"], "target": r["target"], "pending": (((state or {}).get("picks") or {}).get(pick_key(r["avg"])) or {}).get("status") == "pending"}
-                     for r in rows if r["reached"] and not r["complete"]],                       # v2.4.0: 목표에 닿은 스나이퍼 층 (자동 매도 없음 — 선택 대기 중이면 pending)
+                     for r in rows if r["reached"] and not r["complete"]],                       # v2.4.0: 목표에 닿은 스나이퍼 F (자동 매도 없음 — 선택 대기 중이면 pending)
             "empty": [dict(e) for e in (st.get("empty") or []) if isinstance(e, dict)],
             "sub": (buy.get("sub") or {}).get("info"), "sub_buy": bool(buy["order"] and buy["order"].get("sub")), "box_seed": TW.box_seed(s), "portion_usd": TW.portion_usd(s), "sub_portion_usd": TW.sub_portion_usd(s),
             "fill": next(({"no": r["no"], "label": r["label"], "ratio": round(r["cost"] / r["tgt_usd"], 4) if r["tgt_usd"] else 0.0, "cost": r["cost"], "target": r["tgt_usd"], "rebuy": r["rebuy"]}
-                          for r in sorted(rows, key=lambda r: r["id"]) if not r["complete"]), None),      # 채우는 층(위에서부터 첫 미완성 층)의 채움률 = 원가 ÷ 층 시드 (총 시드가 아니라 층 시드 기준)
+                          for r in sorted(rows, key=lambda r: r["id"]) if not r["complete"]), None),      # 채우는 F(위에서부터 첫 미완성 F)의 채움률 = 원가 ÷ F 완성 기준 금액 (총 시드가 아니라 F 완성 기준 금액 기준)
             "tp_l1": tp_pcts(s)[0], "tp_upper": tp_pcts(s)[1], "attack_id": attack_id(st), "rsi": rsi, "usd_cash": round(_f(usd_cash), 2),
             "need_usd": round(buy["order"]["qty"] * buy["order"]["price"], 2) if buy["order"] else 0.0}
     return {"orders": orders, "notes": snotes + tnotes + buy["notes"], "info": info}
@@ -589,7 +590,7 @@ def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, 
 # ---------------------------------------------------------------- 판 33 탑쌓기 매매 모드
 def plan_tower_buy(s, st, qty, principal, price, fx, usd_cash, open_px):
     """v2.9.0 6차 판 33 탑쌓기 매매: 스나이퍼 신호 대신 탑쌓기 매수 계획(TW.make_plan 의 매수 쪽)을 그대로 씀 — 시초가(open_px)와 가장 가까운 칸부터 간격(tower_buy_gap_usd, 기본 5칸·1달러씩)만큼 아래로,
-    채우는 F 의 시드(tower_floor_usd)를 칸마다 같은 금액으로 나눔. 매도는 안 만듦(sellable=0 — 매도는 기존 plan_sells·tower_sells 가 함). 시드를 다 채우면 F 완성 → 다음 날 계획이 다음 F 를 만듦. 계산만 (상태 안 바꿈)
+    채우는 F 의 완성 기준 금액(tower_floor_usd)을 칸마다 같은 금액으로 나눔. 매도는 안 만듦(sellable=0 — 매도는 기존 plan_sells·tower_sells 가 함). 시드를 다 채우면 F 완성 → 다음 날 계획이 다음 F 를 만듦. 계산만 (상태 안 바꿈)
     → {"orders": [BUY 주문...], "notes": [...]}"""
     pl = TW.make_plan(s, st, int(_f(qty)), _f(principal), _f(price), _f(fx), _f(usd_cash), 0, open_px=_f(open_px))
     buys = [dict(o, mode="tower") for o in pl["orders"] if o.get("side") == "BUY"]
@@ -598,7 +599,7 @@ def plan_tower_buy(s, st, qty, principal, price, fx, usd_cash, open_px):
 
 # ---------------------------------------------------------------- 체결 뒤 기준가 갱신
 def note_fills(state, done, now_iso=""):
-    """체결 반영 결과(done = apply_tower_fills 가 돌려준 목록)로 기준가를 갱신: 매도 체결 → 스나이퍼 매도는 그 체결 평균가, 탑 매도(mode tower)는 매도한 층의 평단 (직전 익절가, 'exit'), 매수(본) 체결 → 그 체결 평균가('buy').
+    """체결 반영 결과(done = apply_tower_fills 가 돌려준 목록)로 기준가를 갱신: 매도 체결 → 스나이퍼 매도는 그 체결 평균가, 탑 매도(mode tower)는 매도한 F의 평단 (직전 익절가, 'exit'), 매수(본) 체결 → 그 체결 평균가('buy').
     v2.5.0: 서브 그리드 매수(o["sub"]) 체결은 기준가를 안 바꾸고 서브 버킷에만 넣음(last_sub_day). 본 매수·매도 체결은 last_main_day 를 오늘로(서브 가동 '5영업일 무매매' 기준).
     done 은 반영한 순서 그대로라 마지막 체결이 기준이 됨. 바뀌었으면 True"""
     changed = False
@@ -626,7 +627,7 @@ def note_fills(state, done, now_iso=""):
             sub["last_main_day"] = day
             state["sub"] = sub
         if a.get("side") == "SELL" and o.get("mode") == "tower" and _f(o.get("floor_avg")) > 0:
-            state["anchor"] = round(_f(o.get("floor_avg")), 4)           # v2.3.0 판 23: 탑 매도 체결 → 매도한 층의 평단(주문에 적힌 매도 시점 층 평단)이 기준가
+            state["anchor"] = round(_f(o.get("floor_avg")), 4)           # v2.3.0 판 23: 탑 매도 체결 → 매도한 F의 평단(주문에 적힌 매도 시점 F 평단)이 기준가
         else:
             state["anchor"] = round(da / dq, 4)                          # 스나이퍼 매도·매수 체결은 그대로: 그 체결 평균가
         state["anchor_kind"] = "exit" if a.get("side") == "SELL" else "buy"
@@ -660,7 +661,7 @@ def sync_sub(state, held_qty):
 
 
 def seed_main_day(state, st, today):
-    """판 30 B4: 층이 있는데 본 그리드 마지막 매매일(last_main_day)이 한 번도 안 찍혔으면(봇을 층 보유 중에 처음 켠 경우 등) 오늘로 찍어 '5영업일 무매매' 시계를 시작함 — 안 찍으면 영영 0일이라 서브가 안 깸. 바로 깨우지는 않음. 바뀌었으면 True"""
+    """판 30 B4: F가 있는데 본 그리드 마지막 매매일(last_main_day)이 한 번도 안 찍혔으면(봇을 F 보유 중에 처음 켠 경우 등) 오늘로 찍어 '5영업일 무매매' 시계를 시작함 — 안 찍으면 영영 0일이라 서브가 안 깸. 바로 깨우지는 않음. 바뀌었으면 True"""
     if not active_floors(st) or not today:
         return False
     sub = SG.norm(state.get("sub"))
@@ -672,15 +673,15 @@ def seed_main_day(state, st, today):
 
 
 def trigger_lines(s, st, state, now_et=None):
-    """체결 알림·상황판용 '다음 매매' 글자: 층별 다음 매도(목표가·수량) + 다음 매수 타점(눌림/돌파·기준·상한). 상태는 안 바꿈"""
+    """체결 알림·상황판용 '다음 매매' 글자: F별 다음 매도(목표가·수량) + 다음 매수 타점(눌림/돌파·기준·상한). 상태는 안 바꿈"""
     lines = []
     tpp, tfr = _f((s or {}).get("sell_profit_pct")), _f((s or {}).get("sell_fraction_pct"))
     for r in sorted(sell_rows(st, s, 0.0), key=lambda r: r["no"])[:6]:
-        if r["complete"]:              # v2.3.0 완성 층 = 탑 매도 (층 평단 +sell_profit_pct% 에 보유의 sell_fraction_pct%)
+        if r["complete"]:              # v2.3.0 완성 F = 탑 매도 (F 평단 +sell_profit_pct% 에 보유의 sell_fraction_pct%)
             sq = TW.floor_sell_qty(r["qty"], tfr)
-            lines.append(f"다음 매도: {r['label']}(완성·탑) 평단 ${r['avg']:.2f} → 목표가 ${ceil2(r['avg'] * (1 + tpp / 100.0)):.2f} 에 " + (f"{sq}주 ({tfr:g}%)" if sq >= 1 else "자동 매도 없음 (1주 층)") + f" (+{tpp:g}%)")
+            lines.append(f"다음 매도: {r['label']}(완성·탑) 평단 ${r['avg']:.2f} → 목표가 ${ceil2(r['avg'] * (1 + tpp / 100.0)):.2f} 에 " + (f"{sq}주 ({tfr:g}%)" if sq >= 1 else "자동 매도 없음 (1주 F)") + f" (+{tpp:g}%)")
             continue
-        bxs = r.get("boxes") or []                                  # v2.6.0: 미완성 층은 버킷별 다음 매도 (버킷 하나씩 전량)
+        bxs = r.get("boxes") or []                                  # v2.6.0: 미완성 F는 버킷별 다음 매도 (버킷 하나씩 전량)
         for b in bxs[:4]:
             lines.append(f"다음 매도: {r['label']} 공사중 버킷 평단 ${b['avg']:.2f} → 목표가 ${b['target']:.2f} 에 {b['qty']}주 전량 (+{b['pct']:g}%{' · 졸업 매도' if b.get('kind') == 'grad' else ''}{' · 공격 버킷' if b['role'] == 'L1' else ''})")
         if len(bxs) > 4:
@@ -721,7 +722,7 @@ def save_state(cfg, state):
 
 
 def gauge(complete_cost, partial_cost, cash):
-    """시드 배분 10칸 게이지 (참조 quant_engine 게이지 규칙: 🟦 완성 층 · 🟨 채우는 중인 층 · 🟩 남은 시드(현금)). 있는 영역은 최소 1칸, 합계 10칸 → (막대, 완성%, 진행%, 현금%)"""
+    """시드 배분 10칸 게이지 (참조 quant_engine 게이지 규칙: 🟦 완성 F · 🟨 채우는 중인 F · 🟩 남은 시드(현금)). 있는 영역은 최소 1칸, 합계 10칸 → (막대, 완성%, 진행%, 현금%)"""
     a, b, c = max(0.0, _f(complete_cost)), max(0.0, _f(partial_cost)), max(0.0, _f(cash))
     tot = a + b + c
     if tot <= 0:

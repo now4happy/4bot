@@ -11,9 +11,9 @@
 # v2.4.0 (2026-11-21, 판 24): ① 장부 바로잡기(run_ledger_migration, 일회성: 메리츠 실제 잔고 684주일 때만 → 장부 684주 · 두 층 373주 $40.29 / 311주 $48.14 · 잠금 · 공사중(빈 층), 주문·실제 잔고 안 건드림, 마커 파일로 한 번만, 이전 날 늦은 체결은 건너뜀)
 #   ② 스나이퍼 목표가에 닿으면 자동 매도 대신 텔레그램 버튼(스나이퍼/탑쌓기) 선택 (run_sniper_tick·apply_pick) ③ 잠긴 층은 탑 매도만 ④ 지하층부터 스나이퍼 매수. 업데이트 알림 판 번호는 bot_office/bot_updater.py
 # v2.3.0 수정1 (2026-11-21, 판 23 수정1 — 버전 그대로): 하루 매수 층 수 제한(buy_layer_limit_hit, 기존 설정 tower_max_buy_layers_per_day) · B3 미체결 조회 · B7 모의 스나이퍼(run_sniper_dry) · S3 사이클 최고 층수 잠금 · S1 16:10 뒤 체결 다음 날 반영(run_late_fills) · '목표 도달' 라벨 · 죽은 코드 defer_sell·limit_morning_sells 제거
-# v2.3.0 (2026-11-21, 판 23 하이브리드 — 스나이퍼 매수 + 탑 매도): 모드 선택(trading_mode) 삭제, 항상 하이브리드. 사기=스나이퍼(눌림·돌파)만, 층 시드(기본 $15,000)에 닿은 층은 '완성'이라 탑 매도(층 평단 +10% → 50%), 미완성 층(재매수 대기 포함)은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·층 전량).
+# v2.3.0 (2026-11-21, 판 23 하이브리드 — 스나이퍼 매수 + 탑 매도): 모드 선택(trading_mode) 삭제, 항상 하이브리드. 사기=스나이퍼(눌림·돌파)만, F 완성 기준 금액(기본 $15,000)에 닿은 층은 '완성'이라 탑 매도(층 평단 +10% → 50%), 미완성 층(재매수 대기 포함)은 스나이퍼 매도(1층 +1.5%·상단 +1.0%·층 전량).
 #   총 시드·층 수 한도 없음(total_krw 선택). 새 버킷·층은 스나이퍼 신호가 뜰 때 만듦 (v2.7.0 판 27: 층 간격 규칙 삭제 — 간격은 내부 고정값 GAP_USD=5로 칸 만들기에만 씀). 탑 매도 체결도 스나이퍼 기준가(직전 익절) 갱신. 같은 날 한 층에 매도 주문이 이미 있었으면(탑 매도 일부 체결 뒤 남은 몫 포함) 그 층은 그날 다시 안 팖.
-#   환전: 아침 = 층 시드 × tower_max_buy_layers_per_day (휴장 전날은 × 회차), 장중 매수 신호 때 달러 부족하면 자동환전(실시간 환전 시간만), 마감 60분 전 달러부족 알림 유지. --check 환전 표시 고침(부족 달러 shortfall_usd). 계좌·종목·API·스나이퍼 신호 숫자·매도 %·16:10 동기화·장부=잔고 정지·중복 체결 방지·주문 시간은 안 바꿈.
+#   환전: 아침 = F 완성 기준 금액 × tower_max_buy_layers_per_day (휴장 전날은 × 회차), 장중 매수 신호 때 달러 부족하면 자동환전(실시간 환전 시간만), 마감 60분 전 달러부족 알림 유지. --check 환전 표시 고침(부족 달러 shortfall_usd). 계좌·종목·API·스나이퍼 신호 숫자·매도 %·16:10 동기화·장부=잔고 정지·중복 체결 방지·주문 시간은 안 바꿈.
 # v2.2.20 (2026-11-21, 판 22 메리츠 3번 계좌 SOXL 듀얼 모드 — 스나이퍼 + 탑쌓기): 설정 trading_mode(tower 기본 | sniper). 탑쌓기는 v2.2.18 그대로 (run_order_day·run_intraday_sell·run_sync·16:10 동기화·장부=잔고 정지 규칙 안 바꿈).
 #   스나이퍼(새 파일 sniper_mode.py): loop 가 run_sniper_tick(30초 간격, 정규장 09:30~16:00 ET 매수 · 정규장+장후 16:10 까지 매도) 를 부름. 하루 기록 파일(orders_<날짜>.json)을 탑쌓기와 같이 씀 — 스나이퍼 매도·스나이퍼 매수 체결은 확인 즉시 장부·층에 반영, 탑쌓기 매수는 그대로 run_sync 가 반영.
 #   build_plan·plan_head·next_trade_lines·strategy_ko·cmd_check 는 모드를 따라감. 모드를 바꾸면 다음 판단부터 적용(이미 낸 주문은 안 건드림). 같은 날 스나이퍼 → 탑쌓기로 바꾸면 run_order_day 가 스나이퍼 기록에 이어 탑쌓기 주문을 냄(sniper_day·tower_ordered 표시).
@@ -263,7 +263,7 @@ def strategy_ko(s=None):
 
 
 def tower_state_for(cfg, qty, principal, s=None):
-    """탑쌓기 층 상태 → (상태, 파일에 있었는지). 파일이 없으면 지금 보유분(장부의 주식수·원금, 실행 시 읽은 값)을 1층으로 만든 상태를 돌려줌 (저장은 안 함)"""
+    """탑쌓기 층 상태 → (상태, 파일에 있었는지). 파일이 없으면 지금 보유분(장부의 주식수·원금, 실행 시 읽은 값)을 1F로 만든 상태를 돌려줌 (저장은 안 함)"""
     d = cfg._load_json(TOWER_FILE, None)
     if isinstance(d, dict) and isinstance(d.get("floors"), list):
         return TW.ensure_state(d), True          # v2.2.6: 예전 상태(sell_block)를 층별 rebuy_pending 으로 옮김·주문번호 맵 준비
@@ -280,14 +280,14 @@ def build_plan(s, cfg, price, fx, cash, qty, principal, sellable, ignore_auto_fx
 
 
 def hybrid_fx_plan(s, cash, rounds=1):
-    """v2.3.0 환전 계산용 계획 모양 {"orders","notes","info"}: 필요 달러 = 층 시드 × 하루 매수 층 수(tower_max_buy_layers_per_day, 기본 1) × rounds (휴장 전날은 1 + extra 회차).
-    부족 달러 = max(0, 필요 − 달러 예수금) (info["shortfall_usd"] — auto_fx·알림이 읽는 키). 계산만 함 (시세·층 상태 안 읽음)"""
+    """v2.3.0 환전 계산용 계획 모양 {"orders","notes","info"}: 필요 달러 = F 완성 기준 금액 × 하루 매수 F 수(tower_max_buy_layers_per_day, 기본 1) × rounds (휴장 전날은 1 + extra 회차).
+    부족 달러 = max(0, 필요 − 달러 예수금) (info["shortfall_usd"] — auto_fx·알림이 읽는 키). 계산만 함 (시세·F 상태 안 읽음)"""
     fu, _n, _g = TW.params(s)
     layers = TW.buy_layers(s)
     rounds = max(1, int(rounds))
     need = round(fu * layers * rounds, 2)
     cash = float(cash or 0)
-    basis = f"층 시드 ${fu:,.0f} × 하루 매수 층 수 {layers}" + (f" × {rounds}회차" if rounds > 1 else "") + f" = ${need:,.0f}"
+    basis = f"F 완성 기준 금액 ${fu:,.0f} × 하루 매수 F 수 {layers}" + (f" × {rounds}회차" if rounds > 1 else "") + f" = ${need:,.0f}"
     return {"orders": [{"side": "BUY", "type": "LIMIT", "qty": 0, "price": 0.0, "desc": basis}], "notes": [], "fx_basis": basis,
             "info": {"mode": SN.MODE_SNIPER, "need_usd": need, "usd_cash": round(cash, 2), "shortfall_usd": round(max(0.0, need - cash), 2), "auto_fx": True,
                      "floor_usd": fu, "layers": layers, "rounds": rounds}}
@@ -413,7 +413,7 @@ def fmt_orders(orders):
 
 
 def _tower_progress(tw, s, fid=None):
-    """v2.2.15 판 19: (탑 줄, 지금 채우는 층 진행 글자) — 상황판과 같은 tower_strategy 함수를 그대로 부름 (비율 새로 계산 안 함). v2.2.17: fid 를 주면 그 층의 진행 글자 (없으면 tw["active"] = 첫 층).
+    """v2.2.15 판 19: (탑 줄, 지금 채우는 F 진행 글자) — 상황판과 같은 tower_strategy 함수를 그대로 부름 (비율 새로 계산 안 함). v2.2.17: fid 를 주면 그 F의 진행 글자 (없으면 tw["active"] = 첫 F).
     plan['info']['tower']['floors'] 를 view_lines 가 읽는 모양(id·qty·cost·target·done)으로 맞춰 넘김. 실패하면 ('', '') — 표시만 빠지고 주문·알림은 그대로"""
     try:
         view = [{"id": f["id"], "qty": f["qty"], "cost": f["cost"], "target": f.get("target") or tw.get("floor_usd"), "done": bool(f.get("complete"))}
@@ -430,7 +430,7 @@ def _tower_progress(tw, s, fid=None):
         return "", ""
 
 
-ANCHOR_KO = {"exit": "직전 매도가", "buy": "직전 매수가", "avg": "낮은 층 평단", "first": "첫 기준가(설정)"}      # v2.3.0 B8: 영어 종류 이름을 화면에 그대로 안 보임
+ANCHOR_KO = {"exit": "직전 매도가", "buy": "직전 매수가", "avg": "낮은 F 평단", "first": "첫 기준가(설정)"}      # v2.3.0 B8: 영어 종류 이름을 화면에 그대로 안 보임
 
 
 def sniper_plan_head(plan, s):
@@ -438,9 +438,9 @@ def sniper_plan_head(plan, s):
     i, sg = plan["info"], plan["info"]["signal"]
     pl = f" ({i['profit_pct']:+.2f}%)" if i.get("profit_pct") is not None else ""
     tp = i.get("tower_pct") or [0.0, 0.0]
-    head = (f"하이브리드 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {i['n_layers']}개 · 스나이퍼 익절(미완성 층) 1층 +{i['tp_l1']:g}% · 상단층 +{i['tp_upper']:g}% · 탑 매도(완성 층) +{tp[0]:g}% → {tp[1]:g}%\n"
-            + ("매도 목표 " + " · ".join(f"{r['no']}층{'(완성·탑)' if r.get('complete') else ''} ${(SN.ceil2(r['avg'] * (1 + tp[0] / 100.0)) if r.get('complete') else r['target']):.2f}" + (" (공격 층)" if r["role"] == "L1" and not r.get("complete") else "") for r in sorted(i["sells"], key=lambda r: r["no"])) if i.get("sells") else "매도 목표 없음 (보유 층 없음)"))
-    if i.get("boxes"):                                                       # v2.6.0 버킷별 매도 목표 (미완성 층의 버킷마다 자기 평단 기준)
+    head = (f"하이브리드 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · F {i['n_layers']}개 · 스나이퍼 익절(미완성 F) 1층 +{i['tp_l1']:g}% · 상단층 +{i['tp_upper']:g}% · 탑 매도(완성 F) +{tp[0]:g}% → {tp[1]:g}%\n"
+            + ("매도 목표 " + " · ".join(f"{r['no']}F{'(완성·탑)' if r.get('complete') else ''} ${(SN.ceil2(r['avg'] * (1 + tp[0] / 100.0)) if r.get('complete') else r['target']):.2f}" + (" (공격 층)" if r["role"] == "L1" and not r.get("complete") else "") for r in sorted(i["sells"], key=lambda r: r["no"])) if i.get("sells") else "매도 목표 없음 (보유 F 없음)"))
+    if i.get("boxes"):                                                       # v2.6.0 버킷별 매도 목표 (미완성 F의 버킷마다 자기 평단 기준)
         head += "\n버킷별 매도 목표 " + " · ".join(f"{b['label']} ${b['avg']:.2f}→${b['target']:.2f} ({b['qty']}주{'·공격' if b['role'] == 'L1' else ''}{'·졸업 매도' if b.get('kind') == 'grad' else ''})" for b in i["boxes"][:6]) + (f" · 그 위 {len(i['boxes']) - 6}개" if len(i["boxes"]) > 6 else "")
     head += f"\n매수 신호: {SN.SIGNAL_KO.get(sg['signal_type'], sg['signal_type'])}"
     if sg.get("anchor"):
@@ -450,7 +450,7 @@ def sniper_plan_head(plan, s):
     head += " · RSI " + (f"{i['rsi']:.1f}" if i.get("rsi") is not None else "모으는 중")
     fl = i.get("fill")
     if fl:
-        head += f"\n채우는 층 {fl['no']}층{' (재매수 대기)' if fl['rebuy'] else ''}: 채움 {fl['ratio'] * 100:.0f}% (원가 ${fl['cost']:,.0f} / 층 시드 ${fl['target']:,.0f})"
+        head += f"\n채우는 F {fl['no']}F{' (재매수 대기)' if fl['rebuy'] else ''}: 채움 {fl['ratio'] * 100:.0f}% (원가 ${fl['cost']:,.0f} / F 완성 기준 금액 ${fl['target']:,.0f})"
     head += f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['need_usd'] - i['usd_cash']):,}" if i['need_usd'] > i['usd_cash'] + 1e-9 else "")
     return head
 
@@ -462,31 +462,43 @@ def plan_head(plan, s):
     pl = f" ({i['profit_pct']:+.2f}%)" if i.get("profit_pct") is not None else ""
     tw = i.get("tower") or {}
     fl = tw.get("floors") or []
-    top_line, act_prog = _tower_progress(tw, s)      # v2.2.15 판 19: 탑 진행률 (맨 앞 줄 + 지금 채우는 층 뒤)
-    layers = tw.get("layers") or ([{"id": tw["active"], "new_floor": tw.get("new_floor"), "cells": tw.get("cells")}] if tw.get("active") else [])   # v2.2.17: 오늘 사는 층 전부 (예전 모양 info 도 읽음)
-    act_txt = " + ".join(f"{ly['id']}층{' (새 층)' if ly.get('new_floor') else ''}{act_prog if ly['id'] == tw.get('active') else _tower_progress(tw, s, ly['id'])[1]}"
+    _rank = {int(f.get("id")): n + 1 for n, f in enumerate(sorted([f for f in fl if int(f.get("qty") or 0) > 0], key=lambda f: (float(f.get("avg") or 0), -int(f.get("id") or 0))))}
+
+    def _flab(fid, new=False):
+        if new:
+            return "새 F"
+        f = next((x for x in fl if int(x.get("id")) == int(fid)), None)
+        if f is None:
+            return f"{fid}F"
+        no = _rank.get(int(fid))
+        base = int(math.floor(float(f.get("avg") or 0) + 1e-9))
+        return f"{base}F{no}" if no else f"{base}F"
+
+    top_line, act_prog = _tower_progress(tw, s)      # v2.2.15 판 19: 탑 진행률 (맨 앞 줄 + 지금 채우는 F 뒤)
+    layers = tw.get("layers") or ([{"id": tw["active"], "new_floor": tw.get("new_floor"), "cells": tw.get("cells")}] if tw.get("active") else [])   # v2.2.17: 오늘 사는 F 전부 (예전 모양 info 도 읽음)
+    act_txt = " + ".join(f"{_flab(ly['id'], ly.get('new_floor'))}{act_prog if ly['id'] == tw.get('active') else _tower_progress(tw, s, ly['id'])[1]}"
                          for ly in layers) or "없음"
-    head = (top_line + f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · 층 {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 층 "
+    head = (top_line + f"탑쌓기 · 현재가 ${i['price']:.2f} · 평단 ${i['avg']:.2f}{pl} · F {len(fl)}개 (완성 {sum(1 for f in fl if f['complete'])}) · 지금 채우는 F "
             + act_txt + "\n"
-            + ("매도 목표 " + " · ".join(f"{r['id']}층 ${r['target']:.2f}" for r in i["sells"]) if i.get("sells") else f"매도 목표 ${i['sell_target']:.2f}")
-            + (f" · 칸당 " + " / ".join(f"{ly['id']}층 ${ly.get('unit_usd', 0):,.0f}" for ly in tw["layers"]) if len(tw.get("layers") or []) > 1 else f" · 칸당 ${i.get('unit_usd', 0):,.0f}")   # v2.2.17: 여러 층이면 층마다
+            + ("매도 목표 " + " · ".join(f"{_flab(r['id'])} ${r['target']:.2f}" for r in i["sells"]) if i.get("sells") else f"매도 목표 ${i['sell_target']:.2f}")
+            + (f" · 칸당 " + " / ".join(f"{_flab(ly['id'], ly.get('new_floor'))} ${ly.get('unit_usd', 0):,.0f}" for ly in tw["layers"]) if len(tw.get("layers") or []) > 1 else f" · 칸당 ${i.get('unit_usd', 0):,.0f}")   # v2.2.17: 여러 F이면 F마다
             + (f" · 환율 {i['fx']:,.0f}" if i.get("fx") else ""))
-    for ly in layers:   # v2.2.3: 다음 회차 가격별 배정 (v2.2.17: 오늘 사는 층마다 floor_id 를 적어 1층·2층이 같이 나가는 게 보이게)
+    for ly in layers:   # v2.2.3: 다음 회차 가격별 배정 (v2.2.17: 오늘 사는 F마다 floor_id 를 적어 1F·2F가 같이 나가는 게 보이게)
         cells = ly.get("cells") or []
         if cells:
-            head += "\n다음 회차" + (f" {ly['id']}층" if ly.get("id") else "") + " 가격별 배정:"
+            head += "\n다음 회차" + (f" {_flab(ly['id'], ly.get('new_floor'))}" if ly.get("id") else "") + " 가격별 배정:"
             for c in cells:
                 head += f"\n${c['price']:.2f} → ${c['amount']:,.0f} ({c['qty']}주)"
     oc = i.get("open_cap") or {}
     if oc.get("open") and oc.get("first"):      # v2.2.14: 시초가가 정해진 뒤에만 (정해지기 전엔 계획 배정 그대로, 시초가를 지어내 보이지 않음)
         if len(tw.get("layers") or []) <= 1:
             head += f"\n시초가 ${oc['open']:.2f} · 첫 칸 ${oc['first']:.2f}" + (" (상한 적용)" if oc.get("applied") else " (상한 안 걸림 · 계획 그대로)")
-        else:                                   # v2.2.17: 여러 층이면 층마다 첫 칸
+        else:                                   # v2.2.17: 여러 F이면 F마다 첫 칸
             head += f"\n시초가 ${oc['open']:.2f}" + "".join(
-                f" · {ly['id']}층 첫 칸 ${ly['open_cap']['first']:.2f}" + (" (상한 적용)" if ly["open_cap"].get("applied") else " (상한 안 걸림 · 계획 그대로)")
+                f" · {_flab(ly['id'], ly.get('new_floor'))} 첫 칸 ${ly['open_cap']['first']:.2f}" + (" (상한 적용)" if ly["open_cap"].get("applied") else " (상한 안 걸림 · 계획 그대로)")
                 for ly in tw["layers"] if (ly.get("open_cap") or {}).get("first"))
     if tw.get("new_floor_blocked"):
-        head += "\n새 층 못 만듦: " + tw["new_floor_blocked"]["text"] + " — 풀이님 확인 필요"
+        head += "\n새 F 못 만듦: " + tw["new_floor_blocked"]["text"] + " — 풀이님 확인 필요"
     head += (f"\n필요 달러 ${i['need_usd']:,.0f} · 예수금 ${i['usd_cash']:,.0f}" + (f" · 부족 ${math.ceil(i['shortfall_usd']):,}" if i.get("shortfall_usd") else "")
              if i.get("need_usd") is not None else "")
     return head
@@ -641,12 +653,12 @@ def barbell_tick(s, api, note):
 
 
 def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sniper_only=False):
-    """체결을 층 상태(tst)와 장부에 반영 → [{"o","side","dq","da","cq","closed"}] (실제로 새로 반영한 것만).
-    - 순서: TW.sort_fills (시간순, 시각 필드가 없으면 매도 먼저, 새 층 계획 매수는 매도 뒤) — 장부도 같은 순서로 반영 (버그 1)
+    """체결을 F 상태(tst)와 장부에 반영 → [{"o","side","dq","da","cq","closed"}] (실제로 새로 반영한 것만).
+    - 순서: TW.sort_fills (시간순, 시각 필드가 없으면 매도 먼저, 새 F 계획 매수는 매도 뒤) — 장부도 같은 순서로 반영 (버그 1)
     - 두 번 반영 방지: 주문번호별 누적 체결 중 늘어난 몫만 (TW.apply_fill_delta). 장부는 exec_id(날짜_주문번호[_누적수량])로도 막음 (버그 2)
     - 한 묶음 저장: 항목마다 장부(원금·수량 → 거래 기록)에 쓰고, 끝에 층 상태를 저장. 중간에 멈춰도 다시 부르면 장부는 exec_id 로, 층은 주문번호 맵으로 각각 빠진 몫만 채워 맞춰짐
-    - 매도는 층별로 줄이고, 장부 원금은 그 층 원가만큼만 줄임 (cost_removed)
-    persist=False 면 층 상태(메모리)만 바꾸고 장부·파일은 안 건드림 (장중 평단 판단용)
+    - 매도는 F별로 줄이고, 장부 원금은 그 F 원가만큼만 줄임 (cost_removed)
+    persist=False 면 F 상태(메모리)만 바꾸고 장부·파일은 안 건드림 (장중 평단 판단용)
     v2.2.20: sniper_only=True 면 매도와 스나이퍼 매수(kind buy_sniper)만 반영 (탑쌓기 매수는 run_sync 몫). 장부에 쓴 체결이 있으면 스나이퍼 기준가(직전 익절·매수가)도 갱신"""
     gap, start = TW.params(s)[2], float(s.get("tower_floor1_start_usd") or 0)
     done = []
@@ -683,9 +695,9 @@ def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sni
 
 
 def next_trade_lines(s, st):
-    """체결 알림에 붙는 '다음 매매': 층별 다음 매도(목표가·수량)와 다음에 살 칸. 상태(st)는 바꾸지 않음. 글자 주의: notifier.to_korean 이 '= $'·'필요 $' 같은 앞말 뒤 금액의 소수점을 지우므로
+    """체결 알림에 붙는 '다음 매매': F별 다음 매도(목표가·수량)와 다음에 살 칸. 상태(st)는 바꾸지 않음. 글자 주의: notifier.to_korean 이 '= $'·'필요 $' 같은 앞말 뒤 금액의 소수점을 지우므로
     가격 앞에는 '평단'·'목표가'·'→' 만 씀 (금액은 어차피 정수)"""
-    try:                                                      # v2.3.0: 하이브리드 다음 매매 (층별 목표가 — 완성 층은 탑 매도 + 눌림·돌파 타점)
+    try:                                                      # v2.3.0: 하이브리드 다음 매매 (F별 목표가 — 완성 F는 탑 매도 + 눌림·돌파 타점)
         return SN.trigger_lines(s, st, SN.load_state(ConfigManager(s)))
     except Exception:
         return ["다음 매매: 계산 못 함"]
@@ -694,25 +706,27 @@ def next_trade_lines(s, st):
     lines = []
     tq, tc = TW.totals(st)
     live = [f for f in TW.top_down(st) if int(f.get("qty") or 0) > 0]
+    nos = SN.sniper_numbers(st)      # 표시용 F 번호 {층 id: 스나이퍼 번호}
     for f in live[:4]:
         fa = TW.floor_avg(f)
-        wait = " (이 층 재매수가 체결된 뒤부터)" if f.get("rebuy_pending") and not s.get("allow_consecutive_sell") else ""
+        wait = " (이 F 재매수가 체결된 뒤부터)" if f.get("rebuy_pending") and not s.get("allow_consecutive_sell") else ""
         sq = TW.floor_sell_qty(int(f['qty']), frac)
         if sq < 1:
-            lines.append(f"다음 매도: {int(f['id'])}층 평단 ${fa:.2f} · 보유 {int(f['qty'])}주 — 자동 매도 제외 (직접 매도)")
+            lines.append(f"다음 매도: {nos.get(int(f['id']), int(f['id']))}F 평단 ${fa:.2f} · 보유 {int(f['qty'])}주 — 자동 매도 제외 (직접 매도)")
         else:
-            lines.append(f"다음 매도: {int(f['id'])}층 평단 ${fa:.2f} → 목표가 ${ceil2(fa * (1 + pct / 100.0)):.2f} 에 {sq}주 ({pct:g}%){wait}")
+            lines.append(f"다음 매도: {nos.get(int(f['id']), int(f['id']))}F 평단 ${fa:.2f} → 목표가 ${ceil2(fa * (1 + pct / 100.0)):.2f} 에 {sq}주 ({pct:g}%){wait}")
     if len(live) > 4:
-        lines.append(f"다음 매도: 그 위·아래 {len(live) - 4}개 층은 같은 규칙")
+        lines.append(f"다음 매도: 그 위·아래 {len(live) - 4}개 F는 같은 규칙")
     try:
         pl = TW.make_plan(dict(s, auto_fx_enabled=True), st, tq, tc, 0.0, 1.0, 1e12, tq)
         tw = (pl.get("info") or {}).get("tower") or {}
         lys = tw.get("layers") or ([{"id": tw["active"], "new_floor": tw.get("new_floor"), "cells": tw.get("cells")}] if tw.get("active") else [])
-        shown = [ly for ly in lys if ly.get("cells")]   # v2.2.8: 층의 안 산 칸 전부 표시 (v2.2.17: 하루 최대 N_buy 층 — 층마다 한 줄)
+        shown = [ly for ly in lys if ly.get("cells")]   # v2.2.8: F의 안 산 칸 전부 표시 (v2.2.17: 하루 최대 N_buy F — F마다 한 줄)
         for ly in shown:
-            lines.append(f"다음 매수: {ly['id']}층{' (새 층)' if ly.get('new_floor') else ''} " + " · ".join(f"${c['price']:.2f} → ${c['amount']:,.0f} ({c['qty']}주)" for c in ly["cells"]))
+            lab = "새 F" if ly.get("new_floor") else f"{nos.get(int(ly['id']), ly['id'])}F"
+            lines.append(f"다음 매수: {lab} " + " · ".join(f"${c['price']:.2f} → ${c['amount']:,.0f} ({c['qty']}주)" for c in ly["cells"]))
         if not shown:
-            lines.append("다음 매수: 없음 (층을 다 채웠거나 한도에 닿음)")
+            lines.append("다음 매수: 없음 (F를 다 채웠거나 한도에 닿음)")
     except Exception:
         lines.append("다음 매수: 계산 못 함")
     return lines
@@ -779,8 +793,8 @@ def pick_sells(reached, left_n):
 
 def run_intraday_sell(s, api, note, allow_new_sells=True):
     """당일 확인 (실거래만, loop 가 주문 시간대~체결 반영 시각 전에 부름). 오늘 주문 기록이 있고 체결 반영 전인 동안 intraday_sell_check_sec(기본 30초)마다:
-    ① (v2.2.6, 탑쌓기) 오늘 매도 체결을 장부와 층에 즉시 반영 ② 체결 알림 (이전 알림 이후 늘어난 수량) ③ 오늘 체결된 매수까지 반영한 층 평단의 +목표% 에 현재가가 닿은 층마다 그 층의 매도 비중을 지정가로 매도.
-    매수는 안 함 · 층당 하루 매도 1건 · 하루 매도 층 수는 최대 N_sell (v2.2.17, 설정 tower_max_sell_layers_per_day 기본 1) · 매수 체결의 장부 반영은 run_sync (매도 반영 뒤에 새 층 매수를 배정해야 해서). allow_new_sells=False 면 새 매도 주문은 안 내고 ①②만 → 상태 글자"""
+    ① (v2.2.6, 탑쌓기) 오늘 매도 체결을 장부와 F에 즉시 반영 ② 체결 알림 (이전 알림 이후 늘어난 수량) ③ 오늘 체결된 매수까지 반영한 F 평단의 +목표% 에 현재가가 닿은 F마다 그 F의 매도 비중을 지정가로 매도.
+    매수는 안 함 · F당 하루 매도 1건 · 하루 매도 F 수는 최대 N_sell (v2.2.17, 설정 tower_max_sell_layers_per_day 기본 1) · 매수 체결의 장부 반영은 run_sync (매도 반영 뒤에 새 F 매수를 배정해야 해서). allow_new_sells=False 면 새 매도 주문은 안 내고 ①②만 → 상태 글자"""
     if s.get("dry_run", True):
         return "모의"
     if not intraday_on(s):
@@ -814,7 +828,7 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
     st, applied_now = None, []
     st, had = tower_state_for(cfg, int(pos["qty"]) if pos else 0, float(pos["principal"]) if pos else 0.0, s)
     if had and pos:
-        applied_now = apply_tower_fills(s, cfg, d, items, st, only_sells=True)         # 매도 체결 즉시 반영 (장부·층 같이 저장) — 동기화 전에도 층 상태가 맞음
+        applied_now = apply_tower_fills(s, cfg, d, items, st, only_sells=True)         # 매도 체결 즉시 반영 (장부·F 같이 저장) — 동기화 전에도 F 상태가 맞음
         pos = cfg.get_position()
     if (pos is None) or (int(pos["qty"]) <= 0 and not buys):
         return "해당 없음"                            # 기존 보유도 오늘 낼 매수도 없음 → 조회할 것 없음
@@ -822,7 +836,7 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
     q, pr = q0, pr0
     sim = copy.deepcopy(st)
     cands = [cfg.avg_price(pos)] if q0 > 0 else []     # 시세 게이트용: 평균은 구성 값(기존 평단·오늘 실제 체결 단가) 중 가장 낮은 값보다 낮아질 수 없음 → 안 맞게 막는 일 없음
-    # 오늘 체결된 매수를 '메모리 안에서만' 반영 (장부 파일은 그대로) — 새 층 계획 매수는 매도 반영 뒤 1층 빈칸으로 (B1)
+    # 오늘 체결된 매수를 '메모리 안에서만' 반영 (장부 파일은 그대로) — 새 F 계획 매수는 매도 반영 뒤 1층 빈칸으로 (B1)
     gap, start = TW.params(s)[2], float(s.get("tower_floor1_start_usd") or 0)
     for it in TW.sort_fills(sim, [i for i in items if i["side"] == "BUY"]):
         dq, da = TW.apply_fill_delta(sim, it["o"], it["q"], it["amt"], gap, start)
@@ -872,12 +886,13 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
         except (TypeError, ValueError, KeyError, IndexError):
             anon_sold = 1
     # v2.2.17 (풀이님 요청): 하루에 최대 N_sell 층까지 판다 (설정 tower_max_sell_layers_per_day, 기본 1). 같은 확인에서 여러 층이 목표에 닿으면 번호가 큰 층(맨 위 층)부터 오늘 남은 횟수(N_sell − 오늘 이미 판 층 수)까지 팔고 나머지는 알림만 (층마다 하루 한 번).
-    # 오늘 이미 N_sell 층을 팔았으면 그 뒤에 새로 닿은 층은 팔지 않고 알림만 (v2.2.12 '첫 매도 뒤 2차는 알림만' → 횟수 규칙). N_sell 보다 적게 팔았으면 나중에 새로 닿은 층은 남은 횟수 안에서 판다. 연속 매도 금지는 plan 이 층별로 그대로 걸러 줌.
+    # 오늘 이미 N_sell F를 팔았으면 그 뒤에 새로 닿은 F는 팔지 않고 알림만 (v2.2.12 '첫 매도 뒤 2차는 알림만' → 횟수 규칙). N_sell 보다 적게 팔았으면 나중에 새로 닿은 F는 남은 횟수 안에서 판다. 연속 매도 금지는 plan 이 F별로 그대로 걸러 줌.
     n_sell = TW.sell_layers(s)
     sold_n = len(used) + anon_sold
     left_n = max(0, n_sell - sold_n)
     reached_now = [o for o in plan["orders"] if o.get("kind") == "sell" and o.get("reached") and int(o["floor_id"]) not in used]
     sells, held_back = pick_sells(reached_now, left_n)
+    nos = SN.sniper_numbers(sim)      # 표시용 F 번호 {층 id: 스나이퍼 번호} (sim = 오늘 체결 반영 뒤 상태)
     if left_n <= 0 and held_back:
         rows = {int(r["id"]): r for r in info.get("sells") or []}
         for o in held_back:
@@ -885,11 +900,11 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
             r = rows.get(fid, {})
             _warn_once(cfg, mark, m, f"second_sell_{fid}", note,
                        (f"2차 매도 조건이 생겼어요 (알림만 · 주문은 안 냈어요 — 오늘 첫 매도 뒤라 연속 매도는 안 해요)\n" if n_sell == 1 else
-                        f"2차 매도 조건이 생겼어요 (알림만 · 주문은 안 냈어요 — 오늘 이미 {sold_n}층 매도해서 하루 최대 {n_sell}층에 닿았어요)\n")
-                       + f"· {fid}층 평단 ${float(o.get('floor_avg') or 0):.2f} +{pct:g}% → 매도 목표 ${float(o['price']):.2f} · 현재가 ${px:.2f}에서 닿음\n"
+                        f"2차 매도 조건이 생겼어요 (알림만 · 주문은 안 냈어요 — 오늘 이미 {sold_n}F 매도해서 하루 최대 {n_sell}F에 닿았어요)\n")
+                       + f"· {nos.get(fid, fid)}F 평단 ${float(o.get('floor_avg') or 0):.2f} +{pct:g}% → 매도 목표 ${float(o['price']):.2f} · 현재가 ${px:.2f}에서 닿음\n"
                        f"· 매도하게 될 수량 {int(o['qty'])}주 (보유 {int(r.get('qty') or 0)}주)\n"
-                       f"· 오늘 이미 매도한 층: {', '.join(str(i) + '층' for i in sorted(used)) or '확인 못 함'}\n"
-                       f"오늘은 이 층 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요.")
+                       f"· 오늘 이미 매도한 F: {', '.join(str(nos.get(i, i)) + 'F' for i in sorted(used)) or '확인 못 함'}\n"
+                       f"오늘은 이 F 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요.")
         return "2차 매도 조건 알림"
     if not sells and any(o.get("kind") == "sell" and o.get("reached") for o in plan["orders"]):
         return "오늘 매도 주문 있음"
@@ -913,11 +928,11 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
         return "매도 미체결 있음"
     results, errs_all, placed = [], [], []
     rows_by_id = {int(r["id"]): r for r in info.get("sells") or []}
-    for sel in sells:                                                          # v2.2.17: 하루 최대 N_sell 층 (기본 1 — v2.2.13 하루 한 층): sells 는 남은 횟수 이하
+    for sel in sells:                                                          # v2.2.17: 하루 최대 N_sell F (기본 1 — v2.2.13 하루 한 F): sells 는 남은 횟수 이하
         o = dict(sel, desc="당일 매도 · " + sel.get("desc", ""))
         o.pop("reached", None)
-        att = {"at": now_et().isoformat(), "qty": o["qty"], "price": o["price"], "kind": "sell", "floor_id": o.get("floor_id"),
-               "status": "접수 시도 (이 기록이 있으면 오늘 이 층은 다시 매도 주문을 내지 않음)"}
+        att = {{"at": now_et().isoformat(), "qty": o["qty"], "price": o["price"], "kind": "sell", "floor_id": o.get("floor_id"),
+               "status": "접수 시도 (이 기록이 있으면 오늘 이 F는 다시 매도 주문을 내지 않음)"}}
         if after_hours:
             att["market_status"] = status                 # 장후 주문 표시 (거절돼도 오늘 이 층은 다시 안 냄)
         m.setdefault("sell_attempts", []).append(att)
@@ -928,26 +943,26 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
         if res == "ok":
             att.update(status="접수 완료", no=m["orders"][-1]["no"])
         else:
-            att["status"] = ("증권사가 거절 — 오늘 이 층은 다시 안 냄: " if res == "rejected" else "응답 못 받음 — 오늘 이 층은 다시 안 냄, 체결 내역에서 자동으로 찾음: ") + (err or "")[:100]
+            att["status"] = ("증권사가 거절 — 오늘 이 F는 다시 안 냄: " if res == "rejected" else "응답 못 받음 — 오늘 이 F는 다시 안 냄, 체결 내역에서 자동으로 찾음: ") + (err or "")[:100]
         cfg._save_json(mark, m)
         results.append(res)
         placed.append(o)
         if err:
             errs_all.append(err)
     placed_ids = [int(o["floor_id"]) for o in placed]
-    for o in held_back:                                  # v2.2.13: 같이 닿았지만 팔지 않은 층은 알림만 (층마다 하루 한 번). v2.2.17: 하루 최대 N_sell 층
+    for o in held_back:                                  # v2.2.13: 같이 닿았지만 팔지 않은 F는 알림만 (F마다 하루 한 번). v2.2.17: 하루 최대 N_sell F
         fid = int(o["floor_id"])
         _warn_once(cfg, mark, m, f"second_sell_{fid}", note,
-                   (f"같은 확인에서 여러 층이 목표에 닿았어요 (알림만 · 주문은 안 냈어요 — 하루에 한 층만 팔고, 맨 위 층 {placed_ids[0]}층만 매도해요)\n" if n_sell == 1 else
-                    f"같은 확인에서 여러 층이 목표에 닿았어요 (알림만 · 주문은 안 냈어요 — 하루에 최대 {n_sell}층까지 팔고, 번호가 큰 층부터 {', '.join(str(i) for i in placed_ids)}층만 매도해요)\n")
-                   + f"· {fid}층 평단 ${float(o.get('floor_avg') or 0):.2f} +{pct:g}% → 매도 목표 ${float(o['price']):.2f} · 현재가 ${px:.2f}에서 닿음\n"
+                   (f"같은 확인에서 여러 F가 목표에 닿았어요 (알림만 · 주문은 안 냈어요 — 하루에 한 F만 팔고, 맨 위 F {nos.get(placed_ids[0], placed_ids[0])}F만 매도해요)\n" if n_sell == 1 else
+                    f"같은 확인에서 여러 F가 목표에 닿았어요 (알림만 · 주문은 안 냈어요 — 하루에 최대 {n_sell}F까지 팔고, 번호가 큰 F부터 {', '.join(str(nos.get(i, i)) + 'F' for i in placed_ids)}만 매도해요)\n")
+                   + f"· {nos.get(fid, fid)}F 평단 ${float(o.get('floor_avg') or 0):.2f} +{pct:g}% → 매도 목표 ${float(o['price']):.2f} · 현재가 ${px:.2f}에서 닿음\n"
                    f"· 매도하게 될 수량 {int(o['qty'])}주 (보유 {int(rows_by_id.get(fid, {}).get('qty') or 0)}주)\n"
-                   f"· 오늘 이미 매도한 층: {', '.join(str(i) + '층' for i in sorted(set(placed_ids) | used))}\n"
-                   f"오늘은 이 층 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요.")
+                   f"· 오늘 이미 매도한 F: {', '.join(str(nos.get(i, i)) + 'F' for i in sorted(set(placed_ids) | used))}\n"
+                   f"오늘은 이 F 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요.")
     ok_n = sum(1 for r in results if r == "ok")
     head = (f"{'장후(' + status + ') ' if after_hours else ''}당일 매도 {'접수' if ok_n == len(results) else ('실패' if ok_n == 0 and all(r == 'rejected' for r in results) else '일부 접수 · 실패·응답 없음 있음')}\n"
-            f"오늘 체결 반영 층별 평단 기준 · 현재가 ${px:.2f}\n")
-    note.send(head + fmt_orders(placed) + ("\n" + "\n".join(errs_all) + ("\n장후 주문을 메리츠가 받아주는지는 확인된 적이 없어요(미확인). 거절·응답 없음이면 이 메시지로 알려요 — 장부·층 상태는 체결이 확인될 때만 바뀌어서 그대로예요." if after_hours else "") + "\n오늘은 이 층 매도를 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if errs_all else ""))
+            f"오늘 체결 반영 F별 평단 기준 · 현재가 ${px:.2f}\n")
+    note.send(head + fmt_orders(placed) + ("\n" + "\n".join(errs_all) + ("\n장후 주문을 메리츠가 받아주는지는 확인된 적이 없어요(미확인). 거절·응답 없음이면 이 메시지로 알려요 — 장부·F 상태는 체결이 확인될 때만 바뀌어서 그대로예요." if after_hours else "") + "\n오늘은 이 F 매도를 다시 시도하지 않아요. 내일 아침 계획에서 다시 판단해요." if errs_all else ""))
     if ok_n:
         return "매도 접수"
     return "매도 실패" if all(r == "rejected" for r in results) else "매도 응답 유실"
@@ -1059,25 +1074,29 @@ def send_order(s, api, cfg, mark, m, o, exch, errors, intraday=False):
 
 
 def reached_line(plan, price):
-    """판 23 수정1: 목표 도달 안내 — 층마다 '완성 층 = 탑 매도 +% / 미완성 층 = 스나이퍼 +%' 와 그 층 목표가를 각각 적음 (예전엔 스나이퍼 목표가를 '+10% 목표'로 적었음)"""
+    """판 23 수정1: 목표 도달 안내 — F마다 '완성 F = 탑 매도 +% / 미완성 F = 스나이퍼 +%' 와 그 F 목표가를 각각 적음 (예전엔 스나이퍼 목표가를 '+10% 목표'로 적었음)"""
     rs = [r for r in plan["info"].get("sells") or [] if r.get("reached")]
-    return "".join(f"{r['no']}층({'완성·탑 매도' if r.get('complete') else '스나이퍼'}) 평단 +{r['pct']:g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${r['target']:.2f})\n"
+    return "".join(f"{r['no']}F({'완성·탑 매도' if r.get('complete') else '스나이퍼'}) 평단 +{r['pct']:g}% 도달 (현재가 ${price:.2f} ≥ 목표 ${r['target']:.2f})\n"
                    for r in sorted(rs, key=lambda r: r["no"]))
 
 
 def held_back_lines(plan, s, price):
-    """v2.2.17 판 20 수정1: 아침 계획에서 N_sell 때문에 주문에서 뺀 층의 알림 글자 (없으면 빈 글자). 장중 held_back 알림과 같은 내용 — 층마다 평단·목표가·현재가·매도하게 될 수량"""
+    """v2.2.17 판 20 수정1: 아침 계획에서 N_sell 때문에 주문에서 뺀 F의 알림 글자 (없으면 빈 글자). 장중 held_back 알림과 같은 내용 — F마다 평단·목표가·현재가·매도하게 될 수량"""
     hb = plan["info"].get("held_back") or []
     if not hb:
         return ""
     n = int(plan["info"].get("held_back_n_sell") or 1)
     placed = plan["info"].get("held_back_placed") or []
+    nos = {int(r["id"]): r["no"] for r in plan["info"].get("sells") or [] if "no" in r}
+    if not nos:      # 탑쌓기 계획(make_plan sells 에는 no 없음) — tower floors 평단으로 순위 계산
+        _fl = [f for f in (plan["info"].get("tower") or {}).get("floors") or [] if int(f.get("qty") or 0) > 0]
+        nos = {int(f["id"]): n + 1 for n, f in enumerate(sorted(_fl, key=lambda f: (float(f.get("avg") or 0), -int(f.get("id") or 0))))}
     pct = float(s.get("sell_profit_pct") or 0)
-    out = f"\n같은 확인에서 여러 층이 목표에 닿았어요 (알림만 · 주문은 안 냈어요 — 하루 최대 {n}층까지만 팔아요" + (f", 번호가 큰 층부터 {', '.join(str(i) for i in placed)}층만 매도해요)" if placed else ")")
+    out = f"\n같은 확인에서 여러 F가 목표에 닿았어요 (알림만 · 주문은 안 냈어요 — 하루 최대 {n}F까지만 팔아요" + (f", 번호가 큰 F부터 {', '.join(str(nos.get(int(i), i)) + 'F' for i in placed)}만 매도해요)" if placed else ")")
     for h in hb:
-        out += (f"\n· {h['floor_id']}층 평단 ${h['floor_avg']:.2f} +{pct:g}% → 매도 목표 ${h['target']:.2f} · 현재가 ${float(price):.2f}에서 닿음"
+        out += (f"\n· {nos.get(int(h['floor_id']), h['floor_id'])}F 평단 ${h['floor_avg']:.2f} +{pct:g}% → 매도 목표 ${h['target']:.2f} · 현재가 ${float(price):.2f}에서 닿음"
                 f"\n  매도하게 될 수량 {h['qty']}주 (보유 {h['hold_qty']}주)")
-    return out + "\n오늘은 이 층 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요."
+    return out + "\n오늘은 이 F 주문을 내지 않았어요. 내일 아침 계획에서 다시 판단해요."
 
 
 def run_order_day(s, api, note, live):
@@ -1146,12 +1165,12 @@ def run_order_day(s, api, note, live):
         return "환율 실패"
     cash = api.usd_cash()
     tower_notes = []
-    if live:      # v2.2.0 매일 동기화: 층 상태를 장부(실제 보유분)에 맞춤. 상태 파일이 없으면 지금 보유분을 1층으로 만들어 저장
+    if live:      # v2.2.0 매일 동기화: 층 상태를 장부(실제 보유분)에 맞춤. 상태 파일이 없으면 지금 보유분을 1F로 만들어 저장
         tst, had = tower_state_for(cfg, qty, float(pos["principal"]), s)
         if prev is not None:      # v2.2.20: 스나이퍼 주문이 이미 층 번호(floor_id)를 달고 있어서 같은 날 층을 다시 정리(번호 바뀜)하지 않음 — 오늘 스나이퍼 시작 때 이미 맞춤
             tower_notes = []
         else:
-            tst, tower_notes = TW.reconcile(tst, qty, float(pos["principal"]), TW.params(s)[2], s) if had else (tst, [f"탑쌓기 시작: 현재 보유분 {qty}주 · 평단 ${avg:.2f} 를 1층으로 만듦"])
+            tst, tower_notes = TW.reconcile(tst, qty, float(pos["principal"]), TW.params(s)[2], s) if had else (tst, [f"탑쌓기 시작: 현재 보유분 {qty}주 · 평단 ${avg:.2f} 를 1F로 만듦"])
             cfg._save_json(TOWER_FILE, tst)
     sell_q = sellable if live else qty
     plan = build_plan(s, cfg, price, fx, cash, qty, float(pos["principal"]), sell_q, open_px=open_px)
@@ -1170,9 +1189,9 @@ def run_order_day(s, api, note, live):
     except Exception as e:
         logging.warning(f"1주 남음 알림 실패: {type(e).__name__}")
     try:
-        run_new_floor_notice(s, note, plan, d, live)       # v2.2.9 새 층 규칙: 새 층을 못 만들면 풀이님께 물어봄 (실패해도 주문 흐름 계속)
+        run_new_floor_notice(s, note, plan, d, live)       # v2.2.9 새 F 규칙: 새 F를 못 만들면 풀이님께 물어봄 (실패해도 주문 흐름 계속)
     except Exception as e:
-        logging.warning(f"새 층 못 만듦 알림 실패: {type(e).__name__}")
+        logging.warning(f"새 F 못 만듦 알림 실패: {type(e).__name__}")
     orders, notes = plan["orders"], plan["notes"] + tower_notes
     errors, recovered = [], 0
     m = {"date": d, "prev_close": prev_close, "price": price, "open_price": open_px, "fx": fx, "auto_fx": fxres,
@@ -1231,8 +1250,8 @@ def sniper_on(s):
 
 
 def buy_layer_limit_hit(s, m, rows, open_rows, order):
-    """판 23 수정1 (풀이님 결정): 그날 매수 주문이 나간 층 수가 tower_max_buy_layers_per_day(설정 그대로, 기본 1) 에 닿았는데 오늘 아직 안 산 새 층에 사려 하면 → 알림 글자, 아니면 None.
-    센 대상 = 오늘 기록의 매수 주문 중 살아 있는 것 (미체결 조회에 있거나 체결 있음·방금 낸 주문·응답 못 받은 시도) — 거절·앱에서 취소한 주문은 안 셈. 같은 층에 더 사는 건(남은 시드 채우기) 층 수를 안 늘리므로 계속 가능"""
+    """판 23 수정1 (풀이님 결정): 그날 매수 주문이 나간 F 수가 tower_max_buy_layers_per_day(설정 그대로, 기본 1) 에 닿았는데 오늘 아직 안 산 새 F에 사려 하면 → 알림 글자, 아니면 None.
+    센 대상 = 오늘 기록의 매수 주문 중 살아 있는 것 (미체결 조회에 있거나 체결 있음·방금 낸 주문·응답 못 받은 시도) — 거절·앱에서 취소한 주문은 안 셈. 같은 F에 더 사는 건(남은 시드 채우기) F 수를 안 늘리므로 계속 가능"""
     if not order or order.get("floor_id") is None:
         return None
     n_max = TW.buy_layers(s)
@@ -1383,7 +1402,7 @@ def sniper_preflight(s, api, note, cfg, d, mark, n):
     price = float(api.price(s["symbol"], s["price_market"])["price"])
     cash = api.usd_cash()
     tst, had = tower_state_for(cfg, qty, principal, s)
-    tst, tnotes = TW.reconcile(tst, qty, principal, TW.params(s)[2], s) if had else (tst, [f"탑쌓기 시작: 현재 보유분 {qty}주를 1층으로 만듦"])
+    tst, tnotes = TW.reconcile(tst, qty, principal, TW.params(s)[2], s) if had else (tst, [f"탑쌓기 시작: 현재 보유분 {qty}주를 1F로 만듦"])
     cfg._save_json(TOWER_FILE, tst)
     m = {"date": d, "prev_close": 0.0, "price": price, "open_price": 0.0, "fx": 0.0, "auto_fx": None, "qty": qty, "avg": cfg.avg_price(pos), "cash": round(cash, 2),
          "orders": [], "attempts": [], "errors": [], "synced": False, "sell_deferred": False, "sniper_day": True, "tower_ordered": False}
@@ -1479,7 +1498,7 @@ def run_sniper_dry(s, api, note):
                     rec = dict(o, sim=True, at=n.isoformat())
                     m["orders"].append(rec)
                     out.append(rec)
-    elif status == MKT_REGULAR and n.time() < datetime.time(16, 0):           # v2.5.0: 하루 매수 층 수 제한 없음
+    elif status == MKT_REGULAR and n.time() < datetime.time(16, 0):           # v2.5.0: 하루 매수 F 수 제한 없음
         rsi = SN.rsi_from_state(ss, now_t)[0]
         pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT", is_trading_day=us_trading_day)
         if pb["order"] and not any(o.get("side") == "BUY" and o.get("floor_id") == pb["order"]["floor_id"] and o.get("signal") == pb["order"].get("signal") for o in m["orders"]):
@@ -1493,15 +1512,15 @@ def run_sniper_dry(s, api, note):
     return "모의 신호 없음"
 
 
-PICK_TEXT = ("스나이퍼 목표가에 닿은 층이 있어요 — 자동으로 팔지 않아요. 선택해 주세요.\n"
-             "{no}층 평단 ${avg:.2f} ({qty}주) · 목표가 ${target:.2f} (평단 +{pct:g}%) · 현재가 ${price:.2f}\n"
-             "• 스나이퍼: 이 층은 그대로(안 팔고 안 바꿈) 두고, 목표가 ${target:.2f} 를 기준가로 하는 새 층을 만들어 스나이퍼 매매\n"
-             "• 탑쌓기: 이 층을 잠가 탑 매도(평단 +10% → 50%)로 넘김\n"
-             "답이 없으면 탑쌓기로 두고 기다려요 (그동안 스나이퍼 매수 신호가 오면 바로 새 층을 사요 — 다시 안 물어요).")
+PICK_TEXT = ("스나이퍼 목표가에 닿은 F가 있어요 — 자동으로 팔지 않아요. 선택해 주세요.\n"
+             "{no}F 평단 ${avg:.2f} ({qty}주) · 목표가 ${target:.2f} (평단 +{pct:g}%) · 현재가 ${price:.2f}\n"
+             "• 스나이퍼: 이 F는 그대로(안 팔고 안 바꿈) 두고, 목표가 ${target:.2f} 를 기준가로 하는 새 F를 만들어 스나이퍼 매매\n"
+             "• 탑쌓기: 이 F를 잠가 탑 매도(평단 +10% → 50%)로 넘김\n"
+             "답이 없으면 탑쌓기로 두고 기다려요 (그동안 스나이퍼 매수 신호가 오면 바로 새 F를 사요 — 다시 안 물어요).")
 
 
 def send_pick_prompts(s, note, asks):
-    """v2.4.0: 목표가에 닿은 층마다 텔레그램 버튼 2개(스나이퍼/탑쌓기)로 물음. 버튼 글자는 callback 'pk:<층 평단>:s|t'"""
+    """v2.4.0: 목표가에 닿은 F마다 텔레그램 버튼 2개(스나이퍼/탑쌓기)로 물음. 버튼 글자는 callback 'pk:<F 평단>:s|t'"""
     for a in asks:
         text = PICK_TEXT.format(**a)
         btn = [[("스나이퍼", f"pk:{a['key']}:s"), ("탑쌓기", f"pk:{a['key']}:t")]]
@@ -1513,7 +1532,7 @@ def send_pick_prompts(s, note, asks):
 
 
 def apply_pick(s, key, choice):
-    """v2.4.0 텔레그램 버튼(스나이퍼/탑쌓기) 반영 → 안내 글자. 스나이퍼 상태·층 상태 파일을 같이 저장. 이미 처리됐거나 없어진 층이면 아무것도 안 바꿈. 실제 주문·장부는 안 건드림"""
+    """v2.4.0 텔레그램 버튼(스나이퍼/탑쌓기) 반영 → 안내 글자. 스나이퍼 상태·F 상태 파일을 같이 저장. 이미 처리됐거나 없어진 F면 아무것도 안 바꿈. 실제 주문·장부는 안 건드림"""
     cfg = ConfigManager(s)
     if choice not in ("s", "t"):
         return "알 수 없는 선택이에요"
@@ -1522,11 +1541,11 @@ def apply_pick(s, key, choice):
         return "장부가 없어 처리하지 않았어요"
     tst, had = tower_state_for(cfg, int(pos["qty"]), float(pos["principal"]), s)
     if not had:
-        return "층 상태 파일이 없어 처리하지 않았어요"
+        return "F 상태 파일이 없어 처리하지 않았어요"
     ss = SN.load_state(cfg)
     msg = SN.pick_resolve(ss, tst, key, choice, TW.params(s)[0])
     if msg is None:
-        return "이미 처리됐거나 없어진 층이에요 (아무것도 안 바꿨어요)"
+        return "이미 처리됐거나 없어진 F예요 (아무것도 안 바꿨어요)"
     cfg._save_json(TOWER_FILE, tst)
     SN.save_state(cfg, ss)
     return msg
@@ -1615,8 +1634,8 @@ def tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, statu
 
 def run_sniper_tick(s, api, note):
     """v2.2.20 스나이퍼 한 번치 (실거래만, loop 가 09:30 ET ~ 체결 반영 시각 전에 부름. 간격 = intraday_sell_check_sec, 최소 30초). 순서:
-    ① 오늘 기록이 없으면 만듦 ② 체결 확인 → 매도·스나이퍼 매수 체결은 즉시 장부·층에 반영 (탑쌓기 매수는 run_sync) ③ 체결 알림 ④ 잔고 = 예상 확인 (다르면 보류)
-    ⑤ 시세를 분 단위로 모음(RSI 용) ⑥ 층별 목표에 닿으면 그 층 전량 지정가 매도 (정규장·장후, 16:10 전까지) ⑦ 60초마다 눌림·돌파 신호 → 한 층 시드(남은 몫)만큼 지정가 매수 (정규장·16:00 전까지, 15:30 뒤 돌파 차단)"""
+    ① 오늘 기록이 없으면 만듦 ② 체결 확인 → 매도·스나이퍼 매수 체결은 즉시 장부·F에 반영 (탑쌓기 매수는 run_sync) ③ 체결 알림 ④ 잔고 = 예상 확인 (다르면 보류)
+    ⑤ 시세를 분 단위로 모음(RSI 용) ⑥ F별 목표에 닿으면 그 F 전량 지정가 매도 (정규장·장후, 16:10 전까지) ⑦ 60초마다 눌림·돌파 신호 → F 완성 기준 금액의 남은 몫만큼 지정가 매수 (정규장·16:00 전까지, 15:30 뒤 돌파 차단)"""
     barbell_tick(s, api, note)                                     # 판 34 3차: 바벨 틱 (SGOV·암살자 모의 지표·SCHD 매수, 켜짐일 때만)
     if s.get("dry_run", True):
         return run_sniper_dry(s, api, note)                    # 판 23 수정1 B7: 모의에서도 스나이퍼가 돌되 주문은 안 나가고 시뮬레이션 기록만
@@ -1702,17 +1721,18 @@ def run_sniper_tick(s, api, note):
         k = (br["floor_id"], br["box_id"])
         if k in rej_box and abs(rej_box[k] - br["target"]) < 1e-9:
             busy_boxes.add(k)
-    busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 층은 다시 안 냄 (층 단위 주문만 — 버킷 주문은 버킷 단위로 아래에서 봄)
+    busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 F는 다시 안 냄 (F 단위 주문만 — 버킷 주문은 버킷 단위로 아래에서 봄)
     busy_boxes |= sold_box_keys_today(m, rows, open_rows)
     need_q = sum(o["qty"] for o in SN.plan_sells(s, sim, px, 10 ** 9, skip_ids=busy, skip_boxes=busy_boxes)[0])       # 판 31 질문 3: 원작식 — 목표 수량을 먼저 구하고 매도가능이 그만큼 될 때까지 2초(0.25초 간격) 기다림
     if need_q > 0:
         sellable = SN.wait_sellable(lambda: api.holding(s["symbol"])[1], need_q)
-    sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy, skip_boxes=busy_boxes, ext=(status == MKT_AFTER))      # v2.6.0: 버킷별 매도 자동 (미완성 층: 버킷마다 자기 평단 기준 — 공격 버킷 +1.5% · 나머지 +1.0%, 그 버킷만 전량). 판 24 선택 질문은 안 부름
-    tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy | {a for a, _b in busy_boxes})      # 완성 층만 (탑 매도 +10% → 50%)
+    sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy, skip_boxes=busy_boxes, ext=(status == MKT_AFTER))      # v2.6.0: 버킷별 매도 자동 (미완성 F: 버킷마다 자기 평단 기준 — 공격 버킷 +1.5% · 나머지 +1.0%, 그 버킷만 전량). 판 24 선택 질문은 안 부름
+    tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy | {a for a, _b in busy_boxes})      # 완성 F만 (탑 매도 +10% → 50%)
     tw_pick, tw_held = pick_sells([o for o in tw_all if not (int(o["floor_id"]) in rej and abs(rej[int(o["floor_id"])] - float(o["price"])) < 1e-9)],
-                                  TW.sell_layers(s) - tower_sold_count_today(m, rows, open_rows))      # 하루 매도 층 수(N_sell) 적용 — 넘는 층은 알림만 (알림은 하루 한 번)
+                                  TW.sell_layers(s) - tower_sold_count_today(m, rows, open_rows))      # 하루 매도 F 수(N_sell) 적용 — 넘는 F는 알림만 (알림은 하루 한 번)
     if tw_held:
-        _warn_once(cfg, mark, m, "tower_sell_held", note, "탑 매도 목표에 닿았지만 하루 매도 층 수(" + str(TW.sell_layers(s)) + ")를 넘어 주문은 안 냄: " + ", ".join(f"{o['floor_id']}층" for o in tw_held))
+        _nos = SN.sniper_numbers(sim)
+        _warn_once(cfg, mark, m, "tower_sell_held", note, "탑 매도 목표에 닿았지만 하루 매도 F 수(" + str(TW.sell_layers(s)) + ")를 넘어 주문은 안 냄: " + ", ".join(f"{_nos.get(int(o['floor_id']), o['floor_id'])}F" for o in tw_held))
     sells = sells + [dict(o, type="LIMIT") for o in tw_pick]
     if sells:
         if foreign_open_sells(open_rows if open_rows is not None else api.open_orders_today(s["symbol"]), m, rows):
@@ -1926,7 +1946,7 @@ def _fxm_later(note, d, key, text, sec=300):
 
 
 def _next_rounds_inputs(s, api, cfg, rounds):
-    """v2.3.0: '다음 rounds 회차분' 환전 계산용 입력 → (계획, 0.0, 적용환율, 달러 예수금). 계획 = hybrid_fx_plan: 필요 달러 = 층 시드 × 하루 매수 층 수 × rounds (시세·층 상태는 안 읽음 — 아침 환전은 그날 채울 층 분을 미리).
+    """v2.3.0: '다음 rounds 회차분' 환전 계산용 입력 → (계획, 0.0, 적용환율, 달러 예수금). 계획 = hybrid_fx_plan: 필요 달러 = F 완성 기준 금액 × 하루 매수 F 수 × rounds (시세·F 상태는 안 읽음 — 아침 환전은 그날 채울 F 분을 미리).
     조회 실패는 MeritzError (옛 반환 모양 유지: 두 번째 값은 예전의 전일 종가 자리 — 쓰지 않아 0.0)"""
     rate, _tm = api.fx_applied()
     cash = api.usd_cash()
@@ -1935,7 +1955,7 @@ def _next_rounds_inputs(s, api, cfg, rounds):
 
 def run_fx_morning(s, api, note, live):
     """자동환전 → 상태 글자. loop 가 창 안에서만 부름. 주문은 안 냄. (함수 이름은 판 9 그대로)
-    '다음 한 회차분'(기존 사다리·재매수 계산, max_rounds_per_day 를 1로 둔 계획) 필요 달러 − 달러 예수금 = 부족분만 환전 (여유%·하루 상한은 auto_fx 그대로).
+    '다음 한 회차분'(탑쌓기 계획, max_rounds_per_day 를 1로 둔 계획) 필요 달러 − 달러 예수금 = 부족분만 환전 (여유%·하루 상한은 auto_fx 그대로).
     v2.0.8: 휴장 전날(closure_ahead)이면 오늘 몫 + 휴장 중 주문일(최소 1회차)만큼 — '다음 1+extra 회차분' 으로 계산해 한 번에 환전. 하루 한 번(fx_<날짜>.json).
     가격 기준은 전일 종가(prev_close), 환율은 그 시점 적용환율. 매수 계획이 없거나 부족이 없으면 안 함(기록 안 씀 — Q24). 환전 뒤 달러 반영을 기다리지 않음 (주문까지 시간이 많음)"""
     if not s.get("auto_fx_enabled"):
@@ -1961,10 +1981,10 @@ def run_fx_morning(s, api, note, live):
         if bad:
             _fxm_later(note, d, "gate", "자동환전 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 주문 시간 전까지 5분마다 다시 확인해요. 못 하면 마감 60분 전에 달러부족 알림을 보내요)")
             return "차단"
-        for mp in pending_syncs(state):                        # 어제 체결 반영 전이면 사다리 상태가 낡아 '다음 회차'가 틀릴 수 있음 → 환전 안 함
+        for mp in pending_syncs(state):                        # 어제 체결 반영 전이면 장부 상태가 낡아 '다음 회차'가 틀릴 수 있음 → 환전 안 함
             m = cfg._load_json(mp, {})
             if isinstance(m, dict) and (m.get("orders") or m.get("attempts")) and not m.get("synced", True):
-                _fxm_later(note, d, "sync", f"자동환전 안 함 — 체결 반영 전인 주문 기록이 있어요 ({os.path.basename(mp)}). 사다리 상태가 최신이 아니에요")
+                _fxm_later(note, d, "sync", f"자동환전 안 함 — 체결 반영 전인 주문 기록이 있어요 ({os.path.basename(mp)}). 장부 상태가 최신이 아니에요")
                 return "체결 반영 전"
     ca = closure_ahead(w["day"], s)
     rounds = 1 + (ca["extra"] if ca else 0)
@@ -1977,7 +1997,7 @@ def run_fx_morning(s, api, note, live):
         _fxm_later(note, d, "close", "자동환전 안 함 — 전일 종가를 못 읽었어요 (5분 뒤 다시 시도해요)")
         return "전일종가 없음"
     buys = [o for o in plan["orders"] if o.get("side") == "BUY"]
-    if not buys:                                               # 다음 회차 없음(사다리 전부 채움·시작 대기 등)·한도 부족 → 환전 안 함
+    if not buys:                                               # 다음 회차 없음(F 전부 채움·시작 대기 등)·한도 부족 → 환전 안 함
         _FXM["done"] = True
         logging.info("자동환전: 다음 회차 매수 계획 없음 — 환전 안 함")
         return "매수 계획 없음"
@@ -2044,7 +2064,7 @@ def shortage_alert_due(n, s=None):
 def run_fx_shortage_alert(s, api, note, live):
     """v2.0.8 마감 60분 전 '달러부족' 알림 — 마감 = 주문 시간. 다음 한 회차(휴장 전날이면 1+extra 회차)에 필요한 달러 > 달러 예수금이면 하루 한 번.
     부족분이 0원이면 아무 기록도 안 씀(Q24) — 5분마다 다시 확인. 알림 뒤에도 창 안이면 자동환전은 계속 시도(별도 함수). 자동환전 꺼짐이어도 알림.
-    Q25: 필요 달러 = 정수 주 × 사다리 가격 (make_plan 그대로)"""
+    Q25: 필요 달러 = F 완성 기준 금액 × 하루 매수 F 수 × rounds (hybrid_fx_plan 그대로)"""
     n = now_kst()
     if not shortage_alert_due(n, s):
         return "시간 아님"
@@ -2109,11 +2129,23 @@ def run_holiday_range_notice(s, note, live):
 
 
 def one_share_text(plan):
-    """audit-fix 7-4 (풀이님 결정 2026-11-20 10:03): 탑쌓기에서 1주만 남은 층이 자동 매도에서 빠지면 보낼 '1주 남음' 글자, 아니면 None"""
+    """audit-fix 7-4 (풀이님 결정 2026-11-20 10:03): 탑쌓기에서 1주만 남은 F가 자동 매도에서 빠지면 보낼 '1주 남음' 글자, 아니면 None"""
     ex = (plan.get("info") or {}).get("sell_excluded") or {}
     if ex.get("why") != "one_share":
         return None
-    fl = " · ".join(f"{int(i)}층" for i in ex.get("floors") or [])
+    tw = (plan.get("info") or {}).get("tower") or {}
+    tfl = tw.get("floors") or []
+    _rank = {int(f.get("id")): n + 1 for n, f in enumerate(sorted([f for f in tfl if int(f.get("qty") or 0) > 0], key=lambda f: (float(f.get("avg") or 0), -int(f.get("id") or 0))))}
+
+    def _flab(fid):
+        f = next((x for x in tfl if int(x.get("id")) == int(fid)), None)
+        if f is None:
+            return f"{fid}F"
+        no = _rank.get(int(fid))
+        base = int(math.floor(float(f.get("avg") or 0) + 1e-9))
+        return f"{base}F{no}" if no else f"{base}F"
+
+    fl = " · ".join(_flab(i) for i in ex.get("floors") or [])
     return f"1주 남음 — {fl} 보유 1주는 자동 매도에서 뺐어요. 그대로 두고, 팔려면 직접 매도해 주세요."
 
 
@@ -2131,17 +2163,17 @@ def run_one_share_notice(s, note, plan, d, live):
 
 
 def new_floor_text(plan):
-    """새 층 규칙 (풀이님 결정 2026-11-20 09:59): 새 층을 못 만들면 풀이님께 물어볼 글자, 아니면 None"""
+    """새 F 규칙 (풀이님 결정 2026-11-20 09:59): 새 F를 못 만들면 풀이님께 물어볼 글자, 아니면 None"""
     nb = (((plan.get("info") or {}).get("tower")) or {}).get("new_floor_blocked")
     if not nb:
         return None
-    return (f"새 층을 만들 수 없어요 — {nb['text']}.\n"
-            "자동으로 층·간격을 늘리거나 봇을 멈추지 않았어요. 새 층 매수만 쉬고 있고, 있는 층의 매도는 그대로예요.\n"
-            "어떻게 할지 알려 주세요 (예: 총 한도 늘리기, 층 수·층 금액 바꾸기, 이대로 두기).")
+    return (f"새 F를 만들 수 없어요 — {nb['text']}.\n"
+            "자동으로 F·간격을 늘리거나 봇을 멈추지 않았어요. 새 F 매수만 쉬고 있고, 있는 F의 매도는 그대로예요.\n"
+            "어떻게 할지 알려 주세요 (예: 총 한도 늘리기, F 수·F 완성 기준 금액 바꾸기, 이대로 두기).")
 
 
 def run_new_floor_notice(s, note, plan, d, live):
-    """새 층을 못 만드는 날마다 한 번 물어봄 (표시 파일 new_floor_<날짜>.json — 보내기 성공 뒤에만 기록, 모의는 dry_ 접두)"""
+    """새 F를 못 만드는 날마다 한 번 물어봄 (표시 파일 new_floor_<날짜>.json — 보내기 성공 뒤에만 기록, 모의는 dry_ 접두)"""
     text = new_floor_text(plan)
     if not text:
         return "해당 없음"
@@ -2205,10 +2237,11 @@ def run_sync(s, api, note, mark_path):
     rows = fill_rows_for(api, s, d)                   # v2.2.6: 체결 시각(t)까지 읽음 — 필드 이름 미확인이면 t 는 None → 매도 먼저
     items = fill_items(m, rows)
     lines, done = [], None
-    # v2.2.0 탑쌓기: 층 상태 (파일이 없으면 이 체결들을 넣기 전 장부로 1층)
+    # v2.2.0 탑쌓기: F 상태 (파일이 없으면 이 체결들을 넣기 전 장부로 1F)
     _p0 = cfg.get_position() or {"qty": 0, "principal": 0.0}
     tst = tower_state_for(cfg, int(_p0["qty"]), float(_p0["principal"]), s)[0]
-    # v2.2.6: 시간순(없으면 매도 먼저)·새 층 계획 매수는 매도 뒤·주문번호별 증분만 (장중에 이미 반영한 매도는 다시 안 넣음)·장부와 층을 같은 묶음으로 저장
+    labs = TW.floor_labels(tst) if isinstance(tst, dict) else {}      # 체결 반영 전 F 라벨 (체결 뒤엔 F가 사라질 수 있음)
+    # v2.2.6: 시간순(없으면 매도 먼저)·새 F 계획 매수는 매도 뒤·주문번호별 증분만 (장중에 이미 반영한 매도는 다시 안 넣음)·장부와 F를 같은 묶음으로 저장
     applied = apply_tower_fills(s, cfg, d, items, tst)
     got = {id(a["o"]) for a in applied}
     for it in items:
@@ -2218,9 +2251,10 @@ def run_sync(s, api, note, mark_path):
         o = a["o"]
         lines.append(f"- {SIDE_KO.get(a['side'], a['side'])} {a['dq']}주 @ ${a['da'] / a['dq']:.2f} ({o.get('desc', '')})")
         if a["side"] == "SELL":
-            lines.append(f"  매도 체결 → {int(o['floor_id'])}층의 버킷(평단 ${float(o.get('box_avg') or 0):.2f})만 줄임 (층 원가·수량도 그 버킷 몫만큼만)" if o.get("floor_id") is not None and o.get("box_id") is not None
-                         else f"  매도 체결 → {int(o['floor_id'])}층만 줄이고 그 층 탑업 단계 시작 (층 평단 ${float(o.get('floor_avg') or 0):.2f})" if o.get("floor_id") is not None
-                         else "  매도 체결 → 층별로 나눠 줄이고 탑업 단계 시작")
+            flab = labs.get(int(o["floor_id"]), TW.price_label(o.get("floor_avg") or 0)) if o.get("floor_id") is not None else None
+            lines.append(f"  매도 체결 → {flab}의 버킷(평단 ${float(o.get('box_avg') or 0):.2f})만 줄임 (F 원가·수량도 그 버킷 몫만큼만)" if o.get("floor_id") is not None and o.get("box_id") is not None
+                         else f"  매도 체결 → {flab}만 줄이고 그 F 탑업 단계 시작 (F 평단 ${float(o.get('floor_avg') or 0):.2f})" if o.get("floor_id") is not None
+                         else "  매도 체결 → F별로 나눠 줄이고 탑업 단계 시작")
         done = a["closed"] or done
     hold, _, _ = api.holding(s["symbol"])
     pos = cfg.get_position()
@@ -2439,7 +2473,7 @@ def cmd_check(s):
     print("  " + to_korean(fmt_orders(orders)).replace("\n", "\n  "))
     for n in notes:
         print("  ·", to_korean(n))
-    fxp = hybrid_fx_plan(s, cash, 1)      # v2.3.0: 환전 필요량 = 층 시드 × 하루 매수 층 수 (부족 달러는 shortfall_usd — 예전엔 이 키가 없어 늘 '필요 없음'으로 나왔음)
+    fxp = hybrid_fx_plan(s, cash, 1)      # v2.3.0: 환전 필요량 = F 완성 기준 금액 × 하루 매수 F 수 (부족 달러는 shortfall_usd — 예전엔 이 키가 없어 늘 '필요 없음'으로 나왔음)
     print(f"  환전 기준: {fxp['fx_basis']} · 예수금 ${cash:,.0f} · 부족 ${math.ceil(fxp['info']['shortfall_usd']):,}")
     with in_dir(state):
         r = auto_fx(s, api, ConfigManager(s), fxp, False, now_et().strftime("%Y-%m-%d"))
@@ -2490,7 +2524,7 @@ def cmd_add_shares(s, qty, avg, api=None):
             note.send(msg)
             return 1
         g0 = sell_target(s, cfg, pos)
-        # v2.2.6 (사용자 결정): 토스 입고분은 1층 빈곳에 넣고, 1층 평단 기준 탑쌓기로 나머지 빈칸을 채움. 층 상태는 장부에 넣기 '전' 값에서 시작 (파일이 없으면 넣기 전 장부로 1층)
+        # v2.2.6 (사용자 결정): 토스 입고분은 1층 빈곳에 넣고, 1층 평단 기준 탑쌓기로 나머지 빈칸을 채움. 층 상태는 장부에 넣기 '전' 값에서 시작 (파일이 없으면 넣기 전 장부로 1F)
         tst0, _had = tower_state_for(cfg, int(pos["qty"]), float(pos["principal"]), s)
         before, after = cfg.add_shares(qty, avg, n.strftime("%Y-%m-%d"))
         _fid, tw_notes = TW.add_holdings(tst0, qty, avg, s)

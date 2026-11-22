@@ -7,7 +7,7 @@
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): validate_settings 에 tower_max_buy_layers_per_day · tower_max_sell_layers_per_day 검사 추가 — 없으면 통과(기본 1), 있으면 1~3 정수만 (0·4 이상·소수·글자·true/false 는 문제 목록에 넣어 주문 전에 막음). DEFAULTS 에는 안 넣음(없을 때 코드가 1 로 읽음). 나머지는 그대로
 # v2.2.9 (2026-11-20, audit-fix 7번 3차 — 풀이님 결정 10:14): 사다리 삭제로 탑쌓기 전용 — credit_problems·CHOICES(unit_base·first_buy_mode)·ladder_levels·적립 상태(accum_state.json: get_accum/save_accum/accum_or_start)·사다리 설정 키·start.mode/filled_levels/rebuy_*/first_round_credit_usd 제거. validate_settings(s) 는 사다리 값을 안 보고, tower_gap_usd(1 이상 정수)·tower_floor_usd(>0)·tower_floors(1 이상 정수) 와 strategy("tower" 가 아니면 차단)를 검사. order_type(LOC|LIMIT) 검사는 그대로
 # v2.2.6 (2026-11-20, 판 16 본격): ① intraday_sell_check_sec 기본 120 → 30 (코드 검증 하한 — 체결 알림 간격과 같게) ② apply_fill: 같은 체결(exec_id)을 장부 파일(position.json)의 applied_ids 로도 막고(원금·수량이 먼저 저장돼 중복·누락이 안 생김),
-#   매도 때 층별 매도의 '뺀 원가'(cost_removed)를 받으면 평단 비례 대신 그 값을 씀 (층 합계와 장부 원금이 어긋나지 않게). 호출 형식은 그대로(새 인자는 선택)
+#   매도 때 F별 매도의 '뺀 원가'(cost_removed)를 받으면 평단 비례 대신 그 값을 씀 (F 합계와 장부 원금이 어긋나지 않게). 호출 형식은 그대로(새 인자는 선택)
 # v2.2.1 (2026-11-19, audit-fix 7-1): credit_problems 추가 + validate_settings(s, fx=None) — 환율을 알면 start.first_round_credit_usd < 1회차 단위액(total_krw÷split_count÷환율) 검사. 그 외 검증은 그대로
 # v2.0.3 (2026-11-18): 설정 intraday_sell_check_sec 추가(당일 매도 확인 간격 초, 기본 120, 0 이면 끔) + validate_settings 에 그 값 검사 한 줄. 나머지 검증·장부 함수는 그대로
 # 메리츠 속쓸 적립봇(SOXL 분할매수·부분매도) — 설정·장부
@@ -50,13 +50,13 @@ SAFE_DEFAULTS = {
     "seed_usd": None,                      # (V14 용, 적립봇은 안 씀)
     # ---- 적립봇 (노션 '메리츠 속쓸 적립봇' 2026-11-18)
     "total_krw": None,                     # 총 투자금(원). 금액은 기본값 없음 — 설정 필수
-    "tower_floor1_start_usd": 0,           # 탑쌓기 1층 시작가 (v2.2.4). 0 = 안 정함 — 평단 기준. 정하면 1층 칸이 시작가 기준
+    "tower_floor1_start_usd": 0,           # 탑쌓기 맨 위 F 시작가 (v2.2.4). 0 = 안 정함 — 평단 기준. 정하면 맨 위 F 칸이 시작가 기준
     "sell_profit_pct": 10,                 # 평단 대비 평가 이익 이 % 에 매도
     "sell_fraction_pct": 50,               # 보유의 이 % 매도 (정수 주 내림)
     "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
     "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
-    "trading_mode": "tower",               # v2.2.20 판 22: "tower"(탑쌓기, 기본) | "sniper"(스나이퍼). 바꾸면 다음 매매 판단부터 적용 (이미 낸 주문은 안 건드림). 층 장부는 두 모드가 같이 씀
-    "sniper_tp_l1_pct": 1.5,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 층) 익절 % (층 평단 +이 % 에 그 층 전량)
+    "trading_mode": "tower",               # v2.2.20 판 22: "tower"(탑쌓기, 기본) | "sniper"(스나이퍼). 바꾸면 다음 매매 판단부터 적용 (이미 낸 주문은 안 건드림). F 장부는 두 모드가 같이 씀
+    "sniper_tp_l1_pct": 1.5,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 F) 익절 % (F 평단 +이 % 에 그 F 전량)
     "sniper_tp_upper_pct": 1.0,            # v2.2.20 스나이퍼 상단층 익절 %
     "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
@@ -195,7 +195,7 @@ def validate_settings(s):
             bad.append(f"{k} 0 이하 또는 없음")
     fu = s.get("tower_floor_usd")
     if fu is not None and (isinstance(fu, bool) or _f(fu) <= 0):
-        bad.append("tower_floor_usd 는 0 보다 큰 숫자 (한 층 금액, 달러)")
+        bad.append("tower_floor_usd 는 0 보다 큰 숫자 (F 완성 기준 금액, 달러)")
     for k, nm in (("tower_box_seed_usd", "버킷 시드, 달러"), ("tower_remaining_seed_usd", "퍼센트 작업 남은 시드, 달러"), ("sniper_first_anchor_usd", "스나이퍼 첫 기준가, 달러")):      # v2.5.0: 없으면 기본(15000 · 120000 · 안 정함), 있으면 0 보다 큰 숫자
         v = s.get(k)
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or _f(v) <= 0):
@@ -217,8 +217,8 @@ def validate_settings(s):
         bad.append("tower_buy_gap_usd 는 1~10 정수 (탑쌓기 매매 매수 간격, 달러)")
     fl = s.get("tower_floors")
     if fl is not None and (isinstance(fl, bool) or _f(fl) < 1 or _f(fl) != int(_f(fl))):
-        bad.append("tower_floors 는 1 이상 정수 (층 수)")
-    for k, nm in (("tower_max_buy_layers_per_day", "하루 매수 층 수"), ("tower_max_sell_layers_per_day", "하루 매도 층 수")):      # v2.2.17: 없으면 기본 1, 있으면 1~3 정수만
+        bad.append("tower_floors 는 1 이상 정수 (F 수)")
+    for k, nm in (("tower_max_buy_layers_per_day", "하루 매수 F 수"), ("tower_max_sell_layers_per_day", "하루 매도 F 수")):      # v2.2.17: 없으면 기본 1, 있으면 1~3 정수만
         v = s.get(k)
         if v is not None and (isinstance(v, bool) or not (1 <= _f(v) <= 3) or _f(v) != int(_f(v))):
             bad.append(f"{k} 는 1~3 정수 ({nm})")
@@ -489,7 +489,7 @@ class ConfigManager:
     def apply_fill(self, side, qty, price, date_et, is_reverse, exec_id, cost_removed=None):
         """체결 1건 반영 → (새 장부, 끝난 사이클 기록 또는 None). 같은 exec_id 는 한 번만.
         v2.2.6: 한 번 반영한 exec_id 는 position.json 의 applied_ids 에 함께 저장 (원금·수량과 한 파일이라 같이 저장됨) — 원금·수량을 먼저, 거래 기록을 나중에 쓰므로
-        중간에 멈춰도 다시 부르면 빠진 쪽만 채움 (원금·수량은 두 번 안 바뀜). cost_removed: 매도 때 줄일 원가 (층별 매도가 계산한 값. 없으면 예전처럼 평단 × 수량)"""
+        중간에 멈춰도 다시 부르면 빠진 쪽만 채움 (원금·수량은 두 번 안 바뀜). cost_removed: 매도 때 줄일 원가 (F별 매도가 계산한 값. 없으면 예전처럼 평단 × 수량)"""
         with GlobalThrottle.get_file_lock(self.FILES["POSITION"]):
             pos = self.get_position()
             if not pos:

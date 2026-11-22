@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.3.10 · 2026-11-22 21:09 (KST)
+- 파일: config.py, main.py, notifier.py, README.md, seed_adjust.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.9.0 (판 35 수정, 10차): 남은 용어 정리 ("층" → F 표기, F 완성 기준 금액, 새 시드, 맨 위 F 시작가)
+- 브랜치: staging
+
 ## v1.3.9 · 2026-11-22 20:35 (KST)
 - 파일: tg_menu.py
 - 내용: 메리츠 v2.9.0 (판 35 수정, 9차): 레이더 인라인 버튼 KeyError 고침

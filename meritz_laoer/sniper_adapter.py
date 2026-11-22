@@ -3,8 +3,8 @@
 # 판 32 질문 1·2 (2026-11-22, 2차·부분): 래칫·하드캡·RSI 수확 — 원작 sniper_exit_plugin.py(SniperL1TrailSlot · _step_l1_trail_slot_candidate)를 orig_sniper/ 에 그대로 복사해 어댑터가 그 클래스·함수를 부름 (l1_trail_slot · l1_trail_step · minute_key). 거래 코드에는 아직 연결 안 함
 # 판 32 (2026-11-22, 1차·부분): 단리 모드 Case 112 정책(S-112)·리바운드 스토커 판정 래퍼 추가 — 거래 코드에는 아직 연결 안 함 (래칫·하드캡 실행부는 원작 sniper_exit_plugin.py 안이라 복사본에 없음 → 질문란 참조)
 # 판 31 (2026-11-22): sell_plan 추가 — 원작 evaluate_multi_grid_sell_targets 에 전체 층을 자르지 않고 그대로 넘김(방식 B, Muse 결정). 원작 코드는 안 고침.
-# 원작 스나이퍼 순수 판정 함수(orig_sniper/ 안 원작 복사본, 한 줄도 안 고침)를 하이브리드 상태(층·F)에 맞춰 부르는 얇은 어댑터.
-# 규칙: ① 원작 로직은 orig_sniper/ 에만 있다 (여기서 다시 쓰지 않음) ② 이 파일은 데이터 모양 바꾸기(층 → StratumBucket)와 호출뿐
+# 원작 스나이퍼 순수 판정 함수(orig_sniper/ 안 원작 복사본, 한 줄도 안 고침)를 하이브리드 상태(F)에 맞춰 부르는 얇은 어댑터.
+# 규칙: ① 원작 로직은 orig_sniper/ 에만 있다 (여기서 다시 쓰지 않음) ② 이 파일은 데이터 모양 바꾸기(F → StratumBucket)와 호출뿐
 #       ③ 원작 코드가 메리츠 코드를 부르지 않는다 (test_hybrid_v290.py 가 검사) ④ 브로커 호출·텔레그램 문구·계좌 경로는 여기에도 안 둠
 # 지금 상태: sniper_mode.py·main.py 에 연결됨 (신호 판정 판 30 · 매도 연결 판 31 · 래칫·스토커 판 32). 하이브리드 매매 동작은 이 어댑터를 거쳐 원작 판정을 부름.
 # 용어(판 35): 버킷 = 매수 1건 (원작 StratumBucket, 시드의 8%) · 층 = 그리드 단계 (원작 tier) · F = 탑쌓기 위치 (하이브리드 전용, F 완성 기준 금액 $15,000). 버킷과 층은 다른 개념 — 한 층에 버킷이 여러 개 있을 수 있음.
@@ -41,7 +41,7 @@ def wide_runway_drop(held_layers, ratchet_layers=0):
 
 
 def layers_to_buckets(layers):
-    """층 목록 [{"qty", "cost"}, ...] → 원작 StratumBucket 목록 (평단 오름차순 = 원작 순서, [0] = 가장 싼 층 = 1층). 수량 0 이하는 뺌"""
+    """F 목록 [{"qty", "cost"}, ...] → 원작 StratumBucket 목록 (평단 오름차순 = 원작 순서, [0] = 가장 싼 층 = 1층). 수량 0 이하는 뺌"""
     out = []
     for r in sorted((x for x in layers or [] if int(TC.safe_float(x.get("qty"))) > 0), key=lambda x: TC.safe_float(x.get("cost")) / max(1, int(TC.safe_float(x.get("qty"))))):
         q, c = int(TC.safe_float(r.get("qty"))), round(TC.safe_float(r.get("cost")), 4)
@@ -50,7 +50,7 @@ def layers_to_buckets(layers):
 
 
 def layers_of(st):
-    """하이브리드 상태(tower_strategy 장부)에서 스나이퍼 층 목록 — 완성·잠긴 F 는 탑쌓기 몫이라 뺌, 미완성 F 의 층(boxes_view)만. [{"qty","cost","floor_id","layer_id"}]"""
+    """하이브리드 상태(tower_strategy 장부)에서 스나이퍼 층 목록 — 완성·잠긴 F 는 탑쌓기 몫이라 뺌, 미완성 F 의 버킷(boxes_view)만. [{"qty","cost","floor_id","layer_id"}]"""
     import tower_strategy as TW
     rows = []
     for f in TW.top_down(st if isinstance(st, dict) else {}):
@@ -62,7 +62,7 @@ def layers_of(st):
 
 
 def reentry_signal(price, anchor, lowest_layer_price, rsi=None, late_cutoff=False, mode=MODE_DEFAULT, hm=None, pullback_drop_pct=None):
-    """원작 evaluate_l2_only_hybrid_reentry_signal 호출 (눌림 % 는 Case 111 모드값, 돌파 +1% · RSI 50 · 15:30 차단 · 상한 가드 = 가장 낮은 층 평단).
+    """원작 evaluate_l2_only_hybrid_reentry_signal 호출 (눌림 % 는 Case 111 모드값, 돌파 +1% · RSI 50 · 15:30 차단 · 상한 가드 = 가장 낮은 F 평단).
     분봉 HA·세션 VWAP·기억 저가 입력은 메리츠 API 에 분봉이 없어 None (원작도 None 이면 그 필터를 건너뜀). RSI None = 모름 → 50 으로 봐서 돌파 안 막음 (원작 규칙, Muse 결정). pullback_drop_pct 를 주면 모드값 대신 그 눌림 % 를 씀 (판 30: 와이드 활주로 눌림)"""
     return QC.evaluate_l2_only_hybrid_reentry_signal(
         live_price=price, anchor_price=anchor, l2_book_price=lowest_layer_price, min_upper_tier_price=lowest_layer_price,

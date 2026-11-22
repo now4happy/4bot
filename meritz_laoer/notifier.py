@@ -62,8 +62,8 @@ _NAME_KO = {
     "toss_sniper_stopped_confirmed": "토스 스나이퍼 정지 확인", "key_file": "키 파일", "telegram_file": "텔레그램 설정 파일",
     "expected_key_fp": "키 지문 기대값", "forbid_key_files": "사용 금지 키 파일", "forbid_telegram_files": "사용 금지 텔레그램 파일",
     "state_dir": "장부 폴더", "symbol": "종목", "price_market": "시세 거래소", "exch_id": "거래소 번호",
-    "split_count": "회차 수", "total_krw": "시드", "tower_floor_usd": "F 완성 기준 금액", "trade_mode": "매매 모드", "tower_buy_gap_usd": "탑쌓기 매수 간격", "tower_box_seed_usd": "버킷 시드", "sniper_portion_pct": "눌림 매수%", "sniper_breakout_portion_pct": "돌파 매수%", "sniper_first_anchor_usd": "첫 기준가", "tower_remaining_seed_usd": "남은 시드", "tower_floors": "층 수",
-    "tower_floor1_start_usd": "1층 시작가", "strategy": "전략", "sell_profit_pct": "목표 이익률", "sell_fraction_pct": "매도 비중",
+    "split_count": "회차 수", "total_krw": "시드", "tower_floor_usd": "F 완성 기준 금액", "trade_mode": "매매 모드", "tower_buy_gap_usd": "탑쌓기 매수 간격", "tower_box_seed_usd": "버킷 시드", "sniper_portion_pct": "눌림 매수%", "sniper_breakout_portion_pct": "돌파 매수%", "sniper_first_anchor_usd": "첫 기준가", "tower_remaining_seed_usd": "남은 시드", "tower_floors": "F 수",
+    "tower_floor1_start_usd": "맨 위 F 시작가", "strategy": "전략", "sell_profit_pct": "목표 이익률", "sell_fraction_pct": "매도 비중",
     "order_type": "주문 방식", "allow_consecutive_sell": "연속 매도", "auto_fx_enabled": "자동환전",
     "auto_fx_buffer_pct": "환전 여유%", "auto_fx_max_usd_per_day": "환전 하루 상한",
     "intraday_sell_check_sec": "장중 매도 확인 간격", "order_time_et": "주문 시작 시각", "order_deadline_et": "주문 마감 시각",
@@ -88,7 +88,7 @@ _FLAG_RE = re.compile("|".join(re.escape(k) for k in sorted(_FLAG_KO, key=len, r
 _WORD_RE = re.compile(r"(?<![A-Za-z0-9_.$])(" + "|".join(sorted(_WORD_KO, key=len, reverse=True)) + r")(?![A-Za-z0-9_])")
 _IDENT_RE = re.compile(r"(?<![A-Za-z0-9_.])[A-Za-z]+(?:_[A-Za-z0-9]+)+(?![A-Za-z0-9_])")
 # 탑쌓기 가격이 아닌 달러 금액(회차 금액·차감·필요·가용·부족…)은 소수점 없이. 가격(현재가·평단·1주·@)은 그대로 둠
-_AMT_RE = re.compile(r"(층 금액 |= |필요 |가용 |부족 |예수금 |원금 |기존 보유 \u2212)\$([\d,]+(?:\.\d+)?)(?![\d,])")
+_AMT_RE = re.compile(r"(= |필요 |가용 |부족 |예수금 |원금 |기존 보유 \u2212)\$([\d,]+(?:\.\d+)?)(?![\d,])")
 
 
 def _int_amt(m):
