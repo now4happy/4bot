@@ -76,7 +76,6 @@ I_FUNDS, I_PLAN, I_LEDGER, I_POWER = "자금 현황", "오늘 계획", "거래 �
 T_CHECK, T_ADD, T_HALT, T_INJECT, T_FP = "점검", "주식 넣기", "정지 해제", "장부 시작", "키 확인"
 T_STOP = "매매 정지"                               # 정지 표시를 켬 (정지 해제의 짝)
 B_SNSET = "스나이퍼 설정"
-RADAR_INLINE = [[("⚙️ " + B_SNSET, B_SNSET)]]      # 판 35 수정 12차: 레이더는 스나이퍼 설정 버튼만 (오늘 계획·자금 현황·거래 내역·봇 상태·새로고침 뺌)
 TOOLS_INLINE = [[T_CHECK, T_ADD], [T_STOP, T_HALT], [T_INJECT, T_FP], [BACK]]
 HALT_OK, INJECT_OK, INJECT_OVER = "정지 해제 확인", "장부 시작 확인", "장부 덮어쓰기 확인"
 CHG_OK = "변경 확인"
@@ -720,6 +719,13 @@ class MenuBot:
             return (f"{KEY_ITEM[k]['name']}  {fmt_val(KEY_ITEM[k], cur_val(s, k))}  ▶ 변경", label)
         return [[lab(x)] for x in labels]
 
+    def radar_inline(self, s):
+        """레이더 화면 — 스나이퍼 설정 6개를 바로 보여줌 (2개씩 묶음). 뒤로 없음 (레이더가 최상위)"""
+        cell = {r[0][1]: r[0] for r in self._set_rows(SNIPER_SET, s)}      # tower_inline과 같은 방식 (설정 버튼은 현재값 포함 동적 생성)
+        return [[cell["눌림 매수% 변경"], cell["돌파 매수% 변경"]],
+                [cell["스나이퍼 1층 익절 변경"], cell["스나이퍼 상단층 익절 변경"]],
+                [cell["버킷 시드 변경"], cell["첫 기준가 변경"]]]
+
     def snset_inline(self, s):
         """스나이퍼 설정 (스나이퍼 레이더 안) — 이름 + 현재값 → 누르면 새 값 입력"""
         return self._set_rows(SNIPER_SET, s) + [[BACK]]
@@ -745,7 +751,7 @@ class MenuBot:
 
     def inline_for(self, s):
         """지금 화면(nav)의 인라인 버튼줄. 첫 화면(main)이면 None → 맨밑 4개 키보드"""
-        return {"radar": RADAR_INLINE, "tower": self.tower_inline(s), "snset": self.snset_inline(s), "fx": self.fx_inline(s), "tools": TOOLS_INLINE}.get(self.nav)
+        return {"radar": self.radar_inline(s), "tower": self.tower_inline(s), "snset": self.snset_inline(s), "fx": self.fx_inline(s), "tools": TOOLS_INLINE}.get(self.nav)
 
     def tower_text(self, s):
         esc = _html.escape
@@ -828,7 +834,7 @@ class MenuBot:
             return self.send(self._c, text or self.fx_text(s), None, s.get("dry_run", True), html=True, inline=self.inline_for(s))
         if name == "tools":
             return say(text or "도구 · 가끔 쓰는 기능이에요", TOOLS_INLINE)
-        return say(text or "스나이퍼 레이더", RADAR_INLINE)
+        return say(text or "스나이퍼 레이더", self.radar_inline(s))
 
     # ---------------------------------------------------------- 설정 변경 (설정 파일 값만 바꿈)
     def _desc(self, changes, res):
@@ -926,7 +932,7 @@ class MenuBot:
         # ---- 첫 화면 4개
         if text == B_RADAR:
             self.nav = "radar"
-            return self.send(c, self.board_text(s), None, dry, html=True, inline=RADAR_INLINE)
+            return self.send(c, self.board_text(s), None, dry, html=True, inline=self.radar_inline(s))
         if text == B_SYNC:
             self.nav = "radar"
             return self.send(c, self.sync_text(s), None, dry, html=True)      # 판 35 수정 12차: 동기화 결과는 글만 (인라인 버튼 없음, 맨밑 키보드만)
@@ -942,13 +948,13 @@ class MenuBot:
             if self.nav in ("tower", "snset"):
                 return self.show(self.nav, s, say)
             self.nav = "radar"
-            return self.send(c, self.board_text(s), None, dry, html=True, inline=RADAR_INLINE)
+            return self.send(c, self.board_text(s), None, dry, html=True, inline=self.radar_inline(s))
         if text == T_TOOLS:
             return self.show("tools", s, say)
         # ---- 레이더 안 (조회만)
         if text in (I_FUNDS, I_PLAN, I_LEDGER, I_POWER):
             self.nav = "radar"
-            return say({I_FUNDS: self.funds_text, I_LEDGER: self.ledger_text, I_POWER: self.power_text}.get(text, lambda x: "\n".join(self.plan_lines(x, self.board(x))))(s), RADAR_INLINE)
+            return say({I_FUNDS: self.funds_text, I_LEDGER: self.ledger_text, I_POWER: self.power_text}.get(text, lambda x: "\n".join(self.plan_lines(x, self.board(x))))(s), self.radar_inline(s))
         # ---- 환전 (설정 값만 바꿈)
         if text in (FX_ON, FX_OFF):
             self.nav = "fx"
@@ -971,7 +977,7 @@ class MenuBot:
                                 + (f"\n설정 문제 {len(bad)}건 (켜도 주문은 막혀요): " + "; ".join(bad[:3]) if bad else ""))
         if text in SET_ITEMS:
             it = SET_ITEMS[text]
-            self.nav = "fx" if it["key"].startswith("auto_fx") else ("snset" if text in SNIPER_SET else "tower")
+            self.nav = "fx" if it["key"].startswith("auto_fx") else ("radar" if self.nav == "radar" else ("snset" if text in SNIPER_SET else "tower"))      # 판 35 수정 14차: 레이더에서 바꾼 설정은 레이더에 머무름 (snset 화면에서 바꾼 건 snset 유지)
             self.wait, self.in_prompt = {"kind": "set", "label": text, "ts": time.time()}, True
             return say(f"{text}\n· 지금: {fmt_val(it, cur_val(s, it['key']))}\n· 넣을 수 있는 값: {self.range_text(it)}\n"
                        f"· 무슨 뜻: {MEANS.get(it['key'], ('', ''))[0]}\n· 바꾸면: {MEANS.get(it['key'], ('', ''))[1]} (주문은 바로 나가지 않아요)\n"
