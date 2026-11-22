@@ -615,9 +615,9 @@ class MenuBot:
             pos = d["pos"]
             lq = int(pos["qty"]) if pos else None
             if lq is None:
-                note = "장부 시작 전이라 동기화할 것이 없어요 (기타 도구 → 장부 시작)"
+                note = "장부 시작 전이라 동기화할 것이 없어요 (채팅에 '장부 시작'이라고 보내면 돼요)"
             elif d["hold"] != lq:
-                note = f"⚠️ 메리츠 잔고 {d['hold']}주 ≠ 장부 {lq}주 — F는 안 바꿨어요. 원인을 확인해 주세요 (직접 산 주식은 도구 → 주식 넣기)"
+                note = f"⚠️ 메리츠 잔고 {d['hold']}주 ≠ 장부 {lq}주 — F는 안 바꿨어요. 원인을 확인해 주세요 (직접 산 주식은 채팅에 '주식 넣기'라고 보내면 돼요)"
             else:
                 with o.in_dir(s["state_dir"]):
                     cfg = o.ConfigManager(s)
@@ -710,7 +710,7 @@ class MenuBot:
                           f"· 입고 확인 {'됨' if s.get('transfer_confirmed') else '전'} · 토스 스나이퍼 정지 확인 {'됨' if s.get('toss_sniper_stopped_confirmed') else '전'}",
                           f"· 키 지문: {fp_txt}",
                           f"· 정지 표시: {halt.get('reason') if halt else '없음'}",
-                          "· 봇 켜기/끄기: 탑쌓기 매매 화면의 봇 켜기/끄기 버튼 · 매매 정지: 기타. 모의/실거래 전환은 메뉴에서 안 바꿔요 (서버 설정·기존 안전 절차 그대로)."])
+                          "· 봇 켜기/끄기: 버튼은 없어요. 채팅에 '봇 끄기'라고 보내면 꺼져요 · 매매 정지: 채팅에 '매매 정지'라고 보내면 켜져요. 모의/실거래 전환은 메뉴에서 안 바꿔요 (서버 설정·기존 안전 절차 그대로)."])
 
 
     # ---------------------------------------------------------- v2.3.0 화면 (인라인 버튼 패널)
@@ -872,7 +872,7 @@ class MenuBot:
         self.in_prompt = False
         hint = ""
         if any(k in ("auto_fx_buffer_pct", "auto_fx_max_usd_per_day") for k in changes) and not (self._s or {}).get("auto_fx_enabled"):
-            hint = ("\n· 이제 자금 → 자동환전 에서 [자동환전 켜기] 를 눌러 주세요." if fx_values_ready(self._s)
+            hint = ("\n· 이제 환전 화면에서 [자동환전 켜기]를 눌러 주세요." if fx_values_ready(self._s)
                     else "\n· 아직 " + ("하루 상한" if _num(self._s.get("auto_fx_buffer_pct")) is not None else "여유%") + "을 입력하지 않았어요.")
         return say("변경됨 (다음 주문 시간부터 적용)\n" + self._desc(changes, res) + hint)
 
