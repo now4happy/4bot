@@ -122,7 +122,8 @@ MEANS = {
     "auto_fx_max_usd_per_day": ("자동환전을 하루에 최대 얼마까지 할지 정한 상한이에요.", "하루 환전 한도가 달라져요"),
 }
 _EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A0-\u25FF\u2300-\u23FF\u2900-\u297F\u2139\uFE0F\u200D])+ ?")   # 예전 이모티콘 키보드 글자를 새 버튼으로 읽는 데 씀
-BOOL_NAME = {"enabled": "봇", "auto_fx_enabled": "자동환전"}
+BOOL_NAME = {"barbell_enabled": "바벨 모드", "enabled": "봇", "auto_fx_enabled": "자동환전"}
+T_BB_ON, T_BB_OFF, BB_OK = "바벨 모드 켜기", "바벨 모드 끄기", "네, 바벨 바꿀게요"      # 판 34 2차: 바벨 켜기/끄기 (기본 꺼짐, 확인 버튼 필수)
 MODE_KO = {"sniper": "하이브리드 스나이퍼 매매", "tower": "탑쌓기 매매"}
 FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # 값 없이 켜기를 눌렀을 때 이 글자만
 SET_POWER = "봇 켜기/끄기"
@@ -151,7 +152,7 @@ WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
 HEAD = "7번 메리츠 SOXL 하이브리드"
 ALL_LABELS = ({B_RADAR, B_SYNC, B_TACT, B_FX, BACK, R_REFRESH, T_TOOLS, I_FUNDS, I_PLAN, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
-               T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, T_MODE_TOWER, T_MODE_SNIPER, MODE_OK} | set(SET_ITEMS))
+               T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, T_MODE_TOWER, T_MODE_SNIPER, MODE_OK, T_BB_ON, T_BB_OFF, BB_OK} | set(SET_ITEMS))
 LABEL_LIST = sorted(ALL_LABELS)
 LABEL_IDX = {x: i for i, x in enumerate(LABEL_LIST)}      # 인라인 버튼 callback_data = "c:<번호>" (64바이트 제한 때문에 글자 대신 번호 — 같은 버전 안에서는 항상 같은 번호)
 
@@ -717,6 +718,7 @@ class MenuBot:
             return (f"{KEY_ITEM[key]['name']}  {fmt_val(KEY_ITEM[key], cur_val(s, key))}  ▶ 변경", label)
         rows = [[lab(SET_ITEMS[x]["key"], x, SET_ITEMS[x]["key"])] for x in TACT_SET]
         rows.append([("🏗 탑쌓기 매매 시작 (지금: 하이브리드 스나이퍼)", T_MODE_TOWER) if _TW.trade_mode(s) != "tower" else ("🔫 스나이퍼 매매로 돌아가기 (지금: 탑쌓기 매매)", T_MODE_SNIPER)])
+        rows.append([("🛡 바벨 모드 끄기 (지금 켜짐)", T_BB_OFF) if s.get("barbell_enabled") is True else ("🛡 바벨 모드 켜기 (지금 꺼짐)", T_BB_ON)])
         rows.append([("🔴 봇 끄기 (지금 켜짐)", BOT_OFF) if s.get("enabled") else ("🟢 봇 켜기 (지금 꺼짐)", BOT_ON)])
         rows.append([("🧰 도구 (점검·주식 넣기·정지·장부 시작·키 확인)", T_TOOLS)])
         return rows
@@ -894,7 +896,7 @@ class MenuBot:
             self.nav = "main"
             return self.show("main", s, say, "메뉴가 바뀌었어요 (하이브리드). 아래 버튼으로 써 주세요.")
         active, self.in_prompt, self.wait = self.in_prompt, False, None
-        if text not in (CHG_OK, MODE_OK):
+        if text not in (CHG_OK, MODE_OK, BB_OK):
             self.pending = None
         if text == BACK:
             return self.show(self.nav if active else PARENT.get(self.nav, self.nav), s, say)
@@ -964,9 +966,28 @@ class MenuBot:
             return say(f"매매 모드를 바꿀까요?\n· 지금 모드: {MODE_KO[cur]}\n· 바꿀 모드: {MODE_KO[to]}\n"
                        f"· 시드(F 시드): ${_TW.params(s)[0]:,.0f}\n· 매수 간격: ${cur_val(s, 'tower_buy_gap_usd')} (시초가 가까운 칸부터 $1씩 아래로 {cur_val(s, 'tower_buy_gap_usd')}칸)\n"
                        f"{MODE_KO[to]}로 바꿀까요? {CONFIRM_SEC}초 안에 [{MODE_OK}] 를 눌러 주세요. 이미 낸 주문은 안 건드리고 다음 판단부터 적용돼요.", [[MODE_OK, BACK]])
+        if text in (T_BB_ON, T_BB_OFF):      # 판 34 2차: 바벨 켜기/끄기 — 바로 안 바꾸고 확인부터. 켜면 F 시드 $9,000·층 $720 (SOXL 60% 몫), 16:10 동기화에서 F 재조정
+            self.nav = "tact"
+            to = text == T_BB_ON
+            if (s.get("barbell_enabled") is True) == to:
+                return say(f"이미 바벨 모드가 {'켜져' if to else '꺼져'} 있어요. 바꿀 것이 없어요.")
+            try:
+                update_settings({"barbell_enabled": to}, dry=True)
+            except (ValueError, OSError) as e:
+                return say(f"바꿀 수 없어요: {e}")
+            self.pending = {"changes": {"barbell_enabled": to}, "mode": "bb"}
+            self.confirm[BB_OK], self.in_prompt = time.time() + CONFIRM_SEC, True
+            f0 = _TW.params(dict(s, barbell_enabled=to))[0]
+            return say(f"바벨 모드를 {'켤까요' if to else '끌까요'}?\n· 바꾼 뒤 F 시드 ${f0:,.0f} · 층 ${_TW.portion_usd(dict(s, barbell_enabled=to)):,.0f}\n"
+                       f"· 암살자는 모의(SIMULATED) 고정이에요. {CONFIRM_SEC}초 안에 [{BB_OK}] 를 눌러 주세요. 이미 낸 주문은 안 건드려요.", [[BB_OK, BACK]])
+        if text == BB_OK:
+            p, self.pending = self.pending, None
+            if not p or p.get("mode") != "bb" or not self._ok_confirm(BB_OK):
+                return say("확인 시간이 지났거나 바꿀 것이 없어요. 바벨 버튼을 다시 눌러 주세요.")
+            return self.apply(s, say, p["changes"])
         if text == MODE_OK:
             p, self.pending = self.pending, None
-            if not p or not p.get("mode") or not self._ok_confirm(MODE_OK):
+            if not p or p.get("mode") is not True or not self._ok_confirm(MODE_OK):
                 return say("확인 시간이 지났거나 바꿀 모드가 없어요. 모드 버튼을 다시 눌러 주세요.")
             return self.apply(s, say, p["changes"])
         if text == ADD_OK:

@@ -126,6 +126,7 @@ import config as cfgmod                      # noqa: E402
 import tower_strategy as TW               # noqa: E402  탑쌓기 (v2.2.9 부터 7번은 탑쌓기만 씀)
 import sniper_mode as SN                  # noqa: E402  v2.2.20 스나이퍼 모드 계산부
 import seed_adjust as SA                  # noqa: E402  v2.9.0 6차 판 33 F 시드 조정
+import barbell_adapter as BB              # noqa: E402  v2.9.0 7차 판 34 2차 바벨 어댑터 (원작 orig_sniper 호출)
 from tower_strategy import ceil2          # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
@@ -542,6 +543,103 @@ def fill_items(m, rows):
     return out
 
 
+def barbell_ctx(s, api=None, dry=None):
+    """판 34 3차: 바벨 원작 함수용 context (SOXL 원장 shim·API shim). 총 시드 $15,000 기준. dry 기본 = 설정 dry_run (실거래면 SGOV 실주문). free_cash 는 처음 한 번 $9,000 − 미완성 F 원가로 시작"""
+    dry = bool(s.get("dry_run", True)) if dry is None else dry
+    d = now_et().strftime("%Y-%m-%d")
+
+    def _px(sym):
+        return float(api.price(sym, s["price_market"])["price"]) if api else 0.0
+    ctx = BB.Context(s["state_dir"], TW.params(dict(s, barbell_enabled=False))[0], _px, dry=dry, meritz=api, settings=s,
+                     fills_fn=(lambda: fill_rows_for(api, s, d)) if api else None)
+    try:
+        tst = ConfigManager(s)._load_json(TOWER_FILE, {}) or {}
+        inc = sum(float(f.get("cost") or 0.0) for f in (tst.get("floors") or []) if not TW.is_complete(f))
+        BB.free_cash_init_once(ctx, inc)
+    except Exception as e:
+        logging.warning(f"바벨 free_cash 시작값 실패 {type(e).__name__}")
+    return ctx
+
+
+def barbell_record_sell(s, net_pnl):
+    """SOXL 매도 체결 순이익 → SCHD 매수 대기금에 더함 (Q7: 금고 대신 SCHD). 바벨 꺼짐이면 아무것도 안 함, 실패해도 매매에 영향 없음"""
+    if s.get("barbell_enabled") is not True or net_pnl <= 0:
+        return None
+    try:
+        return BB.schd_add(s["state_dir"], net_pnl)
+    except Exception as e:
+        logging.warning(f"바벨 SCHD 대기금 기록 실패 {type(e).__name__}")
+        return None
+
+
+def barbell_fill_cash(s, side, amount):
+    """Q6: SOXL 체결 → free_cash 장부 (매수 −, 매도 +). 바벨 꺼짐이면 안 함"""
+    if s.get("barbell_enabled") is not True or amount <= 0:
+        return None
+    try:
+        return BB.free_cash_add(barbell_ctx(s, dry=True), -amount if side == "BUY" else amount)
+    except Exception as e:
+        logging.warning(f"바벨 free_cash 기록 실패 {type(e).__name__}")
+        return None
+
+
+def barbell_gate(s, api, o):
+    """Q8·수혈: SOXL 매수 직전 4단계 수혈 검문 (원작 guard). 통과 못하면 (False, 이유). 꺼짐이면 항상 통과. 검문 자체가 고장이면 안전하게 보류"""
+    if s.get("barbell_enabled") is not True or o.get("side") != "BUY":
+        return True, ""
+    try:
+        ctx = barbell_ctx(s, api)
+        px = float(o.get("price") or 0.0)
+        cost = px * int(o.get("qty") or 0)
+        ok, info = BB.buy_gate(ctx, api.usd_cash(), px, TW.portion_usd(s), cost, str(o.get("kind") or "hybrid_buy"), int(o.get("qty") or 0))
+        for t_, b_ in ctx.alerts:
+            logging.info(f"바벨 알림 {t_}")
+        return ok, str(info.get("action") or "")
+    except Exception as e:
+        return False, f"바벨 수혈 검문 오류 {type(e).__name__} (매수 보류)"
+
+
+def barbell_tick(s, api, note):
+    """바벨 틱 (켜짐일 때만, 실패해도 SOXL 매매 안 막음): ① SGOV 틱(원작; 실거래면 실주문) ② 30초 틱→1분 종가 봉(SOXL·QQQ) + 암살자 모의 지표 ③ SCHD 대기금으로 살 수 있으면 매수"""
+    if s.get("barbell_enabled") is not True:
+        return None
+    out = {}
+    try:
+        ctx = barbell_ctx(s, api)
+        out["sgov"] = BB.sgov_tick(ctx)
+        for t_, b_ in ctx.alerts:
+            note(f"{t_}\n{b_}")
+    except Exception as e:
+        logging.warning(f"바벨 SGOV 틱 실패 {type(e).__name__}")
+    try:
+        sd = s["state_dir"]
+        sx = float(api.price(s["symbol"], s["price_market"])["price"])
+        qx = float(api.price("QQQ", s["price_market"])["price"])
+        sb, qb = BB.bars_add(sd, s["symbol"], sx), BB.bars_add(sd, "QQQ", qx)
+        out["assassin"] = BB.assassin_sim_metrics(sd, sb, qb, sx, qx)
+    except Exception as e:
+        logging.warning(f"암살자 모의 지표 실패 {type(e).__name__}")
+    try:
+        sd = s["state_dir"]
+        px = float(api.price(BB.SCHD, s["price_market"])["price"])
+        dry = bool(s.get("dry_run", True))
+
+        def _buy(q, p):
+            if dry:
+                return f"SIM-SCHD-{int(time.time())}"
+            exch = str(api.holding(BB.SCHD)[2] or s.get("sgov_exch_id") or s.get("exch_id") or "")
+            r = api.order("BUY", BB.SCHD, exch, "LIMIT", q, p)
+            if not str(r.get("no") or "").strip():
+                raise RuntimeError("주문 응답에 주문번호가 없음")
+            return str(r["no"])
+        out["schd"] = BB.schd_try_buy(sd, px, _buy)
+        if out["schd"].get("status") == "ORDERED":
+            note(f"SCHD 매수 {out['schd']['qty']}주 @ {out['schd']['price']} (실현수익 누적금{' · 모의' if dry else ''})")
+    except Exception as e:
+        logging.warning(f"SCHD 매수 실패 {type(e).__name__}")
+    return out
+
+
 def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sniper_only=False):
     """체결을 층 상태(tst)와 장부에 반영 → [{"o","side","dq","da","cq","closed"}] (실제로 새로 반영한 것만).
     - 순서: TW.sort_fills (시간순, 시각 필드가 없으면 매도 먼저, 새 층 계획 매수는 매도 뒤) — 장부도 같은 순서로 반영 (버그 1)
@@ -568,6 +666,10 @@ def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sni
             exec_id = f"{d}_{o['no']}" if pq == 0 else f"{d}_{o['no']}_{it['q']}"
             _, closed = cfg.apply_fill(side, dq, da / dq, d, False, exec_id, cost_removed=(removed if side == "SELL" else None))
         done.append({"o": o, "side": side, "dq": dq, "da": da, "cq": it["q"], "closed": closed})
+        if persist and side == "SELL":
+            barbell_record_sell(s, da - float(removed or 0.0))       # 판 34 3차: 바벨 켜짐일 때만 SCHD 매수 대기금에 더함 (금고 대신)
+        if persist:
+            barbell_fill_cash(s, side, da)                           # 판 34 3차: free_cash 장부 (매수 −, 매도 +)
     tst.pop("_cost_removed", None)
     if persist and done:
         cfg._save_json(TOWER_FILE, tst)
@@ -924,6 +1026,10 @@ def reconcile_attempts(s, api, cfg, m, final):
 def send_order(s, api, cfg, mark, m, o, exch, errors, intraday=False):
     """주문 1건. 주문 전에 '시도'를 표시 파일에 먼저 저장하고(→ 응답이 안 와도 같은 날 다시 안 냄), 결과에 따라
     성공: m['orders'] 에 번호와 함께 · 서버가 분명히 거절/경고: errors 에만 · 응답을 못 받음/번호 없음: m['attempts'] 에 남김(나중에 자동으로 찾음). → 'ok'|'rejected'|'unsure'"""
+    _ok, _why = barbell_gate(s, api, o)                         # 판 34 3차: 바벨 켜짐이면 SOXL 매수 직전 4단계 수혈 검문 (원작 guard)
+    if not _ok:
+        errors.append(f"{o.get('desc')}: 바벨 수혈 검문 보류 {_why}")
+        return "rejected"
     a = dict(o, status="접수 시도 (응답 확인 전)")
     m.setdefault("attempts", []).append(a)
     cfg._save_json(mark, m)
@@ -1511,6 +1617,7 @@ def run_sniper_tick(s, api, note):
     """v2.2.20 스나이퍼 한 번치 (실거래만, loop 가 09:30 ET ~ 체결 반영 시각 전에 부름. 간격 = intraday_sell_check_sec, 최소 30초). 순서:
     ① 오늘 기록이 없으면 만듦 ② 체결 확인 → 매도·스나이퍼 매수 체결은 즉시 장부·층에 반영 (탑쌓기 매수는 run_sync) ③ 체결 알림 ④ 잔고 = 예상 확인 (다르면 보류)
     ⑤ 시세를 분 단위로 모음(RSI 용) ⑥ 층별 목표에 닿으면 그 층 전량 지정가 매도 (정규장·장후, 16:10 전까지) ⑦ 60초마다 눌림·돌파 신호 → 한 층 시드(남은 몫)만큼 지정가 매수 (정규장·16:00 전까지, 15:30 뒤 돌파 차단)"""
+    barbell_tick(s, api, note)                                     # 판 34 3차: 바벨 틱 (SGOV·암살자 모의 지표·SCHD 매수, 켜짐일 때만)
     if s.get("dry_run", True):
         return run_sniper_dry(s, api, note)                    # 판 23 수정1 B7: 모의에서도 스나이퍼가 돌되 주문은 안 나가고 시뮬레이션 기록만
     if not sniper_on(s):

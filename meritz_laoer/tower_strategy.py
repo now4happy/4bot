@@ -84,12 +84,18 @@ def floor_sell_qty(q, frac):
     return max(0, min(rnd(q * _f(frac) / 100.0), q - 1))
 
 
+def barbell_factor(s):
+    """v2.9.0 7차 판 34 2차: 바벨 모드(설정 barbell_enabled 가 정확히 True)면 SOXL 60% 몫 → F 시드·층 시드에 0.60 배율. 꺼짐(기본)이면 1.0 = 판 33 과 같음"""
+    return 0.60 if (s or {}).get("barbell_enabled") is True else 1.0
+
+
 def params(s):
     """(층 금액, 층 수, 간격=칸 수). 설정에 없거나 이상하면 기본값. v2.7.0 판 27: 간격은 사용자 설정이 아니라 내부 고정값 GAP_USD=5로만 돌려줌 (설정 파일에 tower_gap_usd가 남아 있어도 무시)."""
     s = s or {}
     fu = _f(s.get("tower_floor_usd")) or FLOOR_USD
     fl = int(_f(s.get("tower_floors"))) or FLOORS
-    return (fu if fu > 0 else FLOOR_USD), (fl if fl >= 1 else FLOORS), buy_gap(s)
+    fu = fu if fu > 0 else FLOOR_USD
+    return round(fu * barbell_factor(s), 2), (fl if fl >= 1 else FLOORS), buy_gap(s)
 
 
 def trade_mode(s):
@@ -108,7 +114,7 @@ def buy_gap(s):
 def box_seed(s):
     """v2.5.0 박스 시드(달러): 설정 tower_box_seed_usd, 없거나 0 이하면 기본 $15,000"""
     v = _f((s or {}).get("tower_box_seed_usd"))
-    return v if v > 0 else BOX_SEED_USD
+    return round((v if v > 0 else BOX_SEED_USD) * barbell_factor(s), 2)
 
 
 def portion_pct(s):

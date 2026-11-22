@@ -1,11 +1,24 @@
-# 메리츠 SOXL 무매 변경 기록
-
-## v1.3.6 · 2026-11-22 15:18 (KST)
-- 파일: config.py, main.py, notifier.py, seed_adjust.py, sniper_mode.py, tg_menu.py, tower_strategy.py
-- 내용: 메리츠 v2.9.0 (판 33, 6차): 탑쌓기 매매 모드 + F 시드 조정
-- 브랜치: staging
-
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
+
+## v2.3.0 · 2026-11-22 (KST) — 판 34 3차 (meritz_laoer v2.9.0 7차, Q6~Q9 반영)
+- 파일: main.py, barbell_adapter.py, test_hybrid_v340.py, CHANGELOG.md. 원작 orig_sniper/* 안 고침. 안 바뀜: tower_strategy.py, config.py, tg_menu.py 등 (2차와 같음).
+- Q6 free_cash: 바벨 켠 뒤 처음 한 번 $9,000 − 미완성 F 원가로 시작 → SOXL 매수 체결 −, 매도 체결 +, 수혈은 원작 guard 가 shim 원장에 +. 
+- Q7: 실현수익은 금고에 안 넣고 SCHD 매수 대기금에 누적 → 1주 값 이상 모이면 정수 주 지정가 매수(못 사면 계속 모음, 주문 실패면 대기금 그대로). 원작 record_barbell_realized_profit 은 안 부름(금고 비어 있음).
+- Q8: 수혈 워터폴 = 매수 직전(send_order) 원작 evaluate_and_execute_barbell_guard30_or_injection 호출, 못 통과하면 그 매수 보류. SGOV 실주문 = 실거래(dry_run=false)일 때 메리츠 api.order(LIMIT) 경유 (SOXL 과 같은 방식), 체결 확인 = 체결 내역, 거래소 = 보유 조회 값 → sgov_exch_id → exch_id. 모의면 주문 안 나감.
+- Q9: 바벨 틱마다(30초) SOXL·QQQ 시세를 1분 종가 봉으로 저장(시·고·저=종가, 거래량 0, VWAP 안 만듦) → 원작 1분 지표 함수로 암살자 모의 지표 기록. 암살자 모의(SIMULATED) 고정, LIVE 이면 새 매매 막음(원작 규칙).
+- 미실행: 서버·실거래·SGOV/SCHD 실주문·메리츠 실시세·텔레그램 실발송.
+
+## v2.2.0 · 2026-11-22 (KST) — 판 34 2차·부분 (meritz_laoer v2.9.0 7차, 바벨 연결)
+- 파일: main.py, tower_strategy.py, config.py, tg_menu.py, barbell_adapter.py, test_hybrid_v340.py, test_hybrid_v300.py(해시 고정 항목만), CHANGELOG.md. 원작 orig_sniper/* 안 고침.
+- 설정 barbell_enabled(기본 꺼짐, true/false 만). 텔레그램 [바벨 모드 켜기/끄기] → 확인 메시지 → [네, 바벨 바꿀게요] 를 눌러야만 바뀜. 켜면 F 시드 $15,000→$9,000, 층(박스) 시드 ×0.60 → 층 $720 (16:10 동기화에서 F 시드 조정이 다시 나눔). 꺼짐이면 판 33 과 똑같음.
+- 연결됨: ① SOXL 매도 체결(apply_tower_fills) → 수익금 금고 기록(원작 record_barbell_realized_profit) ② SGOV 틱(run_sniper_tick 맨 앞, 원작 execute_barbell_sgov_tick_plugin) — 모의 전용(실주문 안 나감, 실거래 SGOV 주문은 막아 둠).
+- 미연결: 4단계 수혈 워터폴(guard30/injection) 매수 직전 연결, SGOV 실주문, 암살자 1분봉 모의 실행(암살자는 모의 고정·실전 전환 코드 없음).
+- 미실행: 서버 적용·실거래·SGOV 실주문/시세·텔레그램 실발송·푸시.
+
+## v2.1.0 · 2026-11-22 (KST) — 판 34 1차·부분 (meritz_laoer v2.9.0 7차, 바벨 어댑터 + 암살자 모의 고정)
+- 파일: barbell_adapter.py(신설), test_hybrid_v340.py(신설), CHANGELOG.md. 안 바뀜: main.py, sniper_mode.py, tower_strategy.py, config.py, tg_menu.py, notifier.py, seed_adjust.py, sniper_adapter.py, orig_sniper/*
+- barbell_adapter.py: 원작 barbell_plugin.py·assassin_plugin.py 복사본을 안 고치고 부르는 얇은 층 — 60/30/10 배분, SGOV 정규장 시간창(09:31~15:55 EST), 현금 10% 상당 SGOV 정수 주 내림 수량, 바벨 전용 원장(state_dir/data/barbell), 암살자 실전 여부(원작 함수). 암살자는 모의(SIMULATED) 고정, 실전으로 바꾸는 코드 없음.
+- 거래 코드에는 아직 연결 안 함(하이브리드 동작은 판 33 과 같음). 4단계 수혈 워터폴·수익금 금고 기록·SGOV 주문은 SOXL 원장 모양·SGOV API 결정이 필요해 질문란으로 넘김.
 
 ## v2.0.0 · 2026-11-22 (KST) — 판 33 (meritz_laoer v2.9.0 6차, 탑쌓기 매매 모드 + 잔고 동기화 F 시드 조정)
 - 파일: main.py, sniper_mode.py, tower_strategy.py, config.py, tg_menu.py, notifier.py, seed_adjust.py(신설), CHANGELOG.md, test_hybrid_v330.py(신설), test_hybrid_v300.py(해시 고정 항목만 판 33 값도 허용). 안 바뀜: sniper_adapter.py, sub_grid.py, sync_orig.py, orig_sniper/*

@@ -209,6 +209,9 @@ def validate_settings(s):
     tm = s.get("trade_mode")      # v2.9.0 6차 판 33: 매매 모드 — 없으면 sniper(하이브리드 스나이퍼), 있으면 sniper | tower 만
     if tm is not None and tm not in ("sniper", "tower"):
         bad.append("trade_mode 는 sniper 또는 tower (매매 모드)")
+    be = s.get("barbell_enabled")      # v2.9.0 7차 판 34 2차: 바벨 모드 켜기 — 없으면 꺼짐, 있으면 true/false 만
+    if be is not None and not isinstance(be, bool):
+        bad.append("barbell_enabled 는 true 또는 false (바벨 모드 켜기)")
     bg = s.get("tower_buy_gap_usd")      # 탑쌓기 매매 매수 간격 — 없으면 5, 있으면 1~10 정수
     if bg is not None and (isinstance(bg, bool) or not isinstance(bg, (int, float)) or not (1 <= _f(bg) <= 10) or _f(bg) != int(_f(bg))):
         bad.append("tower_buy_gap_usd 는 1~10 정수 (탑쌓기 매매 매수 간격, 달러)")
