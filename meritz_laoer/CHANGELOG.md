@@ -1,3 +1,10 @@
+# 메리츠 SOXL 무매 변경 기록
+
+## v1.3.6 · 2026-11-22 15:18 (KST)
+- 파일: config.py, main.py, notifier.py, seed_adjust.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.9.0 (판 33, 6차): 탑쌓기 매매 모드 + F 시드 조정
+- 브랜치: staging
+
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
 ## v2.0.0 · 2026-11-22 (KST) — 판 33 (meritz_laoer v2.9.0 6차, 탑쌓기 매매 모드 + 잔고 동기화 F 시드 조정)
