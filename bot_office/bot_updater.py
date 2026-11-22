@@ -98,7 +98,7 @@ CHECK_EVERY = int(os.environ.get("U_EVERY", "300"))
 KST, ET = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 NAMES = {"han4384tubot.service": "1번 한투 라오어", "toss_sniper.service": "2번 토스 스나이퍼",
          "toss_dca.service": "3번 토스 적립", "bithumb_bot.service": "4번 빗썸 적립", OFFICE_UNIT: "5번 사무실 비서",
-         "meritz_laoer.service": "메리츠 SOXL 무매", "meritz_dca.service": "메리츠 적립"}
+         "meritz_laoer.service": "메리츠 SOXL 하이브리드모드", "meritz_dca.service": "메리츠 적립"}
 SECRET_RE = re.compile(r"(\d{8,10}:[A-Za-z0-9_-]{30,}|ghp_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY|sk-[A-Za-z0-9]{20,})")
 # alert-hub 자동 설치 (승인만으로 설치되게 하기 위한, 업데이터 내장 설치 — 봇 코드가 아님)
 HUB_DIR = os.path.join(REPO, "alert-hub")
