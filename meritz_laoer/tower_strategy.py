@@ -2,9 +2,9 @@
 # FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.7.0)
 # v2.9.0 6차 (2026-11-22, 판 33): trade_mode(s)·buy_gap(s) 추가 — params 의 간격(칸 수)은 tower 모드에서만 설정 tower_buy_gap_usd(1~10, 기본 5), 스나이퍼 모드는 예전처럼 GAP_USD=5. 그 밖의 계산은 안 바꿈
 # v2.7.0 (2026-11-21, 판 27): 층 간격 사용자 설정(tower_gap_usd) 제거 — params()는 간격을 내부 고정값 GAP_USD=5로만 돌려줌 (층 칸(levels) 만들기에만 씀, 매매 규칙 아님). 설정 파일에 tower_gap_usd가 남아 있어도 무시함.
-# v2.6.0 (2026-11-21, 판 26): ① 박스 모델 — 미완성 층 floor['boxes'] = [{id, qty, cost, ono}] (매수 체결 1건 = 박스 1개, 층 qty·cost = 박스 합, 예전 상태·불일치는 층 전체 1박스 id 0) · boxes_view·sync_boxes·fit_boxes·next_box_id · _apply_sell 박스별(층 원가·수량은 판 박스 몫만) · 병합·장부 조정·입고가 박스 유지 ② portion_pct(s) 추가, portion_usd(s) 가 설정 비율 사용 (PORTION_PCT=8.0 은 기본값) · percent_plan(portion_pct_=)
-# v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층): ① 박스 시드 box_seed(s)(tower_box_seed_usd, 기본 $15,000)·매수 분할 portion_usd(s)(박스 시드의 8%, 단리 고정)·서브 4% sub_portion_usd(s) 추가 ② 층 표현 = 평단 정수 달러(price_label·floor_labels, 소수점 버림 — 내부 id 는 그대로)
-#   ③ 탑 매도 체결 뒤 남은 층은 '잠금'을 풀어 공사중 박스로 되돌림(_apply_sell — 토스 스나이퍼가 비워진 부분을 다시 채우고, 채워지면 다시 완성 층) ④ percent_plan(남은 시드→나누는 비율 계산, 표시용 순수 계산) ⑤ view_lines 가 층을 평단 달러로 표시.
+# v2.6.0 (2026-11-21, 판 26): ① 버킷 모델 — 미완성 층 floor['boxes'] = [{id, qty, cost, ono}] (매수 체결 1건 = 버킷 1개, 층 qty·cost = 버킷 합, 예전 상태·불일치는 층 전체 1버킷 id 0) · boxes_view·sync_boxes·fit_boxes·next_box_id · _apply_sell 버킷별(층 원가·수량은 판 버킷 몫만) · 병합·장부 조정·입고가 버킷 유지 ② portion_pct(s) 추가, portion_usd(s) 가 설정 비율 사용 (PORTION_PCT=8.0 은 기본값) · percent_plan(portion_pct_=)
+# v2.5.0 (2026-11-21, 판 25 하이브리드 버킷·층): ① 버킷 시드 box_seed(s)(tower_box_seed_usd, 기본 $15,000)·매수 분할 portion_usd(s)(버킷 시드의 8%, 단리 고정)·서브 4% sub_portion_usd(s) 추가 ② 층 표현 = 평단 정수 달러(price_label·floor_labels, 소수점 버림 — 내부 id 는 그대로)
+#   ③ 탑 매도 체결 뒤 남은 층은 '잠금'을 풀어 공사중 버킷으로 되돌림(_apply_sell — 토스 스나이퍼가 비워진 부분을 다시 채우고, 채워지면 다시 완성 층) ④ percent_plan(남은 시드→나누는 비율 계산, 표시용 순수 계산) ⑤ view_lines 가 층을 평단 달러로 표시.
 #   바뀌지 않은 것: make_plan·_apply_buy(탑쌓기 칸 매수 — 하이브리드에서는 안 부름)·is_tower·합병·동기화.
 # v2.4.0 (2026-11-21, 판 24): 층 상태에 locked(잠금=탑 매도)·st["empty"](빈 층: 지하층·스나이퍼 선택 새 층)·indep(합병 안 하는 층) 추가 — is_tower(잠금 또는 완성)·ledger_fix_state(일회성 장부 바로잡기용 층 목록 교체). 기본값이면 v2.3.0 동작 그대로.
 # v2.3.0 (2026-11-21, 판 23 하이브리드): make_plan 에 인자 2개 추가(기본값이면 v2.2.20 동작 그대로) — complete_only=True: 매도를 '완성 층'만 계산(탑 매도 +10% → 50%), sell_only=True: 매도 계산 뒤 매수 계획 없이 돌려줌(매수는 스나이퍼 몫).
@@ -50,10 +50,10 @@ FLOOR_USD = 15000.0        # 한 층 금액 (달러)
 FLOORS = 10                # 층 수 → 총 한도 = FLOOR_USD × FLOORS = $150,000
 GAP_USD = 5                # v2.7.0 판 27: 층 칸 수 (내부 고정값) — 한 층의 칸(levels) 수. 사용자 설정(tower_gap_usd)은 없앴고, 칸 만들기에만 씀 (매매 규칙 아님).
 TOL_USD = 100.0            # 완성 허용 오차: 층 투자금이 목표에서 이만큼 이내로 모자라면 완성 (슬리피지·반올림)
-BOX_SEED_USD = 15000.0     # v2.5.0 박스 시드 기본값 (달러) — 설정 tower_box_seed_usd. 풀이님 결정 2026-11-21 (Q9): 기존 완성 층($15,000)과 같은 금액
-PORTION_PCT = 8.0          # v2.5.0 신호 한 번에 사는 금액 = 박스 시드의 8% (토스 quant_engine.py:46 PORTION_RATIO_LOCKED = 0.08, 단리 고정 — 총자산 % 복리는 안 씀)
-BREAKOUT_PORTION_PCT = 16.0   # v2.5.0 수정1 돌파 매수 한 번에 사는 금액 = 박스 시드의 16% (눌림은 8% 그대로) — 설정 sniper_breakout_portion_pct, 기본 16 (8%의 2배, 시드 $15,000 이면 $2,400)
-SUB_PORTION_PCT = 4.0      # v2.5.0 서브 그리드 한 번에 사는 금액 = 박스 시드의 4% (토스 SUB_PORTION_RATIO_4PCT = 0.04)
+BOX_SEED_USD = 15000.0     # v2.5.0 버킷 시드 기본값 (달러) — 설정 tower_box_seed_usd. 풀이님 결정 2026-11-21 (Q9): 기존 완성 층($15,000)과 같은 금액
+PORTION_PCT = 8.0          # v2.5.0 신호 한 번에 사는 금액 = 버킷 시드의 8% (토스 quant_engine.py:46 PORTION_RATIO_LOCKED = 0.08, 단리 고정 — 총자산 % 복리는 안 씀)
+BREAKOUT_PORTION_PCT = 16.0   # v2.5.0 수정1 돌파 매수 한 번에 사는 금액 = 버킷 시드의 16% (눌림은 8% 그대로) — 설정 sniper_breakout_portion_pct, 기본 16 (8%의 2배, 시드 $15,000 이면 $2,400)
+SUB_PORTION_PCT = 4.0      # v2.5.0 서브 그리드 한 번에 사는 금액 = 버킷 시드의 4% (토스 SUB_PORTION_RATIO_4PCT = 0.04)
 REMAINING_SEED_USD = 120000.0    # 퍼센트 작업 기본 입력값: 남은 시드 (설정 tower_remaining_seed_usd 로 바꿀 수 있음)
 PCT_BAND_HI_USD = 30.0     # 퍼센트 작업: 고르게 나눌 가격 구간 위쪽 ($30) — 근거 percent_work.md
 PCT_BAND_LO_USD = 10.0     # 퍼센트 작업: 구간 아래쪽 ($10)
@@ -85,7 +85,7 @@ def floor_sell_qty(q, frac):
 
 
 def barbell_factor(s):
-    """v2.9.0 7차 판 34 2차: 바벨 모드(설정 barbell_enabled 가 정확히 True)면 SOXL 60% 몫 → F 시드·층 시드에 0.60 배율. 꺼짐(기본)이면 1.0 = 판 33 과 같음"""
+    """v2.9.0 7차 판 34 2차: 바벨 모드(설정 barbell_enabled 가 정확히 True)면 SOXL 60% 몫 → F 완성 기준 금액·버킷 시드에 0.60 배율. 꺼짐(기본)이면 1.0 = 판 33 과 같음"""
     return 0.60 if (s or {}).get("barbell_enabled") is True else 1.0
 
 
@@ -112,7 +112,7 @@ def buy_gap(s):
 
 
 def box_seed(s):
-    """v2.5.0 박스 시드(달러): 설정 tower_box_seed_usd, 없거나 0 이하면 기본 $15,000"""
+    """v2.5.0 버킷 시드(달러): 설정 tower_box_seed_usd, 없거나 0 이하면 기본 $15,000"""
     v = _f((s or {}).get("tower_box_seed_usd"))
     return round((v if v > 0 else BOX_SEED_USD) * barbell_factor(s), 2)
 
@@ -127,7 +127,7 @@ def portion_pct(s):
 
 
 def portion_usd(s):
-    """v2.6.0 신호 한 번에 사는 금액 = 박스 시드 × 눌림 비율(portion_pct, 기본 8%) (단리 고정, 달러 2자리). 시드 $15,000 이고 8% 이면 $1,200"""
+    """v2.6.0 신호 한 번에 사는 금액 = 버킷 시드 × 눌림 비율(portion_pct, 기본 8%) (단리 고정, 달러 2자리). 시드 $15,000 이고 8% 이면 $1,200"""
     return round(box_seed(s) * portion_pct(s) / 100.0, 2)
 
 
@@ -138,12 +138,12 @@ def breakout_portion_pct(s):
 
 
 def breakout_portion_usd(s):
-    """v2.5.0 수정1 돌파 신호 한 번에 사는 금액 = 박스 시드 × 돌파 비율 (기본 16% → 시드 $15,000 이면 $2,400)"""
+    """v2.5.0 수정1 돌파 신호 한 번에 사는 금액 = 버킷 시드 × 돌파 비율 (기본 16% → 시드 $15,000 이면 $2,400)"""
     return round(box_seed(s) * breakout_portion_pct(s) / 100.0, 2)
 
 
 def sub_portion_usd(s):
-    """v2.5.0 서브 그리드 한 번에 사는 금액 = 박스 시드 × 4% (시드 $15,000 이면 $600)"""
+    """v2.5.0 서브 그리드 한 번에 사는 금액 = 버킷 시드 × 4% (시드 $15,000 이면 $600)"""
     return round(box_seed(s) * SUB_PORTION_PCT / 100.0, 2)
 
 
@@ -173,8 +173,8 @@ def floor_labels(st):
 
 
 def percent_plan(remaining_usd, box_usd, hi=PCT_BAND_HI_USD, lo=PCT_BAND_LO_USD, portion_pct_=None):
-    """v2.5.0 퍼센트 작업(표시용 순수 계산, 주문에 안 씀): 남은 시드를 가격 구간 hi→lo 에 층(박스)마다 같은 금액·같은 가격 폭으로 나눔.
-    박스 수 n = 남은 시드 ÷ 박스 시드 (반올림, 최소 1) · 박스당 금액 = 남은 시드 ÷ n · 박스당 비율(%) = 100 ÷ n · 박스당 가격 폭 = (hi − lo) ÷ n ·
+    """v2.5.0 퍼센트 작업(표시용 순수 계산, 주문에 안 씀): 남은 시드를 가격 구간 hi→lo 에 버킷마다 같은 금액·같은 가격 폭으로 나눔.
+    버킷 수 n = 남은 시드 ÷ 버킷 시드 (반올림, 최소 1) · 버킷당 금액 = 남은 시드 ÷ n · 버킷당 비율(%) = 100 ÷ n · 버킷당 가격 폭 = (hi − lo) ÷ n ·
     $1 당 금액 = 남은 시드 ÷ (hi − lo) · $1 당 비율(%) = 100 ÷ (hi − lo). 구간 = 위에서부터 [hi, hi − 폭], … 입력이 이상하면(0 이하·hi ≤ lo) None.
     토스 신호 숫자(눌림·돌파)는 안 바꿈 — 남은 시드를 바꾸면 이 값이 다시 계산됨. v2.6.0: portion_pct_ 를 주면(호출한 쪽이 TW.portion_pct(s) 를 넘김) 그 비율을, 없으면 기본 8%를 표시"""
     r, b, h, l_ = _f(remaining_usd), _f(box_usd), _f(hi), _f(lo)
@@ -231,7 +231,7 @@ def ensure_state(st):
     if not isinstance(st.get("absorbed"), dict):
         st["absorbed"] = {}
     if isinstance(st.get("next_box"), bool) or not isinstance(st.get("next_box"), int) or st.get("next_box") < 1:
-        st["next_box"] = 1                                            # v2.6.0: 박스 번호 발급기 (상태 안에서 겹치지 않는 박스 번호)
+        st["next_box"] = 1                                            # v2.6.0: 버킷 번호 발급기 (상태 안에서 겹치지 않는 버킷 번호)
     if not isinstance(st.get("empty"), list):
         st["empty"] = []                                              # v2.4.0: 빈 층(지하층·스나이퍼 선택 새 층) 목록 — 0주라 floors 에 못 둠 (normalize 가 수량 0 층을 지움)
     legacy = bool(st.pop("sell_block", False))
@@ -262,15 +262,15 @@ def _floor(fid, qty, cost, target, kind):
             "levels": [], "settled": [], "base_usd": 0.0, "carry_usd": 0.0, "kind": kind, "rebuy_pending": False, "locked": False, "boxes": []}
 
 
-# ---------------------------------------------------------------- v2.6.0 박스 (미완성 층의 매수 1건 = 박스 1개)
-# 박스 = {"id": 상태 안에서 겹치지 않는 번호, "qty": 주, "cost": 원가(달러), "ono": 산 주문번호(선택 — 같은 주문의 부분 체결을 한 박스로 모음)}.
-# 규칙: 층의 qty·cost 는 박스들의 합과 같다. 박스가 없거나 합이 안 맞으면(예전 상태 파일·장부 조정·탑 매도 뒤 잔여) 층 전체를 박스 1개(id 0, 평단 = 층 평단)로 본다.
-# 완성 층(탑 매도)은 박스를 안 씀 — 완성되면 boxes 를 비움.
-BOX_COST_TOL = 0.05         # 박스 원가 합과 층 원가가 이만큼(달러) 이내로 다르면 같은 것으로 봄 (반올림 먼지)
+# ---------------------------------------------------------------- v2.6.0 버킷 (미완성 층의 매수 1건 = 버킷 1개)
+# 버킷 = {"id": 상태 안에서 겹치지 않는 번호, "qty": 주, "cost": 원가(달러), "ono": 산 주문번호(선택 — 같은 주문의 부분 체결을 한 버킷으로 모음)}.
+# 규칙: 층의 qty·cost 는 버킷들의 합과 같다. 버킷이 없거나 합이 안 맞으면(예전 상태 파일·장부 조정·탑 매도 뒤 잔여) 층 전체를 버킷 1개(id 0, 평단 = 층 평단)로 본다.
+# 완성 층(탑 매도)은 버킷을 안 씀 — 완성되면 boxes 를 비움.
+BOX_COST_TOL = 0.05         # 버킷 원가 합과 층 원가가 이만큼(달러) 이내로 다르면 같은 것으로 봄 (반올림 먼지)
 
 
 def boxes_view(f):
-    """읽기 전용 박스 목록 (복사본, 상태 안 바꿈). 수량 0 이하 층은 []. 박스 합이 층 qty·cost 와 다르거나 박스가 없으면 [층 전체 1개(id 0)]"""
+    """읽기 전용 버킷 목록 (복사본, 상태 안 바꿈). 수량 0 이하 층은 []. 버킷 합이 층 qty·cost 와 다르거나 버킷이 없으면 [층 전체 1개(id 0)]"""
     q, c = int(_f(f.get("qty"))), _f(f.get("cost"))
     if q <= 0:
         return []
@@ -289,7 +289,7 @@ def box_avg(b):
 
 
 def next_box_id(st):
-    """겹치지 않는 새 박스 번호 (발급기 st['next_box'] 와 지금 있는 박스 번호 중 큰 값 + 1 을 보장)"""
+    """겹치지 않는 새 버킷 번호 (발급기 st['next_box'] 와 지금 있는 버킷 번호 중 큰 값 + 1 을 보장)"""
     used = [int(_f(b.get("id"))) for f in (st.get("floors") or []) for b in (f.get("boxes") or []) if isinstance(b, dict)]
     nb = max(int(_f(st.get("next_box"))) or 1, max(used, default=0) + 1, 1)
     st["next_box"] = nb + 1
@@ -297,10 +297,10 @@ def next_box_id(st):
 
 
 def sync_boxes(st, f):
-    """상태를 바꾸는 쪽에서 부름: 층 f 의 boxes 를 boxes_view 결과로 맞춤 (합이 맞으면 반올림 먼지를 마지막 박스에 흡수해 합을 정확히). 완성 층은 건드리지 않음 → 박스 목록"""
+    """상태를 바꾸는 쪽에서 부름: 층 f 의 boxes 를 boxes_view 결과로 맞춤 (합이 맞으면 반올림 먼지를 마지막 버킷에 흡수해 합을 정확히). 완성 층은 건드리지 않음 → 버킷 목록"""
     if is_tower(f):
         return boxes_view(f)
-    bs = boxes_view(f)                                                # 예전 상태·불일치면 1박스 (id 0)
+    bs = boxes_view(f)                                                # 예전 상태·불일치면 1버킷 (id 0)
     if bs:
         bs[-1]["cost"] = round(bs[-1]["cost"] + (_f(f.get("cost")) - sum(b["cost"] for b in bs)), 4)
     f["boxes"] = bs
@@ -308,7 +308,7 @@ def sync_boxes(st, f):
 
 
 def fit_boxes(st, f):
-    """층 qty·cost 를 바깥에서 바꾼 뒤(장부 조정·입고) 박스를 맞춤: 차이를 마지막 박스가 받음 (받아도 수량이 1 이상 남을 때만) — 안 되면 박스를 비워 1박스로 접음"""
+    """층 qty·cost 를 바깥에서 바꾼 뒤(장부 조정·입고) 버킷을 맞춤: 차이를 마지막 버킷이 받음 (받아도 수량이 1 이상 남을 때만) — 안 되면 버킷을 비워 1버킷으로 접음"""
     q, c = int(_f(f.get("qty"))), _f(f.get("cost"))
     bs = [b for b in (f.get("boxes") or []) if isinstance(b, dict) and int(_f(b.get("qty"))) > 0]
     if q <= 0 or not bs:
@@ -757,9 +757,9 @@ def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
             st["empty"] = [e for e in (st.get("empty") or []) if str(e.get("id")) != str(eid)]
     if f is None:
         return
-    bs = sync_boxes(st, f)                                            # v2.6.0: 사기 전 보유분을 박스로 정리 (예전 상태면 1박스)
+    bs = sync_boxes(st, f)                                            # v2.6.0: 사기 전 보유분을 버킷으로 정리 (예전 상태면 1버킷)
     ono = str(order.get("no") or "").strip()
-    hit = next((b for b in bs if ono and b.get("ono") == ono), None)  # 같은 주문의 부분 체결은 한 박스로 모음 (매수 체결 1건 = 박스 1개)
+    hit = next((b for b in bs if ono and b.get("ono") == ono), None)  # 같은 주문의 부분 체결은 한 버킷으로 모음 (매수 체결 1건 = 버킷 1개)
     if hit is not None:
         hit["qty"], hit["cost"] = int(hit["qty"]) + q, round(_f(hit["cost"]) + amt, 4)
     else:
@@ -771,7 +771,7 @@ def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
     need = _f(f.get("target") or FLOOR_USD) - _f(f["cost"])
     if is_complete(f) or need < amt / q - 1e-9:
         f["done"], f["levels"], f["settled"], f["base_usd"], f["carry_usd"] = True, [], [], 0.0, 0.0
-        f["boxes"] = []                                               # v2.6.0: 층 완성 = 탑 매도 층 (박스별 매도 끝)
+        f["boxes"] = []                                               # v2.6.0: 층 완성 = 탑 매도 층 (버킷별 매도 끝)
     else:
         _topup_setup(f, gap, start_usd)
         f["rebuy_pending"] = False
@@ -787,7 +787,7 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
         a = min(q, int(_f(tf.get("qty"))))
         bid = order.get("box_id")
         box = None
-        if a > 0 and bid is not None and order.get("mode") == "sniper":      # v2.6.0 박스별 매도: 그 박스만 줄임 (층 원가·수량도 그 박스 몫만큼만)
+        if a > 0 and bid is not None and order.get("mode") == "sniper":      # v2.6.0 버킷별 매도: 그 버킷만 줄임 (층 원가·수량도 그 버킷 몫만큼만)
             bs = sync_boxes(st, tf)
             box = next((b for b in bs if int(b["id"]) == int(_f(bid))), None)
         if box is not None:
@@ -803,7 +803,7 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
             c = _f(tf.get("cost")) if a == int(tf["qty"]) else _f(tf.get("cost")) * a / int(tf["qty"])
             tf["qty"] = int(tf["qty"]) - a
             tf["cost"] = round(max(0.0, _f(tf["cost"]) - c), 4)
-            tf["boxes"] = []                                         # v2.6.0: 층 단위 매도(탑 매도·예전 주문) 뒤 남은 주식은 박스 1개로 봄 (평단 = 층 평단)
+            tf["boxes"] = []                                         # v2.6.0: 층 단위 매도(탑 매도·예전 주문) 뒤 남은 주식은 버킷 1개로 봄 (평단 = 층 평단)
             removed = round(c, 4)
             sold = [tf]
     else:
@@ -833,7 +833,7 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
                 continue
             _topup_setup(f, gap, start_usd)                          # 팔린 층만 탑업 준비 (v2.2.6)
             f["rebuy_pending"] = not f.get("done")                   # 다시 살 게 없는(완성) 층은 매도 금지를 걸지 않음 — 걸면 풀 매수가 영영 없음
-            if not f.get("done"):                                    # v2.5.0 판 25: 탑 매도로 일부 비워진 층은 잠금을 풀어 다시 공사중 박스로 (스나이퍼가 채움 · 채워지면 다시 완성 층)
+            if not f.get("done"):                                    # v2.5.0 판 25: 탑 매도로 일부 비워진 층은 잠금을 풀어 다시 공사중 버킷으로 (스나이퍼가 채움 · 채워지면 다시 완성 층)
                 f["locked"] = False
     st["_cost_removed"] = removed
 
@@ -934,7 +934,7 @@ def add_holdings(st, qty, avg, s=None):
         st["floors"], st["next_id"] = [f], 2
         return 1, [f"층 없음 → 입고 {q}주를 1층으로 만듦 (평단 ${a:.2f})"]
     f = next((x for x in live if not is_complete(x)), live[-1])
-    bs = sync_boxes(st, f) if not is_tower(f) else []                  # v2.6.0: 입고분은 박스 1개로 더함
+    bs = sync_boxes(st, f) if not is_tower(f) else []                  # v2.6.0: 입고분은 버킷 1개로 더함
     if bs or not is_tower(f):
         bs.append({"id": next_box_id(st), "qty": q, "cost": round(q * a, 4), "ono": ""})
         f["boxes"] = bs
@@ -956,7 +956,7 @@ def add_holdings(st, qty, avg, s=None):
 def _merge(a, b, gap, start_usd=0.0, st=None):
     m = _floor(min(int(a["id"]), int(b["id"])), int(a["qty"]) + int(b["qty"]), _f(a["cost"]) + _f(b["cost"]), max(_f(a["target"]), _f(b["target"])), "merged")
     _topup_setup(m, gap, start_usd)
-    if not is_tower(m) and not (a.get("locked") or b.get("locked")):       # v2.6.0: 합친 층이 미완성이면 두 층의 박스를 이어 붙임 (번호가 겹치면 새로 발급)
+    if not is_tower(m) and not (a.get("locked") or b.get("locked")):       # v2.6.0: 합친 층이 미완성이면 두 층의 버킷을 이어 붙임 (번호가 겹치면 새로 발급)
         seen, mb = set(), []
         for b0 in boxes_view(a) + boxes_view(b):
             if b0["id"] in seen:
@@ -1020,7 +1020,7 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
         for f in fl:
             take_q = max(rest_q, -int(f["qty"])) if rest_q < 0 else rest_q
             if not is_tower(f):
-                sync_boxes(st, f)                                     # v2.6.0: 조정 전에 박스를 층과 맞춰 둠 (조정 뒤 fit_boxes 가 차이를 마지막 박스에 넣음)
+                sync_boxes(st, f)                                     # v2.6.0: 조정 전에 버킷을 층과 맞춰 둠 (조정 뒤 fit_boxes 가 차이를 마지막 버킷에 넣음)
             f["qty"] = int(f["qty"]) + take_q
             rest_q -= take_q
             take_c = max(rest_c, -_f(f["cost"])) if rest_c < 0 else rest_c

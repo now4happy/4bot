@@ -7,6 +7,13 @@
 
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
+## v2.4.0 · 2026-11-22 (KST) — 판 35 (meritz_laoer v2.9.0 8차, 용어 정리 + 텔레그램 개편)
+- 파일: main.py, seed_adjust.py, tower_strategy.py, tg_menu.py, sniper_mode.py, sniper_adapter.py, sub_grid.py, config.py, notifier.py, barbell_adapter.py, README.md, CHANGELOG.md, 옛 시험 8개(문구·해시 고정만), test_hybrid_v350.py(신설). 원작 orig_sniper/* 안 고침.
+- 용어(동작 변경 없음): "F 시드"→"F 완성 기준 금액", "층 $720"→"버킷 $720", "박스"→"버킷"(주석·문서·표시 문구, 11개 파일). 기준: 버킷 = 매수 1건(원작 StratumBucket) · 층 = 그리드 단계(원작 tier) · F = 탑쌓기 위치(하이브리드 전용). sniper_adapter.py 헤더 옛 문구·sniper_mode.py RSI 주석(판 30 Q2: RSI 모르면 돌파 안 막음) 고침. 설정 키 이름(tower_box_seed_usd 등)은 안 바꿈.
+- 텔레그램: 전술 제어반(⚙️) 삭제. 첫 화면 [🔫 스나이퍼 레이더][🏛️ 탑쌓기 매매] / [🔄 잔고 동기화][💱 환전]. 스나이퍼 레이더 안 [⚙️ 스나이퍼 설정](버킷 시드·눌림%·돌파%·첫 기준가·1층 익절·상단층 익절). 탑쌓기 매매 화면 안: 매수 간격·F 완성 기준 금액·탑쌓기 매도%·매도 비중·하루 매수/매도 F 수·남은 시드 + 매매 모드·바벨·봇 켜기/끄기·도구 버튼(옮길 곳이 없어 같은 화면에 둠).
+- 화면 문구: 졸업 매도 표시("· 졸업 매도", kind=grad), 돌파 RSI 문구("RSI 50 이하일 때만 · RSI 모르면 그냥 통과").
+- 미실행: 서버·실거래·텔레그램 실발송.
+
 ## v2.3.0 · 2026-11-22 (KST) — 판 34 3차 (meritz_laoer v2.9.0 7차, Q6~Q9 반영)
 - 파일: main.py, barbell_adapter.py, test_hybrid_v340.py, CHANGELOG.md. 원작 orig_sniper/* 안 고침. 안 바뀜: tower_strategy.py, config.py, tg_menu.py 등 (2차와 같음).
 - Q6 free_cash: 바벨 켠 뒤 처음 한 번 $9,000 − 미완성 F 원가로 시작 → SOXL 매수 체결 −, 매도 체결 +, 수혈은 원작 guard 가 shim 원장에 +. 
@@ -17,7 +24,7 @@
 
 ## v2.2.0 · 2026-11-22 (KST) — 판 34 2차·부분 (meritz_laoer v2.9.0 7차, 바벨 연결)
 - 파일: main.py, tower_strategy.py, config.py, tg_menu.py, barbell_adapter.py, test_hybrid_v340.py, test_hybrid_v300.py(해시 고정 항목만), CHANGELOG.md. 원작 orig_sniper/* 안 고침.
-- 설정 barbell_enabled(기본 꺼짐, true/false 만). 텔레그램 [바벨 모드 켜기/끄기] → 확인 메시지 → [네, 바벨 바꿀게요] 를 눌러야만 바뀜. 켜면 F 시드 $15,000→$9,000, 층(박스) 시드 ×0.60 → 층 $720 (16:10 동기화에서 F 시드 조정이 다시 나눔). 꺼짐이면 판 33 과 똑같음.
+- 설정 barbell_enabled(기본 꺼짐, true/false 만). 텔레그램 [바벨 모드 켜기/끄기] → 확인 메시지 → [네, 바벨 바꿀게요] 를 눌러야만 바뀜. 켜면 F 완성 기준 금액 $15,000→$9,000, 버킷 시드 ×0.60 → 버킷 $720 (16:10 동기화에서 F 완성 기준 금액 조정이 다시 나눔). 꺼짐이면 판 33 과 똑같음.
 - 연결됨: ① SOXL 매도 체결(apply_tower_fills) → 수익금 금고 기록(원작 record_barbell_realized_profit) ② SGOV 틱(run_sniper_tick 맨 앞, 원작 execute_barbell_sgov_tick_plugin) — 모의 전용(실주문 안 나감, 실거래 SGOV 주문은 막아 둠).
 - 미연결: 4단계 수혈 워터폴(guard30/injection) 매수 직전 연결, SGOV 실주문, 암살자 1분봉 모의 실행(암살자는 모의 고정·실전 전환 코드 없음).
 - 미실행: 서버 적용·실거래·SGOV 실주문/시세·텔레그램 실발송·푸시.
@@ -27,15 +34,15 @@
 - barbell_adapter.py: 원작 barbell_plugin.py·assassin_plugin.py 복사본을 안 고치고 부르는 얇은 층 — 60/30/10 배분, SGOV 정규장 시간창(09:31~15:55 EST), 현금 10% 상당 SGOV 정수 주 내림 수량, 바벨 전용 원장(state_dir/data/barbell), 암살자 실전 여부(원작 함수). 암살자는 모의(SIMULATED) 고정, 실전으로 바꾸는 코드 없음.
 - 거래 코드에는 아직 연결 안 함(하이브리드 동작은 판 33 과 같음). 4단계 수혈 워터폴·수익금 금고 기록·SGOV 주문은 SOXL 원장 모양·SGOV API 결정이 필요해 질문란으로 넘김.
 
-## v2.0.0 · 2026-11-22 (KST) — 판 33 (meritz_laoer v2.9.0 6차, 탑쌓기 매매 모드 + 잔고 동기화 F 시드 조정)
+## v2.0.0 · 2026-11-22 (KST) — 판 33 (meritz_laoer v2.9.0 6차, 탑쌓기 매매 모드 + 잔고 동기화 F 완성 기준 금액 조정)
 - 파일: main.py, sniper_mode.py, tower_strategy.py, config.py, tg_menu.py, notifier.py, seed_adjust.py(신설), CHANGELOG.md, test_hybrid_v330.py(신설), test_hybrid_v300.py(해시 고정 항목만 판 33 값도 허용). 안 바뀜: sniper_adapter.py, sub_grid.py, sync_orig.py, orig_sniper/*
-- 탑쌓기 매매 모드: 설정 trade_mode(sniper 기본 | tower), 텔레그램 [탑쌓기 매매 시작] → 확인 메시지 → [네, 바꿀게요] 를 눌러야만 바뀜 (스나이퍼로 돌아갈 때도 같음). tower 일 때 스나이퍼 신호 매수 대신 하루 한 번 탑쌓기 매수: 시초가 가까운 칸부터 $1씩 아래로 tower_buy_gap_usd 칸(기본 5, 1~10), F 시드(기본 $15,000)를 칸마다 균등. 매도는 기존 그대로.
-- F 시드 조정(잔고 동기화 둘째 일, 16:10 run_sync): 시드(F 시드·박스 시드)가 바뀌면 보유 주식을 높은 F 부터 새 시드로 다시 채움/나눔 (합계 그대로, 평단 다시 계산, 텔레그램에 F 개수·평단·늘어난 층). 처음엔 기록만.
+- 탑쌓기 매매 모드: 설정 trade_mode(sniper 기본 | tower), 텔레그램 [탑쌓기 매매 시작] → 확인 메시지 → [네, 바꿀게요] 를 눌러야만 바뀜 (스나이퍼로 돌아갈 때도 같음). tower 일 때 스나이퍼 신호 매수 대신 하루 한 번 탑쌓기 매수: 시초가 가까운 칸부터 $1씩 아래로 tower_buy_gap_usd 칸(기본 5, 1~10), F 완성 기준 금액(기본 $15,000)를 칸마다 균등. 매도는 기존 그대로.
+- F 완성 기준 금액 조정(잔고 동기화 둘째 일, 16:10 run_sync): 시드(F 완성 기준 금액·버킷 시드)가 바뀌면 보유 주식을 높은 F 부터 새 시드로 다시 채움/나눔 (합계 그대로, 평단 다시 계산, 텔레그램에 F 개수·평단·늘어난 층). 처음엔 기록만.
 - 미실행: 서버 적용·실거래·푸시.
 
 ## v1.9.2 · 2026-11-22 (KST) — 판 32 3차 (meritz_laoer v2.9.0 5차, 래칫·하드캡·RSI 수확 거래 흐름 연결)
 - 파일: sniper_adapter.py, sniper_mode.py, main.py, CHANGELOG.md, test_hybrid_v320.py(저장소 밖). 안 바뀜: tg_menu.py, tower_strategy.py, orig_sniper/* 등
-- 내용: 질문 4·5 반영. 거래 루프가 시세를 읽을 때마다 SN.trail_tick(dry·live 2곳) → 1층(가장 낮은 박스) 고정 +1.5% 매도가 원작 트레일링으로 바뀜(점화 +1.5%·샤프 래칫·하드캡 +6.0%·RSI 65 수확). 원작 흐름 그대로: 실호가가 점화가 밑이면 슬롯 해제, 보존선 이탈 신호인데 실호가가 정지가 이상이면 취소, 매도 하한가 = 보존선 이상(하드캡이면 캡 가격), 2층 동반 졸업. 졸업(전 층 전량)은 그대로 우선. 보존선·최고점은 메모리에만 두고 sniper_state.json 에 저장 안 함(재시작하면 다시 계산). 어댑터 sell_targets·sell_plan 에 exclude_l1 추가(원작 exclude_daytime_l1). 스토커 보류·VWAP 방어·HA 음봉 청산 안 함
+- 내용: 질문 4·5 반영. 거래 루프가 시세를 읽을 때마다 SN.trail_tick(dry·live 2곳) → 1층(가장 낮은 버킷) 고정 +1.5% 매도가 원작 트레일링으로 바뀜(점화 +1.5%·샤프 래칫·하드캡 +6.0%·RSI 65 수확). 원작 흐름 그대로: 실호가가 점화가 밑이면 슬롯 해제, 보존선 이탈 신호인데 실호가가 정지가 이상이면 취소, 매도 하한가 = 보존선 이상(하드캡이면 캡 가격), 2층 동반 졸업. 졸업(전 층 전량)은 그대로 우선. 보존선·최고점은 메모리에만 두고 sniper_state.json 에 저장 안 함(재시작하면 다시 계산). 어댑터 sell_targets·sell_plan 에 exclude_l1 추가(원작 exclude_daytime_l1). 스토커 보류·VWAP 방어·HA 음봉 청산 안 함
 - 검증: v320 36개 · v310 21개 · v300 25개 · v270 7개 · v260 31개 · v250 16개 통과 · pyflakes 새 경고 0 · 실거래·서버 적용·push 없음
 
 ## v1.9.1 · 2026-11-22 (KST) — 판 32 2차·부분 (meritz_laoer v2.9.0 4차, 래칫·하드캡·RSI 수확 어댑터까지)
@@ -50,17 +57,17 @@
 
 ## v1.8.1 · 2026-11-22 (KST) — 판 31 질문 3 (meritz_laoer v2.9.0 3차, 원작식 부분 주문)
 - 파일: sniper_mode.py, main.py, CHANGELOG.md, test_hybrid_v310.py(저장소 밖). 안 바뀜: sniper_adapter.py, tg_menu.py, tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*
-- 내용: 원작 execute_bulletproof_sell_sweep 방식 — 매도 주문 전 매도가능 수량을 2초(0.25초 간격) 기다림(SN.wait_sellable) · 목표(닿은 박스 합, 졸업이면 전 박스)에 매도가능이 모자라면 평단 낮은 박스부터 가능한 만큼만 주문(마지막 박스는 일부 수량) · 장외 매도가능 0이면 주문 없이 조용히 대기 · 정규장 0이면 원작처럼 목표 수량 시도. 부분 체결 정산은 기존 _apply_sell 이 체결 수량만큼만 박스를 줄임(남은 박스·남은 수량은 장부에 그대로 — 시험으로 확인). '전부 아니면 무'는 안 함 (Muse 결정)
+- 내용: 원작 execute_bulletproof_sell_sweep 방식 — 매도 주문 전 매도가능 수량을 2초(0.25초 간격) 기다림(SN.wait_sellable) · 목표(닿은 버킷 합, 졸업이면 전 버킷)에 매도가능이 모자라면 평단 낮은 버킷부터 가능한 만큼만 주문(마지막 버킷은 일부 수량) · 장외 매도가능 0이면 주문 없이 조용히 대기 · 정규장 0이면 원작처럼 목표 수량 시도. 부분 체결 정산은 기존 _apply_sell 이 체결 수량만큼만 버킷을 줄임(남은 버킷·남은 수량은 장부에 그대로 — 시험으로 확인). '전부 아니면 무'는 안 함 (Muse 결정)
 - 검증: v310 21개 · v300 25개 · v270 7개 · v260 31개 · v250(수정) 16개 통과 · pyflakes 새 경고 0 (main.py 기존 5건·sniper_mode.py 기존 1건 그대로) · 실거래·서버 적용·push 없음
 
 ## v1.8.0 · 2026-11-22 (KST) — 판 31 (meritz_laoer v2.9.0 2차)
 - 파일: sniper_mode.py, sniper_adapter.py, CHANGELOG.md, test_hybrid_v310.py(새, 저장소 밖), test_hybrid_v250.py(저장소 밖, test_04 기대값 1줄 수정). 안 바뀜: main.py, tg_menu.py, tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*
-- 내용: 스나이퍼 매도 판정(box_rows)을 원작 evaluate_multi_grid_sell_targets 로 연결 (방식 B = 전체 층 그대로, Muse 결정; 비교 결과 A·B 동일). 미완성 층 박스 전체를 한 묶음으로: 1층 +1.5% · 2층 +1.0%(닿으면 1층도 같이) · 3층 이상 개별 매도 없음 · 졸업(3층~끝 가중평단 +1.0%)에 닿으면 전 박스 전량. 동작 변경(Muse 수락): 3층 이상 개별 +1.0% 매도 사라짐, '층마다 L1' → 전체 한 묶음 L1. 탑 매도·매수·서브 안 바뀜
+- 내용: 스나이퍼 매도 판정(box_rows)을 원작 evaluate_multi_grid_sell_targets 로 연결 (방식 B = 전체 층 그대로, Muse 결정; 비교 결과 A·B 동일). 미완성 층 버킷 전체를 한 묶음으로: 1층 +1.5% · 2층 +1.0%(닿으면 1층도 같이) · 3층 이상 개별 매도 없음 · 졸업(3층~끝 가중평단 +1.0%)에 닿으면 전 버킷 전량. 동작 변경(Muse 수락): 3층 이상 개별 +1.0% 매도 사라짐, '층마다 L1' → 전체 한 묶음 L1. 탑 매도·매수·서브 안 바뀜
 - 검증: v310 14개 · v300 25개 · v270 7개 · v260 31개 · v250(수정) 16개 통과 · pyflakes 새 경고 0 (기존 copy 미사용 1건) · 실거래·서버 적용·push 없음
 
 ## v1.7.0 · 2026-11-22 (KST) — 판 30 (meritz_laoer v2.9.0 1차)
 - 파일: sniper_mode.py, main.py, tg_menu.py, sniper_adapter.py, README.md, CHANGELOG.md, test_hybrid_v300.py(새, 저장소 밖). 안 바뀜: tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*
-- 내용: 매수 신호 판정을 원작 복사본(어댑터 경유)으로 연결. B1 눌림 깊이 = 층(박스) 수 · B2 상한 = 가장 낮은 층 평단 · B3 눌림·돌파 % 비교 · B3b RSI 모르면 돌파 안 막음 · B4 서브 가동일 기록(seed_main_day). 매도·탑쌓기·서브 매수 규칙은 안 건드림
+- 내용: 매수 신호 판정을 원작 복사본(어댑터 경유)으로 연결. B1 눌림 깊이 = 버킷 수 · B2 상한 = 가장 낮은 층 평단 · B3 눌림·돌파 % 비교 · B3b RSI 모르면 돌파 안 막음 · B4 서브 가동일 기록(seed_main_day). 매도·탑쌓기·서브 매수 규칙은 안 건드림
 - 검증: test_hybrid_v300.py 25개 통과 · v270 7개·v260 31개 통과 · v250 16개 중 2개 실패(B1 이 바꾼 가정 — 되돌리면 통과) · 실거래·서버 적용·push 없음
 
 ## v1.6.0 · 2026-11-22 (KST) — 판 29 1차 (구조만, meritz_laoer v2.9.0 은 미완)
@@ -73,11 +80,11 @@
 - 검증: test_hybrid_v270.py 통과 · 기존 시험(v260·v250) 통과 · pyflakes 새 경고 0. 자세한 건 VERIFY.md
 ## v1.4.0 · 2026-11-21 (KST) — 판 26 (meritz_laoer v2.6.0)
 - 파일: main.py, sniper_mode.py, tower_strategy.py, tg_menu.py, config.py, notifier.py, README.md, CHANGELOG.md, test_hybrid_v260.py(새). sub_grid.py 는 안 바뀜
-- 내용: ① 박스별 매도 — 미완성 층의 매수 1건 = 박스 1개(floor['boxes']), 박스마다 자기 평단 기준 매도(그 층 안 최저 평단 박스 +1.5% · 나머지 +1.0%, 그 박스 전량), 층 원가·수량은 판 박스 몫만 줄고 층 평단은 남은 박스 가중평균, 층 완성 → 탑 매도. 예전 상태(박스 없음)·탑 매도 잔여 = 박스 1개 ② 눌림 매수% 설정 sniper_portion_pct(기본 8, 0 초과 100 이하) + 텔레그램 '눌림 매수% 변경'. 돌파 16%·서브 4% 그대로
+- 내용: ① 버킷별 매도 — 미완성 층의 매수 1건 = 버킷 1개(floor['boxes']), 버킷마다 자기 평단 기준 매도(그 층 안 최저 평단 버킷 +1.5% · 나머지 +1.0%, 그 버킷 전량), 층 원가·수량은 판 버킷 몫만 줄고 층 평단은 남은 버킷 가중평균, 층 완성 → 탑 매도. 예전 상태(버킷 없음)·탑 매도 잔여 = 버킷 1개 ② 눌림 매수% 설정 sniper_portion_pct(기본 8, 0 초과 100 이하) + 텔레그램 '눌림 매수% 변경'. 돌파 16%·서브 4% 그대로
 - 검증: test_hybrid_v260.py 통과 · 기존 시험(v250·v240)·Golden 은 파일이 없어 미실행 · 실거래·서버 적용·push 없음. 자세한 건 VERIFY.md
 ## v1.3.0 · 2026-11-21 (KST) — 판 25 (meritz_laoer v2.5.0)
 - 파일: main.py, sniper_mode.py, sub_grid.py(새), tower_strategy.py, tg_menu.py, config.py, notifier.py, test_hybrid_v250.py(새)
-- 내용: 하이브리드 박스·층 (토스 스나이퍼 이식): 매수 1번 = 박스 시드(기본 $15,000)의 8% · 서브 그리드 4% · 박스 안 자동 매도(+1.5%/+1.0%) 복귀 · 층 간격 규칙 삭제 · 첫 기준가 설정 · 평단 정수 달러 층 이름 · 지하층→공사중 · 퍼센트 작업 계산(percent_plan). 판 24 선택 질문 코드는 남기고 안 부름.
+- 내용: 하이브리드 버킷·층 (토스 스나이퍼 이식): 매수 1번 = 버킷 시드(기본 $15,000)의 8% · 서브 그리드 4% · 버킷 안 자동 매도(+1.5%/+1.0%) 복귀 · 층 간격 규칙 삭제 · 첫 기준가 설정 · 평단 정수 달러 층 이름 · 지하층→공사중 · 퍼센트 작업 계산(percent_plan). 판 24 선택 질문 코드는 남기고 안 부름.
 - 수정1(돌파 매수액): 설정 sniper_breakout_portion_pct(기본 16%, 눌림 8% 그대로) + 텔레그램 '돌파 매수% 변경' 메뉴.
 - 검증: test_hybrid_v250.py 16개 통과 · pyflakes 새 경고 0 · import 확인. test_hybrid_v240.py·Golden 비교는 파일이 없어 미실행. 실거래·서버 적용 없음.
 

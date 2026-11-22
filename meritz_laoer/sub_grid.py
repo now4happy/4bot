@@ -7,14 +7,14 @@
 #   - toss_quant_engine.py compute_sub_grid_available_idle_cash (본 그리드 0.5회분 보호예수금 차감) → avail_idle_cash
 #   - toss sniper_plugin.py _execute_sub_grid_buy_engine_plugin: 본 그리드 5영업일 무매매(또는 서브 가동 중)에 작동 · 서브 0주 첫 진입(S-A) · 10분 게이트 추매(S-B2, 04:07 ET 기점 10분 버킷, 버킷당 한 번 판정)
 #     (10분 게이트 버킷 식 = toss_sniper/quant_indicators_plugin.py evaluate_buy_gate_bucket_status 의 mins_from_0407 // 10 — 저장소 파일 기준, 노션 첨부본 해시 대조는 안 함)
-#   메리츠 이식에서 달라진 점 (VERIFY.md '미확인·차이' 참고): 서브 버킷은 별도 계좌 장부가 아니라 '박스(층) 안에 들어간 매수의 기록(memo)' — 매도는 박스 안 매도 규칙(박스 전체)을 따름.
+#   메리츠 이식에서 달라진 점 (VERIFY.md '미확인·차이' 참고): 서브 버킷은 별도 계좌 장부가 아니라 '버킷(층) 안에 들어간 매수의 기록(memo)' — 매도는 버킷 안 매도 규칙(버킷 전체)을 따름.
 #   서브 수량 기록은 보유 주수보다 클 수 없게 sync 가 위쪽(높은 가격) 버킷부터 깎음. 수수료율 보정(fee_mult)은 안 씀(메리츠 근거 파일에 없음).
 # 상태(sub): {"buckets": [{"qty", "cost", "lots"} ... 평단 오름차순, [0] = 서브 1층(가장 낮은 가격)], "anchor", "cycle_min", "last_main_day": ISO, "last_sub_day": ISO, "gate_bucket": int, "gate_date": ISO, "ratchet_lots": int}
 # ==========================================================
 import datetime
 import math
 
-SUB_PORTION_PCT = 4.0                 # 서브 1회 = 박스 시드의 4% (SUB_PORTION_RATIO_4PCT)
+SUB_PORTION_PCT = 4.0                 # 서브 1회 = 버킷 시드의 4% (SUB_PORTION_RATIO_4PCT)
 SUB_MAX_TIERS = 3                     # 서브 그리드 최대 3층 (SUB_MAX_TIERS_3)
 SUB_MAX_TOTAL_LOTS = 4                # 최대 4회분 = 16% (SUB_MAX_TOTAL_LOTS_4)
 SUB_RESERVE_MAIN_PORTIONS = 0.5       # 본 그리드 0.5회분(= 시드의 4%)을 보호예수금으로 뗌 (SUB_RESERVE_MAIN_PORTIONS)

@@ -196,16 +196,16 @@ def validate_settings(s):
     fu = s.get("tower_floor_usd")
     if fu is not None and (isinstance(fu, bool) or _f(fu) <= 0):
         bad.append("tower_floor_usd 는 0 보다 큰 숫자 (한 층 금액, 달러)")
-    for k, nm in (("tower_box_seed_usd", "박스 시드, 달러"), ("tower_remaining_seed_usd", "퍼센트 작업 남은 시드, 달러"), ("sniper_first_anchor_usd", "스나이퍼 첫 기준가, 달러")):      # v2.5.0: 없으면 기본(15000 · 120000 · 안 정함), 있으면 0 보다 큰 숫자
+    for k, nm in (("tower_box_seed_usd", "버킷 시드, 달러"), ("tower_remaining_seed_usd", "퍼센트 작업 남은 시드, 달러"), ("sniper_first_anchor_usd", "스나이퍼 첫 기준가, 달러")):      # v2.5.0: 없으면 기본(15000 · 120000 · 안 정함), 있으면 0 보다 큰 숫자
         v = s.get(k)
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or _f(v) <= 0):
             bad.append(f"{k} 는 0 보다 큰 숫자 ({nm})")
     bp = s.get("sniper_breakout_portion_pct")      # v2.5.0 수정1: 돌파 매수 비율 — 없으면 기본 16, 있으면 0 초과 100 이하
     if bp is not None and (isinstance(bp, bool) or not isinstance(bp, (int, float)) or not (0 < _f(bp) <= 100)):
-        bad.append("sniper_breakout_portion_pct 는 0 초과 100 이하 (돌파 매수 비율, 박스 시드의 %)")
+        bad.append("sniper_breakout_portion_pct 는 0 초과 100 이하 (돌파 매수 비율, 버킷 시드의 %)")
     pp = s.get("sniper_portion_pct")      # v2.6.0: 눌림(본) 매수 비율 — 없으면 기본 8, 있으면 0 초과 100 이하 (돌파 매수% 검사와 같은 방식)
     if pp is not None and (isinstance(pp, bool) or not isinstance(pp, (int, float)) or not (0 < _f(pp) <= 100)):
-        bad.append("sniper_portion_pct 는 0 초과 100 이하 (눌림 매수 비율, 박스 시드의 %)")
+        bad.append("sniper_portion_pct 는 0 초과 100 이하 (눌림 매수 비율, 버킷 시드의 %)")
     tm = s.get("trade_mode")      # v2.9.0 6차 판 33: 매매 모드 — 없으면 sniper(하이브리드 스나이퍼), 있으면 sniper | tower 만
     if tm is not None and tm not in ("sniper", "tower"):
         bad.append("trade_mode 는 sniper 또는 tower (매매 모드)")

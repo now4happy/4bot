@@ -1,11 +1,11 @@
-# seed_adjust.py — v2.9.0 6차 (2026-11-22, 판 33): 잔고 동기화의 둘째 일 = F 시드 조정
-# 잔고 동기화 = (1) 잔고 대조(TW.reconcile) + (2) F 시드 조정(이 파일). 순수 계산 — 주문·API·파일을 안 만지고, 층 상태(st)만 바꿈.
+# seed_adjust.py — v2.9.0 6차 (2026-11-22, 판 33): 잔고 동기화의 둘째 일 = F 완성 기준 금액 조정
+# 잔고 동기화 = (1) 잔고 대조(TW.reconcile) + (2) F 완성 기준 금액 조정(이 파일). 순수 계산 — 주문·API·파일을 안 만지고, 층 상태(st)만 바꿈.
 # 규칙 (판 33 지시):
 #   · 시드가 커지면 다 채워졌던 F 도 새 시드까지 다시 채움 — 높은 F(평단 높은 층)부터 먼저. 모자란 만큼은 아래 F·미완성 층이 들고 있던 주식을 가져와 합침.
-#   · 아래 F 가 합쳐도 안 차면 미완성 F 로 남음 (그때 매매 모드가 스나이퍼면 박스(층)로, 탑쌓기면 탑쌓기 칸으로 이어감). 합쳐서 차면 완성으로 인식.
-#   · 시드가 줄면 같은 보유 주식을 더 작은 F·더 작은 층(박스 = 시드 8%)으로 다시 나눔 → F·층이 늘어남. 평단은 다시 계산.
+#   · 아래 F 가 합쳐도 안 차면 미완성 F 로 남음 (그때 매매 모드가 스나이퍼면 버킷(층)로, 탑쌓기면 탑쌓기 칸으로 이어감). 합쳐서 차면 완성으로 인식.
+#   · 시드가 줄면 같은 보유 주식을 더 작은 F·더 작은 층(버킷 = 시드 8%)으로 다시 나눔 → F·층이 늘어남. 평단은 다시 계산.
 # 주식 수·원금 합계는 절대 안 바뀜 (다시 나누기만 함). 합계가 어긋나면 아무것도 안 바꾸고 알림만.
-# 기준 시드 기록: 상태(st)의 seed_sig = [F 시드, 박스 시드]. 기록이 없으면(처음) 지금 값을 기록만 하고 안 바꿈 — 배포 순간 옛 층이 멋대로 다시 나뉘지 않게.
+# 기준 시드 기록: 상태(st)의 seed_sig = [F 완성 기준 금액, 버킷 시드]. 기록이 없으면(처음) 지금 값을 기록만 하고 안 바꿈 — 배포 순간 옛 층이 멋대로 다시 나뉘지 않게.
 import tower_strategy as TW
 
 TOL = TW.TOL_USD
@@ -16,12 +16,12 @@ def _f(v):
 
 
 def sig_of(s):
-    """(F 시드, 박스 시드) — F 시드는 층 완성 기준(tower_floor_usd), 박스 시드는 층(박스) 크기의 바탕(tower_box_seed_usd)"""
+    """(F 완성 기준 금액, 버킷 시드) — F 완성 기준 금액는 층 완성 기준(tower_floor_usd), 버킷 시드는 버킷 크기의 바탕(tower_box_seed_usd)"""
     return [float(TW.params(s)[0]), float(TW.box_seed(s))]
 
 
 def _lots(st):
-    """높은 F 부터 주식 덩어리 [(주, 원가)]. 미완성 층(박스 있음)은 박스 평단 높은 순, 완성 층은 층 전체 1덩어리"""
+    """높은 F 부터 주식 덩어리 [(주, 원가)]. 미완성 층(버킷 있음)은 버킷 평단 높은 순, 완성 층은 층 전체 1덩어리"""
     out = []
     for f in TW.top_down(st):
         if int(_f(f.get("qty"))) <= 0:
@@ -52,7 +52,7 @@ def _take(lots, need):
 
 
 def _split_boxes(st, lots, portion):
-    """미완성 층의 주식 덩어리들을 박스(층)로 나눔: 박스 하나 ≈ portion 달러 (마지막은 남은 몫)"""
+    """미완성 층의 주식 덩어리들을 버킷(층)로 나눔: 버킷 하나 ≈ portion 달러 (마지막은 남은 몫)"""
     boxes, cur_q, cur_c = [], 0, 0.0
     for q, c in lots:
         p = c / q
@@ -74,7 +74,7 @@ def _snapshot(st):
 
 
 def adjust(st, s):
-    """F 시드 조정. 시드(sig)가 안 바뀌었으면 아무것도 안 함. → (st, 알림 글자 목록)"""
+    """F 완성 기준 금액 조정. 시드(sig)가 안 바뀌었으면 아무것도 안 함. → (st, 알림 글자 목록)"""
     TW.ensure_state(st)
     cur = sig_of(s)
     old = st.get("seed_sig")
@@ -109,11 +109,11 @@ def adjust(st, s):
         else:
             TW._topup_setup(f, gap, start_usd)                # 탑쌓기 칸(levels·base_usd) — 탑쌓기 매매면 이 칸으로 이어서 채움
             if not tower_mode:
-                f["boxes"] = _split_boxes(st, got, portion)    # 스나이퍼 매매면 박스(층)로 이어감
+                f["boxes"] = _split_boxes(st, got, portion)    # 스나이퍼 매매면 버킷(층)로 이어감
         floors.append(f)
     nq, nc = sum(f["qty"] for f in floors), round(sum(f["cost"] for f in floors), 4)
     if nq != tq or abs(nc - tc) > 0.05:
-        return st, [f"F 시드 조정 중단: 다시 나눈 합계({nq}주·${nc:,.2f})가 장부 합계({tq}주·${tc:,.2f})와 달라 아무것도 안 바꿨어요 (확인 필요)"]
+        return st, [f"F 완성 기준 금액 조정 중단: 다시 나눈 합계({nq}주·${nc:,.2f})가 장부 합계({tq}주·${tc:,.2f})와 달라 아무것도 안 바꿨어요 (확인 필요)"]
     floors.sort(key=TW.floor_avg)
     st["floors"] = floors
     st["next_id"] = len(floors) + 1
@@ -124,13 +124,13 @@ def adjust(st, s):
 
 
 def report(before, after, old, cur, portion, tower_mode):
-    """텔레그램 글자: 시드·층 크기 변화, F 별 평단 변화, 늘어난 층(박스)"""
-    lines = [f"F 시드 조정: F 시드 ${old[0]:,.0f} → ${cur[0]:,.0f} · 박스 시드 ${old[1]:,.0f} → ${cur[1]:,.0f} (층 크기 시드의 8% = ${portion:,.0f})"]
+    """텔레그램 글자: 시드·층 크기 변화, F 별 평단 변화, 늘어난 버킷"""
+    lines = [f"F 완성 기준 금액 조정: F 완성 기준 금액 ${old[0]:,.0f} → ${cur[0]:,.0f} · 버킷 시드 ${old[1]:,.0f} → ${cur[1]:,.0f} (층 크기 시드의 8% = ${portion:,.0f})"]
     lines.append(f"F 개수 {len(before)}개 → {len(after)}개 (주식 {sum(b[1] for b in before)}주 그대로)")
     for fid, q, c, a, done, nb in after:
         was = next((b for b in before if b[0] == fid), None)
         tail = f"(전 {was[1]}주 · 평단 ${was[3]:,.2f})" if was else "(새 F)"
-        state = "완성" if done else f"미완성 · 채움 ${c:,.0f} · " + (f"박스 {nb}개" if not tower_mode else "탑쌓기 칸으로 이어감")
+        state = "완성" if done else f"미완성 · 채움 ${c:,.0f} · " + (f"버킷 {nb}개" if not tower_mode else "탑쌓기 칸으로 이어감")
         lines.append(f"· {fid}F {q}주 · 평단 ${a:,.2f} {tail} · {state}")
     added = [b for b in after if not any(b[0] == x[0] for x in before)]
     if len(after) > len(before):
@@ -138,5 +138,5 @@ def report(before, after, old, cur, portion, tower_mode):
     bn_old = sum(b[5] for b in before)
     bn_new = sum(b[5] for b in after)
     if bn_new != bn_old:
-        lines.append(f"미완성 F 의 층(박스): {bn_old}개 → {bn_new}개 ({bn_new - bn_old:+d})")
+        lines.append(f"미완성 F 의 버킷: {bn_old}개 → {bn_new}개 ({bn_new - bn_old:+d})")
     return lines
