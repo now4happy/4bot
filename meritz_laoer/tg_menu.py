@@ -76,7 +76,7 @@ I_FUNDS, I_PLAN, I_LEDGER, I_POWER = "자금 현황", "오늘 계획", "거래 �
 T_CHECK, T_ADD, T_HALT, T_INJECT, T_FP = "점검", "주식 넣기", "정지 해제", "장부 시작", "키 확인"
 T_STOP = "매매 정지"                               # 정지 표시를 켬 (정지 해제의 짝)
 B_SNSET = "스나이퍼 설정"
-RADAR_INLINE = [[I_PLAN, I_FUNDS], [I_LEDGER, I_POWER], [("⚙️ " + B_SNSET, B_SNSET)], [R_REFRESH]]
+RADAR_INLINE = [[("⚙️ " + B_SNSET, B_SNSET)]]      # 판 35 수정 12차: 레이더는 스나이퍼 설정 버튼만 (오늘 계획·자금 현황·거래 내역·봇 상태·새로고침 뺌)
 TOOLS_INLINE = [[T_CHECK, T_ADD], [T_STOP, T_HALT], [T_INJECT, T_FP], [BACK]]
 HALT_OK, INJECT_OK, INJECT_OVER = "정지 해제 확인", "장부 시작 확인", "장부 덮어쓰기 확인"
 CHG_OK = "변경 확인"
@@ -725,12 +725,15 @@ class MenuBot:
         return self._set_rows(SNIPER_SET, s) + [[BACK]]
 
     def tower_inline(self, s):
-        """탑쌓기 매매 화면 — 탑쌓기 설정 + 매매 모드·바벨·봇 전원·도구"""
-        rows = self._set_rows(TOWER_SET, s)
-        rows.append([("🏗 탑쌓기 매매 시작 (지금: 하이브리드 스나이퍼)", T_MODE_TOWER) if _TW.trade_mode(s) != "tower" else ("🔫 스나이퍼 매매로 돌아가기 (지금: 탑쌓기 매매)", T_MODE_SNIPER)])
+        """탑쌓기 매매 화면 — 판 35 수정 12차: 시작·바벨 먼저, 설정은 비슷한 것끼리 2개씩 (봇 전원·도구 뺌)"""
+        rows = [[("🏗 탑쌓기 매매 시작 (지금: 하이브리드 스나이퍼)", T_MODE_TOWER) if _TW.trade_mode(s) != "tower" else ("🔫 스나이퍼 매매로 돌아가기 (지금: 탑쌓기 매매)", T_MODE_SNIPER)]]
         rows.append([("🛡 바벨 모드 끄기 (지금 켜짐)", T_BB_OFF) if s.get("barbell_enabled") is True else ("🛡 바벨 모드 켜기 (지금 꺼짐)", T_BB_ON)])
-        rows.append([("🔴 봇 끄기 (지금 켜짐)", BOT_OFF) if s.get("enabled") else ("🟢 봇 켜기 (지금 꺼짐)", BOT_ON)])
-        rows.append([("🧰 도구 (점검·주식 넣기·정지·장부 시작·키 확인)", T_TOOLS)])
+        cell = {r[0][1]: r[0] for r in self._set_rows(TOWER_SET, s)}      # _set_rows는 1개씩이라 여기서만 2개씩 묶음 (snset은 그대로)
+        for a, b in (("F 완성 기준 금액 변경", "남은 시드 변경"),
+                     ("탑쌓기 매도% 변경", "매도 비중 변경"),
+                     ("하루 매수 F 수 변경", "하루 매도 F 수 변경")):
+            rows.append([cell[a], cell[b]])
+        rows.append([cell["매수 간격 변경"]])
         return rows
 
 
@@ -926,7 +929,7 @@ class MenuBot:
             return self.send(c, self.board_text(s), None, dry, html=True, inline=RADAR_INLINE)
         if text == B_SYNC:
             self.nav = "radar"
-            return self.send(c, self.sync_text(s), None, dry, html=True, inline=RADAR_INLINE)
+            return self.send(c, self.sync_text(s), None, dry, html=True)      # 판 35 수정 12차: 동기화 결과는 글만 (인라인 버튼 없음, 맨밑 키보드만)
         if text == B_TOWER:
             return self.show("tower", s, say)
         if text == B_SNSET:

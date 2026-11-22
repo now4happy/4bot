@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.1 · 2026-11-22 20:52 (KST)
+- 파일: tg_menu.py
+- 내용: 메리츠 v2.9.0 (판 35 수정, 12차): 레이더·동기화·탑쌓기 메뉴 단순화 (레이더는 스나이퍼 설정 버튼만, 동기화 결과는 글만, 탑쌓기 화면은 시작·바벨 먼저 + 설정 2개씩 묶음, 봇 전원·도구 뺌)
+- 브랜치: staging
+
 ## v1.4.0 · 2026-11-22 21:19 (KST)
 - 파일: config.py, main.py, notifier.py, seed_adjust.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
 - 내용: 메리츠 v2.9.0 (판 35 수정, 11차): 용어 정리 문법 오류 고침
