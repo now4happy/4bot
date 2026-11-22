@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-22 17:52 (KST) · 계기: 업데이트 적용 (staging: 메리츠 v2.9.0 (판 34, 7차): 바벨·SGOV·SCHD·암살자 연결)
+- 갱신: 2026-11-22 18:45 (KST) · 계기: 업데이트 적용 (staging: 메리츠 v2.9.0 (판 35, 8차): 용어·텔레그램 개편)
 
 ## 봇별 현재 상태
 
@@ -14,7 +14,7 @@
 | 3번 토스 적립 | `toss_dca` | ⚪ 꺼짐 | - | - | - |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-20 12:16 KST부터) | v4.4.1 | 2026-11-20 12:17 | audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, |
 | 5번 사무실 비서 | `bot-office` | ⚪ 꺼짐 | v1.9.8 | 2026-11-22 14:07 | 사무실 vNEXT: meritz_laoer/ 하위 폴더(orig_sniper/) 배포 분류 |
-| 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-22 17:52 KST부터) | v1.3.7 | 2026-11-22 17:52 | 메리츠 v2.9.0 (판 34, 7차): 바벨·SGOV·SCHD·암살자 연결 |
+| 메리츠 SOXL 무매 | `meritz_laoer` | 🟢 실행 중 (11-22 18:45 KST부터) | v1.3.8 | 2026-11-22 18:45 | 메리츠 v2.9.0 (판 35, 8차): 용어·텔레그램 개편 |
 | 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-20 13:53 KST부터) | v1.3.4 | 2026-11-20 13:53 | audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6 |
 
 ## 사무실 상시 서비스
@@ -28,6 +28,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-22 18:45 · 메리츠 SOXL 무매 v1.3.8 · config.py, main.py, notifier.py, seed_adjust.py, sniper_adap · 메리츠 v2.9.0 (판 35, 8차): 용어·텔레그램 개편
 - 2026-11-22 17:52 · 메리츠 SOXL 무매 v1.3.7 · barbell_adapter.py, config.py, main.py, tg_menu.py, tower_st · 메리츠 v2.9.0 (판 34, 7차): 바벨·SGOV·SCHD·암살자 연결
 - 2026-11-22 14:07 · 5번 사무실 비서 v1.9.8 · bot_updater.py · 사무실 vNEXT: meritz_laoer/ 하위 폴더(orig_sniper/) 배포 분류
 - 2026-11-21 11:08 · 메리츠 SOXL 무매 v1.2.9 · main.py, notifier.py, sniper_mode.py, tg_menu.py, tower_stra · 판 24 meritz_laoer v2.4.0 (층 나눔·잠금·스나이퍼 선택: 장부 바로잡기 684주·지하층·
@@ -37,7 +38,6 @@
 - 2026-11-20 19:00 · 메리츠 SOXL 무매 v1.2.5 · config.py, main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.17 (판 20 하루 매수·매도 층 수 설정 + 수정1 아침 매도 N_sel
 - 2026-11-20 18:02 · 메리츠 SOXL 무매 v1.2.4 · main.py, tower_strategy.py · meritz_laoer v2.2.15 (판 19 오늘 계획 미리보기에 탑 진행률): plan_head 한 곳
 - 2026-11-20 16:46 · 메리츠 SOXL 무매 v1.2.3 · main.py, tg_menu.py, tower_strategy.py · meritz_laoer v2.2.14 (판 17 시초가 상한): 오늘 채우는 층의 안 산 칸이 시초가를 넘지
-- 2026-11-20 13:53 · 메리츠 적립 v1.3.4 · main.py, t_core.py · audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 

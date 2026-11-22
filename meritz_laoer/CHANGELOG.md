@@ -1,5 +1,10 @@
 # 메리츠 SOXL 무매 변경 기록
 
+## v1.3.8 · 2026-11-22 18:45 (KST)
+- 파일: config.py, main.py, notifier.py, seed_adjust.py, sniper_adapter.py, sniper_mode.py, sub_grid.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.9.0 (판 35, 8차): 용어·텔레그램 개편
+- 브랜치: staging
+
 ## v1.3.7 · 2026-11-22 17:52 (KST)
 - 파일: barbell_adapter.py, config.py, main.py, tg_menu.py, tower_strategy.py
 - 내용: 메리츠 v2.9.0 (판 34, 7차): 바벨·SGOV·SCHD·암살자 연결
