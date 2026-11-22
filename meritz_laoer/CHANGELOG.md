@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.0 · 2026-11-22 21:19 (KST)
+- 파일: config.py, main.py, notifier.py, seed_adjust.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.9.0 (판 35 수정, 11차): 용어 정리 문법 오류 고침
+- 브랜치: staging
+
 ## v1.3.11 · 2026-11-22 20:16 (KST)
 - 파일: tower_strategy.py
 - 내용: 메리츠 v2.9.0 (판 35 수정, 11차): 용어 정리 문법 오류 고침 (f-string 안에 같은 따옴표 중첩 — Python 3.12 전용 문법이 10차에 들어가 서버 3.10에서 문법 오류로 롤백됨)
