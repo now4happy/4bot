@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0)
+# v2.9.0 판 31 질문 3 (2026-11-22): 스나이퍼 매도 주문 전에 매도가능 수량을 2초(0.25초 간격) 기다리고(SN.wait_sellable), plan_sells 에 장외 여부(ext) 전달 — 원작 execute_bulletproof_sell_sweep 방식 부분 주문
 # v2.7.0 (2026-11-21, 판 27 층 간격 설정·버튼 제거): 계획 미리보기 '새 층 가격' 줄(간격 기준) 삭제 · 탑쌓기 계획 머리 '간격' 표시 삭제. 간격은 내부 고정값 GAP_USD=5로만 씀.
 # v2.6.0 (2026-11-21, 판 26 박스별 매도·매수 비율 설정): 박스별 매도 주문의 중복 방지를 박스 단위로(sold_box_keys_today·busy_boxes·거절 기록 키 '층:박스') · 매도 체결 알림 글자(박스만 줄임) · 계획 미리보기에 박스별 목표 줄. 층 단위 주문(탑 매도)은 예전 그대로.
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층 — 토스 스나이퍼 이식): ① 매수 = 신호 1번에 박스 시드의 8%(sniper_mode.plan_buy) · 서브 그리드 4%(sub_grid.py) ② 박스 안 매도(+1.5%/+1.0%, 박스 전체) 자동으로 복귀 — 판 24 선택 질문(pick_scan) 호출 삭제(코드는 남김)
@@ -1540,7 +1541,10 @@ def run_sniper_tick(s, api, note):
             busy_boxes.add(k)
     busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 층은 다시 안 냄 (층 단위 주문만 — 박스 주문은 박스 단위로 아래에서 봄)
     busy_boxes |= sold_box_keys_today(m, rows, open_rows)
-    sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy, skip_boxes=busy_boxes)      # v2.6.0: 박스별 매도 자동 (미완성 층: 박스마다 자기 평단 기준 — 공격 박스 +1.5% · 나머지 +1.0%, 그 박스만 전량). 판 24 선택 질문은 안 부름
+    need_q = sum(o["qty"] for o in SN.plan_sells(s, sim, px, 10 ** 9, skip_ids=busy, skip_boxes=busy_boxes)[0])       # 판 31 질문 3: 원작식 — 목표 수량을 먼저 구하고 매도가능이 그만큼 될 때까지 2초(0.25초 간격) 기다림
+    if need_q > 0:
+        sellable = SN.wait_sellable(lambda: api.holding(s["symbol"])[1], need_q)
+    sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy, skip_boxes=busy_boxes, ext=(status == MKT_AFTER))      # v2.6.0: 박스별 매도 자동 (미완성 층: 박스마다 자기 평단 기준 — 공격 박스 +1.5% · 나머지 +1.0%, 그 박스만 전량). 판 24 선택 질문은 안 부름
     tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy | {a for a, _b in busy_boxes})      # 완성 층만 (탑 매도 +10% → 50%)
     tw_pick, tw_held = pick_sells([o for o in tw_all if not (int(o["floor_id"]) in rej and abs(rej[int(o["floor_id"])] - float(o["price"])) < 1e-9)],
                                   TW.sell_layers(s) - tower_sold_count_today(m, rows, open_rows))      # 하루 매도 층 수(N_sell) 적용 — 넘는 층은 알림만 (알림은 하루 한 번)

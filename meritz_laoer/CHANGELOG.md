@@ -1,11 +1,14 @@
-# 메리츠 SOXL 무매 변경 기록
-
-## v1.3.3 · 2026-11-22 14:11 (KST)
-- 파일: main.py, ORIGIN.json, quant_engine.py, quant_engine_core.py, toss_api.py, toss_api_core.py, sniper_adapter.py, sniper_mode.py, sync_orig.py, tg_menu.py
-- 내용: 메리츠 v2.9.0 (판 30, 1차): 어댑터 연결 + B1~B4 고침
-- 브랜치: staging
-
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
+
+## v1.8.1 · 2026-11-22 (KST) — 판 31 질문 3 (meritz_laoer v2.9.0 3차, 원작식 부분 주문)
+- 파일: sniper_mode.py, main.py, CHANGELOG.md, test_hybrid_v310.py(저장소 밖). 안 바뀜: sniper_adapter.py, tg_menu.py, tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*
+- 내용: 원작 execute_bulletproof_sell_sweep 방식 — 매도 주문 전 매도가능 수량을 2초(0.25초 간격) 기다림(SN.wait_sellable) · 목표(닿은 박스 합, 졸업이면 전 박스)에 매도가능이 모자라면 평단 낮은 박스부터 가능한 만큼만 주문(마지막 박스는 일부 수량) · 장외 매도가능 0이면 주문 없이 조용히 대기 · 정규장 0이면 원작처럼 목표 수량 시도. 부분 체결 정산은 기존 _apply_sell 이 체결 수량만큼만 박스를 줄임(남은 박스·남은 수량은 장부에 그대로 — 시험으로 확인). '전부 아니면 무'는 안 함 (Muse 결정)
+- 검증: v310 21개 · v300 25개 · v270 7개 · v260 31개 · v250(수정) 16개 통과 · pyflakes 새 경고 0 (main.py 기존 5건·sniper_mode.py 기존 1건 그대로) · 실거래·서버 적용·push 없음
+
+## v1.8.0 · 2026-11-22 (KST) — 판 31 (meritz_laoer v2.9.0 2차)
+- 파일: sniper_mode.py, sniper_adapter.py, CHANGELOG.md, test_hybrid_v310.py(새, 저장소 밖), test_hybrid_v250.py(저장소 밖, test_04 기대값 1줄 수정). 안 바뀜: main.py, tg_menu.py, tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*
+- 내용: 스나이퍼 매도 판정(box_rows)을 원작 evaluate_multi_grid_sell_targets 로 연결 (방식 B = 전체 층 그대로, Muse 결정; 비교 결과 A·B 동일). 미완성 층 박스 전체를 한 묶음으로: 1층 +1.5% · 2층 +1.0%(닿으면 1층도 같이) · 3층 이상 개별 매도 없음 · 졸업(3층~끝 가중평단 +1.0%)에 닿으면 전 박스 전량. 동작 변경(Muse 수락): 3층 이상 개별 +1.0% 매도 사라짐, '층마다 L1' → 전체 한 묶음 L1. 탑 매도·매수·서브 안 바뀜
+- 검증: v310 14개 · v300 25개 · v270 7개 · v260 31개 · v250(수정) 16개 통과 · pyflakes 새 경고 0 (기존 copy 미사용 1건) · 실거래·서버 적용·push 없음
 
 ## v1.7.0 · 2026-11-22 (KST) — 판 30 (meritz_laoer v2.9.0 1차)
 - 파일: sniper_mode.py, main.py, tg_menu.py, sniper_adapter.py, README.md, CHANGELOG.md, test_hybrid_v300.py(새, 저장소 밖). 안 바뀜: tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*

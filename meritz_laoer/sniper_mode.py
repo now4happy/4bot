@@ -1,6 +1,8 @@
 # ==========================================================
 # FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.9.0)
-# v2.9.0 (2026-11-22, 판 30): 신호 판정(buy_signal)을 원작 복사본(sniper_adapter → orig_sniper/quant_engine_core.evaluate_l2_only_hybrid_reentry_signal)으로 바꿈. B1 … B3b … (헤더 주석 1줄)
+# v2.9.0 판 31 질문 3 (2026-11-22): 원작식 부분 주문 — plan_sells 가 매도가능이 모자라면 평단 낮은 박스부터 가능한 만큼만(마지막 박스는 일부) 주문, 장외 매도가능 0이면 조용히 대기, 정규장 0이면 목표 수량 시도. main 이 주문 전에 매도가능을 2초(0.25초 간격) 기다림
+# v2.9.0 판 31 (2026-11-22): 매도 판정(box_rows)을 원작 evaluate_multi_grid_sell_targets(어댑터 sell_plan, 방식 B = 전체 층 그대로)로 바꿈 — 미완성 층 박스 전체 한 묶음: 1층 +1.5% · 2층 +1.0% · 3층 이상은 개별 매도 없음, 졸업(3층~끝 가중평단 +1.0%)에 닿으면 전량. 탑 매도·매수·서브는 안 바뀜
+# v2.9.0 (2026-11-22, 판 30): 신호 판정(buy_signal)을 원작 복사본(sniper_adapter → orig_sniper/quant_engine_core.evaluate_l2_only_hybrid_reentry_signal)으로 바꿈. B1 눌림 깊이 = 층(박스) 수 · B2 상한 = 가장 낮은 층 평단 · B3 눌림·돌파는 % 로 비교(반올림 목표가 아님) · B3b RSI 모르면 돌파 안 막음. 표시용 눌림·돌파 가격은 그대로. 매도·탑쌓기·서브 매수 규칙은 안 바뀜
 # v2.7.0 (2026-11-21, 판 27): 층 간격 설정 제거 — make_plan info에서 'gap' 키 삭제 (계획 미리보기 '새 층 가격' 줄이 없어져서 안 씀). 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params).
 # v2.6.0 (2026-11-21, 판 26): ① 박스별 매도 — box_rows(박스마다 평단 +1.5%(그 층 안 최저 평단 L1) / +1.0%) · plan_sells 가 닿은 박스만 그 박스 전량 주문(floor_id + box_id) · sell_rows 층 행에 boxes 추가 ② 눌림 매수% = TW.portion_pct(s) (설정 sniper_portion_pct, 기본 8) ③ trigger_lines 박스별 줄 · make_plan info['boxes']
 # v2.5.0 (2026-11-21, 판 25 하이브리드 박스·층 — 토스 스나이퍼 이식): ① 매수 = 신호 1번에 박스 시드의 8%(단리 고정, plan_buy: min(8%, 박스 남은 시드) → 13번째가 나머지) ② 새 박스 가격은 신호가 뜰 때 정해짐 — 층 간격(tower_gap_usd)·'새 층 보류' 규칙 삭제, 시초가 상한은 호출한 쪽(main)이 그대로
@@ -25,6 +27,7 @@
 import copy
 import datetime
 import math
+import time
 
 import sniper_adapter as AD
 import sub_grid as SG
@@ -91,25 +94,30 @@ def sniper_numbers(st):
 
 
 def box_rows(st, s, price):
-    """v2.6.0 박스별 익절 행 (미완성 층의 박스만 — 완성·잠긴 층은 탑 매도라 박스별 매도 없음): floor_id·box_id·label(층 표현)·qty·avg(박스 평단)·cost·pct·target(올림 2자리)·role·reached·gain_pct.
-    L1(공격 박스) = 그 미완성 층 안에서 평단이 가장 낮은 박스 (같으면 번호가 큰 = 나중에 산 박스) → 평단 +1.5% · 나머지 박스(상단) +1.0%. 층끼리는 비교하지 않음. 계산만 함 (상태 안 바꿈)"""
+    """v2.9.0(판 31) 박스별 익절 행 — 원작 매도 판정(어댑터 sell_plan, 방식 B = 전체 층 그대로)으로 계산. 미완성 층의 박스만 (완성·잠긴 층은 탑 매도): floor_id·box_id·label·qty·avg·cost·pct·target·role·reached·gain_pct·floor_avg.
+    미완성 층 전체 박스를 평단 오름차순 한 묶음으로 봄: 가장 낮은 박스 = L1(+1.5%) · 그 다음 = L2(+1.0%, 닿으면 L1 도 같이) · 3번째 이상은 개별 매도 없음, 졸업(3번째~끝 가중평단 +1.0%)에 닿으면 전 박스 전량 (role 'grad', target = 졸업 목표가). reached = 원작 sold_indices. 계산만 함 (상태 안 바꿈)"""
     tp1, tpu = tp_pcts(s)
     labs = TW.floor_labels(st)
     px = _f(price)
-    rows = []
+    src = []
     for f in active_floors(st):
         if TW.is_tower(f):
             continue
-        fid = int(_f(f.get("id")))
-        bs = sorted(TW.boxes_view(f), key=lambda b: (TW.box_avg(b), -int(b["id"])))
-        for i, b in enumerate(bs):
-            ba = TW.box_avg(b)
-            role = "L1" if i == 0 else "upper"
-            pct = tp1 if role == "L1" else tpu
-            tg = ceil2(ba * (1 + pct / 100.0))
-            rows.append({"floor_id": fid, "box_id": int(b["id"]), "label": labs.get(fid, TW.price_label(TW.floor_avg(f))), "qty": int(b["qty"]), "avg": ba, "cost": round(_f(b["cost"]), 2),
-                         "pct": pct, "target": tg, "role": role, "reached": bool(px > 0 and px >= tg), "gain_pct": (round((px / ba - 1) * 100, 2) if px > 0 and ba > 0 else None),
-                         "floor_avg": TW.floor_avg(f)})
+        for b in TW.boxes_view(f):
+            src.append((f, b))
+    src.sort(key=lambda fb: (TW.box_avg(fb[1]), -int(fb[1]["id"]), -int(_f(fb[0].get("id")))))     # 평단 같으면 나중에 산 박스가 1층 쪽 (판 26 규칙 유지)
+    layers = [{"qty": int(b["qty"]), "cost": _f(b["cost"])} for _f_, b in src]
+    plan, _res = AD.sell_plan(layers, px, rise_l1_pct=tp1, rise_upper_pct=tpu) if layers else ([], {})
+    rows = []
+    for pr in plan:
+        f, b = src[pr["src"]]
+        fid, ba = int(_f(f.get("id"))), TW.box_avg(b)
+        role = "L1" if pr["role"] == "L1" else "upper"
+        tg = pr["target"] if pr["target"] > 0 else ceil2(ba * (1 + tpu / 100.0))
+        pct = tp1 if pr["role"] == "L1" else (tpu if pr["role"] == "L2" else (round((tg / ba - 1) * 100, 2) if ba > 0 else 0.0))
+        rows.append({"floor_id": fid, "box_id": int(b["id"]), "label": labs.get(fid, TW.price_label(TW.floor_avg(f))), "qty": int(b["qty"]), "avg": ba, "cost": round(_f(b["cost"]), 2),
+                     "pct": pct, "target": tg, "role": role, "reached": bool(px > 0 and pr["reached"]), "gain_pct": (round((px / ba - 1) * 100, 2) if px > 0 and ba > 0 else None),
+                     "floor_avg": TW.floor_avg(f), "kind": pr["role"] or "none"})
     return rows
 
 
@@ -188,24 +196,50 @@ def pick_resolve(state, st, key, choice, fu):
     return f"스나이퍼 선택 — 평단 ${TW.floor_avg(f):.2f} 층은 그대로 두고, 목표가 ${tgt:.2f} 를 기준가로 하는 새 층을 만들어 스나이퍼 매매를 해요"
 
 
-def plan_sells(s, st, price, sellable, skip_ids=(), otype="LIMIT", skip_boxes=()):
-    """v2.6.0 박스별 매도: 미완성 층의 박스마다 자기 목표(L1 평단 +1.5% · 나머지 +1.0%)에 닿은 박스만 그 박스 전량(100%) 지정가 매도 주문 → (주문 목록, 알림 글자 목록). 완성·잠긴 층은 탑 매도 몫이라 안 냄.
-    skip_ids = 이 층 전체를 건너뜀(층 단위 주문이 나가 있음) · skip_boxes = {(층 id, 박스 id)} 이미 이 박스 주문이 나가 있거나 오늘 거절된 박스만 건너뜀.
-    매도가능 수량(sellable)이 모자라면 아래층(번호 큰 층)·평단 낮은 박스부터 우선하고 나머지는 보류. 계산만 함 (상태 안 바꿈)"""
-    notes, orders, taken = [], [], 0
+SELLABLE_WAIT_SEC = 2.0            # 원작 SELLABLE_QTY_POLL_WAIT_SEC
+SELLABLE_POLL_SEC = 0.25           # 원작 SELLABLE_QTY_POLL_INTERVAL_SEC
+
+
+def wait_sellable(fetch, need, sleep=time.sleep, mono=time.monotonic, wait=None, every=None):
+    """원작식 매도가능 수량 대기: fetch() 가 돌려주는 매도가능이 need 이상이 되거나 wait(기본 2초)가 지날 때까지 every(기본 0.25초) 간격으로 확인 → 마지막으로 본 매도가능 수량. need <= 0 이면 바로 한 번만 읽음"""
+    wait = SELLABLE_WAIT_SEC if wait is None else wait
+    every = SELLABLE_POLL_SEC if every is None else every
+    q = int(_f(fetch()))
+    end = mono() + wait
+    while need > 0 and q < need and mono() < end:
+        sleep(every)
+        q = int(_f(fetch()))
+    return q
+
+
+def plan_sells(s, st, price, sellable, skip_ids=(), otype="LIMIT", skip_boxes=(), ext=False):
+    """v2.9.0(판 31 질문 3) 원작식 부분 주문 (원작 execute_bulletproof_sell_sweep): 목표에 닿은 박스(졸업이면 전 박스)의 합 = 목표 수량. 매도가능(sellable)이 목표 이상이면 전량, 모자라면 가능한 만큼만 —
+    평단 낮은 박스부터 채우고(원작 정산 순서) 마지막 박스는 일부 수량만 주문(그 박스는 남은 수량이 장부에 그대로 남음). 매도가능 0: 장외(ext=True)면 주문 없이 조용히 대기(원작 SILENT_EXTENDED_SELL_RESTRICTED), 정규장이면 원작처럼 목표 수량 그대로 주문 시도.
+    주문은 박스별(floor_id + box_id) 그대로 → (주문 목록, 알림 글자 목록). skip_ids = 이 층 전체 건너뜀 · skip_boxes = {(층 id, 박스 id)} 이미 주문이 나가 있거나 오늘 거절된 박스. 계산만 함 (상태 안 바꿈)"""
+    notes, orders = [], []
     cap = max(0, int(_f(sellable)))
     skip = {int(x) for x in skip_ids}
     skipb = {(int(a), int(b)) for a, b in skip_boxes}
-    for r in sorted((r for r in box_rows(st, s, price) if r["reached"]), key=lambda r: (-r["floor_id"], r["avg"], -r["box_id"])):
-        if r["floor_id"] in skip or (r["floor_id"], r["box_id"]) in skipb:
-            continue
-        if taken + r["qty"] > cap:
-            notes.append(f"매도 {r['label']} 박스 ${r['avg']:.2f} {r['qty']}주 > 매도가능 {max(cap - taken, 0)}주 — 보류")
-            continue
-        taken += r["qty"]
-        orders.append({"side": "SELL", "type": otype, "qty": r["qty"], "price": r["target"], "kind": "sell", "mode": MODE_SNIPER, "level": None,
+    hit = sorted((r for r in box_rows(st, s, price) if r["reached"] and r["floor_id"] not in skip and (r["floor_id"], r["box_id"]) not in skipb), key=lambda r: (r["avg"], -r["box_id"], r["floor_id"]))
+    want = sum(r["qty"] for r in hit)
+    if want <= 0:
+        return orders, notes
+    if cap <= 0 and ext:
+        return orders, notes                                                  # 장외 매도가능 0주: 조용히 대기 (원작과 같음)
+    left = want if cap <= 0 else min(want, cap)                               # 정규장 0주는 원작처럼 목표 수량 그대로 시도
+    for r in hit:
+        q = min(r["qty"], left)
+        if q <= 0:
+            break
+        left -= q
+        part = q < r["qty"]
+        if part:
+            notes.append(f"매도 {r['label']} 박스 ${r['avg']:.2f} {r['qty']}주 중 {q}주만 — 매도가능 {cap}주 (원작식 부분 주문, 나머지 {r['qty'] - q}주는 장부에 그대로)")
+        orders.append({"side": "SELL", "type": otype, "qty": q, "price": r["target"], "kind": "sell", "mode": MODE_SNIPER, "level": None,
                        "floor_id": r["floor_id"], "box_id": r["box_id"], "floor_avg": r["floor_avg"], "box_avg": r["avg"], "reached": True,
-                       "desc": f"스나이퍼 {r['label']} 박스 평단 ${r['avg']:.2f} +{r['pct']:g}% 전량 매도 (박스별 매도{' · 공격 박스' if r['role'] == 'L1' else ''})"})
+                       "desc": f"스나이퍼 {r['label']} 박스 평단 ${r['avg']:.2f} +{r['pct']:g}% {'일부 ' + str(q) + '/' + str(r['qty']) + '주' if part else '전량'} 매도 (박스별 매도{' · 공격 박스' if r['role'] == 'L1' else ''}{' · 졸업' if r.get('kind') == 'grad' else ''})"})
+    if want > cap > 0:
+        notes.append(f"매도 목표 {want}주 > 매도가능 {cap}주 — 가능한 만큼만 주문 (원작식)")
     return orders, notes
 
 
