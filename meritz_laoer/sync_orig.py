@@ -35,7 +35,7 @@ def check():
         ok = os.path.exists(os.path.join(OD, f)) and sha(os.path.join(OD, f)) == h
         print(("OK   " if ok else "DIFF ") + f)
         bad += 0 if ok else 1
-    code = ("import sys; sys.path.insert(0, %r); import quant_engine_core, quant_engine, toss_api; print('import OK')" % OD)
+    code = ("import sys; sys.path.insert(0, %r); import quant_engine_core, quant_engine, toss_api, sniper_exit_plugin; print('import OK')" % OD)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     print((r.stdout or r.stderr).strip().splitlines()[-1] if (r.stdout or r.stderr).strip() else "import 결과 없음")
     if r.returncode != 0:

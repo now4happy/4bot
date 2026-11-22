@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0)
+# v2.9.0 판 32 질문 4·5 (2026-11-22): 시세를 읽을 때마다 SN.trail_tick (실거래·모의 둘 다) — 1층 트레일링 슬롯은 메모리에만
 # v2.9.0 판 31 질문 3 (2026-11-22): 스나이퍼 매도 주문 전에 매도가능 수량을 2초(0.25초 간격) 기다리고(SN.wait_sellable), plan_sells 에 장외 여부(ext) 전달 — 원작 execute_bulletproof_sell_sweep 방식 부분 주문
 # v2.7.0 (2026-11-21, 판 27 층 간격 설정·버튼 제거): 계획 미리보기 '새 층 가격' 줄(간격 기준) 삭제 · 탑쌓기 계획 머리 '간격' 표시 삭제. 간격은 내부 고정값 GAP_USD=5로만 씀.
 # v2.6.0 (2026-11-21, 판 26 박스별 매도·매수 비율 설정): 박스별 매도 주문의 중복 방지를 박스 단위로(sold_box_keys_today·busy_boxes·거절 기록 키 '층:박스') · 매도 체결 알림 글자(박스만 줄임) · 계획 미리보기에 박스별 목표 줄. 층 단위 주문(탑 매도)은 예전 그대로.
@@ -1339,6 +1340,7 @@ def run_sniper_dry(s, api, note):
     if not isinstance(ss, dict):
         ss = copy.deepcopy(SN.load_state(cfg))                          # 처음엔 실거래 기준가를 복사해 시작 (이후 모의 파일만 씀)
     SN.series_add(ss, px, now_t)
+    SN.trail_tick(sim, s, px, now_t, ss)                                  # 판 32: 1층 트레일링 (메모리 슬롯 — 저장 안 함)
     SN.update_peak(ss, SN.layer_count(SN.active_floors(sim)), q)
     cfg._save_json(DRY_SNIPER_FILE, ss)
     done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is None}
@@ -1512,6 +1514,7 @@ def run_sniper_tick(s, api, note):
     px = float(api.price(s["symbol"], s["price_market"])["price"])
     ss = SN.load_state(cfg)
     SN.series_add(ss, px, now_t)
+    SN.trail_tick(sim, s, px, now_t, ss)                                    # 판 32: 1층 트레일링 (원작 슬롯, 메모리에만 — 상태 파일에 저장 안 함, 재시작하면 다시 계산)
     SN.update_peak(ss, SN.layer_count(SN.active_floors(sim)), q)            # 판 23 수정1 S3: 이번 사이클 최고 층수 (눌림 깊이 잠금) — 상태 파일에 저장
     SN.save_state(cfg, ss)
     hold, sellable, exch_vid = api.holding(s["symbol"])

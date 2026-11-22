@@ -1,11 +1,19 @@
-# 메리츠 SOXL 무매 변경 기록
-
-## v1.3.4 · 2026-11-22 14:15 (KST)
-- 파일: main.py, sniper_adapter.py, sniper_mode.py
-- 내용: 메리츠 v2.9.0 (판 31, 2차·3차): 매도 연결 + 질문 3 부분 주문
-- 브랜치: staging
-
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
+
+## v1.9.2 · 2026-11-22 (KST) — 판 32 3차 (meritz_laoer v2.9.0 5차, 래칫·하드캡·RSI 수확 거래 흐름 연결)
+- 파일: sniper_adapter.py, sniper_mode.py, main.py, CHANGELOG.md, test_hybrid_v320.py(저장소 밖). 안 바뀜: tg_menu.py, tower_strategy.py, orig_sniper/* 등
+- 내용: 질문 4·5 반영. 거래 루프가 시세를 읽을 때마다 SN.trail_tick(dry·live 2곳) → 1층(가장 낮은 박스) 고정 +1.5% 매도가 원작 트레일링으로 바뀜(점화 +1.5%·샤프 래칫·하드캡 +6.0%·RSI 65 수확). 원작 흐름 그대로: 실호가가 점화가 밑이면 슬롯 해제, 보존선 이탈 신호인데 실호가가 정지가 이상이면 취소, 매도 하한가 = 보존선 이상(하드캡이면 캡 가격), 2층 동반 졸업. 졸업(전 층 전량)은 그대로 우선. 보존선·최고점은 메모리에만 두고 sniper_state.json 에 저장 안 함(재시작하면 다시 계산). 어댑터 sell_targets·sell_plan 에 exclude_l1 추가(원작 exclude_daytime_l1). 스토커 보류·VWAP 방어·HA 음봉 청산 안 함
+- 검증: v320 36개 · v310 21개 · v300 25개 · v270 7개 · v260 31개 · v250 16개 통과 · pyflakes 새 경고 0 · 실거래·서버 적용·push 없음
+
+## v1.9.1 · 2026-11-22 (KST) — 판 32 2차·부분 (meritz_laoer v2.9.0 4차, 래칫·하드캡·RSI 수확 어댑터까지)
+- 파일: sniper_adapter.py, sync_orig.py, orig_sniper/ORIGIN.json, orig_sniper/{sniper_exit_plugin.py, assassin_plugin.py, barbell_plugin.py, quant_indicators_plugin.py}(새, 원작 d9170fa 바이트 동일 — 해시로만 검증), CHANGELOG.md, test_hybrid_v320.py(저장소 밖). 안 바뀜: sniper_mode.py, main.py, tg_menu.py, tower_strategy.py 등
+- 내용: 원작 sniper_exit_plugin.py 복사(질문 1 (a)) — import 에 필요한 3개도 같이 복사, ORIGIN.json files 로 등록(watch 에서 뺌)·sync_orig --check 가 import 까지 확인. 어댑터에 l1_trail_slot·l1_trail_sync·l1_trail_step·minute_key 추가 = 원작 SniperL1TrailSlot·_step_l1_trail_slot_candidate 호출 (단리 S-112: 샤프 래칫·하드캡 +6.0%·RSI 65 수확). 입력은 봇이 모은 1분 종가로 만든 값, 스토커·VWAP 방어·HA 음봉 청산은 안 함. ⚠ 새 의존성: quant_indicators_plugin 이 numpy·pandas 를 import. 거래 코드에는 아직 연결 안 함
+- 검증: v320 24개 · v310 21개 · v300 25개 · v270 7개 · v260 31개 · v250 16개 통과 · pyflakes 새 경고 0 · sync_orig --check 통과 · 실거래·서버 적용·push 없음
+
+## v1.9.0 · 2026-11-22 (KST) — 판 32 1차·부분 (meritz_laoer v2.9.0 4차, 스토커·래칫·하드캡 이식 중)
+- 파일: sniper_adapter.py, CHANGELOG.md, test_hybrid_v320.py(새, 저장소 밖), test_hybrid_v300.py(저장소 밖, 분봉 입력 금지 검사에서 어댑터 제외 1곳 수정). 안 바뀜: sniper_mode.py, main.py, tg_menu.py, tower_strategy.py 등, orig_sniper/*
+- 내용: 어댑터에 단리 Case 112 정책(rebound_policy = S-112: 스토커 +0.25%·VWAP -3.0%·샤프 래칫·하드캡 6.0%·RSI 65)과 스토커 판정 래퍼(stalker_fire = 원작 evaluate_stalker_reversal_fire) 추가. 거래 코드에는 아직 연결 안 함 — 래칫·하드캡 실행부(SniperL1TrailSlot)가 원작 sniper_exit_plugin.py 안이라 복사본에 없고, 분봉·VWAP 입력이 메리츠 API 에 없어 Muse 결정 대기(질문란)
+- 검증: v320 9개 · v310 21개 · v300 25개 · v270 7개 · v260 31개 · v250 16개 통과 · pyflakes 새 경고 0 · 실거래·서버 적용·push 없음
 
 ## v1.8.1 · 2026-11-22 (KST) — 판 31 질문 3 (meritz_laoer v2.9.0 3차, 원작식 부분 주문)
 - 파일: sniper_mode.py, main.py, CHANGELOG.md, test_hybrid_v310.py(저장소 밖). 안 바뀜: sniper_adapter.py, tg_menu.py, tower_strategy.py, sub_grid.py, config.py, notifier.py, orig_sniper/*

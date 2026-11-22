@@ -1,5 +1,7 @@
 # ==========================================================
 # FILE: meritz_laoer/sniper_adapter.py   (MERITZ_LAOER v2.9.0 — 판 31: 매도 연결, 방식 B)
+# 판 32 질문 1·2 (2026-11-22, 2차·부분): 래칫·하드캡·RSI 수확 — 원작 sniper_exit_plugin.py(SniperL1TrailSlot · _step_l1_trail_slot_candidate)를 orig_sniper/ 에 그대로 복사해 어댑터가 그 클래스·함수를 부름 (l1_trail_slot · l1_trail_step · minute_key). 거래 코드에는 아직 연결 안 함
+# 판 32 (2026-11-22, 1차·부분): 단리 모드 Case 112 정책(S-112)·리바운드 스토커 판정 래퍼 추가 — 거래 코드에는 아직 연결 안 함 (래칫·하드캡 실행부는 원작 sniper_exit_plugin.py 안이라 복사본에 없음 → 질문란 참조)
 # 판 31 (2026-11-22): sell_plan 추가 — 원작 evaluate_multi_grid_sell_targets 에 전체 층을 자르지 않고 그대로 넘김(방식 B, Muse 결정). 원작 코드는 안 고침.
 # 원작 스나이퍼 순수 판정 함수(orig_sniper/ 안 원작 복사본, 한 줄도 안 고침)를 하이브리드 상태(층·F)에 맞춰 부르는 얇은 어댑터.
 # 규칙: ① 원작 로직은 orig_sniper/ 에만 있다 (여기서 다시 쓰지 않음) ② 이 파일은 데이터 모양 바꾸기(층 → StratumBucket)와 호출뿐
@@ -67,18 +69,19 @@ def reentry_signal(price, anchor, lowest_layer_price, rsi=None, late_cutoff=Fals
         is_late_new_cycle_cutoff=bool(late_cutoff), is_late_cutoff=bool(late_cutoff), rsi_14=rsi, hm=hm, portion_mode=mode, pullback_drop_pct=pullback_drop_pct)
 
 
-def sell_targets(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00):
-    """원작 evaluate_multi_grid_sell_targets (1층 +1.5% · 상단 +1.0% · 3~7층 통합이평 졸업) 를 층 목록에 적용 → 원작 결과 dict 그대로"""
-    return QE.evaluate_multi_grid_sell_targets(layers_to_buckets(layers), price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct)
+def sell_targets(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00, exclude_l1=False):
+    """원작 evaluate_multi_grid_sell_targets (1층 +1.5% · 상단 +1.0% · 3~7층 통합이평 졸업) 를 층 목록에 적용 → 원작 결과 dict 그대로.
+    exclude_l1=True (판 32 질문 4): 원작 exclude_daytime_l1 — 1층 고정 +1.5% 매도와 2층 개별 매도를 끄고(트레일링이 대신함) 졸업만 남김"""
+    return QE.evaluate_multi_grid_sell_targets(layers_to_buckets(layers), price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct, exclude_daytime_l1=bool(exclude_l1))
 
 
-def sell_plan(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00):
+def sell_plan(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00, exclude_l1=False):
     """판 31 방식 B: 전체 층(평단 오름차순, [0] = 1층)을 자르지 않고 원작 매도 판정에 넘김 → 층마다 {idx(오름차순 번호), src(입력 목록 번호), role(L1|L2|grad|None), target, reached}.
     reached = 원작 결과 sold_indices (판정은 원작 그대로). target = 표시·주문 가격: L1 = 1층 평단 +rise_l1 · L2 = max(2층 평단 +rise_upper, L1 목표) (L2 가 닿으면 L1 도 같이 팔림 — 원작) · 졸업(grad) = 3층~끝 가중평단 +rise_upper (닿으면 전 층 전량).
     반환 (rows, result) — result 는 원작 결과 dict 그대로. 졸업 가능한 층 수(3층 이상 층 있음)일 때만 grad 목표가 있음"""
     order = sorted((i for i, x in enumerate(layers or []) if int(TC.safe_float(x.get("qty"))) > 0),
                    key=lambda i: TC.safe_float(layers[i].get("cost")) / max(1, int(TC.safe_float(layers[i].get("qty")))))
-    res = sell_targets([layers[i] for i in order], price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct)
+    res = sell_targets([layers[i] for i in order], price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct, exclude_l1=exclude_l1)
     bk = layers_to_buckets([layers[i] for i in order])
     w = QE.compute_upper_2_to_12_moving_avg(bk, rise_upper_pct=rise_upper_pct)
     sold = set(res.get("sold_indices") or [])
@@ -104,3 +107,46 @@ def sell_plan(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00):
             tgt = grad_t
         rows.append({"idx": k, "src": i, "role": role or ("grad" if grad_t > 0 else None), "target": tgt, "reached": reached})
     return rows, res
+
+
+def rebound_policy(mode=MODE_DEFAULT):
+    """판 32: 원작 resolve_smart_rebound_policy 그대로 — 하이브리드는 단리(SIMPLE) 고정 → S-112: 스토커 +0.25% · VWAP -3.0% 폭락 방어 · 샤프 래칫 (1.75→1.60, 2.50→2.15, 3.50→3.10, 4.50→4.10, 5.30→4.80) · 하드캡 +6.0% · RSI 과열 수확 65. 바벨·복리 값은 쓰지 않음"""
+    return TC.resolve_smart_rebound_policy(mode)
+
+
+def stalker_fire(price, bar_open, bar_low, prev_stalk_low, closed_real_reversal=False, closed_ha_shaved_bear=False, closed_ha_ready=False, is_dip_add=False, hm=None, mode=MODE_DEFAULT):
+    """판 32: 원작 evaluate_stalker_reversal_fire 호출 (저점 추적 + 저점 대비 +0.25%(추매 +0.30%) 반등 또는 완결 양봉 반전). 입력(분봉 시가·저가·완결봉 반전 표시)은 호출한 쪽이 만들어 넘김 — 메리츠 API 에 분봉이 없어 연결 방법은 Muse 결정 대기 (질문란)"""
+    pol = rebound_policy(mode)
+    return QC.evaluate_stalker_reversal_fire(
+        live_price=price, cur_bar_open=bar_open, cur_bar_low=bar_low, prev_stalk_low=prev_stalk_low, closed_real_reversal=closed_real_reversal,
+        closed_ha_shaved_bear=closed_ha_shaved_bear, closed_ha_ready=closed_ha_ready, stalk_rebound_pct=pol["stalk_rebound_pct"], hm=hm, is_dip_add=is_dip_add)
+
+
+def minute_key(ts):
+    """에포크초 → 원작 분봉 키 글자 'YYYY-MM-DD HH:MM' (UTC 기준 — 키는 서로 크기만 비교하므로 시간대는 상관없음)"""
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(float(ts), tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def l1_trail_slot(kind="MAIN"):
+    """판 32: 원작 SniperL1TrailSlot 새 슬롯 (1층 트레일링 상태: 점화·스텝 잠금·하드캡·최고점). 원작 클래스 그대로"""
+    import sniper_exit_plugin as XP
+    return XP.SniperL1TrailSlot(kind)
+
+
+def l1_trail_sync(slot, qty, book_price, mode=MODE_DEFAULT):
+    """판 32: 1층(가장 낮은 층) 수량·평단이 바뀌면 슬롯을 처음부터 다시 맞춤 (원작 sync_fingerprint — 점화가 평단 +1.5%, 정책은 모드별: 단리 = S-112 샤프 래칫·하드캡 +6.0%)"""
+    slot.sync_fingerprint(int(qty), float(book_price), mode)
+    return slot
+
+
+def l1_trail_step(slot, live_price, now_ts, closed_minute_ts=None, closed_rsi=None):
+    """판 32: 원작 _step_l1_trail_slot_candidate 한 번 호출 → (신호 코드, 방금 점화 여부). 코드: TRAIL_CAP_500(하드캡 +6.0%) · TRAIL_CB_STOP(래칫 보존선 이탈) · TRAIL_CLIMAX_EXHAUST(최고 +3.00% 이상 & 완결봉 RSI >= 65 & 고점 -0.50% 이탈) · '' (없음).
+    입력은 메리츠에 분봉이 없어 봇이 모은 1분 종가로 만든 값: closed_minute_ts = 직전 완결 분의 시각(없으면 None → 완결봉 없음), closed_rsi = 그 완결 분까지의 RSI(14) (모르면 None → 원작 기본 50 = 수확 안 함).
+    완결봉 HA 음봉 청산(TRAIL_CLOSED_HA_RED)은 이 판 범위 밖이라 '양봉 확정'으로 넘겨 꺼 둠 (지시: 래칫·하드캡·RSI 65 수확만). 세션 VWAP·QQQ 속도는 없음(0)"""
+    import sniper_exit_plugin as XP
+    cmk = minute_key(closed_minute_ts) if closed_minute_ts else ""
+    return XP._step_l1_trail_slot_candidate(
+        slot, float(live_price), 0.0, minute_key(now_ts), cmk, bool(cmk), True, 0.0,
+        closed_ha_shaved_bull=True, cur_bar_min_key="", session_vwap=0.0,
+        closed_rsi_14=(50.0 if closed_rsi is None else float(closed_rsi)))

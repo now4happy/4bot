@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.9.0)
+# v2.9.0 판 32 질문 4·5 (2026-11-22): 1층(가장 낮은 박스) 고정 +1.5% 매도를 원작 트레일링(점화 +1.5% → 샤프 5단 보존선 · 하드캡 +6.0% · RSI 65 수확)으로 바꿈 — trail_tick 이 메모리 슬롯(상태 파일에 저장 안 함, 재시작하면 다시 계산)을 갱신, 원작 실호가 재확인·매도 하한가·2층 동반 졸업 따라감. box_rows 는 trail_tick 을 한 번이라도 부르면(main) 트레일링 방식, 안 부르면 예전 고정 방식
 # v2.9.0 판 31 질문 3 (2026-11-22): 원작식 부분 주문 — plan_sells 가 매도가능이 모자라면 평단 낮은 박스부터 가능한 만큼만(마지막 박스는 일부) 주문, 장외 매도가능 0이면 조용히 대기, 정규장 0이면 목표 수량 시도. main 이 주문 전에 매도가능을 2초(0.25초 간격) 기다림
 # v2.9.0 판 31 (2026-11-22): 매도 판정(box_rows)을 원작 evaluate_multi_grid_sell_targets(어댑터 sell_plan, 방식 B = 전체 층 그대로)로 바꿈 — 미완성 층 박스 전체 한 묶음: 1층 +1.5% · 2층 +1.0% · 3층 이상은 개별 매도 없음, 졸업(3층~끝 가중평단 +1.0%)에 닿으면 전량. 탑 매도·매수·서브는 안 바뀜
 # v2.9.0 (2026-11-22, 판 30): 신호 판정(buy_signal)을 원작 복사본(sniper_adapter → orig_sniper/quant_engine_core.evaluate_l2_only_hybrid_reentry_signal)으로 바꿈. B1 눌림 깊이 = 층(박스) 수 · B2 상한 = 가장 낮은 층 평단 · B3 눌림·돌파는 % 로 비교(반올림 목표가 아님) · B3b RSI 모르면 돌파 안 막음. 표시용 눌림·돌파 가격은 그대로. 매도·탑쌓기·서브 매수 규칙은 안 바뀜
@@ -93,6 +94,72 @@ def sniper_numbers(st):
     return {int(_f(f.get("id"))): i + 1 for i, f in enumerate(order)}
 
 
+# ---------------------------------------------------------------- 판 32 1층 트레일링 (원작 SniperL1TrailSlot 메모리 슬롯 — 상태 파일에 저장 안 함 = 원작대로, 재시작하면 다시 계산)
+TRAIL = {"on": False, "slot": None, "fire": None, "code": ""}
+
+
+def trail_reset():
+    TRAIL.update(on=False, slot=None, fire=None, code="")
+
+
+def _src_boxes(st):
+    """미완성 층의 박스 전체, 평단 오름차순([0] = 1층). box_rows 와 같은 정렬"""
+    src = [(f, b) for f in active_floors(st) if not TW.is_tower(f) for b in TW.boxes_view(f)]
+    src.sort(key=lambda fb: (TW.box_avg(fb[1]), -int(fb[1]["id"]), -int(_f(fb[0].get("id")))))
+    return src
+
+
+def trail_tick(st, s, price, now_ts, state):
+    """판 32: 거래 루프가 시세를 읽을 때마다 부름 — 1층(가장 낮은 박스) 슬롯을 맞추고 원작 트레일링 한 번 평가 → 신호가 났으면 {"l1_price", "l2_price"(2층 동반 졸업, 없으면 0), "code"}.
+    원작 execute_1m_sniper_sell 흐름을 따름: 신호 뒤 실호가 재확인 — 점화가 밑이면 슬롯 해제(허락보다 용서를) · 보존선 이탈 신호인데 실호가가 보존선 이상이면 취소 · 매도 하한가 = 보존선(없으면 점화가) 이상, 하드캡이면 캡 가격, 보존선 위면 실호가 -0.2% 와 보존선 중 큰 값 · 2층이 활성이고 하한가가 2층 목표(+1.0%) 이상이거나 실호가가 2층 목표 이상이면 2층 동반 졸업.
+    완결 분·RSI 는 봇이 모은 1분 종가(state['series']: [분 번호, 종가])에서 만듦. 졸업(전 층 전량)이 닿은 때는 box_rows 가 졸업을 우선"""
+    TRAIL["on"] = True
+    px = _f(price)
+    src = _src_boxes(st)
+    if not src or px <= 0:
+        if TRAIL["slot"] is not None:
+            TRAIL["slot"].full_reset()
+        TRAIL.update(fire=None, code="")
+        return None
+    if TRAIL["slot"] is None:
+        TRAIL["slot"] = AD.l1_trail_slot("MAIN")
+    slot = TRAIL["slot"]
+    f1, b1 = src[0]
+    AD.l1_trail_sync(slot, int(b1["qty"]), TW.box_avg(b1))
+    cur_min = int(now_ts // 60)
+    closed = [x for x in (state or {}).get("series") or [] if isinstance(x, (list, tuple)) and len(x) == 2 and int(x[0]) < cur_min]
+    closed_ts = int(closed[-1][0]) * 60 if closed else None
+    rsi = rsi14([x[1] for x in closed]) if closed else None
+    code, _ign = AD.l1_trail_step(slot, px, now_ts, closed_ts, rsi)
+    TRAIL.update(fire=None, code=code or "")
+    if not code:
+        return None
+    if px < slot.arm_100_p - 1e-9:                                     # 허락보다 용서를: 실호가가 점화가 밑이면 슬롯 해제
+        slot.release_forgive()
+        TRAIL["code"] = ""
+        return None
+    stop = slot.refresh_stop_price()
+    if code == "TRAIL_CB_STOP" and (stop <= 0.0 or px >= stop - 1e-9):
+        TRAIL["code"] = ""
+        return None
+    lock = slot.lock_floor_p if slot.lock_floor_p > 0.0 else slot.arm_100_p
+    if code == "TRAIL_CAP_500" and px >= slot.cap_500_p - 1e-9:
+        fl = slot.cap_500_p
+    elif px >= lock - 1e-9:
+        fl = max(lock, math.floor((px * 0.998 + 1e-9) * 100.0) / 100.0)
+    else:
+        fl = max(lock, math.floor((px + 1e-9) * 100.0) / 100.0)
+    l2p = 0.0
+    if len(src) >= 2:
+        rows, _res = AD.sell_plan([{"qty": int(b["qty"]), "cost": _f(b["cost"])} for _f_, b in src], px, rise_l1_pct=tp_pcts(s)[0], rise_upper_pct=tp_pcts(s)[1], exclude_l1=True)
+        if any(r["role"] == "L2" for r in rows):
+            raw2 = ceil2(TW.box_avg(src[1][1]) * (1 + tp_pcts(s)[1] / 100.0))
+            if raw2 <= fl + 1e-9 or px >= raw2 - 1e-9:
+                l2p = raw2
+    TRAIL["fire"] = {"l1_price": round(fl, 2), "l2_price": l2p, "code": code}
+    return TRAIL["fire"]
+
+
 def box_rows(st, s, price):
     """v2.9.0(판 31) 박스별 익절 행 — 원작 매도 판정(어댑터 sell_plan, 방식 B = 전체 층 그대로)으로 계산. 미완성 층의 박스만 (완성·잠긴 층은 탑 매도): floor_id·box_id·label·qty·avg·cost·pct·target·role·reached·gain_pct·floor_avg.
     미완성 층 전체 박스를 평단 오름차순 한 묶음으로 봄: 가장 낮은 박스 = L1(+1.5%) · 그 다음 = L2(+1.0%, 닿으면 L1 도 같이) · 3번째 이상은 개별 매도 없음, 졸업(3번째~끝 가중평단 +1.0%)에 닿으면 전 박스 전량 (role 'grad', target = 졸업 목표가). reached = 원작 sold_indices. 계산만 함 (상태 안 바꿈)"""
@@ -107,7 +174,10 @@ def box_rows(st, s, price):
             src.append((f, b))
     src.sort(key=lambda fb: (TW.box_avg(fb[1]), -int(fb[1]["id"]), -int(_f(fb[0].get("id")))))     # 평단 같으면 나중에 산 박스가 1층 쪽 (판 26 규칙 유지)
     layers = [{"qty": int(b["qty"]), "cost": _f(b["cost"])} for _f_, b in src]
-    plan, _res = AD.sell_plan(layers, px, rise_l1_pct=tp1, rise_upper_pct=tpu) if layers else ([], {})
+    trail_on = bool(TRAIL.get("on"))
+    fire = TRAIL.get("fire") if trail_on else None
+    plan, _res = AD.sell_plan(layers, px, rise_l1_pct=tp1, rise_upper_pct=tpu, exclude_l1=trail_on) if layers else ([], {})
+    grad = bool((_res or {}).get("reason_tag") == "SELL_ALL_GRAD")
     rows = []
     for pr in plan:
         f, b = src[pr["src"]]
@@ -115,8 +185,17 @@ def box_rows(st, s, price):
         role = "L1" if pr["role"] == "L1" else "upper"
         tg = pr["target"] if pr["target"] > 0 else ceil2(ba * (1 + tpu / 100.0))
         pct = tp1 if pr["role"] == "L1" else (tpu if pr["role"] == "L2" else (round((tg / ba - 1) * 100, 2) if ba > 0 else 0.0))
+        reached = bool(px > 0 and pr["reached"])
+        if trail_on and not grad:                                       # 판 32: 1층은 트레일링 신호로만, 2층은 동반 졸업으로만 (원작)
+            if pr["role"] == "L1":
+                reached = bool(fire)
+                tg = fire["l1_price"] if fire else (TRAIL["slot"].arm_100_p if TRAIL.get("slot") is not None and TRAIL["slot"].arm_100_p > 0 else ceil2(ba * (1 + tp1 / 100.0)))
+            elif pr["role"] == "L2":
+                reached = bool(fire and fire["l2_price"] > 0)
+                if reached:
+                    tg = fire["l2_price"]
         rows.append({"floor_id": fid, "box_id": int(b["id"]), "label": labs.get(fid, TW.price_label(TW.floor_avg(f))), "qty": int(b["qty"]), "avg": ba, "cost": round(_f(b["cost"]), 2),
-                     "pct": pct, "target": tg, "role": role, "reached": bool(px > 0 and pr["reached"]), "gain_pct": (round((px / ba - 1) * 100, 2) if px > 0 and ba > 0 else None),
+                     "pct": pct, "target": tg, "role": role, "reached": reached, "gain_pct": (round((px / ba - 1) * 100, 2) if px > 0 and ba > 0 else None),
                      "floor_avg": TW.floor_avg(f), "kind": pr["role"] or "none"})
     return rows
 
