@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v1.9.9 · 2026-11-22 19:41 (KST)
+- 파일: bot_updater.py
+- 내용: 메리츠 이름 변경: 메리츠 SOXL 무매 → 메리츠 SOXL 하이브리드모드 (업데이트 비서 NAMES 한 줄)
+- 브랜치: staging
+
 ## v1.9.8 · 2026-11-22 14:07 (KST)
 - 파일: bot_updater.py
 - 내용: 사무실 vNEXT: meritz_laoer/ 하위 폴더(orig_sniper/) 배포 분류
