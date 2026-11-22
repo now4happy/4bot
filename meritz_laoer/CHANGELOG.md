@@ -1,3 +1,10 @@
+# 메리츠 SOXL 무매 변경 기록
+
+## v1.3.3 · 2026-11-22 14:11 (KST)
+- 파일: main.py, ORIGIN.json, quant_engine.py, quant_engine_core.py, toss_api.py, toss_api_core.py, sniper_adapter.py, sniper_mode.py, sync_orig.py, tg_menu.py
+- 내용: 메리츠 v2.9.0 (판 30, 1차): 어댑터 연결 + B1~B4 고침
+- 브랜치: staging
+
 # 7번 메리츠 SOXL 탑쌓기 변경 기록
 
 ## v1.7.0 · 2026-11-22 (KST) — 판 30 (meritz_laoer v2.9.0 1차)
