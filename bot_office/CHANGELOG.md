@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v2.0.0 · 2026-11-24 08:55 (KST)
+- 파일: bot_updater.py, fanding_trade.py
+- 내용: 죽은 사무실 서비스 재시작 중단 + fanding 가격표 표기를 프라이버시 날짜로 (직접 적용, 풀이님 지시)
+- 브랜치: fix/updater-skip-stopped-service + staging
+
 ## v1.9.9 · 2026-11-22 19:41 (KST)
 - 파일: bot_updater.py
 - 내용: 메리츠 이름 변경: 메리츠 SOXL 무매 → 메리츠 SOXL 하이브리드모드 (업데이트 비서 NAMES 한 줄)
