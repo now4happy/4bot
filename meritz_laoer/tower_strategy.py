@@ -265,7 +265,10 @@ def boxes_view(f):
     bs = []
     for b in (f.get("boxes") if isinstance(f.get("boxes"), list) else []):
         if isinstance(b, dict) and int(_f(b.get("qty"))) > 0:
-            bs.append({"id": int(_f(b.get("id"))), "qty": int(_f(b.get("qty"))), "cost": round(_f(b.get("cost")), 4), "ono": str(b.get("ono") or "")})
+            bx = {"id": int(_f(b.get("id"))), "qty": int(_f(b.get("qty"))), "cost": round(_f(b.get("cost")), 4), "ono": str(b.get("ono") or "")}
+            if b.get("lot_type"):
+                bx["lot_type"] = str(b["lot_type"])               # 판 37 후속: 층 태그(GRID_L1..L7) 보존 — 원작 버킷의 lot_type 과 같은 역할 (grid_tiers.py)
+            bs.append(bx)
     if bs and sum(b["qty"] for b in bs) == q and abs(sum(b["cost"] for b in bs) - c) <= BOX_COST_TOL and len({b["id"] for b in bs}) == len(bs):
         return bs
     return [{"id": 0, "qty": q, "cost": round(c, 4), "ono": ""}]
@@ -749,10 +752,12 @@ def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
     bs = sync_boxes(st, f)                                            # v2.6.0: 사기 전 보유분을 버킷으로 정리 (예전 상태면 1버킷)
     ono = str(order.get("no") or "").strip()
     hit = next((b for b in bs if ono and b.get("ono") == ono), None)  # 같은 주문의 부분 체결은 한 버킷으로 모음 (매수 체결 1건 = 버킷 1개)
+    new_box = None
     if hit is not None:
         hit["qty"], hit["cost"] = int(hit["qty"]) + q, round(_f(hit["cost"]) + amt, 4)
     else:
-        bs.append({"id": next_box_id(st), "qty": int(q), "cost": round(amt, 4), "ono": ono})
+        new_box = {"id": next_box_id(st), "qty": int(q), "cost": round(amt, 4), "ono": ono}
+        bs.append(new_box)
     f["boxes"] = bs
     f["qty"] = int(f["qty"]) + q
     f["cost"] = round(_f(f["cost"]) + amt, 4)
@@ -764,6 +769,30 @@ def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
     else:
         _topup_setup(f, gap, start_usd)
         f["rebuy_pending"] = False
+        if new_box is not None:
+            _tag_on_buy(st, f, new_box)                                   # 판 37 후속: 새 버킷 태그(GRID_L1~L7) — 원작 매수 때 층 재배치
+
+
+def _tag_on_buy(st, f, new_box):
+    """판 37 후속(Muse Q6: 원작대로): 스나이퍼 매수 1건이 큐(미완성 F 의 버킷 전체)에 들어올 때 원작 vrev_add_quota_lot_and_merge_2tier 규칙으로 모든 버킷의 층 태그를 다시 정해 box["lot_type"] 에 저장.
+    7층 초과분은 L2_L7_MERGE_SORT 로 같은 7층 태그를 달아 한 층으로 봄 (장부 버킷은 주문 단위라 따로 남김). 태그 없는 예전 버킷은 지금 동적 규칙(가장 싼 것 = 1층)으로 처음 태그를 붙인 뒤 이어감.
+    매수로 F 가 완성돼 버킷이 비워지는 경우는 안 부름 (그 버킷은 큐를 떠남)"""
+    import grid_tiers as GT
+    items, where = [], {}
+    nkey = (int(_f(f.get("id"))), int(new_box["id"]))
+    for g in top_down(st):
+        if int(_f(g.get("qty"))) <= 0 or is_tower(g):
+            continue
+        bs = sync_boxes(st, g)
+        for b in bs:
+            key = (int(_f(g.get("id"))), int(b["id"]))
+            where[key] = b                                                # sync_boxes 가 F 의 boxes 를 복사본으로 바꾸므로 지금 F 에 들어 있는 객체를 잡음
+            if key != nkey:
+                items.append({"key": key, "qty": int(b["qty"]), "cost": _f(b["cost"]), "lot_type": b.get("lot_type")})
+    tags = GT.tags_on_buy(items, nkey, int(new_box["qty"]), _f(new_box["cost"]))
+    for k, tag in tags.items():
+        if k in where:
+            where[k]["lot_type"] = tag
 
 
 def _apply_sell(st, order, q, amt, gap, start_usd):

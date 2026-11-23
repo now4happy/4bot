@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.10.0)
+# vNEXT (판 37 Case 113 이식 + 후속 — 버전 번호는 Muse 지정 전이라 미확정): ① 개장 7분 쉴드 매번 적용 ② 10분 게이트(04:07 ET 기점·정규장 안, 보유 층이 있을 때 추가매수만) ③ 상한 가드·기준가 상한 = 가장 낮은 층 평단(그대로) ④ 눌림 계단(-1/-2/-3.5/-5.5) 유지(항목 2 취소) ⑤ 층 태그 GRID_L1~L7 고정·7층 상한·L2_L7_MERGE_SORT 합병 (grid_tiers.py·tower_strategy._tag_on_buy·sniper_adapter.tiered — 1층이 팔리면 새 1층 안 생김) ⑥ 2층 공석 돌파 연결(OFF — 원작 Case 113 폐기). 항목 6(시간외)은 미적용 → 노션 질문
 # v2.10.0 (2026-11-23, 판 36 Case 113 이식): 원작 복사본 5개를 7718e29 로 교체한 뒤 하이브리드 자체 값 정리 — ① 돌파 매수 삭제(BREAKOUT_* 상수·돌파 가격·돌파 매수액 분기) ② 눌림 타점 표시를 원작 결과(pullback_target_price = min(직전 매도가, 최하단 F 평단) 기준)로 맞춤 ③ 서브 그리드 끔(SUB_GRID_ON=False — plan_buy 가 plan_sub 를 안 부름, 서브 상태·체결 반영·수량 동기화 코드는 남김) ④ 신규 진입 컷오프 15:30 → 15:00 (보유 F 0개일 때만 매수 차단) ⑤ 개장 7분 쉴드(09:30~09:36): 보유 F 0개 첫 진입일 때만 원작 신호 함수에 시각(hm) 전달 ⑥ 1층 익절 기본값 1.5 → 1.0 (TP_L1_DEFAULT)
 # v2.9.0 6차 (2026-11-22, 판 33): plan_tower_buy 신설(탑쌓기 매매 매수 계획 = TW.make_plan 매수 쪽) · make_plan 미리보기가 tower 모드면 스나이퍼 매수 대신 탑쌓기 매수. 스나이퍼 매수·매도·래칫 계산은 안 바꿈
 # v2.9.0 판 32 질문 4·5 (2026-11-22): 1층(가장 낮은 버킷) 고정 +1.5% 매도를 원작 트레일링(점화 +1.5% → 샤프 5단 보존선 · 하드캡 +6.0% · RSI 65 수확)으로 바꿈 — trail_tick 이 메모리 슬롯(상태 파일에 저장 안 함, 재시작하면 다시 계산)을 갱신, 원작 실호가 재확인·매도 하한가·2층 동반 졸업 따라감. box_rows 는 trail_tick 을 한 번이라도 부르면(main) 트레일링 방식, 안 부르면 예전 고정 방식
@@ -41,7 +42,7 @@ MODE_SNIPER = "sniper"          # 주문 'mode' 표시 글자 (체결 반영이 
 
 TP_L1_DEFAULT = 1.0            # 스나이퍼 1층(공격 층) 익절 % — 설정 sniper_tp_l1_pct (v2.10.0 판 36 D3: Case 113 원작 +1.00% 에 맞춰 1.5 → 1.0)
 TP_UPPER_DEFAULT = 1.0         # 상단층 익절 % — 설정 sniper_tp_upper_pct
-PULLBACK_TIERS = ((4, -1.00), (8, -2.00), (10, -3.50))      # (보유 층 수 이하, 눌림 %) — 그 위는 PULLBACK_DEEP (참조 get_golden8_prog_thresholds)
+PULLBACK_TIERS = ((4, -1.00), (8, -2.00), (10, -3.50))      # (보유 층 수 이하, 눌림 %) — 그 위는 PULLBACK_DEEP (참조 get_golden8_prog_thresholds). 판 37 후속(풀이님 정정): 항목 2 취소 — 계단 그대로
 PULLBACK_DEEP = -5.50
 RSI_PERIOD = 14
 LATE_CUTOFF = datetime.time(15, 0)       # 15:00~16:00 ET 신규 진입 차단 (v2.10.0 판 36 D7: 원작 Case 113 컷오프 15:00 — 보유 F 0개일 때만 적용)
@@ -104,10 +105,15 @@ def trail_reset():
 
 
 def _src_boxes(st):
-    """미완성 F의 버킷 전체, 평단 오름차순([0] = 1층). box_rows 와 같은 정렬"""
+    """미완성 F의 버킷 전체, 평단 오름차순 (같으면 나중에 산 버킷이 앞). box_rows 와 같은 입력 순서 — 큐 순서(1층 → 상단층)는 어댑터 tiered 가 정함 (판 37 후속: 태그 기준)"""
     src = [(f, b) for f in active_floors(st) if not TW.is_tower(f) for b in TW.boxes_view(f)]
     src.sort(key=lambda fb: (TW.box_avg(fb[1]), -int(fb[1]["id"]), -int(_f(fb[0].get("id")))))
     return src
+
+
+def _src_layers(src):
+    """(F, 버킷) 목록 → 어댑터 층 목록 (태그 lot_type 포함)"""
+    return [{"qty": int(b["qty"]), "cost": _f(b["cost"]), "lot_type": b.get("lot_type") or ""} for _f_, b in src]
 
 
 def trail_tick(st, s, price, now_ts, state):
@@ -117,7 +123,8 @@ def trail_tick(st, s, price, now_ts, state):
     TRAIL["on"] = True
     px = _f(price)
     src = _src_boxes(st)
-    if not src or px <= 0:
+    lay = _src_layers(src)
+    if not src or px <= 0 or not AD.has_l1(lay):                       # 판 37 후속: 1층이 없으면(1층이 팔려 상단층만 남음 — 원작은 새 1층을 안 만듦) 트레일링 슬롯 없음
         if TRAIL["slot"] is not None:
             TRAIL["slot"].full_reset()
         TRAIL.update(fire=None, code="")
@@ -125,7 +132,7 @@ def trail_tick(st, s, price, now_ts, state):
     if TRAIL["slot"] is None:
         TRAIL["slot"] = AD.l1_trail_slot("MAIN")
     slot = TRAIL["slot"]
-    f1, b1 = src[0]
+    f1, b1 = src[AD.queue_order(lay)[0]]
     AD.l1_trail_sync(slot, int(b1["qty"]), TW.box_avg(b1))
     cur_min = int(now_ts // 60)
     closed = [x for x in (state or {}).get("series") or [] if isinstance(x, (list, tuple)) and len(x) == 2 and int(x[0]) < cur_min]
@@ -152,9 +159,10 @@ def trail_tick(st, s, price, now_ts, state):
         fl = max(lock, math.floor((px + 1e-9) * 100.0) / 100.0)
     l2p = 0.0
     if len(src) >= 2:
-        rows, _res = AD.sell_plan([{"qty": int(b["qty"]), "cost": _f(b["cost"])} for _f_, b in src], px, rise_l1_pct=tp_pcts(s)[0], rise_upper_pct=tp_pcts(s)[1], exclude_l1=True)
-        if any(r["role"] == "L2" for r in rows):
-            raw2 = ceil2(TW.box_avg(src[1][1]) * (1 + tp_pcts(s)[1] / 100.0))
+        rows, _res = AD.sell_plan(lay, px, rise_l1_pct=tp_pcts(s)[0], rise_upper_pct=tp_pcts(s)[1], exclude_l1=True)
+        l2r = next((r for r in rows if r["role"] == "L2"), None)
+        if l2r is not None:
+            raw2 = ceil2(TW.box_avg(src[l2r["src"]][1]) * (1 + tp_pcts(s)[1] / 100.0))
             if raw2 <= fl + 1e-9 or px >= raw2 - 1e-9:
                 l2p = raw2
     TRAIL["fire"] = {"l1_price": round(fl, 2), "l2_price": l2p, "code": code}
@@ -174,7 +182,7 @@ def box_rows(st, s, price):
         for b in TW.boxes_view(f):
             src.append((f, b))
     src.sort(key=lambda fb: (TW.box_avg(fb[1]), -int(fb[1]["id"]), -int(_f(fb[0].get("id")))))     # 평단 같으면 나중에 산 버킷이 1층 쪽 (판 26 규칙 유지)
-    layers = [{"qty": int(b["qty"]), "cost": _f(b["cost"])} for _f_, b in src]
+    layers = _src_layers(src)
     trail_on = bool(TRAIL.get("on"))
     fire = TRAIL.get("fire") if trail_on else None
     plan, _res = AD.sell_plan(layers, px, rise_l1_pct=tp1, rise_upper_pct=tpu, exclude_l1=trail_on) if layers else ([], {})
@@ -326,7 +334,7 @@ def plan_sells(s, st, price, sellable, skip_ids=(), otype="LIMIT", skip_boxes=()
 
 # ---------------------------------------------------------------- 채우기 (층 사기)
 def drop_pct(n_layers):
-    """보유 층 수에 따른 눌림 % (음수). 참조 get_golden8_prog_thresholds: 1-4층 -1.0 · 5-8층 -2.0 · 9-10층 -3.5 · 그 위 -5.5"""
+    """보유 층 수에 따른 눌림 % (음수). 참조 get_golden8_prog_thresholds: 1-4층 -1.0 · 5-8층 -2.0 · 9-10층 -3.5 · 그 위 -5.5 (판 37 후속: -1.00 고정은 취소 — 계단 유지)"""
     lots = max(1, int(n_layers))
     for hi, pct in PULLBACK_TIERS:
         if lots <= hi:
@@ -473,11 +481,11 @@ def plan_sub(s, st, price, state, usd_cash, now_et, is_trading_day=None):
 
 
 def timed_signal(price, anchor, kind, cap_price, depth, rsi, now_et, n_held):
-    """v2.10.0 판 36 D7·D8: buy_signal + 시각 규칙. 보유 F 0개(n_held <= 0) = 신규(첫) 진입일 때만 ① ET 시각 HHMM 을 원작 신호 함수에 넘겨 개장 7분 쉴드(09:30~09:36) 적용
-    ② 15:00~16:00 ET 이면 매수 신호를 HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF 로 바꿔 막음. 보유 F 가 있으면 시각 규칙 없음 (원작 범위 그대로 — 원작 쉴드·컷오프는 0주 첫 진입 경로만)"""
+    """buy_signal + 시각 규칙. ① (vNEXT 판 37 항목 5) ET 시각 HHMM 을 매번 원작 신호 함수에 넘겨 개장 7분 쉴드(09:30~09:36) 적용 — 보유 F 개수와 상관없음
+    ② (v2.10.0 판 36 D7) 15:00~16:00 ET 이면 보유 F 0개(신규 진입)일 때만 매수 신호를 HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF 로 막음"""
     entry0 = int(n_held) <= 0
     late = is_late_cutoff(now_et)
-    hm = (now_et.hour * 100 + now_et.minute) if entry0 else None
+    hm = now_et.hour * 100 + now_et.minute            # vNEXT 판 37 항목 5: 개장 7분 쉴드는 첫 진입만이 아니라 매번 적용 (원작: hm 을 매번 넘김)
     sg = buy_signal(price, anchor, kind, cap_price, depth, rsi, late, hm=hm)
     if entry0 and late and sg["should_buy"]:
         sg = dict(sg, should_buy=False, signal_type="HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF")
@@ -498,7 +506,7 @@ def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_tradi
     anchor, kind = anchor_info(st, state, s)
     cap = lowest_layer_avg(fl)
     sig = timed_signal(px, anchor, kind, cap, depth_layers(state, n), rsi, now_et, n)
-    out = {"order": None, "notes": [], "signal": sig, "target": None, "sub": None, "sub_gate": None}
+    out = {"order": None, "notes": [], "signal": sig, "target": None, "sub": None, "sub_gate": None, "gate": None, "l2_vac": None}
     chosen = None
     cands = [{"empty_id": e.get("id"), "ref": _f(e.get("ref_px")), "kind": e.get("kind")} for e in (st.get("empty") or []) if isinstance(e, dict)]      # 판 24 선택 대기(picks)는 v2.5.0 에서 안 봄
     for c in cands:
@@ -508,6 +516,17 @@ def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_tradi
         chosen, sig = c, sg
         out["signal"] = sg
         break
+    if n > 0 and chosen is None and not sig["should_buy"]:       # 판 37 후속 항목 3 (Q1: 연결은 하되 OFF): 2층 공석 돌파 — 원작 함수를 부르며, 원작 Case 113 이 영구 폐기해 항상 NOT_ELIGIBLE (절대 안 삼)
+        out["l2_vac"] = AD.l2_vacant_break_signal(AD.layers_of(st), px, cycle_min_buy_price=cap, ratchet_layers=depth_layers(state, n))
+        if out["l2_vac"].get("should_buy"):
+            sig = dict(sig, should_buy=True, signal_type="LOW_BREAK_L2_VAC_RELOAD")
+            out["signal"] = sig
+    if n > 0 and (chosen is not None or sig["should_buy"]):     # vNEXT 판 37 항목 7(Muse Q8): 10분 게이트는 보유 층이 있을 때(추가매수)만 — 첫 매수(층 0개)는 안 기다림. 04:07 ET 기점, 같은 날 같은 10분 구간에 주문은 1번
+        g_open, g_bucket, g_day = SG.gate_status(now_et, (state or {}).get("buy_gate_bucket", -1), (state or {}).get("buy_gate_date", ""))
+        if not g_open:
+            out["signal"] = dict(sig, should_buy=False, signal_type="HOLD_BUY_GATE_10M")
+            return out
+        out["gate"] = {"bucket": g_bucket, "date": g_day}
     is_sub, per, per_pct, tag = False, portion, TW.portion_pct(s), sig["signal_type"]
     if chosen is None and not sig["should_buy"]:
         if not SUB_GRID_ON:                                                    # v2.10.0 판 36 D2: 서브 그리드 끔 — plan_sub 를 안 부름 (서브 상태·체결 반영 코드는 남김)
@@ -641,6 +660,15 @@ def note_fills(state, done, now_iso=""):
     return changed
 
 
+def mark_buy_gate(state, plan):
+    """본 매수 주문을 낸 틱의 10분 게이트 기록 (vNEXT 판 37 항목 7 — 같은 10분 구간 재주문 방지). 바뀌었으면 True"""
+    g = (plan or {}).get("gate")
+    if not g:
+        return False
+    state["buy_gate_bucket"], state["buy_gate_date"] = g["bucket"], g["date"]
+    return True
+
+
 def mark_sub_gate(state, plan_sub_result):
     """서브 주문을 낸 틱의 10분 게이트 기록 (같은 10분 구간 재주문 방지). 바뀌었으면 True"""
     g = (plan_sub_result or {}).get("gate")
@@ -705,7 +733,7 @@ def trigger_lines(s, st, state, now_et=None):
 
 # ---------------------------------------------------------------- 상태 파일 (cfg = ConfigManager: _load_json·_save_json 재사용)
 def new_state():
-    return {"version": 1, "anchor": 0.0, "anchor_kind": "", "anchor_at": "", "last_order_ts": 0.0, "buy_block_until": 0.0, "peak_layers": 0, "series": [], "picks": {}, "sub": SG.new_sub()}
+    return {"version": 1, "anchor": 0.0, "anchor_kind": "", "anchor_at": "", "last_order_ts": 0.0, "buy_block_until": 0.0, "peak_layers": 0, "series": [], "picks": {}, "sub": SG.new_sub(), "buy_gate_bucket": -1, "buy_gate_date": ""}
 
 
 def load_state(cfg):

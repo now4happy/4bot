@@ -578,7 +578,7 @@ class MenuBot:
             anchor, kind = _SN.anchor_info(st, ss, s)
             cap = _SN.lowest_layer_avg(fl)
             late = _SN.is_late_cutoff(o.now_et())
-            sig = _SN.timed_signal(px, anchor, kind, cap, _SN.depth_layers(ss, _SN.layer_count(fl)), rsi, o.now_et(), len(fl))
+            sig = _SN.timed_signal(px, anchor, kind, cap, _SN.depth_layers(ss, _SN.layer_count(fl)), rsi, o.now_et(), _SN.layer_count(fl))
             if anchor > 0:
                 gate = "신규 진입 차단(15:00~)" if (late and not fl) else ("개장 7분 쉴드(09:30~09:36)" if sig["signal_type"] == "HOLD_REG_OPEN_7M_VWAP_SHIELD" else "")
                 lines.append(f"▫️ 눌림 <b>${sig['pullback_price']:.2f}</b> ({sig['drop_pct']:+.1f}%) 도달 시 매수" + (f" · {gate}" if gate else ""))

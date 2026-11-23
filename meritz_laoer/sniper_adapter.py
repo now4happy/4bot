@@ -19,6 +19,7 @@ _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "orig_sniper")
 if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
+import grid_tiers as GT             # noqa: E402  판 37 후속: 층 태그·7층 상한·합병 (원작 이식, orig 대조 시험 있음)
 import quant_engine as QE            # noqa: E402  원작 복사본 (orig_sniper/)
 import quant_engine_core as QC       # noqa: E402
 import toss_api_core as TC           # noqa: E402
@@ -51,15 +52,45 @@ def layers_to_buckets(layers):
     return out
 
 
+def tiered(layers):
+    """판 37 후속: 층 목록 → (order, buckets, groups). 큐 순서 = 원작 순서 ([0] 이 GRID_L1 이면 1층, 그 뒤 상단층 번호 순, 7층 칸은 합병분이 한 칸).
+    모든 층에 태그(lot_type = GRID_L1..GRID_L7)가 있으면 태그대로 (같은 태그 = 합병된 한 버킷 — 수량·원가 합), 하나라도 없으면 예전처럼 평단 오름차순 ([0] = 가장 싼 층 = 1층, 층마다 버킷 1개).
+    order = 큐 순서의 입력 번호 목록 · buckets = 원작 StratumBucket 목록 · groups[k] = 버킷 k 에 든 입력 번호들"""
+    idx = [i for i, x in enumerate(layers or []) if int(TC.safe_float(x.get("qty"))) > 0]
+    gq = GT.group_by_tag([{"key": i, "qty": int(TC.safe_float(layers[i].get("qty"))), "cost": TC.safe_float(layers[i].get("cost")), "lot_type": layers[i].get("lot_type")} for i in idx])
+    if gq is not None:
+        bk = [QC.StratumBucket(qty=b["qty"], book_price=b["price"], book_invested_usd=b["cost"], actual_cost_usd=b["cost"], lot_count=max(1, len(b["members"])), lot_type=b["tag"]) for b in gq]
+        groups = [list(b["members"]) for b in gq]
+        return [i for g in groups for i in g], bk, groups
+    order = sorted(idx, key=lambda i: TC.safe_float(layers[i].get("cost")) / max(1, int(TC.safe_float(layers[i].get("qty")))))
+    return order, layers_to_buckets([layers[i] for i in order]), [[i] for i in order]
+
+
+def has_l1(layers):
+    """큐 맨 앞이 1층(GRID_L1 또는 예전 방식이면 가장 싼 층)이면 True — 1층이 팔려 상단층만 남았으면 False (원작 has_active_l1_bucket)"""
+    bk = tiered(layers)[1]
+    return bool(bk) and QC.has_active_l1_bucket(bk)
+
+
+def queue_order(layers):
+    """큐 순서의 입력 번호 목록 (tiered 의 order)"""
+    return tiered(layers)[0]
+
+
+def tags_on_buy(existing_layers, new_key, qty, cost):
+    """판 37 후속: 새 매수 한 건의 태그 갱신 — existing_layers = [{"key","qty","cost","lot_type"}] → {키: 태그} (원작 vrev_add_quota_lot_and_merge_2tier, 7층 상한·L2_L7 합병)"""
+    return GT.tags_on_buy(existing_layers, new_key, qty, cost, GT.MAX_GRID_TIERS_7)
+
+
 def layers_of(st):
-    """하이브리드 상태(tower_strategy 장부)에서 스나이퍼 층 목록 — 완성·잠긴 F 는 탑쌓기 몫이라 뺌, 미완성 F 의 버킷(boxes_view)만. [{"qty","cost","floor_id","layer_id"}]"""
+    """하이브리드 상태(tower_strategy 장부)에서 스나이퍼 층 목록 — 완성·잠긴 F 는 탑쌓기 몫이라 뺌, 미완성 F 의 버킷(boxes_view)만. [{"qty","cost","floor_id","layer_id","lot_type"}]"""
     import tower_strategy as TW
     rows = []
     for f in TW.top_down(st if isinstance(st, dict) else {}):
         if int(TW._f(f.get("qty"))) <= 0 or TW.is_tower(f):
             continue
         for b in TW.boxes_view(f):
-            rows.append({"qty": b["qty"], "cost": b["cost"], "floor_id": int(TW._f(f.get("id"))), "layer_id": int(b["id"])})
+            rows.append({"qty": b["qty"], "cost": b["cost"], "floor_id": int(TW._f(f.get("id"))), "layer_id": int(b["id"]), "lot_type": b.get("lot_type") or ""})
     return rows
 
 
@@ -71,20 +102,25 @@ def reentry_signal(price, anchor, lowest_layer_price, rsi=None, late_cutoff=Fals
         is_late_new_cycle_cutoff=bool(late_cutoff), is_late_cutoff=bool(late_cutoff), rsi_14=rsi, hm=hm, portion_mode=mode, pullback_drop_pct=pullback_drop_pct)
 
 
+def l2_vacant_break_signal(layers, price, cycle_min_buy_price=0.0, ratchet_layers=0, closed_ha_shaved_bear=None):
+    """판 37 후속 항목 3: 원작 evaluate_l2_vacant_low_break_signal (LOW_BREAK_L2_VAC_RELOAD) 연결 — 원작 결과 dict 그대로. 원작 Case 113 에서 영구 폐기돼 꺼져 있음(is_eligible_l2_vac=False → eligible=False · should_buy 항상 False) — 풀이님 Q1 결정: 연결은 하되 OFF 그대로, 절대 안 삼"""
+    return QC.evaluate_l2_vacant_low_break_signal(
+        live_price=price, buckets=tiered(layers)[1], cycle_min_buy_price=cycle_min_buy_price, cycle_ratchet_max_lots=max(0, int(ratchet_layers)), closed_ha_shaved_bear=closed_ha_shaved_bear)
+
+
 def sell_targets(layers, price, rise_l1_pct=1.00, rise_upper_pct=1.00, exclude_l1=False):
     """원작 evaluate_multi_grid_sell_targets (1층 +1.0% · 상단 +1.0% · 3~7층 통합이평 졸업) 를 층 목록에 적용 → 원작 결과 dict 그대로.
     exclude_l1=True (판 32 질문 4): 원작 exclude_daytime_l1 — 1층 고정 +1.5% 매도와 2층 개별 매도를 끄고(트레일링이 대신함) 졸업만 남김"""
-    return QE.evaluate_multi_grid_sell_targets(layers_to_buckets(layers), price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct, exclude_daytime_l1=bool(exclude_l1))
+    return QE.evaluate_multi_grid_sell_targets(tiered(layers)[1], price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct, exclude_daytime_l1=bool(exclude_l1))
 
 
 def sell_plan(layers, price, rise_l1_pct=1.00, rise_upper_pct=1.00, exclude_l1=False):
-    """판 31 방식 B: 전체 층(평단 오름차순, [0] = 1층)을 자르지 않고 원작 매도 판정에 넘김 → 층마다 {idx(오름차순 번호), src(입력 목록 번호), role(L1|L2|grad|None), target, reached}.
-    reached = 원작 결과 sold_indices (판정은 원작 그대로). target = 표시·주문 가격: L1 = 1층 평단 +rise_l1 · L2 = max(2층 평단 +rise_upper, L1 목표) (L2 가 닿으면 L1 도 같이 팔림 — 원작) · 졸업(grad) = 3층~끝 가중평단 +rise_upper (닿으면 전 층 전량).
+    """판 31 방식 B: 전체 층을 자르지 않고 원작 매도 판정에 넘김 → 층마다 {idx(큐 순서 번호), src(입력 목록 번호), role(L1|L2|grad|None), target, reached}.
+    판 37 후속: 큐 순서·층 구분은 tiered 가 정함 — 태그가 있으면 태그대로 (1층이 팔려도 다음 층은 상단층으로 남음, 새 1층이 안 생김 · 7층 칸은 합병분 = 한 버킷), 없으면 예전처럼 평단 오름차순 ([0] = 1층).
+    reached = 원작 결과 sold_indices (판정은 원작 그대로, 합병 버킷이 닿으면 그 안의 모든 층). target = 표시·주문 가격: L1 = 1층 평단 +rise_l1 · L2 = max(2층 평단 +rise_upper, L1 목표) (L2 가 닿으면 L1 도 같이 팔림 — 원작) · 졸업(grad) = 3~7층 가중평단 +rise_upper (닿으면 전 층 전량).
     반환 (rows, result) — result 는 원작 결과 dict 그대로. 졸업 가능한 층 수(3층 이상 층 있음)일 때만 grad 목표가 있음"""
-    order = sorted((i for i, x in enumerate(layers or []) if int(TC.safe_float(x.get("qty"))) > 0),
-                   key=lambda i: TC.safe_float(layers[i].get("cost")) / max(1, int(TC.safe_float(layers[i].get("qty")))))
-    res = sell_targets([layers[i] for i in order], price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct, exclude_l1=exclude_l1)
-    bk = layers_to_buckets([layers[i] for i in order])
+    order, bk, groups = tiered(layers)
+    res = QE.evaluate_multi_grid_sell_targets(bk, price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct, exclude_daytime_l1=bool(exclude_l1))
     w = QE.compute_upper_2_to_12_moving_avg(bk, rise_upper_pct=rise_upper_pct)
     sold = set(res.get("sold_indices") or [])
 
@@ -96,7 +132,7 @@ def sell_plan(layers, price, rise_l1_pct=1.00, rise_upper_pct=1.00, exclude_l1=F
     l2_t = max(up(bk[l2_idx].book_price, rise_upper_pct), l1_t) if l2_idx >= 0 else 0.0
     grad_t = float(w.get("inv_3_7_wma_target_price") or 0.0) if int(w.get("inv_3_7_tier_count") or 0) > 0 else 0.0
     rows = []
-    for k, i in enumerate(order):
+    for k, g in enumerate(groups):
         role = "L1" if (k == 0 and w.get("has_active_l1")) else ("L2" if k == l2_idx else None)
         reached = k in sold
         if grad_t > 0 and res.get("reason_tag") == "SELL_ALL_GRAD":
@@ -107,7 +143,8 @@ def sell_plan(layers, price, rise_l1_pct=1.00, rise_upper_pct=1.00, exclude_l1=F
             tgt = l2_t
         else:
             tgt = grad_t
-        rows.append({"idx": k, "src": i, "role": role or ("grad" if grad_t > 0 else None), "target": tgt, "reached": reached})
+        for i in g:
+            rows.append({"idx": len(rows), "src": i, "role": role or ("grad" if grad_t > 0 else None), "target": tgt, "reached": reached})
     return rows, res
 
 

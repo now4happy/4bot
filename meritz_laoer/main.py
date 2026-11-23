@@ -1807,6 +1807,8 @@ def run_sniper_tick(s, api, note):
     ss["last_order_ts"] = now_t
     if o.get("sub") and res != "rejected":
         SN.mark_sub_gate(ss, pb.get("sub"))                    # v2.5.0 서브 10분 게이트 기록
+    elif res != "rejected":
+        SN.mark_buy_gate(ss, pb)                               # vNEXT 판 37 항목 7: 본 매수 10분 게이트 기록
     if res == "rejected":
         ss["buy_block_until"] = now_t + 300                    # 거절되면 5분 쉼 (같은 거절을 매분 반복하지 않게)
     SN.save_state(cfg, ss)
