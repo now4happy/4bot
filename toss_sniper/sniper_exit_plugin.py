@@ -2132,11 +2132,17 @@ async def _commit_filled_sell_and_reanchor_ledger(
     is_late_cutoff_now = is_late_regular_new_cycle_cutoff_window(
         hm_now, now_est=now_est_dt
     )
+    # MODIFIED [Audit-113-02]: HHMM(1500) 직전 분 산수 오차(1499 -> 1459) 교정
+    _prev_cut_hm = (
+        ((NEW_CYCLE_BUY_CUTOFF_HM // 100 - 1) * 100 + 59)
+        if (NEW_CYCLE_BUY_CUTOFF_HM % 100 == 0)
+        else (NEW_CYCLE_BUY_CUTOFF_HM - 1)
+    )
     will_hit_late_cutoff_after_shield = bool(
         is_late_cutoff_now
         or (
             now_est_dt.weekday() < 5
-            and hm_now == (NEW_CYCLE_BUY_CUTOFF_HM - 1)
+            and hm_now == _prev_cut_hm
             and now_est_dt.second >= 1
         )
     )
@@ -2232,9 +2238,10 @@ async def _commit_filled_sell_and_reanchor_ledger(
                     )
                 elif is_ext_sell:
                     next_entry_guide = "🔒장외 매수잠금 · 04:07 EST 프리장 개시 후 첫 1층 진입 대기!"
+                # MODIFIED [Case 113]: 정규장 마감 1시간 전(15:00 ~ 16:00 EST) 0주 신규차단 표기 동기화
                 elif will_hit_late_cutoff_after_shield:
                     next_entry_guide = (
-                        "🔒장마감 30분전(15:30 ~ 16:00) 새 사이클 진입 차단(고점 오버나이트 방어) · "
+                        "🔒장마감 1시간전(15:00 ~ 16:00) 새 사이클 진입 차단(고점 오버나이트 방어) · "
                         "익일 04:07 EST 프리장 첫 1층 진입 대기!"
                     )
                 else:
@@ -2266,18 +2273,14 @@ async def _commit_filled_sell_and_reanchor_ledger(
                         wma_info.get("min_indiv_upper_price"),
                         rem_buckets[0].book_price,
                     )
+                    # MODIFIED [Case 113]: 돌파/저가돌파 폐기 반영 -> ±1.0% 데드존 및 -1.0% 눌림목 단일 안내
                     if is_ext_sell:
                         reload_guide = (
-                            f"🔒장외 매수잠금·1~2층채굴개방(04:07 EST 이후 상한 ${l2_cap_p:.2f} 이하 1층재장전 · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
-                        )
-                    elif will_hit_late_cutoff_after_shield:
-                        reload_guide = (
-                            f"🛡️60초 타임쉴드 후 장마감 30분전(15:30 ~ 16:00) +1.0% 돌파차단 · "
-                            f"2층상한 ${l2_cap_p:.2f} 이하 눌림({resolve_smart_pullback_drop_pct(st.get('portion_mode')):.1f}%·<=세션VWAP) & 최저가돌파(<${next_cycle_min_p:.2f}{ratchet_lock_note}) 감시"
+                            f"🔒장외 매수잠금·1~2층채굴개방(04:07 EST 이후 상한 ${l2_cap_p:.2f} 이하 -1.0% 눌림재장전 · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note} 잠금)"
                         )
                     else:
                         reload_guide = (
-                            f"🛡️60초 타임쉴드 후 1층재장전(눌림 {resolve_smart_pullback_drop_pct(st.get('portion_mode')):.1f}%·<=세션VWAP · 최저가돌파 <${next_cycle_min_p:.2f}{ratchet_lock_note} · 상한 ${l2_cap_p:.2f})"
+                            f"🛡️60초 타임쉴드 후 1층재장전(±1.0% 데드존 · 눌림 -1.0%·<=세션VWAP · 상한 ${l2_cap_p:.2f} · 기억저가 ${next_cycle_min_p:.2f}{ratchet_lock_note})"
                         )
                     primer_reset_prefix = (
                         f"🎯앵커 ${old_anchor_p:.2f}➔${next_anchor_p:.2f} 리셋 완료(정식 8% 공격수 해금 · 본동결 {next_main_frozen_d}일 보존) · "
@@ -3173,7 +3176,7 @@ async def execute_1m_sniper_sell_and_reanchor_plugin(
             if ign_m:
                 just_ignited_any = True
                 logger.info(
-                    "🔥 [Case 112(%s) SOXL 본 1층 다단래칫 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(상단캡=$%.2f[+%.1f%%]) · 점화분=%s(기완결=%s) · 추적 개시",
+                    "🔥 [Case 113(%s) SOXL 본 1층 T4 샤프래칫 트레일링 점화] 단가=$%.2f ➔ 점화가=$%.2f(상단캡=$%.2f[+%.1f%%]) · 점화분=%s(기완결=%s) · 추적 개시",
                     main_slot.spec_id,
                     main_slot.ref_cost,
                     main_slot.arm_100_p,
