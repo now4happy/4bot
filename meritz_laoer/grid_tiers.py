@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ==========================================================
-# FILE: meritz_laoer/grid_tiers.py   (vNEXT — 판 37 후속: 원작 Case 113 층 태그·7층 상한·합병 이식)
+# FILE: meritz_laoer/grid_tiers.py   (v1.4.4 — 판 37 후속: 원작 Case 113 층 태그·7층 상한·합병 이식)
 # 원작 quant_engine.vrev_add_quota_lot_and_merge_2tier · quant_engine_core.relabel_upper_grid_tiers (7718e29, L2_L7_MERGE_SORT) 를
 # '합병 때 어느 버킷이 합쳐졌는지(members)'를 같이 들고 다니게 그대로 옮긴 순수 계산 모듈 (원작 import 없음 — 탑쌓기 장부(tower_strategy)가 불러 씀).
 # 원작과 같은지는 test_hybrid_v370.py 가 원작 함수와 무작위 매수열로 대조함.

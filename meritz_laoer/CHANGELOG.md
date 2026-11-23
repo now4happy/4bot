@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.4 · 2026-11-23 21:32 (KST)
+- 파일: grid_tiers.py, main.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 판 37 후속: Case 113 100% 이식 (암살자 제외) — 7층 상한·합병·고정 태그·계단 복원·2층 공석 OFF
+- 브랜치: staging
+
 ## v1.4.3 · 2026-11-23 11:43 (KST)
 - 파일: config.py, main.py, ORIGIN.json, quant_engine.py, quant_engine_core.py, quant_indicators_plugin.py, sniper_exit_plugin.py, toss_api_core.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
 - 내용: 메리츠 v2.10.0 (판 36): 브리핑 타이머를 스테이징에서 제외 — 메리츠 파일만 적용 대상으로
