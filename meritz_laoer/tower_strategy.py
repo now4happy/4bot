@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.7.0)
+# v2.10.0 (2026-11-23, 판 36 D5): 눌림 매수 기본 8% → 10%, 바벨 켜짐이면 15%(BARBELL_PORTION_PCT, 시드 $9,000 → $1,350). 돌파 매수 비율(BREAKOUT_PORTION_PCT·breakout_portion_pct/usd) 삭제 (설정 키는 남아 있어도 무시)
 # v2.9.0 6차 (2026-11-22, 판 33): trade_mode(s)·buy_gap(s) 추가 — params 의 간격(칸 수)은 tower 모드에서만 설정 tower_buy_gap_usd(1~10, 기본 5), 스나이퍼 모드는 예전처럼 GAP_USD=5. 그 밖의 계산은 안 바꿈
 # v2.7.0 (2026-11-21, 판 27): 층 간격 사용자 설정(tower_gap_usd) 제거 — params()는 간격을 내부 고정값 GAP_USD=5로만 돌려줌 (층 칸(levels) 만들기에만 씀, 매매 규칙 아님). 설정 파일에 tower_gap_usd가 남아 있어도 무시함.
 # v2.6.0 (2026-11-21, 판 26): ① 버킷 모델 — 미완성 층 floor['boxes'] = [{id, qty, cost, ono}] (매수 체결 1건 = 버킷 1개, 층 qty·cost = 버킷 합, 예전 상태·불일치는 층 전체 1버킷 id 0) · boxes_view·sync_boxes·fit_boxes·next_box_id · _apply_sell 버킷별(층 원가·수량은 판 버킷 몫만) · 병합·장부 조정·입고가 버킷 유지 ② portion_pct(s) 추가, portion_usd(s) 가 설정 비율 사용 (PORTION_PCT=8.0 은 기본값) · percent_plan(portion_pct_=)
@@ -51,8 +52,8 @@ FLOORS = 10                # F 수 → 총 한도 = FLOOR_USD × FLOORS = $150,0
 GAP_USD = 5                # v2.7.0 판 27: F 칸 수 (내부 고정값) — 한 F의 칸(levels) 수. 사용자 설정(tower_gap_usd)은 없앴고, 칸 만들기에만 씀 (매매 규칙 아님).
 TOL_USD = 100.0            # 완성 허용 오차: F 투자금이 목표에서 이만큼 이내로 모자라면 완성 (슬리피지·반올림)
 BOX_SEED_USD = 15000.0     # v2.5.0 버킷 시드 기본값 (달러) — 설정 tower_box_seed_usd. 풀이님 결정 2026-11-21 (Q9): 기존 완성 F($15,000)과 같은 금액
-PORTION_PCT = 8.0          # v2.5.0 신호 한 번에 사는 금액 = 버킷 시드의 8% (토스 quant_engine.py:46 PORTION_RATIO_LOCKED = 0.08, 단리 고정 — 총자산 % 복리는 안 씀)
-BREAKOUT_PORTION_PCT = 16.0   # v2.5.0 수정1 돌파 매수 한 번에 사는 금액 = 버킷 시드의 16% (눌림은 8% 그대로) — 설정 sniper_breakout_portion_pct, 기본 16 (8%의 2배, 시드 $15,000 이면 $2,400)
+PORTION_PCT = 10.0         # v2.10.0 판 36 D5: 신호 한 번에 사는 금액 = 버킷 시드의 10% (Case 113 단리 10%; 예전 8%)
+BARBELL_PORTION_PCT = 15.0   # v2.10.0 판 36 D5: 바벨 켜짐(barbell_enabled True)이면 기본 15% (원작 바벨 코어 15%) — 시드 $9,000 × 15% = $1,350
 SUB_PORTION_PCT = 4.0      # v2.5.0 서브 그리드 한 번에 사는 금액 = 버킷 시드의 4% (토스 SUB_PORTION_RATIO_4PCT = 0.04)
 REMAINING_SEED_USD = 120000.0    # 퍼센트 작업 기본 입력값: 남은 시드 (설정 tower_remaining_seed_usd 로 바꿀 수 있음)
 PCT_BAND_HI_USD = 30.0     # 퍼센트 작업: 고르게 나눌 가격 구간 위쪽 ($30) — 근거 percent_work.md
@@ -118,28 +119,18 @@ def box_seed(s):
 
 
 def portion_pct(s):
-    """v2.6.0 눌림(본) 매수 비율(%): 설정 sniper_portion_pct, 없거나 0 이하·100 초과·숫자 아님·bool 이면 기본 8.0 (PORTION_PCT)"""
+    """눌림(본) 매수 비율(%): 설정 sniper_portion_pct(우선), 없거나 0 이하·100 초과·숫자 아님·bool 이면 기본 — 일반 10.0(PORTION_PCT), 바벨 켜짐 15.0(BARBELL_PORTION_PCT)"""
+    dflt = BARBELL_PORTION_PCT if (s or {}).get("barbell_enabled") is True else PORTION_PCT
     v = (s or {}).get("sniper_portion_pct")
     if isinstance(v, bool) or not isinstance(v, (int, float)):
-        return PORTION_PCT
+        return dflt
     x = _f(v)
-    return x if 0 < x <= 100 else PORTION_PCT
+    return x if 0 < x <= 100 else dflt
 
 
 def portion_usd(s):
-    """v2.6.0 신호 한 번에 사는 금액 = 버킷 시드 × 눌림 비율(portion_pct, 기본 8%) (단리 고정, 달러 2자리). 시드 $15,000 이고 8% 이면 $1,200"""
+    """v2.6.0 신호 한 번에 사는 금액 = 버킷 시드 × 눌림 비율(portion_pct, 기본 10% · 바벨 15%) (단리 고정, 달러 2자리). 시드 $15,000 × 10% = $1,500 · 바벨 시드 $9,000 × 15% = $1,350"""
     return round(box_seed(s) * portion_pct(s) / 100.0, 2)
-
-
-def breakout_portion_pct(s):
-    """v2.5.0 수정1 돌파 매수 비율(%): 설정 sniper_breakout_portion_pct, 없거나 0 이하·100 초과면 기본 16"""
-    v = _f((s or {}).get("sniper_breakout_portion_pct"))
-    return v if 0 < v <= 100 else BREAKOUT_PORTION_PCT
-
-
-def breakout_portion_usd(s):
-    """v2.5.0 수정1 돌파 신호 한 번에 사는 금액 = 버킷 시드 × 돌파 비율 (기본 16% → 시드 $15,000 이면 $2,400)"""
-    return round(box_seed(s) * breakout_portion_pct(s) / 100.0, 2)
 
 
 def sub_portion_usd(s):

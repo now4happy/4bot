@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.9.0)
+# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.10.0)
+# v2.10.0 (2026-11-23, 판 36 Case 113 이식): 원작 복사본 5개를 7718e29 로 교체한 뒤 하이브리드 자체 값 정리 — ① 돌파 매수 삭제(BREAKOUT_* 상수·돌파 가격·돌파 매수액 분기) ② 눌림 타점 표시를 원작 결과(pullback_target_price = min(직전 매도가, 최하단 F 평단) 기준)로 맞춤 ③ 서브 그리드 끔(SUB_GRID_ON=False — plan_buy 가 plan_sub 를 안 부름, 서브 상태·체결 반영·수량 동기화 코드는 남김) ④ 신규 진입 컷오프 15:30 → 15:00 (보유 F 0개일 때만 매수 차단) ⑤ 개장 7분 쉴드(09:30~09:36): 보유 F 0개 첫 진입일 때만 원작 신호 함수에 시각(hm) 전달 ⑥ 1층 익절 기본값 1.5 → 1.0 (TP_L1_DEFAULT)
 # v2.9.0 6차 (2026-11-22, 판 33): plan_tower_buy 신설(탑쌓기 매매 매수 계획 = TW.make_plan 매수 쪽) · make_plan 미리보기가 tower 모드면 스나이퍼 매수 대신 탑쌓기 매수. 스나이퍼 매수·매도·래칫 계산은 안 바꿈
 # v2.9.0 판 32 질문 4·5 (2026-11-22): 1층(가장 낮은 버킷) 고정 +1.5% 매도를 원작 트레일링(점화 +1.5% → 샤프 5단 보존선 · 하드캡 +6.0% · RSI 65 수확)으로 바꿈 — trail_tick 이 메모리 슬롯(상태 파일에 저장 안 함, 재시작하면 다시 계산)을 갱신, 원작 실호가 재확인·매도 하한가·2층 동반 졸업 따라감. box_rows 는 trail_tick 을 한 번이라도 부르면(main) 트레일링 방식, 안 부르면 예전 고정 방식
 # v2.9.0 판 31 질문 3 (2026-11-22): 원작식 부분 주문 — plan_sells 가 매도가능이 모자라면 평단 낮은 버킷부터 가능한 만큼만(마지막 버킷은 일부) 주문, 장외 매도가능 0이면 조용히 대기, 정규장 0이면 목표 수량 시도. main 이 주문 전에 매도가능을 2초(0.25초 간격) 기다림
@@ -38,14 +39,13 @@ from tower_strategy import ceil2
 
 MODE_SNIPER = "sniper"          # 주문 'mode' 표시 글자 (체결 반영이 스나이퍼 매도를 알아봄). 설정으로 고르는 모드는 없음 (v2.3.0)
 
-TP_L1_DEFAULT = 1.5            # 스나이퍼 1층(공격 층) 익절 % — 설정 sniper_tp_l1_pct (지금 스나이퍼 세팅 그대로)
+TP_L1_DEFAULT = 1.0            # 스나이퍼 1층(공격 층) 익절 % — 설정 sniper_tp_l1_pct (v2.10.0 판 36 D3: Case 113 원작 +1.00% 에 맞춰 1.5 → 1.0)
 TP_UPPER_DEFAULT = 1.0         # 상단층 익절 % — 설정 sniper_tp_upper_pct
 PULLBACK_TIERS = ((4, -1.00), (8, -2.00), (10, -3.50))      # (보유 층 수 이하, 눌림 %) — 그 위는 PULLBACK_DEEP (참조 get_golden8_prog_thresholds)
 PULLBACK_DEEP = -5.50
-BREAKOUT_RISE_PCT = 1.00       # 돌파 % (참조 REENTRY_BREAKOUT_RISE_PCT)
-BREAKOUT_MAX_RSI = 50.0        # 돌파 때 RSI(14) 상한 (참조 REENTRY_BREAKOUT_MAX_RSI_50)
 RSI_PERIOD = 14
-LATE_CUTOFF = datetime.time(15, 30)      # 15:30~16:00 ET 돌파 차단 (참조 NEW_CYCLE_BUY_CUTOFF_HM 1530, Case 84)
+LATE_CUTOFF = datetime.time(15, 0)       # 15:00~16:00 ET 신규 진입 차단 (v2.10.0 판 36 D7: 원작 Case 113 컷오프 15:00 — 보유 F 0개일 때만 적용)
+SUB_GRID_ON = False                      # v2.10.0 판 36 D2: 서브 그리드 끔 (원작 Case 113 서브 폐기). True 로 바꾸면 plan_sub 가 다시 돈다 (코드는 남겨 둠)
 BUY_CHECK_SEC = 60             # 재장전 감시 주기 (판 22: 60초)
 ORDER_SHIELD_SEC = 60          # 주문 낸 뒤 이 시간 동안 새 매수 안 함 (참조 매수·매도 후 60초 타임쉴드)
 SERIES_KEEP = 120              # 분 단위 종가 보관 개수
@@ -386,7 +386,7 @@ def rsi_from_state(state, now_ts):
 
 
 def is_late_cutoff(now_et):
-    """15:30 ~ 16:00 ET 인가 (돌파 차단 구간)"""
+    """15:00 ~ 16:00 ET 인가 (신규 진입 차단 구간, v2.10.0 판 36 D7)"""
     t = now_et.time()
     return LATE_CUTOFF <= t < datetime.time(16, 0)
 
@@ -406,35 +406,28 @@ def anchor_info(st, state, s=None):
     return 0.0, ""
 
 
-def buy_signal(price, anchor, kind, cap_price, n_layers, rsi, late_cutoff):
-    """재장전 신호 판정 (참조 evaluate_l2_only_hybrid_reentry_signal 규칙, 순수 계산) → dict(should_buy, signal_type, pullback_price, breakout_price, ...).
-    signal_type: NO_PRICE · NO_ANCHOR · HOLD_PREVENT_INVERSION(현재가 > 평단 가장 낮은 F 평단 = Case 73 상한) · PULLBACK_RELOAD · BREAKOUT_RELOAD ·
-    HOLD_LATE_SESSION_BREAKOUT_CUTOFF · HOLD_BREAKOUT_RSI_OVER_50 · HOLD_BREAKOUT_RSI_UNKNOWN · HOLD_WAIT_GATE.
-    돌파는 기준가가 익절가('exit')이거나 평단 대신 쓴 값('avg')·풀이님이 정한 첫 기준가('first', v2.5.0 — Muse 확인 필요)일 때만 (직전 매수가 기준이면 눌림만 — 추가 매수는 더 눌려야 함)"""
+def buy_signal(price, anchor, kind, cap_price, n_layers, rsi, late_cutoff, hm=None):
+    """재장전 신호 판정 (원작 Case 113 evaluate_l2_only_hybrid_reentry_signal 을 어댑터로 호출) → dict(should_buy, signal_type, pullback_price, ref_anchor, ...).
+    signal_type: NO_PRICE · NO_ANCHOR · HOLD_PREVENT_INVERSION(현재가 > 가장 낮은 F 평단 = Case 73 상한) · PULLBACK_RELOAD · HOLD_REG_OPEN_7M_VWAP_SHIELD(hm 을 준 경우만) · HOLD_WAIT_GATE.
+    v2.10.0 판 36: 돌파 매수 삭제 (원작이 BREAKOUT_RELOAD 를 안 만듦). 눌림 타점·기준가는 원작 결과 그대로 — 기준가 = min(직전 매도가, 가장 낮은 F 평단) (D6). 눌림 % 는 층 수별(-1/-2/-3.5/-5.5, Q-C 그대로).
+    late_cutoff 는 원작이 무시함 (신규 진입 컷오프는 plan_buy 가 보유 F 0개일 때 따로 적용). hm = ET 시각 HHMM (개장 7분 쉴드 용, 없으면 쉴드 없음)"""
     lp, anc, cap = _f(price), _f(anchor), _f(cap_price)
     drop = drop_pct(n_layers)
     pull = round(anc * (1.0 + drop / 100.0), 2) if anc > 0 else 0.0
-    brk = round(anc * (1.0 + BREAKOUT_RISE_PCT / 100.0), 2) if anc > 0 and kind in ("exit", "avg", "first") else 0.0
     base = {"should_buy": False, "signal_type": "", "anchor": round(anc, 4), "anchor_kind": kind, "drop_pct": drop, "pullback_price": pull,
-            "breakout_price": brk, "cap_price": round(cap, 4), "rsi": rsi, "chg_pct": (round((lp / anc - 1) * 100, 2) if lp > 0 and anc > 0 else 0.0)}
-    if lp <= 0:
-        return dict(base, signal_type="NO_PRICE")
+            "ref_anchor": round(anc, 4), "cap_price": round(cap, 4), "rsi": rsi, "chg_pct": (round((lp / anc - 1) * 100, 2) if lp > 0 and anc > 0 else 0.0)}
     if anc <= 0:
         return dict(base, signal_type="NO_ANCHOR")
-    r = AD.reentry_signal(lp, anc, cap, rsi=rsi, late_cutoff=late_cutoff, pullback_drop_pct=drop)          # 원작 판정 (판 30) — 눌림·돌파는 % 로 비교, RSI 모르면 돌파 안 막음
+    r = AD.reentry_signal(lp, anc, cap, rsi=rsi, late_cutoff=late_cutoff, pullback_drop_pct=drop, hm=hm)          # 원작 판정 (판 30·36)
     typ = str(r.get("signal_type") or "")
-    if typ == "BREAKOUT_RELOAD" and brk <= 0:                                                            # 직전 매수가 기준이면 눌림만 (하이브리드 규칙 그대로)
-        typ = "HOLD_WAIT_GATE"
-    elif typ == "HOLD_BREAKOUT_RSI_OVER_50" and brk <= 0:
-        typ = "HOLD_WAIT_GATE"
-    elif typ == "HOLD_LATE_SESSION_BREAKOUT_CUTOFF" and brk <= 0:
-        typ = "HOLD_WAIT_GATE"
-    return dict(base, should_buy=bool(typ in ("PULLBACK_RELOAD", "BREAKOUT_RELOAD") and r.get("should_buy")), signal_type=typ)
+    base = dict(base, pullback_price=_f(r.get("pullback_target_price")) or pull, ref_anchor=_f(r.get("ref_anchor")) or round(anc, 4),
+                chg_pct=(round(_f(r.get("chg_from_exit_pct")), 2) if lp > 0 else 0.0))
+    return dict(base, should_buy=bool(typ == "PULLBACK_RELOAD" and r.get("should_buy")), signal_type=typ)
 
 
 SIGNAL_KO = {"NO_PRICE": "시세 없음", "NO_ANCHOR": "기준가 없음 (텔레그램 설정에서 첫 기준가를 정해 주세요)", "HOLD_PREVENT_INVERSION": "상한 가드 (가장 아래 F 평단 초과)",
-             "PULLBACK_RELOAD": "눌림 재장전", "BREAKOUT_RELOAD": "돌파 재장전", "HOLD_LATE_SESSION_BREAKOUT_CUTOFF": "돌파 차단 (15:30~16:00)",
-             "HOLD_BREAKOUT_RSI_OVER_50": "돌파 보류 (RSI 50 초과)", "HOLD_BREAKOUT_RSI_UNKNOWN": "돌파 보류 (RSI 모으는 중)", "HOLD_WAIT_GATE": "대기 (눌림·돌파 전)"}
+             "PULLBACK_RELOAD": "눌림 재장전", "HOLD_REG_OPEN_7M_VWAP_SHIELD": "개장 7분 쉴드 (09:30~09:36, 첫 진입)", "HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF": "신규 진입 차단 (15:00~16:00)",
+             "HOLD_WAIT_GATE": "대기 (눌림 전)"}
 
 
 def plan_sub(s, st, price, state, usd_cash, now_et, is_trading_day=None):
@@ -479,6 +472,18 @@ def plan_sub(s, st, price, state, usd_cash, now_et, is_trading_day=None):
     return dict(out, buy=True, tag=ev["trigger_tag"], gate=gate, info=info)
 
 
+def timed_signal(price, anchor, kind, cap_price, depth, rsi, now_et, n_held):
+    """v2.10.0 판 36 D7·D8: buy_signal + 시각 규칙. 보유 F 0개(n_held <= 0) = 신규(첫) 진입일 때만 ① ET 시각 HHMM 을 원작 신호 함수에 넘겨 개장 7분 쉴드(09:30~09:36) 적용
+    ② 15:00~16:00 ET 이면 매수 신호를 HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF 로 바꿔 막음. 보유 F 가 있으면 시각 규칙 없음 (원작 범위 그대로 — 원작 쉴드·컷오프는 0주 첫 진입 경로만)"""
+    entry0 = int(n_held) <= 0
+    late = is_late_cutoff(now_et)
+    hm = (now_et.hour * 100 + now_et.minute) if entry0 else None
+    sg = buy_signal(price, anchor, kind, cap_price, depth, rsi, late, hm=hm)
+    if entry0 and late and sg["should_buy"]:
+        sg = dict(sg, should_buy=False, signal_type="HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF")
+    return sg
+
+
 def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_trading_day=None):
     """오늘 재장전 매수 계획 → {"order": 주문 또는 None, "notes", "signal", "target", "sub", "sub_gate"}. 상태·장부를 바꾸지 않음.
     v2.5.0 사는 금액 = min(신호 1번 몫, 그 버킷의 남은 시드): 몫 = 버킷 시드(tower_box_seed_usd, 기본 $15,000)의 8% (돌파 신호는 sniper_breakout_portion_pct, 기본 16%=$2,400 · 서브 신호는 4%) — 단리 고정. 시드 $15,000 이면 $1,200씩 12번, 13번째에 남은 $600 (13번은 정한 횟수가 아니라 계산 결과).
@@ -492,21 +497,21 @@ def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_tradi
     labs = TW.floor_labels(st)
     anchor, kind = anchor_info(st, state, s)
     cap = lowest_layer_avg(fl)
-    sig = buy_signal(px, anchor, kind, cap, depth_layers(state, n), rsi, is_late_cutoff(now_et))
+    sig = timed_signal(px, anchor, kind, cap, depth_layers(state, n), rsi, now_et, n)
     out = {"order": None, "notes": [], "signal": sig, "target": None, "sub": None, "sub_gate": None}
     chosen = None
     cands = [{"empty_id": e.get("id"), "ref": _f(e.get("ref_px")), "kind": e.get("kind")} for e in (st.get("empty") or []) if isinstance(e, dict)]      # 판 24 선택 대기(picks)는 v2.5.0 에서 안 봄
     for c in cands:
-        sg = buy_signal(px, c["ref"], "exit", 0.0, depth_layers(state, n), rsi, is_late_cutoff(now_et)) if c["ref"] > 0 else sig
+        sg = timed_signal(px, c["ref"], "exit", 0.0, depth_layers(state, n), rsi, now_et, n) if c["ref"] > 0 else sig
         if not sg["should_buy"]:
             continue
         chosen, sig = c, sg
         out["signal"] = sg
         break
     is_sub, per, per_pct, tag = False, portion, TW.portion_pct(s), sig["signal_type"]
-    if tag == "BREAKOUT_RELOAD":                                               # v2.5.0 수정1: 돌파 매수액은 별도 설정 (기본 16%), 눌림은 설정 sniper_portion_pct (v2.6.0, 기본 8%)
-        per, per_pct = TW.breakout_portion_usd(s), TW.breakout_portion_pct(s)
     if chosen is None and not sig["should_buy"]:
+        if not SUB_GRID_ON:                                                    # v2.10.0 판 36 D2: 서브 그리드 끔 — plan_sub 를 안 부름 (서브 상태·체결 반영 코드는 남김)
+            return out
         sp = plan_sub(s, st, px, state, usd_cash, now_et, is_trading_day)
         out["sub"], out["sub_gate"] = sp, sp.get("gate")
         if not sp["buy"]:
@@ -691,8 +696,8 @@ def trigger_lines(s, st, state, now_et=None):
     cap = lowest_layer_avg(fl)
     if anchor > 0:
         sig = buy_signal(0.0, anchor, kind, cap, depth_layers(state, layer_count(fl)), None, False)
-        lines.append(f"다음 매수: 눌림 ${sig['pullback_price']:.2f} ({sig['drop_pct']:+.1f}%)" + (f" / 돌파 ${sig['breakout_price']:.2f} (RSI {BREAKOUT_MAX_RSI:g} 이하)" if sig["breakout_price"] > 0 else "")
-                     + f" · 기준 ${anchor:.2f}" + (f" · 상한 ${cap:.2f}" if cap > 0 else ""))
+        lines.append(f"다음 매수: 눌림 ${sig['pullback_price']:.2f} ({sig['drop_pct']:+.1f}%)"
+                     + f" · 기준 ${sig['ref_anchor']:.2f}" + (f" · 상한 ${cap:.2f}" if cap > 0 else ""))
     else:
         lines.append("다음 매수: 기준가 없음 (텔레그램 설정에서 첫 기준가를 정해 주세요)")
     return lines

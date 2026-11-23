@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/sniper_adapter.py   (MERITZ_LAOER v2.9.0 — 판 31: 매도 연결, 방식 B)
+# FILE: meritz_laoer/sniper_adapter.py   (MERITZ_LAOER v2.10.0 — 판 36 Case 113)
+# v2.10.0 (2026-11-23, 판 36 Case 113 이식, D1·D3·D8): ① stalker_fire·rebound_policy 삭제 (스토커 영구 폐기, 호출처 없었음) ② reentry_signal 에 hm(ET 시각 HHMM) 전달 — 원작 신호 함수의 개장 7분 쉴드용 ③ sell_targets·sell_plan 기본 1층 익절 rise_l1_pct 1.50 → 1.00 (원작 Case 113 1층 기준 +1.00%)
+# 판 31: 매도 연결, 방식 B
 # 판 32 질문 1·2 (2026-11-22, 2차·부분): 래칫·하드캡·RSI 수확 — 원작 sniper_exit_plugin.py(SniperL1TrailSlot · _step_l1_trail_slot_candidate)를 orig_sniper/ 에 그대로 복사해 어댑터가 그 클래스·함수를 부름 (l1_trail_slot · l1_trail_step · minute_key). 거래 코드에는 아직 연결 안 함
 # 판 32 (2026-11-22, 1차·부분): 단리 모드 Case 112 정책(S-112)·리바운드 스토커 판정 래퍼 추가 — 거래 코드에는 아직 연결 안 함 (래칫·하드캡 실행부는 원작 sniper_exit_plugin.py 안이라 복사본에 없음 → 질문란 참조)
 # 판 31 (2026-11-22): sell_plan 추가 — 원작 evaluate_multi_grid_sell_targets 에 전체 층을 자르지 않고 그대로 넘김(방식 B, Muse 결정). 원작 코드는 안 고침.
@@ -62,20 +64,20 @@ def layers_of(st):
 
 
 def reentry_signal(price, anchor, lowest_layer_price, rsi=None, late_cutoff=False, mode=MODE_DEFAULT, hm=None, pullback_drop_pct=None):
-    """원작 evaluate_l2_only_hybrid_reentry_signal 호출 (눌림 % 는 Case 111 모드값, 돌파 +1% · RSI 50 · 15:30 차단 · 상한 가드 = 가장 낮은 F 평단).
+    """원작 evaluate_l2_only_hybrid_reentry_signal 호출 (Case 113: 눌림만 — 돌파 폐기, 기준가 = min(직전 매도가, 가장 낮은 F 평단), 상한 가드 = 가장 낮은 F 평단, hm 을 주면 09:30~09:36 7분 쉴드. late_cutoff 는 원작이 무시함).
     분봉 HA·세션 VWAP·기억 저가 입력은 메리츠 API 에 분봉이 없어 None (원작도 None 이면 그 필터를 건너뜀). RSI None = 모름 → 50 으로 봐서 돌파 안 막음 (원작 규칙, Muse 결정). pullback_drop_pct 를 주면 모드값 대신 그 눌림 % 를 씀 (판 30: 와이드 활주로 눌림)"""
     return QC.evaluate_l2_only_hybrid_reentry_signal(
         live_price=price, anchor_price=anchor, l2_book_price=lowest_layer_price, min_upper_tier_price=lowest_layer_price,
         is_late_new_cycle_cutoff=bool(late_cutoff), is_late_cutoff=bool(late_cutoff), rsi_14=rsi, hm=hm, portion_mode=mode, pullback_drop_pct=pullback_drop_pct)
 
 
-def sell_targets(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00, exclude_l1=False):
-    """원작 evaluate_multi_grid_sell_targets (1층 +1.5% · 상단 +1.0% · 3~7층 통합이평 졸업) 를 층 목록에 적용 → 원작 결과 dict 그대로.
+def sell_targets(layers, price, rise_l1_pct=1.00, rise_upper_pct=1.00, exclude_l1=False):
+    """원작 evaluate_multi_grid_sell_targets (1층 +1.0% · 상단 +1.0% · 3~7층 통합이평 졸업) 를 층 목록에 적용 → 원작 결과 dict 그대로.
     exclude_l1=True (판 32 질문 4): 원작 exclude_daytime_l1 — 1층 고정 +1.5% 매도와 2층 개별 매도를 끄고(트레일링이 대신함) 졸업만 남김"""
     return QE.evaluate_multi_grid_sell_targets(layers_to_buckets(layers), price, rise_l1_pct=rise_l1_pct, rise_upper_pct=rise_upper_pct, exclude_daytime_l1=bool(exclude_l1))
 
 
-def sell_plan(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00, exclude_l1=False):
+def sell_plan(layers, price, rise_l1_pct=1.00, rise_upper_pct=1.00, exclude_l1=False):
     """판 31 방식 B: 전체 층(평단 오름차순, [0] = 1층)을 자르지 않고 원작 매도 판정에 넘김 → 층마다 {idx(오름차순 번호), src(입력 목록 번호), role(L1|L2|grad|None), target, reached}.
     reached = 원작 결과 sold_indices (판정은 원작 그대로). target = 표시·주문 가격: L1 = 1층 평단 +rise_l1 · L2 = max(2층 평단 +rise_upper, L1 목표) (L2 가 닿으면 L1 도 같이 팔림 — 원작) · 졸업(grad) = 3층~끝 가중평단 +rise_upper (닿으면 전 층 전량).
     반환 (rows, result) — result 는 원작 결과 dict 그대로. 졸업 가능한 층 수(3층 이상 층 있음)일 때만 grad 목표가 있음"""
@@ -109,19 +111,6 @@ def sell_plan(layers, price, rise_l1_pct=1.50, rise_upper_pct=1.00, exclude_l1=F
     return rows, res
 
 
-def rebound_policy(mode=MODE_DEFAULT):
-    """판 32: 원작 resolve_smart_rebound_policy 그대로 — 하이브리드는 단리(SIMPLE) 고정 → S-112: 스토커 +0.25% · VWAP -3.0% 폭락 방어 · 샤프 래칫 (1.75→1.60, 2.50→2.15, 3.50→3.10, 4.50→4.10, 5.30→4.80) · 하드캡 +6.0% · RSI 과열 수확 65. 바벨·복리 값은 쓰지 않음"""
-    return TC.resolve_smart_rebound_policy(mode)
-
-
-def stalker_fire(price, bar_open, bar_low, prev_stalk_low, closed_real_reversal=False, closed_ha_shaved_bear=False, closed_ha_ready=False, is_dip_add=False, hm=None, mode=MODE_DEFAULT):
-    """판 32: 원작 evaluate_stalker_reversal_fire 호출 (저점 추적 + 저점 대비 +0.25%(추매 +0.30%) 반등 또는 완결 양봉 반전). 입력(분봉 시가·저가·완결봉 반전 표시)은 호출한 쪽이 만들어 넘김 — 메리츠 API 에 분봉이 없어 연결 방법은 Muse 결정 대기 (질문란)"""
-    pol = rebound_policy(mode)
-    return QC.evaluate_stalker_reversal_fire(
-        live_price=price, cur_bar_open=bar_open, cur_bar_low=bar_low, prev_stalk_low=prev_stalk_low, closed_real_reversal=closed_real_reversal,
-        closed_ha_shaved_bear=closed_ha_shaved_bear, closed_ha_ready=closed_ha_ready, stalk_rebound_pct=pol["stalk_rebound_pct"], hm=hm, is_dip_add=is_dip_add)
-
-
 def minute_key(ts):
     """에포크초 → 원작 분봉 키 글자 'YYYY-MM-DD HH:MM' (UTC 기준 — 키는 서로 크기만 비교하므로 시간대는 상관없음)"""
     import datetime as _dt
@@ -135,7 +124,7 @@ def l1_trail_slot(kind="MAIN"):
 
 
 def l1_trail_sync(slot, qty, book_price, mode=MODE_DEFAULT):
-    """판 32: 1층(가장 낮은 층) 수량·평단이 바뀌면 슬롯을 처음부터 다시 맞춤 (원작 sync_fingerprint — 점화가 평단 +1.5%, 정책은 모드별: 단리 = S-112 샤프 래칫·하드캡 +6.0%)"""
+    """판 32: 1층(가장 낮은 층) 수량·평단이 바뀌면 슬롯을 처음부터 다시 맞춤 (원작 sync_fingerprint — 점화 +1.00% · 스텝 (1.35,1.15)~(5.00,4.50) · 하드캡 +6.00% — Case 113 T4 래칫, 전 모드 같음)"""
     slot.sync_fingerprint(int(qty), float(book_price), mode)
     return slot
 

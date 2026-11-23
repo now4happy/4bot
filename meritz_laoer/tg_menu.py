@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.7.0)
+# v2.10.0 (2026-11-23, 판 36 Case 113): '돌파 매수% 변경' 버튼·설정 표시·도움말 삭제, 눌림 매수% 기본 10(바벨 15), 1층 익절 기본 1.0, 다음 매수 타점 표시를 원작 판정과 같은 값(기준가=min(직전 매도가, 가장 낮은 F 평단), 15:00 신규 진입 차단·개장 7분 쉴드)으로 맞춤. 레이더 설정 버튼 5개(눌림·버킷 시드 / 1층 익절·상단 익절 / 첫 기준가)
 # v2.9.0 6차 (2026-11-22, 판 33): 전술 제어반에 [탑쌓기 매매 시작]/[스나이퍼 매매로 돌아가기] 버튼 + 확인 메시지([네, 바꿀게요] 를 눌러야만 바뀜) · '매수 간격 변경'(1~10) 설정 추가
 # v2.7.0 (2026-11-21, 판 27): 층 간격 설정·버튼 제거 — MEANS '층 간격 변경'(tower_gap_usd)·MEANS 설명·TACT_SET·TOWER_DEFAULTS·설정 표시 '층 간격'·계획 '새 층 가격' 줄 삭제. 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params).
 # v2.6.0 (2026-11-21, 판 26): '눌림 매수% 변경' 버튼(sniper_portion_pct, MEANS·TACT_SET·TOWER_DEFAULTS 8.0) · 설정 표시의 '눌림 8%' 고정 글자를 설정 비율로 · '돌파 매수% 변경' 예시 글자 · 층 줄 밑에 버킷별 목표 줄
@@ -9,7 +10,7 @@
 #   인라인 버튼은 callback_query 로 받음(getUpdates allowed_updates 에 callback_query 추가, answerCallbackQuery). 층 수·시드(total_krw)·1층 시작가 변경 버튼 삭제, 총 한도 표시 삭제. B8: 오늘 계획·자금 현황·레이더가 오늘 체결을 메모리에서 더한 층 상태로 계산, '잔고≠장부' 비교도 16:10 동기화 전엔 오늘 체결 반영 수량으로 비교, 영어 설정 이름 대신 한국어.
 # v2.2.20 (2026-11-21, 판 22 듀얼 모드): ① 첫 메뉴 맨 위에 [스나이퍼 모드] [탑쌓기 모드] 버튼 — 누르면 설정 trading_mode 가 바로 바뀜 (다음 매매 판단부터 적용, 이미 낸 주문·층은 그대로. 설정 검사가 막으면 이유를 보여 줌). 첫 화면 글자에 지금 모드 표시
 #   ② 상황판(현상태)을 스나이퍼 봇 형식 HTML 로 새로 씀 — 굵은 제목·이모티콘, 층마다 한 줄 ⚡ [N층: X주·$Y] $평단 ➔ $목표가 (+P%), 시드 배분 게이지(🟦🟨🟩), 구분선. 장부 파일뿐 아니라 오늘 체결(조회만, 메모리에서만 반영)까지 실시간으로 섞음. 스나이퍼 모드의 층 번호는 평단 낮은 층이 1층, 탑쌓기 모드는 예전 번호(평단 높은 층이 1층)
-#   ③ 설정 메뉴에 '스나이퍼 1층 익절 변경'(sniper_tp_l1_pct, 기본 1.5)·'스나이퍼 상단층 익절 변경'(sniper_tp_upper_pct, 기본 1.0). 탑쌓기 설정은 그대로. send 에 html 옵션 추가 (일반 알림·다른 화면은 예전처럼 글자만)
+#   ③ 설정 메뉴에 '스나이퍼 1층 익절 변경'(sniper_tp_l1_pct, 기본 1.0)·'스나이퍼 상단층 익절 변경'(sniper_tp_upper_pct, 기본 1.0). 탑쌓기 설정은 그대로. send 에 html 옵션 추가 (일반 알림·다른 화면은 예전처럼 글자만)
 # v2.2.18 (2026-11-20, 판 21 거래 내역·봇 상태 버튼 오류 고침): _local 이 4개(pos·halt·avg·tgt)를 돌려주는데 ledger_text·power_text 가 5개로 풀어서 ValueError 가 나던 것을 4개로 고침. 매매 로직·문구 변경 없음
 # v2.2.17 (2026-11-20, 판 20 하루 매수·매도 층 수 설정): 설정 메뉴에 "하루 매수 F 수 변경"(tower_max_buy_layers_per_day)·"하루 매도 F 수 변경"(tower_max_sell_layers_per_day) 버튼 추가 — 1~3 정수, 없으면 1 (TOWER_DEFAULTS). MEANS 설명 2개, 설정 화면 SET_ROWS 와 상황판 설정값 줄에 현재 값 표시. 다른 설정 버튼은 그대로
 # v2.2.14 (2026-11-20, 판 17 시초가 상한): 상황판 오늘 계획 미리보기가 저장된 시초가(main.load_open_price, 읽기만)를 build_plan 에 넘김 — 시초가가 아직 없으면 0 → 계획 배정 그대로. 메뉴·문구는 그대로
@@ -90,14 +91,13 @@ SET_ITEMS = {
     "매도 비중 변경": dict(key="sell_fraction_pct", name="매도 비중", unit="%", kind="num", lo=0, lo_incl=False, hi=100, hi_incl=False, ex="예: 50 (보유의 절반을 매도)"),
     "버킷 시드 변경": dict(key="tower_box_seed_usd", name="버킷 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (버킷 시드. 매수 1번 = 이 금액 × 눌림 매수%)"),
     "눌림 매수% 변경": dict(key="sniper_portion_pct", name="눌림 매수%", unit="%", kind="num", lo=0, lo_incl=False, hi=100, ex="예: 8 (눌림 신호 한 번에 버킷 시드의 8% 매수. 기본 8)"),
-    "돌파 매수% 변경": dict(key="sniper_breakout_portion_pct", name="돌파 매수%", unit="%", kind="num", lo=0, lo_incl=False, hi=100, ex="예: 16 (돌파 신호 한 번에 버킷 시드의 16% 매수. 눌림은 '눌림 매수%' 설정 그대로)"),
     "첫 기준가 변경": dict(key="sniper_first_anchor_usd", name="첫 기준가", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 48.5 (기준가·F가 아직 없을 때만 쓰는 첫 기준가, 달러)"),
     "남은 시드 변경": dict(key="tower_remaining_seed_usd", name="퍼센트 작업 남은 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 120000 (퍼센트 작업에서 $30~$10 구간에 나눌 남은 달러)"),
     "매수 간격 변경": dict(key="tower_buy_gap_usd", name="매수 간격", unit="$", kind="int", lo=1, hi=10, ex="예: 5 (탑쌓기 매매 모드에서 시초가 가까운 칸부터 $1씩 아래로 5칸에 시드를 균등 분산. 1~10)"),
     "F 완성 기준 금액 변경": dict(key="tower_floor_usd", name="F 완성 기준 금액", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (한 F에 쌓을 달러, 정수)"),
     "하루 매수 F 수 변경": dict(key="tower_max_buy_layers_per_day", name="하루 매수 F 수", unit="F", kind="int", lo=1, hi=3, ex="예: 2"),
     "하루 매도 F 수 변경": dict(key="tower_max_sell_layers_per_day", name="하루 매도 F 수", unit="F", kind="int", lo=1, hi=3, ex="예: 2"),
-    "스나이퍼 1층 익절 변경": dict(key="sniper_tp_l1_pct", name="스나이퍼 1층 익절", unit="%", kind="num", lo=0, lo_incl=False, hi=50, ex="예: 1.5 (미완성 1층 평단보다 1.5% 오르면 그 층 전량 매도)"),
+    "스나이퍼 1층 익절 변경": dict(key="sniper_tp_l1_pct", name="스나이퍼 1층 익절", unit="%", kind="num", lo=0, lo_incl=False, hi=50, ex="예: 1.0 (미완성 1층 평단보다 1.0% 오르면 그 층 전량 매도)"),
     "스나이퍼 상단층 익절 변경": dict(key="sniper_tp_upper_pct", name="스나이퍼 상단층 익절", unit="%", kind="num", lo=0, lo_incl=False, hi=50, ex="예: 1.0 (미완성 상단층 평단보다 1.0% 오르면 그 층 전량 매도)"),
     "환전 여유% 변경": dict(key="auto_fx_buffer_pct", name="환전 여유%", unit="%", kind="num", lo=0, hi=100, ex="예: 3 (모자란 달러보다 3% 더 환전)"),
     "환전 하루 상한 변경": dict(key="auto_fx_max_usd_per_day", name="환전 하루 상한", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 5000 (달러, 정수)"),
@@ -108,15 +108,14 @@ MEANS = {
     "sell_profit_pct": ("완성 F를 파는 기준이에요. 그 F 평단보다 이 %만큼 오르면 매도해요 (탑쌓기 매도).", "다음 판단부터 완성 F 파는 시점이 달라져요"),
     "sell_fraction_pct": ("탑쌓기 매도가 일어날 때 그 F 보유 중 파는 비중이에요 (정수 주 내림, 1주는 남김).", "다음 탑쌓기 매도부터 파는 양이 달라져요"),
     "tower_box_seed_usd": ("버킷 하나의 시드(달러)예요. 매수 신호 1번에 이 금액의 눌림 매수%(기본 8%, 서브 신호는 4%)를 사요 — 단리 고정. 마지막 회차는 버킷에 남은 시드만큼 사요. 안 정하면 15000이에요.", "다음 매수부터 한 번에 사는 금액과 새 버킷 크기가 달라져요 (이미 있는 F는 안 바뀜)"),
-    "sniper_portion_pct": ("눌림 신호가 날 때 한 번에 사는 금액이에요. 버킷 시드의 이 %만큼 사요 (0 초과 100 이하). 안 정하면 8이에요 (시드 15000이면 1200달러). 마지막 버킷은 남은 시드만큼만 사요. 비율을 바꾸면 한 F의 버킷 수가 달라져요 (8%면 13개, 10%면 10개).", "다음 눌림 매수부터 한 번에 사는 금액이 달라져요 (이미 산 버킷은 그대로)"),
-    "sniper_breakout_portion_pct": ("돌파 신호(기준가 +1% · RSI 50 이하)가 날 때 한 번에 사는 금액이에요. 버킷 시드의 이 %만큼 사요 (눌림 매수는 '눌림 매수%' 설정 그대로). 안 정하면 16이에요 (시드 15000이면 2400달러). 마지막 회차는 버킷에 남은 시드만큼만 사요.", "다음 돌파 매수부터 한 번에 사는 금액이 달라져요 (눌림·서브 금액은 그대로)"),
+    "sniper_portion_pct": ("눌림 신호가 날 때 한 번에 사는 금액이에요. 버킷 시드의 이 %만큼 사요 (0 초과 100 이하). 안 정하면 10이에요 (시드 15000이면 1500달러, 바벨을 켜면 15 = 시드 9000이면 1350달러). 마지막 버킷은 남은 시드만큼만 사요. 비율을 바꾸면 한 F의 버킷 수가 달라져요 (10%면 10개).", "다음 눌림 매수부터 한 번에 사는 금액이 달라져요 (이미 산 버킷은 그대로)"),
     "sniper_first_anchor_usd": ("기준가도 F도 아직 없을 때만 쓰는 첫 기준가(달러)예요. 첫 체결이 생기면 그 체결가가 기준가가 돼요. 안 정하면 첫 매수 신호가 없어요.", "기준가·F가 없는 동안의 첫 매수 타점이 달라져요"),
     "tower_remaining_seed_usd": ("퍼센트 작업 계산용 남은 시드(달러)예요. $30~$10 구간에 나눠 버킷 몇 개·한 버킷 몇 %인지 보여줘요 (표시만, 주문엔 안 써요). 안 정하면 120000이에요.", "퍼센트 작업 표시 비율이 다시 계산돼요"),
     "tower_buy_gap_usd": ("탑쌓기 매매 모드에서 F 완성 기준 금액을 나눠 사는 칸 수예요 (시초가와 가장 가까운 칸부터 $1씩 아래로 이 칸 수만큼, 칸마다 같은 금액). 1~10 정수, 안 정하면 5예요. 스나이퍼 모드에서는 안 써요.", "탑쌓기 매매 모드의 다음 매수 계획부터 칸 수가 달라져요"),
     "tower_floor_usd": ("한 F의 시드(달러)예요. F 원가가 이 금액에 닿으면 그 F는 완성이에요. 총 시드·F 수 한도는 없어요. 안 정하면 15000이에요.", "새 F·남은 몫 매수 금액과 F 완성 기준이 달라져요"),
     "tower_max_buy_layers_per_day": ("하루에 채울 F 수예요 (아침 환전 금액 = F 완성 기준 금액 × 이 값). 1~3 정수만 돼요. 안 정하면 1이에요.", "아침 환전액이 달라져요"),
     "tower_max_sell_layers_per_day": ("하루에 최대 몇 F까지 팔지예요. 1~3 정수만 돼요. 안 정하면 1이에요 (지금처럼 하루에 한 F). 같은 때 여러 F가 목표에 닿으면 번호가 큰 F(맨 위 F)부터 팔아요.", "다음 매도 확인부터 하루에 파는 F 수가 달라져요 (목표 이익률·매도 비중은 그대로)"),
-    "sniper_tp_l1_pct": ("미완성 F 중 평단이 가장 낮은 F(공격 층)을 파는 기준이에요. 그 F 평단보다 이 %만큼 오르면 그 F 전량을 팔아요. 안 정하면 1.5예요.", "다음 스나이퍼 매도 판단부터 달라져요"),
+    "sniper_tp_l1_pct": ("미완성 F 중 평단이 가장 낮은 F(공격 층)을 파는 기준이에요. 그 F 평단보다 이 %만큼 오르면 그 F 전량을 팔아요. 안 정하면 1.0이에요.", "다음 스나이퍼 매도 판단부터 달라져요"),
     "sniper_tp_upper_pct": ("미완성 F 중 공격 층 위쪽 F(상단층)을 파는 기준이에요. 그 F 평단보다 이 %만큼 오르면 그 F 전량을 팔아요. 안 정하면 1.0이에요.", "다음 스나이퍼 매도 판단부터 달라져요"),
     "auto_fx_buffer_pct": ("자동환전 때 부족분에 더해 환전하는 여유 비율이에요.", "다음 자동환전 금액이 달라져요"),
     "auto_fx_max_usd_per_day": ("자동환전을 하루에 최대 얼마까지 할지 정한 상한이에요.", "하루 환전 한도가 달라져요"),
@@ -127,11 +126,11 @@ T_BB_ON, T_BB_OFF, BB_OK = "바벨 모드 켜기", "바벨 모드 끄기", "네,
 MODE_KO = {"sniper": "하이브리드 스나이퍼 매매", "tower": "탑쌓기 매매"}
 FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # 값 없이 켜기를 눌렀을 때 이 글자만
 SET_POWER = "봇 켜기/끄기"
-SNIPER_SET = ["버킷 시드 변경", "눌림 매수% 변경", "돌파 매수% 변경", "첫 기준가 변경", "스나이퍼 1층 익절 변경", "스나이퍼 상단층 익절 변경"]      # 판 35: 스나이퍼 레이더 → ⚙️ 스나이퍼 설정
+SNIPER_SET = ["버킷 시드 변경", "눌림 매수% 변경", "첫 기준가 변경", "스나이퍼 1층 익절 변경", "스나이퍼 상단층 익절 변경"]      # 판 35: 스나이퍼 레이더 → ⚙️ 스나이퍼 설정
 TOWER_SET = ["매수 간격 변경", "F 완성 기준 금액 변경", "탑쌓기 매도% 변경", "매도 비중 변경", "하루 매수 F 수 변경", "하루 매도 F 수 변경", "남은 시드 변경"]      # 판 35: 탑쌓기 매매 화면
 TACT_SET = SNIPER_SET + TOWER_SET
 FX_SET = ["환전 하루 상한 변경", "환전 여유% 변경"]
-TOWER_DEFAULTS = {"tower_buy_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_box_seed_usd": int(_TW.BOX_SEED_USD), "sniper_portion_pct": _TW.PORTION_PCT, "sniper_breakout_portion_pct": _TW.BREAKOUT_PORTION_PCT, "tower_remaining_seed_usd": int(_TW.REMAINING_SEED_USD),
+TOWER_DEFAULTS = {"tower_buy_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_box_seed_usd": int(_TW.BOX_SEED_USD), "sniper_portion_pct": _TW.PORTION_PCT, "tower_remaining_seed_usd": int(_TW.REMAINING_SEED_USD),
                   "tower_max_buy_layers_per_day": 1, "tower_max_sell_layers_per_day": 1,
                   "sniper_tp_l1_pct": _SN.TP_L1_DEFAULT, "sniper_tp_upper_pct": _SN.TP_UPPER_DEFAULT}   # 설정에 없으면 쓰는 기본값 (표시용)
 
@@ -480,7 +479,7 @@ class MenuBot:
         fx = "켜짐" if s.get("auto_fx_enabled") else "꺼짐"
         fx += f" (여유 {fmt_val(KEY_ITEM['auto_fx_buffer_pct'], s.get('auto_fx_buffer_pct'), '입력 전')} · 하루 상한 {fmt_val(KEY_ITEM['auto_fx_max_usd_per_day'], s.get('auto_fx_max_usd_per_day'), '입력 전')})" if fx_values_ready(s) else " (여유%·하루 상한 입력 전)"
         return ["설정값",
-                f"· 버킷 시드 {v('tower_box_seed_usd')} (눌림 {_TW.portion_pct(s):g}% ${_TW.portion_usd(s):,.0f} · 돌파 {_TW.breakout_portion_pct(s):g}% ${_TW.breakout_portion_usd(s):,.0f}) · 첫 기준가 " + (f"${float(s['sniper_first_anchor_usd']):.2f}" if _f0(s.get("sniper_first_anchor_usd")) > 0 else "안 정함"),
+                f"· 버킷 시드 {v('tower_box_seed_usd')} (눌림 {_TW.portion_pct(s):g}% ${_TW.portion_usd(s):,.0f}) · 첫 기준가 " + (f"${float(s['sniper_first_anchor_usd']):.2f}" if _f0(s.get("sniper_first_anchor_usd")) > 0 else "안 정함"),
                 f"· F 완성 기준 금액 {v('tower_floor_usd')}",
                 f"· 매매 모드 {MODE_KO[_TW.trade_mode(s)]} · 탑쌓기 매수 간격 ${_TW.buy_gap(dict(s, trade_mode='tower'))}",
                 f"· 탑쌓기 매도 +{v('sell_profit_pct')} → 보유의 {v('sell_fraction_pct')}",
@@ -514,7 +513,7 @@ class MenuBot:
 
     def floor_lines(self, s, st, px, esc=_html.escape):
         """F마다 한 줄 (레이더·잔고 동기화 공용, HTML) → (줄 목록, 채우는 F 줄). F 번호 = 평단 낮은 F가 1 (스나이퍼 번호).
-        상태: 완성 = 탑 매도 대상(평단 +탑쌓기 매도%) · 재매수 대기 / 탑업 중 = 스나이퍼 매도 대상(1층 +1.5% · 상단 +1.0%, 전량). 채움률 = 원가 ÷ F 완성 기준 금액"""
+        상태: 완성 = 탑 매도 대상(평단 +탑쌓기 매도%) · 재매수 대기 / 탑업 중 = 스나이퍼 매도 대상(1층 +1.0% · 상단 +1.0%, 전량). 채움률 = 원가 ÷ F 완성 기준 금액"""
         rows = sorted(_SN.sell_rows(st, s, px), key=lambda r: r["no"])
         pct_t = float(s.get("sell_profit_pct") or 0)
         out, fill = [], None
@@ -529,7 +528,7 @@ class MenuBot:
                 prog = f" ◧{int(round(ratio * 100))}%"
                 fill = fill or (r["no"], ratio, r["cost"], r["tgt_usd"], state)
             out.append(f"⚡ <b>[{esc(r['label'])}: {r['qty']}주·${r['cost']:,.0f}]</b> <b>${r['avg']:.2f}</b> ➔ <b>${tg:.2f}</b> ({'+' if (g or 0) >= 0 else ''}{(g or 0):.2f}%) {esc(state)}{prog}")
-            if not r["complete"]:                      # v2.6.0 버킷별 매도: 버킷마다 자기 평단·목표 (공격 버킷 +1.5% · 나머지 +1.0%)
+            if not r["complete"]:                      # v2.6.0 버킷별 매도: 버킷마다 자기 평단·목표 (공격 버킷 +1.0% · 나머지 +1.0%)
                 for b in (r.get("boxes") or [])[:4]:
                     out.append(f"   ▫ 버킷 ${b['avg']:.2f} · {b['qty']}주 ➔ ${b['target']:.2f} (+{b['pct']:g}%{' · 공격' if b['role'] == 'L1' else ''}{' · 졸업 매도' if b.get('kind') == 'grad' else ''})")
                 if len(r.get("boxes") or []) > 4:
@@ -579,11 +578,11 @@ class MenuBot:
             anchor, kind = _SN.anchor_info(st, ss, s)
             cap = _SN.lowest_layer_avg(fl)
             late = _SN.is_late_cutoff(o.now_et())
-            sig = _SN.buy_signal(px, anchor, kind, cap, _SN.depth_layers(ss, _SN.layer_count(fl)), rsi, late)
+            sig = _SN.timed_signal(px, anchor, kind, cap, _SN.depth_layers(ss, _SN.layer_count(fl)), rsi, o.now_et(), len(fl))
             if anchor > 0:
-                brk = "돌파차단(15:30~)" if late else (f"돌파 <b>${sig['breakout_price']:.2f}</b> (RSI {_SN.BREAKOUT_MAX_RSI:g} 이하일 때만 · RSI 모르면 그냥 통과)" if sig["breakout_price"] else "돌파 없음")
-                lines.append(f"▫️ 눌림 <b>${sig['pullback_price']:.2f}</b> ({sig['drop_pct']:+.1f}%) / {brk} 시 매수")
-                lines.append(f"▫️ 기준 ${anchor:.2f}({esc(o.ANCHOR_KO.get(kind, kind))}) 대비 {sig['chg_pct']:+.2f}%" + (f" · 상한 ${cap:.2f}" if cap > 0 else ""))
+                gate = "신규 진입 차단(15:00~)" if (late and not fl) else ("개장 7분 쉴드(09:30~09:36)" if sig["signal_type"] == "HOLD_REG_OPEN_7M_VWAP_SHIELD" else "")
+                lines.append(f"▫️ 눌림 <b>${sig['pullback_price']:.2f}</b> ({sig['drop_pct']:+.1f}%) 도달 시 매수" + (f" · {gate}" if gate else ""))
+                lines.append(f"▫️ 기준 ${anchor:.2f}({esc(o.ANCHOR_KO.get(kind, kind))}) 대비 {sig['chg_pct']:+.2f}%" + (f" · 상한 ${cap:.2f}" if cap > 0 else "") + (f" · 원작 기준가 ${sig['ref_anchor']:.2f}(직전 매도가·가장 낮은 F 평단 중 낮은 값)" if sig.get("ref_anchor") else ""))
             else:
                 lines.append("▫️ 기준가 없음 — 첫 매수는 직전 매도가가 생긴 뒤부터 감시해요")
             inc = next((f for f in fl if not _TW.is_complete(f)), None)
@@ -722,9 +721,9 @@ class MenuBot:
     def radar_inline(self, s):
         """레이더 화면 — 스나이퍼 설정 6개를 바로 보여줌 (2개씩 묶음). 뒤로 없음 (레이더가 최상위)"""
         cell = {r[0][1]: r[0] for r in self._set_rows(SNIPER_SET, s)}      # tower_inline과 같은 방식 (설정 버튼은 현재값 포함 동적 생성)
-        return [[cell["눌림 매수% 변경"], cell["돌파 매수% 변경"]],
+        return [[cell["눌림 매수% 변경"], cell["버킷 시드 변경"]],
                 [cell["스나이퍼 1층 익절 변경"], cell["스나이퍼 상단층 익절 변경"]],
-                [cell["버킷 시드 변경"], cell["첫 기준가 변경"]]]
+                [cell["첫 기준가 변경"]]]
 
     def snset_inline(self, s):
         """스나이퍼 설정 (스나이퍼 레이더 안) — 이름 + 현재값 → 누르면 새 값 입력"""
@@ -768,7 +767,7 @@ class MenuBot:
         esc = _html.escape
         v = lambda k: esc(fmt_val(KEY_ITEM[k], cur_val(s, k)))
         return "\n".join(["⚙️ <b>[스나이퍼 설정]</b>", "──────────────",
-                          f"🧱 버킷 시드: <b>{v('tower_box_seed_usd')}</b> (눌림 {_TW.portion_pct(s):g}% = ${_TW.portion_usd(s):,.0f} · 돌파 {_TW.breakout_portion_pct(s):g}% = ${_TW.breakout_portion_usd(s):,.0f})",
+                          f"🧱 버킷 시드: <b>{v('tower_box_seed_usd')}</b> (눌림 {_TW.portion_pct(s):g}% = ${_TW.portion_usd(s):,.0f})",
                           f"🎯 첫 기준가: <b>{v('sniper_first_anchor_usd')}</b>",
                           f"3️⃣ 스나이퍼 익절(미완성 F, 전량): 1층 <b>+{v('sniper_tp_l1_pct')}</b> · 상단층 <b>+{v('sniper_tp_upper_pct')}</b>",
                           "──────────────", "💡 버튼을 누르면 새 값을 입력해요 (현재값 → 바꿀 값 확인 뒤 바뀌고, 주문은 안 나가요)"])
