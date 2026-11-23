@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-23 15:29:00",
-  "as_of_et": "2026-11-23 01:29:00",
+  "as_of_kst": "2026-11-23 15:30:00",
+  "as_of_et": "2026-11-23 01:30:00",
   "market_open": true,
   "source": "toss",
   "prices": {
@@ -21,12 +21,12 @@
     "35": 189.34,
     "37": 28,
     "38": 29,
-    "41": 13350.69
+    "41": 13351.29
   },
   "totals": {
-    "api_sum": 46197.2,
+    "api_sum": 46197.8,
     "cash": 27553.41,
-    "total_assets": 64178.2
+    "total_assets": 64178.8
   },
   "market_open_us": false,
   "market_open_kr": true,
@@ -36,10 +36,10 @@
     "api_ex41": 32846.506768,
     "cash": 27553.406768,
     "manual": 17981.0,
-    "krx_total": 13350.691
+    "krx_total": 13351.291
   },
   "krx": {
-    "as_of_kst": "2026-11-23 15:29:00",
+    "as_of_kst": "2026-11-23 15:30:00",
     "stocks": [
       {
         "code": "411060",
@@ -286,8 +286,8 @@
         "name": "현대차",
         "qty": 12,
         "avg_price": 354000,
-        "price": 247000,
-        "value_manw": 296.4
+        "price": 247500,
+        "value_manw": 297
       },
       {
         "code": "145020",
@@ -298,7 +298,7 @@
         "value_manw": 383.8
       }
     ],
-    "total_manw": 13350.69,
+    "total_manw": 13351.29,
     "unavailable": []
   }
 }
