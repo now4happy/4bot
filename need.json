@@ -1,22 +1,22 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-20 16:30:00",
+  "as_of_kst": "2026-11-23 11:27:21",
   "accounts": [
     {
       "name": "토스",
       "lines": [
         {
           "currency": "USD",
-          "holding": 14064.71,
-          "need": 1589.05,
+          "holding": 6987.08,
+          "need": 1599.22,
           "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
           "label": "바벨 씨드",
           "currency": "USD",
-          "holding": 14064.71,
-          "need": 20000.0,
+          "holding": 6987.08,
+          "need": 12582.67,
           "sufficient": false,
           "auto_fx": "unavailable"
         },
@@ -43,21 +43,18 @@
         {
           "label": "VR6",
           "currency": "USD",
-          "holding": 74.36,
-          "need": 0.0,
-          "sufficient": true,
-          "auto_fx": "on"
+          "holding": 484.37,
+          "need": null,
+          "sufficient": null,
+          "auto_fx": "unknown"
         },
         {
           "label": "3번",
           "currency": "USD",
-          "holding": 670.3,
-          "need": 34.67,
+          "holding": 636.39,
+          "need": 97.41,
           "sufficient": true,
-          "auto_fx": "on",
-          "skipped": [
-            "QLD"
-          ]
+          "auto_fx": "on"
         }
       ]
     },
@@ -66,14 +63,14 @@
       "lines": [
         {
           "currency": "USD",
-          "holding": 38.18,
+          "holding": 2038.18,
           "need": 1506.875,
-          "sufficient": false,
+          "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
           "currency": "KRW",
-          "holding": 6057372.0,
+          "holding": null,
           "need": null,
           "sufficient": null,
           "auto_fx": "unavailable"
@@ -85,7 +82,7 @@
       "lines": [
         {
           "currency": "KRW",
-          "holding": 730484.325407,
+          "holding": 550413.054147,
           "need": 60000.0,
           "sufficient": true,
           "auto_fx": "na"
@@ -93,6 +90,6 @@
       ]
     }
   ],
-  "total_need_usd": 23130.594999999998,
+  "total_need_usd": 15786.175,
   "total_need_krw": 60000.0
 }

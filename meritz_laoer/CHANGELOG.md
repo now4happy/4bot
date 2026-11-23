@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.3 · 2026-11-23 11:43 (KST)
+- 파일: config.py, main.py, ORIGIN.json, quant_engine.py, quant_engine_core.py, quant_indicators_plugin.py, sniper_exit_plugin.py, toss_api_core.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.10.0 (판 36): 브리핑 타이머를 스테이징에서 제외 — 메리츠 파일만 적용 대상으로
+- 브랜치: staging
+
 ## v1.4.3 · 2026-11-23 11:25 (KST)
 - 파일: README.md, config.py, main.py, orig_sniper/ORIGIN.json, orig_sniper/quant_engine.py, orig_sniper/quant_engine_core.py, orig_sniper/quant_indicators_plugin.py, orig_sniper/sniper_exit_plugin.py, orig_sniper/toss_api_core.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
 - 내용: 메리츠 v2.10.0 (판 36): Case 113 이식 (단일 통합 T4 엔진 — 황금비율 눌림 10%·바벨 코어 15%, 서브·스토커·마중물·돌파 폐기, 1층 익절 1.0%, T4 래칫, 컷오프 15:00, 개장 7분 쉴드)
