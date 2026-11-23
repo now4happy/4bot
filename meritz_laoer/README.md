@@ -1,4 +1,13 @@
-# 7번 메리츠 SOXL 하이브리드 (meritz_laoer · 서비스 meritz_laoer.service) — v2.7.0
+# 7번 메리츠 SOXL 하이브리드 (meritz_laoer · 서비스 meritz_laoer.service) — v2.10.0
+
+## Case 113 이식 — 단일 통합 T4 엔진 (v2.10.0, 판 36)
+- **원작 복사본 5개를 7718e29 로 교체**(`orig_sniper/` quant_engine·quant_engine_core·quant_indicators_plugin·sniper_exit_plugin·toss_api_core, 바이트 그대로). `ORIGIN.json` 도 7718e29 로 갱신. 원작 코드는 수정하지 않고 어댑터(`sniper_adapter.py`)로만 부른다.
+- **돌파 매수 영구 폐기**: 눌림만 산다. 신호 기준가 = min(직전 매도가, 가장 낮은 F 평단). 표시도 같은 값 (`ref_anchor`). 눌림 깊이 -1/-2/-3.5/-5.5% 는 그대로.
+- **스토커 삭제**(`stalker_fire`·`rebound_policy`), **서브 그리드 꺼짐**(`SUB_GRID_ON=False`, 코드는 남김), **1층 익절 기본 1.5 → 1.0%**.
+- **눌림 매수 기본 8 → 10%, 바벨 켜짐이면 15%** (시드 $9,000 → 버킷 $1,350). 설정 `sniper_portion_pct` 가 있으면 그 값이 우선.
+- **신규 진입(보유 F 0개)에만**: 15:00~16:00 ET 매수 차단(컷오프 15:30 → 15:00), 09:30~09:36 ET 개장 7분 쉴드.
+- 설정 `sniper_breakout_portion_pct` 는 남아 있어도 무시. 메뉴·표시에서 돌파 항목 삭제.
+- 범위 밖(안 바꿈): 바벨·SGOV·SCHD·암살자·탑쌓기 모드, 탑 매도 +10%/50%, F 완성 금액 $15,000(바벨 $9,000), 잔고 동기화, 16:10 동기화, 환율·계좌·종목·API, BOT_VERSION. CHANGELOG.md 는 업데이터가 자동 생성하므로 이번 판에서 안 건드림.
 
 ## 층 간격 설정·버튼 제거 (v2.7.0, 판 27)
 - **층 간격 사용자 설정(`tower_gap_usd`)을 없앴다.** 판 25에서 간격 규칙(새 층을 만들 때 간격을 따짐)을 버렸는데 설정·버튼·표시만 남아 있어 풀이님이 지워달라고 했다. 텔레그램 '층 간격 변경' 버튼, 설정 검사, 설정 표시 '층 간격', 계획 미리보기 '새 층 가격' 줄을 삭제했다. 설정 파일에 `tower_gap_usd`가 남아 있어도 무시하고 통과한다.

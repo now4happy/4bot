@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.7.0)
+# v2.10.0 (2026-11-23, 판 36 Case 113): 기본 sniper_tp_l1_pct 1.5 → 1.0 · sniper_breakout_portion_pct 검사 삭제(옛 키는 남아 있어도 무시)
 # v2.9.0 6차 (2026-11-22, 판 33): validate_settings 에 trade_mode(sniper|tower)·tower_buy_gap_usd(1~10 정수) 검사 추가 (없으면 통과 = 기본값)
 # v2.7.0 (2026-11-21, 판 27): 층 간격 설정(tower_gap_usd) 검사 제거 — 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params). 설정 파일에 tower_gap_usd가 남아 있어도 통과함 (무시).
 # v2.6.0 (2026-11-21, 판 26): validate_settings 에 sniper_portion_pct 검사 (없으면 통과·기본 8, 있으면 0 초과 100 이하 숫자)
@@ -56,7 +57,7 @@ SAFE_DEFAULTS = {
     "order_type": None,                    # 노션 Q5: LOC | LIMIT — 비어 있으면 주문 안 함
     "allow_consecutive_sell": None,        # 노션 Q6: true | false — 비어 있으면 주문 안 함
     "trading_mode": "tower",               # v2.2.20 판 22: "tower"(탑쌓기, 기본) | "sniper"(스나이퍼). 바꾸면 다음 매매 판단부터 적용 (이미 낸 주문은 안 건드림). F 장부는 두 모드가 같이 씀
-    "sniper_tp_l1_pct": 1.5,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 F) 익절 % (F 평단 +이 % 에 그 F 전량)
+    "sniper_tp_l1_pct": 1.0,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 F) 익절 % (F 평단 +이 % 에 그 F 전량)
     "sniper_tp_upper_pct": 1.0,            # v2.2.20 스나이퍼 상단층 익절 %
     "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
@@ -200,10 +201,8 @@ def validate_settings(s):
         v = s.get(k)
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or _f(v) <= 0):
             bad.append(f"{k} 는 0 보다 큰 숫자 ({nm})")
-    bp = s.get("sniper_breakout_portion_pct")      # v2.5.0 수정1: 돌파 매수 비율 — 없으면 기본 16, 있으면 0 초과 100 이하
-    if bp is not None and (isinstance(bp, bool) or not isinstance(bp, (int, float)) or not (0 < _f(bp) <= 100)):
-        bad.append("sniper_breakout_portion_pct 는 0 초과 100 이하 (돌파 매수 비율, 버킷 시드의 %)")
-    pp = s.get("sniper_portion_pct")      # v2.6.0: 눌림(본) 매수 비율 — 없으면 기본 8, 있으면 0 초과 100 이하 (돌파 매수% 검사와 같은 방식)
+    # v2.10.0 판 36 D4: sniper_breakout_portion_pct(돌파 매수 비율)는 돌파 폐기로 안 씀 — 설정 파일에 남아 있어도 검사·사용 없이 무시
+    pp = s.get("sniper_portion_pct")      # v2.6.0: 눌림(본) 매수 비율 — 없으면 기본 10 (v2.10.0, 바벨 켜짐이면 15), 있으면 0 초과 100 이하
     if pp is not None and (isinstance(pp, bool) or not isinstance(pp, (int, float)) or not (0 < _f(pp) <= 100)):
         bad.append("sniper_portion_pct 는 0 초과 100 이하 (눌림 매수 비율, 버킷 시드의 %)")
     tm = s.get("trade_mode")      # v2.9.0 6차 판 33: 매매 모드 — 없으면 sniper(하이브리드 스나이퍼), 있으면 sniper | tower 만

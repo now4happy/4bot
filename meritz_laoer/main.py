@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0)
+# v2.10.0 (2026-11-23, 판 36 Case 113): 매수 신호 한 줄에서 돌파 표시 삭제 (BOT_VERSION 은 이번 판 범위 밖이라 그대로)
 # v2.9.0 6차 (2026-11-22, 판 33): ① tower_buy_tick 신설 — 매매 모드가 tower 일 때 run_sniper_tick(실거래)·run_sniper_dry(모의)가 스나이퍼 신호 대신 하루 한 번 탑쌓기 매수(시초가 가까운 칸부터 아래로, 칸마다 같은 금액) ② run_sync 가 잔고 대조(TW.reconcile) 뒤 F 완성 기준 금액 조정(seed_adjust.adjust)을 부름. 모드 기본은 sniper(하이브리드 그대로). 매도·래칫·스토커·16:10 동기화 시각은 안 바꿈
 # v2.9.0 판 32 질문 4·5 (2026-11-22): 시세를 읽을 때마다 SN.trail_tick (실거래·모의 둘 다) — 1층 트레일링 슬롯은 메모리에만
 # v2.9.0 판 31 질문 3 (2026-11-22): 스나이퍼 매도 주문 전에 매도가능 수량을 2초(0.25초 간격) 기다리고(SN.wait_sellable), plan_sells 에 장외 여부(ext) 전달 — 원작 execute_bulletproof_sell_sweep 방식 부분 주문
@@ -444,7 +445,7 @@ def sniper_plan_head(plan, s):
         head += "\n버킷별 매도 목표 " + " · ".join(f"{b['label']} ${b['avg']:.2f}→${b['target']:.2f} ({b['qty']}주{'·공격' if b['role'] == 'L1' else ''}{'·졸업 매도' if b.get('kind') == 'grad' else ''})" for b in i["boxes"][:6]) + (f" · 그 위 {len(i['boxes']) - 6}개" if len(i["boxes"]) > 6 else "")
     head += f"\n매수 신호: {SN.SIGNAL_KO.get(sg['signal_type'], sg['signal_type'])}"
     if sg.get("anchor"):
-        head += f" · 기준 ${sg['anchor']:.2f}({ANCHOR_KO.get(sg['anchor_kind'], sg['anchor_kind'])}) · 눌림 ${sg['pullback_price']:.2f}({sg['drop_pct']:+.1f}%)" + (f" · 돌파 ${sg['breakout_price']:.2f} (RSI {SN.BREAKOUT_MAX_RSI:g} 이하)" if sg.get("breakout_price") else "")
+        head += f" · 기준 ${sg['anchor']:.2f}({ANCHOR_KO.get(sg['anchor_kind'], sg['anchor_kind'])}) · 눌림 ${sg['pullback_price']:.2f}({sg['drop_pct']:+.1f}%)"
         if sg.get("cap_price"):
             head += f" · 상한 ${sg['cap_price']:.2f}"
     head += " · RSI " + (f"{i['rsi']:.1f}" if i.get("rsi") is not None else "모으는 중")
