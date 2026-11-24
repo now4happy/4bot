@@ -1,7 +1,9 @@
 # ==========================================================
-# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.7.0)
+# FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.12.0 수정 1차 (2026-11-24, 판 39 수정 1차): 설정값 줄의 '첫 기준가: 안 정함' 표시 삭제 (첫 매수는 가격 조건 없음)
 # v2.10.0 (2026-11-23, 판 36 Case 113): '돌파 매수% 변경' 버튼·설정 표시·도움말 삭제, 눌림 매수% 기본 10(바벨 15), 1층 익절 기본 1.0, 다음 매수 타점 표시를 원작 판정과 같은 값(기준가=min(직전 매도가, 가장 낮은 F 평단), 15:00 신규 진입 차단·개장 7분 쉴드)으로 맞춤. 레이더 설정 버튼 5개(눌림·버킷 시드 / 1층 익절·상단 익절 / 첫 기준가)
 # v2.9.0 6차 (2026-11-22, 판 33): 전술 제어반에 [탑쌓기 매매 시작]/[스나이퍼 매매로 돌아가기] 버튼 + 확인 메시지([네, 바꿀게요] 를 눌러야만 바뀜) · '매수 간격 변경'(1~10) 설정 추가
+# v2.12.0 (2026-11-24, 판 39): 레이더 하위 메뉴를 원작 전술 제어반으로 교체 — [스나이퍼 켜기/끄기] [매수 비율 모드(복리 8·단리 10·바벨 15, 3순환)] [바벨 관제보드]. 눌림 매수%·첫 기준가·1층/상단 익절·남은 시드 설정·버튼 삭제, 스나이퍼 설정(snset) 화면 삭제, 바벨 켜기/끄기 별도 버튼은 모드 버튼에 흡수. 시드(F 완성 기준 금액·버킷 시드)는 잔고 동기화 화면으로 이동
 # v2.7.0 (2026-11-21, 판 27): 층 간격 설정·버튼 제거 — MEANS '층 간격 변경'(tower_gap_usd)·MEANS 설명·TACT_SET·TOWER_DEFAULTS·설정 표시 '층 간격'·계획 '새 층 가격' 줄 삭제. 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params).
 # v2.6.0 (2026-11-21, 판 26): '눌림 매수% 변경' 버튼(sniper_portion_pct, MEANS·TACT_SET·TOWER_DEFAULTS 8.0) · 설정 표시의 '눌림 8%' 고정 글자를 설정 비율로 · '돌파 매수% 변경' 예시 글자 · 층 줄 밑에 버킷별 목표 줄
 # v2.4.0 (2026-11-21, 판 24): 스나이퍼 가격 선택 버튼(callback 'pk:<층 평단>:s|t') 처리 · 층 줄에 '잠금·탑 매도'·지하층(빈 층) 표시.
@@ -76,7 +78,7 @@ R_REFRESH, T_TOOLS = "새로고침", "도구"
 I_FUNDS, I_PLAN, I_LEDGER, I_POWER = "자금 현황", "오늘 계획", "거래 내역", "봇 상태"
 T_CHECK, T_ADD, T_HALT, T_INJECT, T_FP = "점검", "주식 넣기", "정지 해제", "장부 시작", "키 확인"
 T_STOP = "매매 정지"                               # 정지 표시를 켬 (정지 해제의 짝)
-B_SNSET = "스나이퍼 설정"
+B_BBBOARD = "바벨 관제보드"      # v2.12.0 판 39
 TOOLS_INLINE = [[T_CHECK, T_ADD], [T_STOP, T_HALT], [T_INJECT, T_FP], [BACK]]
 HALT_OK, INJECT_OK, INJECT_OVER = "정지 해제 확인", "장부 시작 확인", "장부 덮어쓰기 확인"
 CHG_OK = "변경 확인"
@@ -89,16 +91,11 @@ T_MODE_TOWER, T_MODE_SNIPER, MODE_OK = "탑쌓기 매매 시작", "스나이퍼 
 SET_ITEMS = {
     "탑쌓기 매도% 변경": dict(key="sell_profit_pct", name="탑쌓기 매도%", unit="%", kind="num", lo=0, lo_incl=False, hi=500, ex="예: 10 (완성 F 평단보다 10% 오르면 매도)"),
     "매도 비중 변경": dict(key="sell_fraction_pct", name="매도 비중", unit="%", kind="num", lo=0, lo_incl=False, hi=100, hi_incl=False, ex="예: 50 (보유의 절반을 매도)"),
-    "버킷 시드 변경": dict(key="tower_box_seed_usd", name="버킷 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (버킷 시드. 매수 1번 = 이 금액 × 눌림 매수%)"),
-    "눌림 매수% 변경": dict(key="sniper_portion_pct", name="눌림 매수%", unit="%", kind="num", lo=0, lo_incl=False, hi=100, ex="예: 8 (눌림 신호 한 번에 버킷 시드의 8% 매수. 기본 8)"),
-    "첫 기준가 변경": dict(key="sniper_first_anchor_usd", name="첫 기준가", unit="$", kind="num", lo=0, lo_incl=False, ex="예: 48.5 (기준가·F가 아직 없을 때만 쓰는 첫 기준가, 달러)"),
-    "남은 시드 변경": dict(key="tower_remaining_seed_usd", name="퍼센트 작업 남은 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 120000 (퍼센트 작업에서 $30~$10 구간에 나눌 남은 달러)"),
+    "버킷 시드 변경": dict(key="tower_box_seed_usd", name="버킷 시드", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (버킷 시드. 매수 1번 = 이 금액 × 모드 비율 — 복리 8%·단리 10%·바벨 15%)"),
     "매수 간격 변경": dict(key="tower_buy_gap_usd", name="매수 간격", unit="$", kind="int", lo=1, hi=10, ex="예: 5 (탑쌓기 매매 모드에서 시초가 가까운 칸부터 $1씩 아래로 5칸에 시드를 균등 분산. 1~10)"),
     "F 완성 기준 금액 변경": dict(key="tower_floor_usd", name="F 완성 기준 금액", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 15000 (한 F에 쌓을 달러, 정수)"),
     "하루 매수 F 수 변경": dict(key="tower_max_buy_layers_per_day", name="하루 매수 F 수", unit="F", kind="int", lo=1, hi=3, ex="예: 2"),
     "하루 매도 F 수 변경": dict(key="tower_max_sell_layers_per_day", name="하루 매도 F 수", unit="F", kind="int", lo=1, hi=3, ex="예: 2"),
-    "스나이퍼 1층 익절 변경": dict(key="sniper_tp_l1_pct", name="스나이퍼 1층 익절", unit="%", kind="num", lo=0, lo_incl=False, hi=50, ex="예: 1.0 (미완성 1층 평단보다 1.0% 오르면 그 층 전량 매도)"),
-    "스나이퍼 상단층 익절 변경": dict(key="sniper_tp_upper_pct", name="스나이퍼 상단층 익절", unit="%", kind="num", lo=0, lo_incl=False, hi=50, ex="예: 1.0 (미완성 상단층 평단보다 1.0% 오르면 그 층 전량 매도)"),
     "환전 여유% 변경": dict(key="auto_fx_buffer_pct", name="환전 여유%", unit="%", kind="num", lo=0, hi=100, ex="예: 3 (모자란 달러보다 3% 더 환전)"),
     "환전 하루 상한 변경": dict(key="auto_fx_max_usd_per_day", name="환전 하루 상한", unit="$", kind="int", lo=0, lo_incl=False, ex="예: 5000 (달러, 정수)"),
 }
@@ -107,30 +104,28 @@ KEY_ITEM = {i["key"]: i for i in SET_ITEMS.values()}
 MEANS = {
     "sell_profit_pct": ("완성 F를 파는 기준이에요. 그 F 평단보다 이 %만큼 오르면 매도해요 (탑쌓기 매도).", "다음 판단부터 완성 F 파는 시점이 달라져요"),
     "sell_fraction_pct": ("탑쌓기 매도가 일어날 때 그 F 보유 중 파는 비중이에요 (정수 주 내림, 1주는 남김).", "다음 탑쌓기 매도부터 파는 양이 달라져요"),
-    "tower_box_seed_usd": ("버킷 하나의 시드(달러)예요. 매수 신호 1번에 이 금액의 눌림 매수%(기본 8%, 서브 신호는 4%)를 사요 — 단리 고정. 마지막 회차는 버킷에 남은 시드만큼 사요. 안 정하면 15000이에요.", "다음 매수부터 한 번에 사는 금액과 새 버킷 크기가 달라져요 (이미 있는 F는 안 바뀜)"),
-    "sniper_portion_pct": ("눌림 신호가 날 때 한 번에 사는 금액이에요. 버킷 시드의 이 %만큼 사요 (0 초과 100 이하). 안 정하면 10이에요 (시드 15000이면 1500달러, 바벨을 켜면 15 = 시드 9000이면 1350달러). 마지막 버킷은 남은 시드만큼만 사요. 비율을 바꾸면 한 F의 버킷 수가 달라져요 (10%면 10개).", "다음 눌림 매수부터 한 번에 사는 금액이 달라져요 (이미 산 버킷은 그대로)"),
-    "sniper_first_anchor_usd": ("기준가도 F도 아직 없을 때만 쓰는 첫 기준가(달러)예요. 첫 체결이 생기면 그 체결가가 기준가가 돼요. 안 정하면 첫 매수 신호가 없어요.", "기준가·F가 없는 동안의 첫 매수 타점이 달라져요"),
-    "tower_remaining_seed_usd": ("퍼센트 작업 계산용 남은 시드(달러)예요. $30~$10 구간에 나눠 버킷 몇 개·한 버킷 몇 %인지 보여줘요 (표시만, 주문엔 안 써요). 안 정하면 120000이에요.", "퍼센트 작업 표시 비율이 다시 계산돼요"),
+    "tower_box_seed_usd": ("버킷 하나의 시드(달러)예요. 매수 신호 1번에 이 금액의 모드 비율(복리 8%·단리 10%·바벨 15%, 서브 신호는 4%)을 사요. 마지막 회차는 버킷에 남은 시드만큼 사요. 안 정하면 15000이에요.", "다음 매수부터 한 번에 사는 금액과 새 버킷 크기가 달라져요 (이미 있는 F는 안 바뀜)"),
     "tower_buy_gap_usd": ("탑쌓기 매매 모드에서 F 완성 기준 금액을 나눠 사는 칸 수예요 (시초가와 가장 가까운 칸부터 $1씩 아래로 이 칸 수만큼, 칸마다 같은 금액). 1~10 정수, 안 정하면 5예요. 스나이퍼 모드에서는 안 써요.", "탑쌓기 매매 모드의 다음 매수 계획부터 칸 수가 달라져요"),
     "tower_floor_usd": ("한 F의 시드(달러)예요. F 원가가 이 금액에 닿으면 그 F는 완성이에요. 총 시드·F 수 한도는 없어요. 안 정하면 15000이에요.", "새 F·남은 몫 매수 금액과 F 완성 기준이 달라져요"),
     "tower_max_buy_layers_per_day": ("하루에 채울 F 수예요 (아침 환전 금액 = F 완성 기준 금액 × 이 값). 1~3 정수만 돼요. 안 정하면 1이에요.", "아침 환전액이 달라져요"),
     "tower_max_sell_layers_per_day": ("하루에 최대 몇 F까지 팔지예요. 1~3 정수만 돼요. 안 정하면 1이에요 (지금처럼 하루에 한 F). 같은 때 여러 F가 목표에 닿으면 번호가 큰 F(맨 위 F)부터 팔아요.", "다음 매도 확인부터 하루에 파는 F 수가 달라져요 (목표 이익률·매도 비중은 그대로)"),
-    "sniper_tp_l1_pct": ("미완성 F 중 평단이 가장 낮은 F(공격 층)을 파는 기준이에요. 그 F 평단보다 이 %만큼 오르면 그 F 전량을 팔아요. 안 정하면 1.0이에요.", "다음 스나이퍼 매도 판단부터 달라져요"),
-    "sniper_tp_upper_pct": ("미완성 F 중 공격 층 위쪽 F(상단층)을 파는 기준이에요. 그 F 평단보다 이 %만큼 오르면 그 F 전량을 팔아요. 안 정하면 1.0이에요.", "다음 스나이퍼 매도 판단부터 달라져요"),
     "auto_fx_buffer_pct": ("자동환전 때 부족분에 더해 환전하는 여유 비율이에요.", "다음 자동환전 금액이 달라져요"),
     "auto_fx_max_usd_per_day": ("자동환전을 하루에 최대 얼마까지 할지 정한 상한이에요.", "하루 환전 한도가 달라져요"),
 }
 _EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A0-\u25FF\u2300-\u23FF\u2900-\u297F\u2139\uFE0F\u200D])+ ?")   # 예전 이모티콘 키보드 글자를 새 버튼으로 읽는 데 씀
-BOOL_NAME = {"barbell_enabled": "바벨 모드", "enabled": "봇", "auto_fx_enabled": "자동환전"}
-T_BB_ON, T_BB_OFF, BB_OK = "바벨 모드 켜기", "바벨 모드 끄기", "네, 바벨 바꿀게요"      # 판 34 2차: 바벨 켜기/끄기 (기본 꺼짐, 확인 버튼 필수)
+BOOL_NAME = {"barbell_enabled": "바벨 모드", "compound_enabled": "복리 모드", "enabled": "봇", "auto_fx_enabled": "자동환전"}
+T_PMODE, PM_OK = "매수 비율 모드 바꾸기", "네, 모드 바꿀게요"      # v2.12.0 판 39: 복리→단리→바벨→복리 3순환 (원작 toggle_portion_mode). 예전 바벨 켜기/끄기 버튼은 여기에 흡수
+PM_KO = {"compound": "복리 8%", "simple": "단리 10%", "barbell": "바벨 15%"}
+PM_NEXT = {"compound": "simple", "simple": "barbell", "barbell": "compound"}      # 원작 순환 순서
+PM_CHANGES = {"compound": {"barbell_enabled": False, "compound_enabled": True}, "simple": {"barbell_enabled": False, "compound_enabled": False}, "barbell": {"barbell_enabled": True, "compound_enabled": False}}
 MODE_KO = {"sniper": "하이브리드 스나이퍼 매매", "tower": "탑쌓기 매매"}
 FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # 값 없이 켜기를 눌렀을 때 이 글자만
 SET_POWER = "봇 켜기/끄기"
-SNIPER_SET = ["버킷 시드 변경", "눌림 매수% 변경", "첫 기준가 변경", "스나이퍼 1층 익절 변경", "스나이퍼 상단층 익절 변경"]      # 판 35: 스나이퍼 레이더 → ⚙️ 스나이퍼 설정
-TOWER_SET = ["매수 간격 변경", "F 완성 기준 금액 변경", "탑쌓기 매도% 변경", "매도 비중 변경", "하루 매수 F 수 변경", "하루 매도 F 수 변경", "남은 시드 변경"]      # 판 35: 탑쌓기 매매 화면
-TACT_SET = SNIPER_SET + TOWER_SET
+TOWER_SET = ["매수 간격 변경", "탑쌓기 매도% 변경", "매도 비중 변경", "하루 매수 F 수 변경", "하루 매도 F 수 변경"]      # 판 35: 탑쌓기 매매 화면 (판 39: F 완성 기준 금액은 잔고 동기화로 이동, 남은 시드 삭제)
+SYNC_SET = ["F 완성 기준 금액 변경", "버킷 시드 변경"]      # 판 39 할 일 3: 시드 설정 = 잔고 동기화 화면
+TACT_SET = TOWER_SET + SYNC_SET
 FX_SET = ["환전 하루 상한 변경", "환전 여유% 변경"]
-TOWER_DEFAULTS = {"tower_buy_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_box_seed_usd": int(_TW.BOX_SEED_USD), "sniper_portion_pct": _TW.PORTION_PCT, "tower_remaining_seed_usd": int(_TW.REMAINING_SEED_USD),
+TOWER_DEFAULTS = {"tower_buy_gap_usd": _TW.GAP_USD, "tower_floor_usd": int(_TW.FLOOR_USD), "tower_box_seed_usd": int(_TW.BOX_SEED_USD), 
                   "tower_max_buy_layers_per_day": 1, "tower_max_sell_layers_per_day": 1,
                   "sniper_tp_l1_pct": _SN.TP_L1_DEFAULT, "sniper_tp_upper_pct": _SN.TP_UPPER_DEFAULT}   # 설정에 없으면 쓰는 기본값 (표시용)
 
@@ -146,13 +141,13 @@ def cur_val(s, key):
     """설정값, 없으면 탑쌓기 기본값 (표시용)"""
     v = (s or {}).get(key)
     return TOWER_DEFAULTS.get(key) if v is None else v
-PARENT = {"tools": "tower", "snset": "radar"}
+PARENT = {"tools": "tower"}
 CONFIRM_SEC = 60            # 제안값: 확인 버튼 유효 시간
 WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
 HEAD = "7번 메리츠 SOXL 하이브리드"
-ALL_LABELS = ({B_RADAR, B_SYNC, B_TOWER, B_FX, B_SNSET, BACK, R_REFRESH, T_TOOLS, I_FUNDS, I_PLAN, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
-               T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, T_MODE_TOWER, T_MODE_SNIPER, MODE_OK, T_BB_ON, T_BB_OFF, BB_OK} | set(SET_ITEMS))
+ALL_LABELS = ({B_RADAR, B_SYNC, B_TOWER, B_FX, B_BBBOARD, BACK, R_REFRESH, T_TOOLS, I_FUNDS, I_PLAN, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
+               T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, T_MODE_TOWER, T_MODE_SNIPER, MODE_OK, T_PMODE, PM_OK} | set(SET_ITEMS))
 LABEL_LIST = sorted(ALL_LABELS)
 LABEL_IDX = {x: i for i, x in enumerate(LABEL_LIST)}      # 인라인 버튼 callback_data = "c:<번호>" (64바이트 제한 때문에 글자 대신 번호 — 같은 버전 안에서는 항상 같은 번호)
 
@@ -473,21 +468,6 @@ class MenuBot:
             return "꺼짐 (지정가 주문일 때만 켜져요)"
         return f"{int(sec // 60)}분마다" if sec % 60 == 0 else f"{int(sec)}초마다"
 
-    def settings_lines(self, s):
-        """현재 설정값 (설정 파일 값 그대로, 한국어로)"""
-        v = lambda k: fmt_val(KEY_ITEM[k], cur_val(s, k))
-        fx = "켜짐" if s.get("auto_fx_enabled") else "꺼짐"
-        fx += f" (여유 {fmt_val(KEY_ITEM['auto_fx_buffer_pct'], s.get('auto_fx_buffer_pct'), '입력 전')} · 하루 상한 {fmt_val(KEY_ITEM['auto_fx_max_usd_per_day'], s.get('auto_fx_max_usd_per_day'), '입력 전')})" if fx_values_ready(s) else " (여유%·하루 상한 입력 전)"
-        return ["설정값",
-                f"· 버킷 시드 {v('tower_box_seed_usd')} (눌림 {_TW.portion_pct(s):g}% ${_TW.portion_usd(s):,.0f}) · 첫 기준가 " + (f"${float(s['sniper_first_anchor_usd']):.2f}" if _f0(s.get("sniper_first_anchor_usd")) > 0 else "안 정함"),
-                f"· F 완성 기준 금액 {v('tower_floor_usd')}",
-                f"· 매매 모드 {MODE_KO[_TW.trade_mode(s)]} · 탑쌓기 매수 간격 ${_TW.buy_gap(dict(s, trade_mode='tower'))}",
-                f"· 탑쌓기 매도 +{v('sell_profit_pct')} → 보유의 {v('sell_fraction_pct')}",
-                f"· 스나이퍼 익절 1층 {v('sniper_tp_l1_pct')} · 상단층 {v('sniper_tp_upper_pct')}",
-                f"· 하루 매수 {v('tower_max_buy_layers_per_day')}F · 하루 매도 {v('tower_max_sell_layers_per_day')}F",
-                f"· 당일 매도 확인 {self.intraday_text(s)}",
-                f"· 자동환전 {fx}"]
-
     def live_state(self, s, d):
         """v2.2.20 실시간 F 상태 → (F 상태, 안내 글자). 장부 파일(tower_state.json)에 오늘 체결을 메모리에서만 더함 (조회만 — 파일·장부·주문 안 건드림).
         체결을 못 읽으면(키·조회 오류 등) 장부 기준 그대로 + 안내"""
@@ -566,7 +546,7 @@ class MenuBot:
         elif fl:
             lines.append("🟦" * 10 + " 모든 F 완성 · 다음 매수는 새 F")
         if not fl:
-            lines.append("⚪ <b>[보유 F: 0주]</b> 직전 매도가가 생긴 뒤부터 감시해요 (기준가 없음)")
+            lines.append("⚪ <b>[보유 F: 0주]</b> 첫 매수는 가격 조건 없이 현재가로 사요 (15:00 전 · 개장 7분 · 1분봉 검문 통과 시)")
         lines += floor_rows
         if fl:
             lines.append(f"▫️ 완성 F: 탑 매도 평단 +{float(s.get('sell_profit_pct') or 0):g}% → 보유의 {float(s.get('sell_fraction_pct') or 0):g}% · 미완성 F: 스나이퍼 1층 +{_SN.tp_pcts(s)[0]:g}% · 상단층 +{_SN.tp_pcts(s)[1]:g}% 전량")
@@ -578,13 +558,15 @@ class MenuBot:
             anchor, kind = _SN.anchor_info(st, ss, s)
             cap = _SN.lowest_layer_avg(fl)
             late = _SN.is_late_cutoff(o.now_et())
-            sig = _SN.timed_signal(px, anchor, kind, cap, _SN.depth_layers(ss, _SN.layer_count(fl)), rsi, o.now_et(), _SN.layer_count(fl))
-            if anchor > 0:
+            sig = (_SN.first_buy_signal(px, o.now_et(), None) if not fl else _SN.timed_signal(px, anchor, kind, cap, _SN.depth_layers(ss, _SN.layer_count(fl)), rsi, o.now_et(), _SN.layer_count(fl)))      # 판 39: 보유 0개는 첫 매수 검문 (레이더는 1분봉을 안 읽으므로 HA 칸은 '준비 전'으로 보임)
+            if not fl:      # v2.12.0 판 39: 보유 0개 = 원작 분기 A — 눌림·기준가 안 봄 (신호 칸이 검문 결과를 보여 줌)
+                lines.append(f"▫️ 첫 매수: 가격 조건 없이 현재가 ${_SN.exec_price(px):.2f} (소수 2자리 내림) · 한 번에 버킷 시드의 {_TW.portion_pct(s):g}% (${_TW.portion_usd(s):,.0f})")
+            elif anchor > 0:
                 gate = "신규 진입 차단(15:00~)" if (late and not fl) else ("개장 7분 쉴드(09:30~09:36)" if sig["signal_type"] == "HOLD_REG_OPEN_7M_VWAP_SHIELD" else "")
                 lines.append(f"▫️ 눌림 <b>${sig['pullback_price']:.2f}</b> ({sig['drop_pct']:+.1f}%) 도달 시 매수" + (f" · {gate}" if gate else ""))
                 lines.append(f"▫️ 기준 ${anchor:.2f}({esc(o.ANCHOR_KO.get(kind, kind))}) 대비 {sig['chg_pct']:+.2f}%" + (f" · 상한 ${cap:.2f}" if cap > 0 else "") + (f" · 원작 기준가 ${sig['ref_anchor']:.2f}(직전 매도가·가장 낮은 F 평단 중 낮은 값)" if sig.get("ref_anchor") else ""))
             else:
-                lines.append("▫️ 기준가 없음 — 첫 매수는 직전 매도가가 생긴 뒤부터 감시해요")
+                lines.append("▫️ 눌림 기준가가 아직 없어요 (첫 매수 체결 뒤에 생겨요)")
             inc = next((f for f in fl if not _TW.is_complete(f)), None)
             nxt = (f"{_SN.sniper_numbers(st).get(int(inc['id']), inc['id'])}F 남은 몫 ${max(0.0, float(inc.get('target') or fu) - float(inc.get('cost') or 0)):,.0f}" if inc is not None
                    else f"새 시드 ${fu:,.0f}")
@@ -627,7 +609,7 @@ class MenuBot:
                     elif fq == lq:
                         note = f"잔고 {d['hold']}주 = 장부 {lq}주 = F 합계 {fq}주 · 맞아요 (바꾼 것 없음)"
                     elif pend:
-                        note = f"F 합계 {fq}주 ≠ 장부 {lq}주지만 체결 반영 전 주문 기록이 있어 안 바꿨어요 (16:10 ET 동기화가 맞춰요)"
+                        note = f"F 합계 {fq}주 ≠ 장부 {lq}주지만 체결 반영 전 주문 기록이 있어 안 바꿨어요 (20:00 ET 동기화가 맞춰요)"
                     else:
                         tst2, tn = _TW.reconcile(tst, lq, float(pos["principal"]), _TW.params(s)[2], s)
                         cfg._save_json(o.TOWER_FILE, tst2)
@@ -719,23 +701,21 @@ class MenuBot:
         return [[lab(x)] for x in labels]
 
     def radar_inline(self, s):
-        """레이더 화면 — 스나이퍼 설정 6개를 바로 보여줌 (2개씩 묶음). 뒤로 없음 (레이더가 최상위)"""
-        cell = {r[0][1]: r[0] for r in self._set_rows(SNIPER_SET, s)}      # tower_inline과 같은 방식 (설정 버튼은 현재값 포함 동적 생성)
-        return [[cell["눌림 매수% 변경"], cell["버킷 시드 변경"]],
-                [cell["스나이퍼 1층 익절 변경"], cell["스나이퍼 상단층 익절 변경"]],
-                [cell["첫 기준가 변경"]]]
+        """레이더 화면 = 원작 전술 제어반 (v2.12.0 판 39): [스나이퍼 켜기/끄기] [매수 비율 모드] [바벨 관제보드]. 뒤로 없음 (레이더가 최상위)"""
+        pm = _TW.portion_mode(s)
+        return [[("🔴 스나이퍼 끄기 (지금 켜짐)", BOT_OFF) if s.get("enabled") else ("🟢 스나이퍼 켜기 (지금 꺼짐)", BOT_ON)],
+                [(f"🔄 매수 비율 모드: {PM_KO[pm]} → {PM_KO[PM_NEXT[pm]]}", T_PMODE)],
+                [("🛡 바벨 관제보드", B_BBBOARD)]]
 
-    def snset_inline(self, s):
-        """스나이퍼 설정 (스나이퍼 레이더 안) — 이름 + 현재값 → 누르면 새 값 입력"""
-        return self._set_rows(SNIPER_SET, s) + [[BACK]]
+    def sync_inline(self, s):
+        """잔고 동기화 화면 (v2.12.0 판 39 할 일 3): 시드 설정 2개 — F 완성 기준 금액 · 버킷 시드"""
+        return self._set_rows(SYNC_SET, s)
 
     def tower_inline(self, s):
         """탑쌓기 매매 화면 — 판 35 수정 12차: 시작·바벨 먼저, 설정은 비슷한 것끼리 2개씩 (봇 전원·도구 뺌)"""
         rows = [[("🏗 탑쌓기 매매 시작 (지금: 하이브리드 스나이퍼)", T_MODE_TOWER) if _TW.trade_mode(s) != "tower" else ("🔫 스나이퍼 매매로 돌아가기 (지금: 탑쌓기 매매)", T_MODE_SNIPER)]]
-        rows.append([("🛡 바벨 모드 끄기 (지금 켜짐)", T_BB_OFF) if s.get("barbell_enabled") is True else ("🛡 바벨 모드 켜기 (지금 꺼짐)", T_BB_ON)])
-        cell = {r[0][1]: r[0] for r in self._set_rows(TOWER_SET, s)}      # _set_rows는 1개씩이라 여기서만 2개씩 묶음 (snset은 그대로)
-        for a, b in (("F 완성 기준 금액 변경", "남은 시드 변경"),
-                     ("탑쌓기 매도% 변경", "매도 비중 변경"),
+        cell = {r[0][1]: r[0] for r in self._set_rows(TOWER_SET, s)}      # _set_rows는 1개씩이라 여기서만 2개씩 묶음
+        for a, b in (("탑쌓기 매도% 변경", "매도 비중 변경"),
                      ("하루 매수 F 수 변경", "하루 매도 F 수 변경")):
             rows.append([cell[a], cell[b]])
         rows.append([cell["매수 간격 변경"]])
@@ -750,7 +730,7 @@ class MenuBot:
 
     def inline_for(self, s):
         """지금 화면(nav)의 인라인 버튼줄. 첫 화면(main)이면 None → 맨밑 4개 키보드"""
-        return {"radar": self.radar_inline(s), "tower": self.tower_inline(s), "snset": self.snset_inline(s), "fx": self.fx_inline(s), "tools": TOOLS_INLINE}.get(self.nav)
+        return {"radar": self.radar_inline(s), "tower": self.tower_inline(s), "sync": self.sync_inline(s), "fx": self.fx_inline(s), "tools": TOOLS_INLINE}.get(self.nav)
 
     def tower_text(self, s):
         esc = _html.escape
@@ -758,19 +738,40 @@ class MenuBot:
         on = bool(s.get("enabled"))
         return "\n".join(["🏛️ <b>[탑쌓기 매매]</b>", "──────────────",
                           f"1️⃣ 봇 전원: <b>{'🟢 켜짐' if on else '🔴 꺼짐'}</b> ({'모의' if s.get('dry_run', True) else '실거래'}) · 매매 모드 <b>{MODE_KO[_TW.trade_mode(s)]}</b>",
-                          f"2️⃣ F 완성 기준 금액: <b>{v('tower_floor_usd')}</b>",
+                          f"2️⃣ 매수 비율 모드: <b>{PM_KO[_TW.portion_mode(s)]}</b> · 시드 설정은 [잔고 동기화] 화면",
                           f"3️⃣ 탑쌓기 매도(완성 F): 평단 <b>+{v('sell_profit_pct')}</b> → 보유의 <b>{v('sell_fraction_pct')}</b>",
-                          f"4️⃣ 하루 매수 <b>{v('tower_max_buy_layers_per_day')}</b>F · 하루 매도 <b>{v('tower_max_sell_layers_per_day')}</b>F · 남은 시드 <b>{v('tower_remaining_seed_usd')}</b>",
+                          f"4️⃣ 하루 매수 <b>{v('tower_max_buy_layers_per_day')}</b>F · 하루 매도 <b>{v('tower_max_sell_layers_per_day')}</b>F",
                           "──────────────", "💡 버튼을 누르면 새 값을 입력해요 (현재값 → 바꿀 값 확인 뒤 바뀌고, 주문은 안 나가요)"])
 
-    def snset_text(self, s):
+    def seed_lines(self, s):
+        """잔고 동기화 화면 아래에 붙는 시드 설정 표시 (v2.12.0 판 39 할 일 3)"""
         esc = _html.escape
         v = lambda k: esc(fmt_val(KEY_ITEM[k], cur_val(s, k)))
-        return "\n".join(["⚙️ <b>[스나이퍼 설정]</b>", "──────────────",
-                          f"🧱 버킷 시드: <b>{v('tower_box_seed_usd')}</b> (눌림 {_TW.portion_pct(s):g}% = ${_TW.portion_usd(s):,.0f})",
-                          f"🎯 첫 기준가: <b>{v('sniper_first_anchor_usd')}</b>",
-                          f"3️⃣ 스나이퍼 익절(미완성 F, 전량): 1층 <b>+{v('sniper_tp_l1_pct')}</b> · 상단층 <b>+{v('sniper_tp_upper_pct')}</b>",
-                          "──────────────", "💡 버튼을 누르면 새 값을 입력해요 (현재값 → 바꿀 값 확인 뒤 바뀌고, 주문은 안 나가요)"])
+        return ["──────────────", "🌱 <b>[시드 설정]</b>",
+                f"· F 완성 기준 금액: <b>{v('tower_floor_usd')}</b>",
+                f"· 버킷 시드: <b>{v('tower_box_seed_usd')}</b> (모드 {PM_KO[_TW.portion_mode(s)]} → 매수 1번 ${_TW.portion_usd(s):,.0f})",
+                "💡 버튼을 누르면 새 값을 입력해요 (현재값 → 바꿀 값 확인 뒤 바뀌고, 주문은 안 나가요)"]
+
+    def barbell_text(self, s):
+        """바벨 관제보드 (v2.12.0 판 39 할 일 2): SGOV 보유 · 대기 현금(free_cash) · SCHD 대기금 — 조회만 (하이브리드는 별도수익금고 대신 SCHD 누적). 시드 줄은 넣지 않음"""
+        esc = _html.escape
+        on = s.get("barbell_enabled") is True
+        lines = ["🛡 <b>[바벨 관제보드]</b>", "──────────────", f"· 바벨 모드: <b>{'켜짐' if on else '꺼짐'}</b> · 지금 모드 <b>{PM_KO[_TW.portion_mode(s)]}</b> · {'모의' if s.get('dry_run', True) else '실거래'}"]
+        sd = s.get("state_dir") or ""
+        try:
+            led = self.o.BB.open_ledger(sd, _TW.params(dict(s, barbell_enabled=False))[0]).get_state()
+            lines.append(f"· 대기 현금(free_cash): <b>${float(led.get('free_cash_usd') or 0):,.2f}</b>" + ("" if led.get("free_init") else " (바벨을 켠 뒤 처음 계산 전)"))
+        except Exception as e:
+            lines.append(f"· 대기 현금: 미확인 ({esc(type(e).__name__)})")
+        sc = self.o.BB._rw(self.o.BB.schd_path(sd), {}) or {}
+        lines.append(f"· SCHD 대기금: <b>${float(sc.get('pending_usd') or 0):,.2f}</b> · 산 수량 {int(float(sc.get('bought_qty') or 0))}주 · 쓴 금액 ${float(sc.get('spent_usd') or 0):,.2f}")
+        try:
+            hold = self._api(s).holding("SGOV")[0]
+            lines.append(f"· SGOV 보유: <b>{int(hold)}주</b> (메리츠 잔고)")
+        except Exception as e:
+            lines.append(f"· SGOV 보유: 미확인 ({esc(type(e).__name__)})")
+        lines += ["──────────────", "💡 보기만 하는 화면이에요. 모드는 레이더의 [매수 비율 모드]로 바꿔요 (바벨 = 시드 $9,000 · 매수 15%)"]
+        return "\n".join(lines)
 
     def fx_text(self, s):
         """환전 화면: 오늘 환전한 금액 · 남은 한도 · 자동환전 설정 (환전 기록 파일 fx_<날짜>.json 읽기만)"""
@@ -821,14 +822,12 @@ class MenuBot:
                 "· 끄면 바로 적용, 켜면 확인 버튼이 한 번 더 나와요. 모의/실거래 전환은 여기서 안 바꿔요.")
 
     def show(self, name, s, say, text=None):
-        """화면 보이기. name: main(첫 화면) | radar | tower | snset | fx | tools"""
+        """화면 보이기. name: main(첫 화면) | radar | tower | fx | tools"""
         self.nav, self.in_prompt = name, False
         if name == "main":
             return say(text or "아래 버튼을 눌러 주세요", None)
         if name == "tower":
             return self.send(self._c, text or self.tower_text(s), None, s.get("dry_run", True), html=True, inline=self.inline_for(s))
-        if name == "snset":
-            return self.send(self._c, text or self.snset_text(s), None, s.get("dry_run", True), html=True, inline=self.inline_for(s))
         if name == "fx":
             return self.send(self._c, text or self.fx_text(s), None, s.get("dry_run", True), html=True, inline=self.inline_for(s))
         if name == "tools":
@@ -924,7 +923,7 @@ class MenuBot:
             self.nav = "main"
             return self.show("main", s, say, "메뉴가 바뀌었어요 (하이브리드). 아래 버튼으로 써 주세요.")
         active, self.in_prompt, self.wait = self.in_prompt, False, None
-        if text not in (CHG_OK, MODE_OK, BB_OK):
+        if text not in (CHG_OK, MODE_OK, PM_OK):
             self.pending = None
         if text == BACK:
             return self.show(self.nav if active else PARENT.get(self.nav, self.nav), s, say)
@@ -933,18 +932,19 @@ class MenuBot:
             self.nav = "radar"
             return self.send(c, self.board_text(s), None, dry, html=True, inline=self.radar_inline(s))
         if text == B_SYNC:
-            self.nav = "radar"
-            return self.send(c, self.sync_text(s), None, dry, html=True)      # 판 35 수정 12차: 동기화 결과는 글만 (인라인 버튼 없음, 맨밑 키보드만)
+            self.nav = "sync"      # v2.12.0 판 39 할 일 3: 시드 설정 2개(F 완성 기준 금액·버킷 시드)를 이 화면 버튼으로 바꿈 — 바꾼 뒤에도 이 화면에 머무름
+            return self.send(c, self.sync_text(s) + "\n" + "\n".join(self.seed_lines(s)), None, dry, html=True, inline=self.sync_inline(s))
         if text == B_TOWER:
             return self.show("tower", s, say)
-        if text == B_SNSET:
-            return self.show("snset", s, say)
+        if text == B_BBBOARD:
+            self.nav = "radar"
+            return self.send(c, self.barbell_text(s), None, dry, html=True, inline=self.radar_inline(s))
         if text == B_FX:
             return self.show("fx", s, say)
         if text == R_REFRESH:
             if self.nav == "fx":
                 return self.show("fx", s, say)
-            if self.nav in ("tower", "snset"):
+            if self.nav == "tower":
                 return self.show(self.nav, s, say)
             self.nav = "radar"
             return self.send(c, self.board_text(s), None, dry, html=True, inline=self.radar_inline(s))
@@ -966,17 +966,17 @@ class MenuBot:
             return self.apply(s, say, {"auto_fx_enabled": False})
         # ---- 탑쌓기 매매 화면 (봇 전원·매매 모드·바벨)
         if text == BOT_OFF:
-            self.nav = "tower"
+            self.nav = "radar" if self.nav == "radar" else "tower"      # 판 39: 레이더 제어반에서 눌렀으면 레이더에 머무름
             return self.apply(s, say, {"enabled": False})
         if text == BOT_ON:
-            self.nav = "tower"
+            self.nav = "radar" if self.nav == "radar" else "tower"
             bad = self.o.validate_settings(s)
             return self.propose(s, say, {"enabled": True},
                                 f"켜면 다음 주문 시간부터 동작해요. 지금 {'모의' if dry else '실거래'}예요. 입고 확인·토스 정지 확인·키 지문 등 기존 안전 조건은 그대로 먼저 통과해야 해요."
                                 + (f"\n설정 문제 {len(bad)}건 (켜도 주문은 막혀요): " + "; ".join(bad[:3]) if bad else ""))
         if text in SET_ITEMS:
             it = SET_ITEMS[text]
-            self.nav = "fx" if it["key"].startswith("auto_fx") else ("radar" if self.nav == "radar" else ("snset" if text in SNIPER_SET else "tower"))      # 판 35 수정 14차: 레이더에서 바꾼 설정은 레이더에 머무름 (snset 화면에서 바꾼 건 snset 유지)
+            self.nav = "fx" if it["key"].startswith("auto_fx") else ("sync" if text in SYNC_SET else "tower")      # v2.12.0 판 39: 시드 설정은 잔고 동기화 화면에 머무름 (snset 화면 삭제)
             self.wait, self.in_prompt = {"kind": "set", "label": text, "ts": time.time()}, True
             return say(f"{text}\n· 지금: {fmt_val(it, cur_val(s, it['key']))}\n· 넣을 수 있는 값: {self.range_text(it)}\n"
                        f"· 무슨 뜻: {MEANS.get(it['key'], ('', ''))[0]}\n· 바꾸면: {MEANS.get(it['key'], ('', ''))[1]} (주문은 바로 나가지 않아요)\n"
@@ -996,24 +996,25 @@ class MenuBot:
             return say(f"매매 모드를 바꿀까요?\n· 지금 모드: {MODE_KO[cur]}\n· 바꿀 모드: {MODE_KO[to]}\n"
                        f"· 시드(F 완성 기준 금액): ${_TW.params(s)[0]:,.0f}\n· 매수 간격: ${cur_val(s, 'tower_buy_gap_usd')} (시초가 가까운 칸부터 $1씩 아래로 {cur_val(s, 'tower_buy_gap_usd')}칸)\n"
                        f"{MODE_KO[to]}로 바꿀까요? {CONFIRM_SEC}초 안에 [{MODE_OK}] 를 눌러 주세요. 이미 낸 주문은 안 건드리고 다음 판단부터 적용돼요.", [[MODE_OK, BACK]])
-        if text in (T_BB_ON, T_BB_OFF):      # 판 34 2차: 바벨 켜기/끄기 — 바로 안 바꾸고 확인부터. 켜면 F 완성 기준 금액 $9,000·버킷 $720 (SOXL 60% 몫), 16:10 동기화에서 F 재조정
-            self.nav = "tower"
-            to = text == T_BB_ON
-            if (s.get("barbell_enabled") is True) == to:
-                return say(f"이미 바벨 모드가 {'켜져' if to else '꺼져'} 있어요. 바꿀 것이 없어요.")
+        if text == T_PMODE:      # v2.12.0 판 39: 매수 비율 모드 3순환 (복리→단리→바벨→복리) — 바로 안 바꾸고 확인부터 (바벨은 F 완성 기준 금액·버킷 시드 0.6배가 같이 바뀜)
+            self.nav = "radar"
+            cur = _TW.portion_mode(s)
+            to = PM_NEXT[cur]
             try:
-                update_settings({"barbell_enabled": to}, dry=True)
+                update_settings(PM_CHANGES[to], dry=True)
             except (ValueError, OSError) as e:
                 return say(f"바꿀 수 없어요: {e}")
-            self.pending = {"changes": {"barbell_enabled": to}, "mode": "bb"}
-            self.confirm[BB_OK], self.in_prompt = time.time() + CONFIRM_SEC, True
-            f0 = _TW.params(dict(s, barbell_enabled=to))[0]
-            return say(f"바벨 모드를 {'켤까요' if to else '끌까요'}?\n· 바꾼 뒤 F 완성 기준 금액 ${f0:,.0f} · 버킷 ${_TW.portion_usd(dict(s, barbell_enabled=to)):,.0f}\n"
-                       f"· 암살자는 모의(SIMULATED) 고정이에요. {CONFIRM_SEC}초 안에 [{BB_OK}] 를 눌러 주세요. 이미 낸 주문은 안 건드려요.", [[BB_OK, BACK]])
-        if text == BB_OK:
+            self.pending = {"changes": PM_CHANGES[to], "mode": "pm"}
+            self.confirm[PM_OK], self.in_prompt = time.time() + CONFIRM_SEC, True
+            s2 = dict(s, **PM_CHANGES[to])
+            return say(f"매수 비율 모드를 바꿀까요?\n· 지금: {PM_KO[cur]} → 바꿀 모드: {PM_KO[to]}\n"
+                       f"· 바꾼 뒤 F 완성 기준 금액 ${_TW.params(s2)[0]:,.0f} · 매수 1번 ${_TW.portion_usd(s2):,.0f}\n"
+                       f"· 암살자는 모의(SIMULATED) 고정이에요. {CONFIRM_SEC}초 안에 [{PM_OK}] 를 눌러 주세요. 이미 낸 주문은 안 건드려요.", [[PM_OK, BACK]])
+        if text == PM_OK:
             p, self.pending = self.pending, None
-            if not p or p.get("mode") != "bb" or not self._ok_confirm(BB_OK):
-                return say("확인 시간이 지났거나 바꿀 것이 없어요. 바벨 버튼을 다시 눌러 주세요.")
+            if not p or p.get("mode") != "pm" or not self._ok_confirm(PM_OK):
+                return say("확인 시간이 지났거나 바꿀 것이 없어요. 모드 버튼을 다시 눌러 주세요.")
+            self.nav = "radar"
             return self.apply(s, say, p["changes"])
         if text == MODE_OK:
             p, self.pending = self.pending, None

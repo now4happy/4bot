@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.10.0)
+# FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.12.0)
+# v2.12.0 (2026-11-24, 판 39): ① first_buy_signal·exec_price 신설 — 보유 층 0개 = 원작 분기 A: 가격 조건 없이 현재가(소수 2자리 내림), 검문 순서 15:00 컷오프 → 개장 7분 쉴드 → 직전 1분봉 무머리 HA음봉 ② plan_buy(ha=)·make_plan(ha=) ③ anchor_info 에서 첫 기준가(sniper_first_anchor_usd) 삭제 ④ 레이더 문구 3곳 교체(NO_ANCHOR·trigger_lines)
 # v2.11.0 (2026-11-24, 판 38 시간 확대): STATUS_*·SELL_STATUS·BUY_STATUS·sell_ok·buy_ok 추가 (원작 is_active_buy_window 04:07~16:00 · is_active_sell_window 04:00~04:06 제외 전 구간 을 어댑터로 그대로 부름). 10분 게이트는 sub_grid.gate_status 가 04:07 부터 엶. 15:00 신규 진입 컷오프·개장 7분 쉴드(09:30~09:36)는 그대로 — 컷오프는 15:00~16:00 에만, 쉴드는 정규장 개장 직후에만 걸려 프리장 매수와 겹치지 않음
 # v1.4.4 (판 37 Case 113 이식 + 후속 — 버전 번호는 Muse 지정 전이라 미확정): ① 개장 7분 쉴드 매번 적용 ② 10분 게이트(04:07 ET 기점·정규장 안, 보유 층이 있을 때 추가매수만) ③ 상한 가드·기준가 상한 = 가장 낮은 층 평단(그대로) ④ 눌림 계단(-1/-2/-3.5/-5.5) 유지(항목 2 취소) ⑤ 층 태그 GRID_L1~L7 고정·7층 상한·L2_L7_MERGE_SORT 합병 (grid_tiers.py·tower_strategy._tag_on_buy·sniper_adapter.tiered — 1층이 팔리면 새 1층 안 생김) ⑥ 2층 공석 돌파 연결(OFF — 원작 Case 113 폐기). 항목 6(시간외)은 미적용 → 노션 질문
 # v2.10.0 (2026-11-23, 판 36 Case 113 이식): 원작 복사본 5개를 7718e29 로 교체한 뒤 하이브리드 자체 값 정리 — ① 돌파 매수 삭제(BREAKOUT_* 상수·돌파 가격·돌파 매수액 분기) ② 눌림 타점 표시를 원작 결과(pullback_target_price = min(직전 매도가, 최하단 F 평단) 기준)로 맞춤 ③ 서브 그리드 끔(SUB_GRID_ON=False — plan_buy 가 plan_sub 를 안 부름, 서브 상태·체결 반영·수량 동기화 코드는 남김) ④ 신규 진입 컷오프 15:30 → 15:00 (보유 F 0개일 때만 매수 차단) ⑤ 개장 7분 쉴드(09:30~09:36): 보유 F 0개 첫 진입일 때만 원작 신호 함수에 시각(hm) 전달 ⑥ 1층 익절 기본값 1.5 → 1.0 (TP_L1_DEFAULT)
@@ -417,7 +418,8 @@ def buy_ok(status, now_et):
 
 
 def anchor_info(st, state, s=None):
-    """(기준가, 종류). 저장된 직전 익절/매수가가 있으면 그것, 없으면 가장 아래 활성 F 평단('avg'). 기준가도 F도 없을 때만(v2.5.0) 설정 sniper_first_anchor_usd('first' — 풀이님이 텔레그램 설정에서 정한 첫 기준가).
+    """(기준가, 종류). 저장된 직전 익절/매수가가 있으면 그것, 없으면 가장 아래 활성 F 평단('avg'). (v2.12.0 판 39: 첫 기준가 설정 sniper_first_anchor_usd 삭제 — 첫 매수는 first_buy_signal 이 가격 조건 없이 처리, 기준가는 2번째 이후 눌림 매수용)
+    예전 설명: 기준가도 F도 없을 때만(v2.5.0) 설정 sniper_first_anchor_usd('first' — 풀이님이 텔레그램 설정에서 정한 첫 기준가).
     첫 매매 체결이 생기면 체결가가 기준가가 됨(note_fills — 토스 anchor_price = fill_p). 모두 없으면 (0.0, '')"""
     a = _f((state or {}).get("anchor"))
     if a > 0:
@@ -425,9 +427,6 @@ def anchor_info(st, state, s=None):
     fl = active_floors(st)
     if fl:
         return min(TW.floor_avg(f) for f in fl), "avg"
-    fa = _f((s or {}).get("sniper_first_anchor_usd"))
-    if fa > 0:
-        return fa, "first"
     return 0.0, ""
 
 
@@ -450,9 +449,10 @@ def buy_signal(price, anchor, kind, cap_price, n_layers, rsi, late_cutoff, hm=No
     return dict(base, should_buy=bool(typ == "PULLBACK_RELOAD" and r.get("should_buy")), signal_type=typ)
 
 
-SIGNAL_KO = {"NO_PRICE": "시세 없음", "NO_ANCHOR": "기준가 없음 (텔레그램 설정에서 첫 기준가를 정해 주세요)", "HOLD_PREVENT_INVERSION": "상한 가드 (가장 아래 F 평단 초과)",
+SIGNAL_KO = {"NO_PRICE": "시세 없음", "NO_ANCHOR": "기준가 없음 (첫 매수 뒤 생겨요)", "HOLD_PREVENT_INVERSION": "상한 가드 (가장 아래 F 평단 초과)",
              "PULLBACK_RELOAD": "눌림 재장전", "HOLD_REG_OPEN_7M_VWAP_SHIELD": "개장 7분 쉴드 (09:30~09:36, 첫 진입)", "HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF": "신규 진입 차단 (15:00~16:00)",
-             "HOLD_WAIT_GATE": "대기 (눌림 전)"}
+             "HOLD_WAIT_GATE": "대기 (눌림 전)", "FIRST_BUY": "첫 매수 (가격 조건 없이 현재가)",
+             "HOLD_ZERO_SHARES_REG_OPEN_7M_SHIELD": "첫 매수 개장 7분 쉴드 (09:30~09:36)", "HOLD_ZERO_SHARES_SHAVED_HA_BEAR": "첫 매수 보류 (직전 1분봉 무머리 HA음봉 또는 1분봉 준비 전)"}
 
 
 def plan_sub(s, st, price, state, usd_cash, now_et, is_trading_day=None):
@@ -509,7 +509,30 @@ def timed_signal(price, anchor, kind, cap_price, depth, rsi, now_et, n_held):
     return sg
 
 
-def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_trading_day=None):
+def first_buy_signal(price, now_et, ha):
+    """v2.12.0 판 39 할 일 1: 첫 매수 = 원작 분기 A(보유 0주) — 가격 조건 없이 현재가. 검문 순서(원작 그대로):
+    ① 15:00~16:00 ET 신규 진입 차단 → ② 개장 7분 쉴드 09:30~09:36 → ③ 직전 완결 1분봉 무머리 HA음봉(또는 1분봉 준비 전) 이면 보류.
+    분 경계 타임쉴드(Audit-113-01)는 원작 1.5초 루프의 로그·연산 중복 차단용 → 하이브리드 30초 틱은 매번 새 1분봉으로 ③을 다시 판정하므로 따로 안 둠 (VERIFY.md 설명).
+    주문 직후 60초 쉼(ORDER_SHIELD_SEC)은 main.py 가 매수 판단 앞에서 이미 지킴. ha = AD.first_buy_ha(...) 결과 (None 이면 준비 안 됨 = 보류)"""
+    px = _f(price)
+    base = {"should_buy": False, "signal_type": "", "anchor": 0.0, "anchor_kind": "", "drop_pct": 0.0, "pullback_price": 0.0, "ref_anchor": 0.0, "cap_price": 0.0, "rsi": None, "chg_pct": 0.0}
+    if px <= 0:
+        return dict(base, signal_type="NO_PRICE")
+    if AD.zero_share_cutoff(now_et):
+        return dict(base, signal_type="HOLD_LATE_SESSION_NEW_CYCLE_CUTOFF")
+    if AD.zero_share_open_shield(now_et):
+        return dict(base, signal_type="HOLD_ZERO_SHARES_REG_OPEN_7M_SHIELD")
+    if not ha or (not ha.get("ready")) or ha.get("shaved_bear"):
+        return dict(base, signal_type="HOLD_ZERO_SHARES_SHAVED_HA_BEAR")
+    return dict(base, should_buy=True, signal_type="FIRST_BUY")
+
+
+def exec_price(price):
+    """원작 exec_order_p: max(0.01, floor((현재가 + 1e-9) × 100) / 100) — 소수 2자리 내림 (판 39)"""
+    return max(0.01, math.floor((_f(price) + 1e-9) * 100.0) / 100.0)
+
+
+def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_trading_day=None, ha=None):
     """오늘 재장전 매수 계획 → {"order": 주문 또는 None, "notes", "signal", "target", "sub", "sub_gate"}. 상태·장부를 바꾸지 않음.
     v2.5.0 사는 금액 = min(신호 1번 몫, 그 버킷의 남은 시드): 몫 = 버킷 시드(tower_box_seed_usd, 기본 $15,000)의 8% (돌파 신호는 sniper_breakout_portion_pct, 기본 16%=$2,400 · 서브 신호는 4%) — 단리 고정. 시드 $15,000 이면 $1,200씩 12번, 13번째에 남은 $600 (13번은 정한 횟수가 아니라 계산 결과).
     채울 버킷 = 빈 F(공사중, st["empty"]) → 위에서부터 첫 미완성 F(공사중) → 새 버킷(시드 = 버킷 시드). 새 버킷 가격은 신호 가격 (F 간격 규칙 없음). 신호 한 번에 1회분만 (여러 회분 한 번에 안 삼).
@@ -522,10 +545,11 @@ def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_tradi
     labs = TW.floor_labels(st)
     anchor, kind = anchor_info(st, state, s)
     cap = lowest_layer_avg(fl)
-    sig = timed_signal(px, anchor, kind, cap, depth_layers(state, n), rsi, now_et, n)
+    first = n == 0                                            # v2.12.0 판 39: 보유 층 0개 = 원작 분기 A(0주 첫 진입) — 가격 조건 없이 현재가, 눌림·기준가 안 봄
+    sig = first_buy_signal(px, now_et, ha) if first else timed_signal(px, anchor, kind, cap, depth_layers(state, n), rsi, now_et, n)
     out = {"order": None, "notes": [], "signal": sig, "target": None, "sub": None, "sub_gate": None, "gate": None, "l2_vac": None}
     chosen = None
-    cands = [{"empty_id": e.get("id"), "ref": _f(e.get("ref_px")), "kind": e.get("kind")} for e in (st.get("empty") or []) if isinstance(e, dict)]      # 판 24 선택 대기(picks)는 v2.5.0 에서 안 봄
+    cands = [] if first else [{"empty_id": e.get("id"), "ref": _f(e.get("ref_px")), "kind": e.get("kind")} for e in (st.get("empty") or []) if isinstance(e, dict)]      # 판 24 선택 대기(picks)는 v2.5.0 에서 안 봄
     for c in cands:
         sg = timed_signal(px, c["ref"], "exit", 0.0, depth_layers(state, n), rsi, now_et, n) if c["ref"] > 0 else sig
         if not sg["should_buy"]:
@@ -564,18 +588,19 @@ def plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype="LIMIT", is_tradi
         remaining = max(0.0, _f(inc.get("target") or fu) - _f(inc.get("cost")))
         label = f"{labs.get(fid, TW.price_label(TW.floor_avg(inc)))} 공사중"
     amount = round(min(per, remaining), 2)
-    q = int(math.floor(amount / px + 1e-9)) if px > 0 else 0
+    opx = exec_price(px) if (first and not is_sub) else px      # 첫 매수만 원작 exec_order_p (소수 2자리 내림). 다른 매수는 예전 그대로
+    q = int(math.floor(amount / opx + 1e-9)) if opx > 0 else 0
     cash = _f(usd_cash)
-    if q * px > cash + 1e-9:
-        q = int(math.floor(cash / px + 1e-9)) if cash > 0 else 0
+    if q * opx > cash + 1e-9:
+        q = int(math.floor(cash / opx + 1e-9)) if cash > 0 else 0
         out["notes"].append(f"달러 예수금 ${cash:,.0f} 만큼만 매수 (필요 ${amount:,.0f})")
     if q < 1:
-        out["notes"].append(f"매수 못 함 — {label} ${amount:,.0f} 로 1주(${px:.2f})도 못 삼 (예수금 ${cash:,.0f})")
+        out["notes"].append(f"매수 못 함 — {label} ${amount:,.0f} 로 1주(${opx:.2f})도 못 삼 (예수금 ${cash:,.0f})")
         return out
     out["target"] = {"floor_id": fid, "amount": round(amount, 2), "label": label, "remaining": round(remaining, 2), "last_portion": bool(amount >= remaining - 1e-9), "portion_pct": per_pct}
     desc = (f"서브 그리드 {SG.SUB_TAG_KO.get(tag, tag)} · {label} ${amount:,.0f} (버킷 시드 {per_pct:g}%)" if is_sub
             else f"스나이퍼 {SIGNAL_KO.get(tag, tag)} · {label} ${amount:,.0f} (버킷 시드 {per_pct:g}%{' · 마지막 회차(남은 시드)' if amount >= remaining - 1e-9 and remaining < per - 1e-9 else ''} · 기준 ${sig['anchor']:.2f} {sig['chg_pct']:+.2f}%)")
-    out["order"] = {"side": "BUY", "type": otype, "qty": q, "price": round(px, 2), "kind": "buy_sniper", "mode": MODE_SNIPER, "level": None,
+    out["order"] = {"side": "BUY", "type": otype, "qty": q, "price": round(opx, 2), "kind": "buy_sniper", "mode": MODE_SNIPER, "level": None,
                     "floor_id": fid, "new_floor": nf, "plan_usd": round(amount, 2), "signal": tag, "sub": bool(is_sub), "portion_pct": per_pct, "box_seed": round(box, 2),
                     "empty_id": (chosen or {}).get("empty_id"), "pick_key": None, "desc": desc}
     return out
@@ -594,7 +619,7 @@ def tower_sells(s, st, price, sellable, skip_ids=()):
     return orders, plan["notes"], plan["info"].get("sells") or []
 
 
-def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, is_trading_day=None, skip_sell_ids=(), skip_sell_boxes=()):
+def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, is_trading_day=None, skip_sell_ids=(), skip_sell_boxes=(), ha=None):
     """오늘(지금) 하이브리드 계획 미리보기 — {"orders","notes","info"}. 상태·장부를 바꾸지 않음. 상황판·--check·텔레그램 오늘 계획용.
     주문 = 버킷 안 매도(미완성 F, v2.5.0 자동) + 탑 매도(완성 F) + 스나이퍼 매수(본 8% 또는 서브 4%)"""
     otype = otype or s.get("order_type") or "LIMIT"
@@ -606,7 +631,7 @@ def make_plan(s, st, price, state, rsi, usd_cash, sellable, now_et, otype=None, 
         tb = plan_tower_buy(s, st, _q, _p, price, 1.0, usd_cash, 0.0)
         buy = {"order": None, "signal": {"should_buy": False, "signal_type": "tower"}, "target": 0.0, "notes": ["탑쌓기 매매 모드 — 스나이퍼 매수 신호 안 씀"] + tb["notes"], "sub": None, "tower_orders": tb["orders"]}
     else:
-        buy = plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype=otype, is_trading_day=is_trading_day)
+        buy = plan_buy(s, st, price, state, rsi, usd_cash, now_et, otype=otype, is_trading_day=is_trading_day, ha=ha)
     orders = list(sells) + [dict(o, type=otype) for o in tsells] + ([buy["order"]] if buy["order"] else []) + list(buy.get("tower_orders") or [])
     fl = active_floors(st)
     q, principal = TW.totals(st)
@@ -739,12 +764,14 @@ def trigger_lines(s, st, state, now_et=None):
     fl = active_floors(st)
     anchor, kind = anchor_info(st, state, s)
     cap = lowest_layer_avg(fl)
-    if anchor > 0:
+    if not fl:      # v2.12.0 판 39: 보유 0개 = 원작 분기 A (가격 조건 없는 첫 매수)
+        lines.append(f"다음 매수: 첫 매수 — 가격 조건 없이 현재가 (소수 2자리 내림) · 버킷 시드의 {TW.portion_pct(s):g}% (${TW.portion_usd(s):,.0f})")
+    elif anchor > 0:
         sig = buy_signal(0.0, anchor, kind, cap, depth_layers(state, layer_count(fl)), None, False)
         lines.append(f"다음 매수: 눌림 ${sig['pullback_price']:.2f} ({sig['drop_pct']:+.1f}%)"
                      + f" · 기준 ${sig['ref_anchor']:.2f}" + (f" · 상한 ${cap:.2f}" if cap > 0 else ""))
     else:
-        lines.append("다음 매수: 기준가 없음 (텔레그램 설정에서 첫 기준가를 정해 주세요)")
+        lines.append("다음 매수: 눌림 기준가가 아직 없어요 (첫 매수 체결 뒤에 생겨요)")
     return lines
 
 

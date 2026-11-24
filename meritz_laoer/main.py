@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.12.0 수정 1차 (2026-11-24, 판 39 수정 1차): ① 모의 매도 컷오프 16:10 → 20:00 (run_sniper_dry) ② ANCHOR_KO 의 죽은 라벨 "first" 삭제 (1분봉 필드명 수정은 meritz_api.py·어댑터 파일)
+# v2.12.0 (2026-11-24, 판 39 — BOT_VERSION 은 v2.7.0 그대로): ① first_buy_ha 추가 — 보유 층 0개일 때만 메리츠 1분봉(api.minute_candles)을 읽어 plan_buy(ha=) 로 전달 (실거래·모의 둘 다) ② 동기화 시각 기본 16:10 → 20:00 ET (_hm 대체값 3곳) ③ run_late_fills 안내 글자 '동기화 시각 이후'
 # v2.11.0 (2026-11-24, 판 38 시간 확대 — BOT_VERSION 은 이번에도 그대로): 스나이퍼 시간을 원작 시간으로 — 매수 04:07~16:00 ET(프리장·정규장, SN.buy_ok) · 매도는 평일 04:00~04:06 ET 7분만 빼고 전 구간(SN.sell_ok) 인데 장운영 코드 003·004·005 일 때만 주문 (그 밖 코드 = 야간 등은 메리츠 접수 여부 미확인이라 안 냄). 틱이 00:00 ET 부터 돌고(바벨 틱은 예전 09:30 ET~ 그대로), 16:10 ET 체결 반영 뒤에는 그날 기록이 닫혀 예전처럼 주문 안 함 (16:10~20:00 장후·야간 매도는 미적용 — 노션 질문).
 # v2.10.0 (2026-11-23, 판 36 Case 113): 매수 신호 한 줄에서 돌파 표시 삭제 (BOT_VERSION 은 이번 판 범위 밖이라 그대로)
 # v2.9.0 6차 (2026-11-22, 판 33): ① tower_buy_tick 신설 — 매매 모드가 tower 일 때 run_sniper_tick(실거래)·run_sniper_dry(모의)가 스나이퍼 신호 대신 하루 한 번 탑쌓기 매수(시초가 가까운 칸부터 아래로, 칸마다 같은 금액) ② run_sync 가 잔고 대조(TW.reconcile) 뒤 F 완성 기준 금액 조정(seed_adjust.adjust)을 부름. 모드 기본은 sniper(하이브리드 그대로). 매도·래칫·스토커·16:10 동기화 시각은 안 바꿈
@@ -432,7 +434,7 @@ def _tower_progress(tw, s, fid=None):
         return "", ""
 
 
-ANCHOR_KO = {"exit": "직전 매도가", "buy": "직전 매수가", "avg": "낮은 F 평단", "first": "첫 기준가(설정)"}      # v2.3.0 B8: 영어 종류 이름을 화면에 그대로 안 보임
+ANCHOR_KO = {"exit": "직전 매도가", "buy": "직전 매수가", "avg": "낮은 F 평단"}      # v2.3.0 B8: 영어 종류 이름을 화면에 그대로 안 보임
 
 
 def sniper_plan_head(plan, s):
@@ -1488,7 +1490,7 @@ def run_sniper_dry(s, api, note):
     done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is None}
     done_boxes = {(int(o["floor_id"]), int(o["box_id"])) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is not None}      # v2.6.0 버킷별 매도: 버킷 단위로 건너뜀
     out = []
-    if n.time() < datetime.time(16, 10):
+    if n.time() < datetime.time(20, 0):                                      # 판 39 수정 1차: 16:10 → 20:00 (실거래 틱·동기화 시각과 같게 — 모의만 16:10 에 매도를 멈추면 16:10~20:00 이 실거래와 달라짐)
         sells, _sn = SN.plan_sells(s, sim, px, max(0, q), skip_ids=done_sell, skip_boxes=done_boxes)                  # v2.6.0: 버킷별 매도 자동 (모의는 기록만)
         tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, q - sum(o["qty"] for o in sells)), skip_ids=done_sell | {a for a, _b in done_boxes})
         tw_pick, _held = pick_sells(tw_all, TW.sell_layers(s) - len({int(o["floor_id"]) for o in m["orders"] if o.get("mode") == "tower" and o.get("side") == "SELL"}))
@@ -1515,7 +1517,8 @@ def run_sniper_dry(s, api, note):
                     out.append(rec)
     elif SN.buy_ok(status, n):           # v2.5.0: 하루 매수 F 수 제한 없음
         rsi = SN.rsi_from_state(ss, now_t)[0]
-        pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT", is_trading_day=us_trading_day)
+        ha = first_buy_ha(s, api, sim, n)
+        pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT", is_trading_day=us_trading_day, ha=ha)
         if pb["order"] and not any(o.get("side") == "BUY" and o.get("floor_id") == pb["order"]["floor_id"] and o.get("signal") == pb["order"].get("signal") for o in m["orders"]):
             rec = dict(pb["order"], sim=True, at=n.isoformat())
             m["orders"].append(rec)
@@ -1645,6 +1648,17 @@ def tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, statu
         time.sleep(0.3)
     note.send(f"탑쌓기 매수 접수 {len(placed)}건 (시초가 ${open_px:.2f} 기준)\n" + fmt_orders(placed) + ("\n" + "\n".join("· " + x for x in pl["notes"]) if pl["notes"] else "") + ("\n" + "\n".join(errs) if errs else ""))
     return "탑쌓기 매수 접수" if placed else "탑쌓기 매수 실패"
+
+
+def first_buy_ha(s, api, sim, n):
+    """v2.12.0 판 39 할 일 1·6: 보유 층 0개(첫 매수 분기 A)일 때만 메리츠 1분봉을 읽어 직전 완결봉 HA 상태를 만듦 → plan_buy(ha=). 층이 있으면 호출 안 함(None).
+    못 읽으면(형식·통신 오류) None → 매수 보류 (HOLD_ZERO_SHARES_SHAVED_HA_BEAR). 읽기 전용 호출"""
+    if SN.layer_count(SN.active_floors(sim)) > 0:
+        return None
+    try:
+        return SN.AD.first_buy_ha(api.minute_candles(s["symbol"], s["price_market"]), n)
+    except (MeritzError, ValueError, KeyError, TypeError):
+        return None
 
 
 def run_sniper_tick(s, api, note):
@@ -1808,15 +1822,16 @@ def run_sniper_tick(s, api, note):
         return tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, status, out)
     rsi = SN.rsi_from_state(ss, now_t)[0]
     cash_now = api.usd_cash()
-    pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day)
+    ha = first_buy_ha(s, api, sim, n)
+    pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day, ha=ha)
     buy_sig = bool(pb["signal"].get("should_buy")) or bool(pb.get("sub") and pb["sub"].get("buy"))
     if live_fx_ok(s) and buy_sig:          # v2.3.0 장중 자동환전: 매수 신호가 났는데 달러가 모자라면 부족분만 환전 (실시간 환전 시간·하루 한 번·상한은 auto_fx 가 지킴)
-        full = SN.plan_buy(s, sim, px, ss, rsi, 1e12, n, "LIMIT", is_trading_day=us_trading_day)["order"]
+        full = SN.plan_buy(s, sim, px, ss, rsi, 1e12, n, "LIMIT", is_trading_day=us_trading_day, ha=ha)["order"]
         need = round(full["qty"] * full["price"], 2) if full else 0.0
         if need > cash_now + 1e-9:
             cash_now, fxres = intraday_fx(s, api, cfg, note, mark, m, d, n, need, cash_now)
             if fxres and fxres.get("done"):
-                pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day)
+                pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day, ha=ha)
     if not pb["order"]:
         if pb["notes"] and pb["signal"].get("should_buy"):
             _warn_once(cfg, mark, m, "buy_" + pb["signal"]["signal_type"], note, "스나이퍼 매수 신호가 났지만 안 샀어요\n" + "\n".join("· " + x for x in pb["notes"]))
@@ -2311,9 +2326,9 @@ LATE_FILL_DAYS = 4          # 늦은 체결은 최근 며칠(달력 기준) 기�
 
 
 def run_late_fills(s, api, note, mp, today):
-    """판 23 수정1 S1: 16:10 동기화로 '반영 끝'이 된 날 기록(orders_<날짜>.json)에 대해, 그 뒤(장후)에 체결된 몫을 다음 날 첫 확인 때 장부·층에 반영.
+    """판 23 수정1 S1: 동기화(기본 20:00 ET, 판 39)로 '반영 끝'이 된 날 기록(orders_<날짜>.json)에 대해, 그 뒤(장후)에 체결된 몫을 다음 날 첫 확인 때 장부·층에 반영.
     주문번호별 '이미 반영한 수량'을 층 상태가 갖고 있어 늘어난 몫만 들어감 (중복 반영 없음). 반영한 뒤 층 상태를 장부에 맞추고 알림. 확인을 한 번 마치면 late_done 표시 (같은 날 기록은 다시 안 봄).
-    메리츠가 16:10 이후 접수·체결을 하는지는 미확인 — 체결이 있을 때만 반영하고, 없으면 아무것도 안 바꿈. 조회가 실패하면 표시 안 하고 다음 반복에 다시"""
+    메리츠가 동기화 시각 이후 접수·체결을 하는지는 미확인 — 체결이 있을 때만 반영하고, 없으면 아무것도 안 바꿈. 조회가 실패하면 표시 안 하고 다음 반복에 다시"""
     cfg = ConfigManager(s)
     m = cfg._load_json(mp, {})
     if not isinstance(m, dict) or not m.get("synced") or m.get("late_done") or not m.get("orders") or str(m.get("date") or "") >= today:
@@ -2339,7 +2354,7 @@ def run_late_fills(s, api, note, mp, today):
         tst2, tnotes = TW.reconcile(tst, int(pos["qty"]), float(pos["principal"]), TW.params(s)[2], s)
         cfg._save_json(TOWER_FILE, tst2)
         lines += [f"  {x}" for x in tnotes]
-        note.send(f"{d} 16:10 이후에 체결된 주문을 오늘 아침 장부에 반영\n" + "\n".join(lines) + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}")
+        note.send(f"{d} 동기화 시각(20:00 ET) 이후에 체결된 주문을 오늘 아침 장부에 반영\n" + "\n".join(lines) + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}")
     m["late_done"] = True
     cfg._save_json(mp, m)
     return "반영" if applied else "없음"
@@ -2421,7 +2436,7 @@ def loop():
                     except Exception as e:
                         logging.warning(f"늦은 체결 반영 중 오류: {type(e).__name__}")
             if sniper_on(s):          # v2.2.20 스나이퍼 모드 · 판 38: 00:00 ET ~ 체결 반영 시각 전 (실제 주문은 SN.buy_ok 04:07~16:00 · SN.sell_ok 04:00~04:06 빼고 전 구간 + 장운영 코드 확인). 옛 설명: 09:30 ET ~ 체결 반영 시각 전 (정규장 매수·정규장+장후 매도). 탑쌓기 주문 시간·당일 매도 확인은 안 돌림
-                if n.weekday() < 5 and n.time() < _hm(s["sync_time_et"], datetime.time(16, 10)):      # 판 23 수정1 B7: 모의도 돌림 (run_sniper_tick 이 모의면 주문 없이 시뮬레이션)
+                if n.weekday() < 5 and n.time() < _hm(s["sync_time_et"], datetime.time(20, 0)):      # 판 23 수정1 B7: 모의도 돌림 (run_sniper_tick 이 모의면 주문 없이 시뮬레이션)
                     try:
                         api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                         run_sniper_tick(s, api, note)
@@ -2434,7 +2449,7 @@ def loop():
                 api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                 run_order_day(s, api, note, live)
             # v2.0.3 당일 매도 확인 + v2.2.6 체결 반영·알림 (실패해도 주문·체결 반영 흐름은 계속). 주문 마감(order_deadline_et) 뒤~체결 반영 시각 전에는 새 매도 주문 없이 체결 반영·알림만
-            if live and not sniper_on(s) and n.weekday() < 5 and ot <= n.time() < _hm(s["sync_time_et"], datetime.time(16, 10)):
+            if live and not sniper_on(s) and n.weekday() < 5 and ot <= n.time() < _hm(s["sync_time_et"], datetime.time(20, 0)):
                 try:
                     api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                     run_intraday_sell(s, api, note, allow_new_sells=(n.time() <= dl))
@@ -2447,7 +2462,7 @@ def loop():
                 today = n.strftime("%Y-%m-%d")
                 for mp in pending_syncs(state):
                     md = os.path.basename(mp)[7:17]
-                    if md < today or n.time() >= _hm(s["sync_time_et"], datetime.time(16, 10)):
+                    if md < today or n.time() >= _hm(s["sync_time_et"], datetime.time(20, 0)):
                         m = ConfigManager(s)._load_json(mp, {})
                         if (m.get("orders") or m.get("attempts")) and not m.get("synced", True):
                             api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))

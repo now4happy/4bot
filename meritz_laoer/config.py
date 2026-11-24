@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.7.0)
+# FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.12.0 (2026-11-24, 판 39): sniper_portion_pct·tower_remaining_seed_usd·sniper_first_anchor_usd 검사 삭제(옛 키는 남아 있어도 무시) · compound_enabled(복리 모드) 검사 추가 · 기본 sync_time_et 16:10 → 20:00
 # v2.10.0 (2026-11-23, 판 36 Case 113): 기본 sniper_tp_l1_pct 1.5 → 1.0 · sniper_breakout_portion_pct 검사 삭제(옛 키는 남아 있어도 무시)
 # v2.9.0 6차 (2026-11-22, 판 33): validate_settings 에 trade_mode(sniper|tower)·tower_buy_gap_usd(1~10 정수) 검사 추가 (없으면 통과 = 기본값)
 # v2.7.0 (2026-11-21, 판 27): 층 간격 설정(tower_gap_usd) 검사 제거 — 간격은 내부 고정값 GAP_USD=5로만 씀 (tower_strategy.params). 설정 파일에 tower_gap_usd가 남아 있어도 통과함 (무시).
@@ -78,7 +79,7 @@ SAFE_DEFAULTS = {
     "state_dir": "/var/lib/meritz-laoer",
     "order_time_et": "10:05",              # 주문 시각 (미국 동부). 이 시각~order_deadline_et 사이 1회
     "order_deadline_et": "15:40",          # LOC 접수 마감(15:50) 전
-    "sync_time_et": "16:10",               # 체결 확인 시각 (미국 동부)
+    "sync_time_et": "20:00",               # 체결 확인 시각 (미국 동부) — v2.12.0 판 39: 16:10 → 20:00 (애프터마켓 매도 체결까지 기다림)
 }
 
 
@@ -197,14 +198,15 @@ def validate_settings(s):
     fu = s.get("tower_floor_usd")
     if fu is not None and (isinstance(fu, bool) or _f(fu) <= 0):
         bad.append("tower_floor_usd 는 0 보다 큰 숫자 (F 완성 기준 금액, 달러)")
-    for k, nm in (("tower_box_seed_usd", "버킷 시드, 달러"), ("tower_remaining_seed_usd", "퍼센트 작업 남은 시드, 달러"), ("sniper_first_anchor_usd", "스나이퍼 첫 기준가, 달러")):      # v2.5.0: 없으면 기본(15000 · 120000 · 안 정함), 있으면 0 보다 큰 숫자
+    for k, nm in (("tower_box_seed_usd", "버킷 시드, 달러"),):      # v2.12.0 판 39: 남은 시드·첫 기준가 키 삭제      # v2.5.0: 없으면 기본(15000 · 120000 · 안 정함), 있으면 0 보다 큰 숫자
         v = s.get(k)
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or _f(v) <= 0):
             bad.append(f"{k} 는 0 보다 큰 숫자 ({nm})")
     # v2.10.0 판 36 D4: sniper_breakout_portion_pct(돌파 매수 비율)는 돌파 폐기로 안 씀 — 설정 파일에 남아 있어도 검사·사용 없이 무시
-    pp = s.get("sniper_portion_pct")      # v2.6.0: 눌림(본) 매수 비율 — 없으면 기본 10 (v2.10.0, 바벨 켜짐이면 15), 있으면 0 초과 100 이하
-    if pp is not None and (isinstance(pp, bool) or not isinstance(pp, (int, float)) or not (0 < _f(pp) <= 100)):
-        bad.append("sniper_portion_pct 는 0 초과 100 이하 (눌림 매수 비율, 버킷 시드의 %)")
+    # v2.12.0 판 39: sniper_portion_pct(눌림 매수%) 삭제 — 비율은 모드(복리 8·단리 10·바벨 15)로만 정함. 설정 파일에 남아 있어도 검사·사용 없이 무시
+    ce = s.get("compound_enabled")      # v2.12.0 판 39: 복리 모드 — 없으면 꺼짐(단리), 있으면 true/false 만
+    if ce is not None and not isinstance(ce, bool):
+        bad.append("compound_enabled 는 true 또는 false (복리 모드)")
     tm = s.get("trade_mode")      # v2.9.0 6차 판 33: 매매 모드 — 없으면 sniper(하이브리드 스나이퍼), 있으면 sniper | tower 만
     if tm is not None and tm not in ("sniper", "tower"):
         bad.append("trade_mode 는 sniper 또는 tower (매매 모드)")

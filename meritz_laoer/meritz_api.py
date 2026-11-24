@@ -1,5 +1,6 @@
 # ==========================================================
-# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.2.6)
+# FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.2.6 · 판 39 v2.12.0 1분봉)
+# v2.12.0 (2026-11-24, 판 39 할 일 6): minute_candles(symbol, mrkt_cls_code, delayed) 추가 — GET /market/v1/overseas/candles/minutes (hour_cls_code=60). 응답 필드명 미확인 → 후보 키로 읽고 못 찾으면 MeritzError (값을 지어내지 않음)
 # v2.2.6 (2026-11-20, 판 16 본격): fills_rows(date_from, date_to, time_key="") — 체결 행의 체결 시각을 time_key 로 읽어 row["t"] 에 담음 (체결 반영 순서용). 체결 시각 필드 이름은 이 ZIP 의 근거 파일(공식 openapi.json 없음)에서 확인 못 해 '미확인' —
 #   time_key 가 비어 있으면(기본) t 는 None → main 이 매도를 먼저 반영. 설정 fill_time_field 에 필드 이름을 넣으면 그 값을 씀. 나머지 함수·반환 모양은 그대로
 # v2.0.9 (2026-11-19, 판 11): usd_cash()가 estm_frcr_amt를 읽게 고침 (Q27 원인 고침). frcr_amt는 주식 가치를 포함해 메리츠 앱 외화예수금과 달라서 바꿈 — 서버 진단 2026-11-19 + 공식 openapi.json 대조 확인. estm_frcr_amt가 없거나 빈 값이면 MeritzError (되돌림 없음 — 틀린 값으로 거래하지 않게).
@@ -140,6 +141,51 @@ class MeritzApi:
         rows = d.get("data") or []
         out = [(str(r.get("date")), _num(r.get("prpr"))) for r in rows if isinstance(r, dict) and _num(r.get("prpr")) > 0]
         return sorted(out, key=lambda x: x[0], reverse=True)
+
+    # v2.12.0 (판 39 수정 1차): 1분봉 실제 응답 필드 (SOXL 직접 호출 40건 확인, 노션 판 39 수정 1차 페이지의 응답 행):
+    #   korea_hour = 시각 한국시간 HHMMSS · korea_date = 날짜 한국시간 YYYYMMDD · oprc 시가 · hprc 고가 · lprc 저가 · prpr 종가 · cntg_vol 구간 거래량 · acml_vol 누적 거래량
+    # 앞쪽이 실제 필드. 뒤쪽 후보 이름은 다른 응답 형식에 대비해 남김 (korea_hour 가 없을 때만 씀 — 이때 시각은 시간대를 모르는 값이라 tz=None)
+    _MIN_KEYS = {
+        "time": ("korea_hour", "time", "hour", "cntg_hour", "stck_cntg_hour", "bsop_hour", "xymd_hms"),
+        "date": ("korea_date",),
+        "open": ("oprc", "opnprc", "open", "stck_oprc", "opn_prc"),
+        "high": ("hprc", "hgpr", "high", "stck_hgpr", "hg_prc"),
+        "low": ("lprc", "lwpr", "low", "stck_lwpr", "lw_prc"),
+        "close": ("prpr", "clpr", "close", "stck_prpr", "cls_prc"),
+    }
+
+    def minute_candles(self, symbol, mrkt_cls_code, delayed=False):
+        """최신 1분봉 [{'t','tz','o','h','l','c'}] 오래된 것 → 최신 순. 체결 없는 분은 봉이 빠짐(간격 2분 이상 가능, 채우지 않음).
+        t = korea_date + korea_hour (한국시간 YYYYMMDDHHMMSS, tz='KST') — 미국 동부 변환은 sniper_adapter.candle_min_key 가 함. 못 읽으면 MeritzError
+        mrkt_cls_code: OQ/NY/AX"""
+        d = self._call("GET", "/market/v1/overseas/candles/minutes",
+                       {"hour_cls_code": "60", "mrkt_div_code": "OV", "mrkt_cls_code": mrkt_cls_code, "iscd": symbol,
+                        "dely_rltm_cls_code": "1" if delayed else "0"})
+        rows = d.get("data") or []
+        if not isinstance(rows, list):
+            raise MeritzError("1분봉 형식 확인 필요")
+        out = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            v = {}
+            for k, names in self._MIN_KEYS.items():
+                hit = next((r[n] for n in names if r.get(n) not in (None, "")), None)
+                v[k] = hit
+            if v["time"] is None or any(_num(v[k]) <= 0 for k in ("open", "high", "low", "close")):
+                continue
+            t, tz = str(v["time"]).strip(), None
+            if r.get("korea_hour") not in (None, ""):          # 실제 응답: 한국시간. 앞자리 0 이 빠진 숫자("5100" = 00:51:00)도 6자리로 맞춤
+                hh = str(r["korea_hour"]).strip()
+                t = (hh.zfill(6) if hh.isdigit() else hh)
+                if v["date"] not in (None, ""):
+                    t = str(v["date"]).strip() + t
+                tz = "KST"
+            out.append({"t": t, "tz": tz, "o": _num(v["open"]), "h": _num(v["high"]),
+                        "l": _num(v["low"]), "c": _num(v["close"])})
+        if rows and not out:
+            raise MeritzError("1분봉 필드명 확인 필요 (응답에 korea_hour·oprc·hprc·lprc·prpr 없음)")
+        return sorted(out, key=lambda x: x["t"])      # 같은 날 안에서는 한국시간 문자열 순 = 시간 순 (날짜가 앞에 붙어 자정 넘김도 맞음)
 
     def holding(self, symbol):
         """(보유수량, 매도가능수량, 거래소벤더번호). 없으면 (0, 0, None). 평단은 일부러 돌려주지 않음(입고 평단 안 씀)"""

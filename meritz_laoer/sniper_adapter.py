@@ -1,5 +1,7 @@
 # ==========================================================
-# FILE: meritz_laoer/sniper_adapter.py   (MERITZ_LAOER v2.10.0 — 판 36 Case 113)
+# FILE: meritz_laoer/sniper_adapter.py   (MERITZ_LAOER v2.12.0 — 판 39)
+# v2.12.0 수정 1차 (2026-11-24, 판 39 수정 1차): 1분봉 실제 필드(korea_date·korea_hour·oprc·hprc·lprc·prpr) 대응 — candle_min_key(tz='KST') 한국시간→미국 동부 변환 · 오래된 완결봉 가드 FIRST_BUY_MAX_BAR_AGE_MIN
+# v2.12.0 (2026-11-24, 판 39): first_buy_ha 추가 — 메리츠 1분봉(meritz_api.minute_candles)을 원작 _compute_vectorized_heikin_ashi_and_rsi 에 그대로 넣어 '직전 완결봉이 무머리 HA음봉인가'를 돌려줌 (첫 매수 분기 A 용). MODE_DEFAULT 는 단리 그대로(눌림 신호·매도 판정용) — 모드별 매수 비율은 tower_strategy.portion_mode
 # v2.11.0 (2026-11-24, 판 38): buy_window_open·sell_window_open 추가 (원작 quant_indicators_plugin.is_active_buy_window·is_active_sell_window 를 그대로 부름). orig_sniper/ 의 sniper_exit_plugin·barbell_plugin 은 원작 23a16d5 로 교체 (Audit-113)
 # v2.10.0 (2026-11-23, 판 36 Case 113 이식, D1·D3·D8): ① stalker_fire·rebound_policy 삭제 (스토커 영구 폐기, 호출처 없었음) ② reentry_signal 에 hm(ET 시각 HHMM) 전달 — 원작 신호 함수의 개장 7분 쉴드용 ③ sell_targets·sell_plan 기본 1층 익절 rise_l1_pct 1.50 → 1.00 (원작 Case 113 1층 기준 +1.00%)
 # 판 31: 매도 연결, 방식 B
@@ -197,3 +199,91 @@ def l1_trail_step(slot, live_price, now_ts, closed_minute_ts=None, closed_rsi=No
         slot, float(live_price), 0.0, minute_key(now_ts), cmk, bool(cmk), True, 0.0,
         closed_ha_shaved_bull=True, cur_bar_min_key="", session_vwap=0.0,
         closed_rsi_14=(50.0 if closed_rsi is None else float(closed_rsi)))
+
+
+# ---- v2.12.0 판 39 할 일 1·6: 첫 매수(분기 A) 무머리 HA음봉 판정 — 원작 계산기를 그대로 부름
+_TIME_FMTS_DASH = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M")      # 메리츠 1분봉 시각 형식은 미확인 → 흔한 형식만 시도, 못 읽으면 '준비 안 됨'(매수 보류)
+_TIME_FMTS_DIGITS = {14: "%Y%m%d%H%M%S", 12: "%Y%m%d%H%M", 6: "%H%M%S", 4: "%H%M"}      # 숫자만 있는 글자는 자릿수로 형식을 정함 ("1030" 이 10:03:0 으로 읽히는 모호함 방지)
+
+
+FIRST_BUY_MAX_BAR_AGE_MIN = 5      # 판 39 수정 1차: 직전 완결봉이 지금 분보다 이 분 넘게 오래됐으면 낡은 데이터로 보고 첫 매수 보류 (코드로 정한 값 — 근거 측정값 없음, VERIFY.md 참고)
+
+
+def candle_min_key(t, now_et, tz=None):
+    """1분봉 시각 글자 → 미국 동부 'YYYY-MM-DD HH:MM' (원작 min_key 형식). 못 읽으면 ''.
+    tz='KST' (메리츠 1분봉 실제 응답: korea_date+korea_hour 는 한국시간) 이면 한국시간으로 읽어 미국 동부로 바꿈 — 서머타임(EST 14시간·EDT 13시간 차)은 시간대 데이터가 처리.
+      14자리 YYYYMMDDHHMMSS 또는 6자리 HHMMSS (날짜 없으면 now_et 를 한국시간으로 바꾼 날짜).
+    tz 가 None 이면 예전처럼 '이미 동부 시각'으로 읽음 (날짜 없는 시각은 now_et 의 날짜)"""
+    import datetime as _dt
+    s = str(t or "").strip()
+    if tz == "KST":
+        from zoneinfo import ZoneInfo as _Z
+        kst = _Z("Asia/Seoul")
+        try:
+            if s.isdigit() and len(s) == 14:
+                d = _dt.datetime.strptime(s, "%Y%m%d%H%M%S")
+            elif s.isdigit() and len(s) == 6:
+                base = _as_et(now_et).astimezone(kst)
+                d = _dt.datetime.strptime(s, "%H%M%S").replace(year=base.year, month=base.month, day=base.day)
+            else:
+                return ""
+        except ValueError:
+            return ""
+        return d.replace(tzinfo=kst).astimezone(QI.EST_TZ).strftime("%Y-%m-%d %H:%M")
+    fmts = (_TIME_FMTS_DIGITS.get(len(s)),) if s.isdigit() else _TIME_FMTS_DASH
+    for f in fmts:
+        if not f:
+            continue
+        try:
+            d = _dt.datetime.strptime(s, f)
+        except ValueError:
+            continue
+        if "%Y" not in f:
+            d = d.replace(year=now_et.year, month=now_et.month, day=now_et.day)
+        return d.strftime("%Y-%m-%d %H:%M")
+    return ""
+
+
+def first_buy_ha(candles, now_et):
+    """분기 A 4번 검문 재료: 직전 완결 1분봉의 HA 상태 → {"ready": bool, "shaved_bear": bool, "closed_mk": str}.
+    candles = meritz_api.minute_candles() 결과 (오래된 것 → 최신). 계산은 원작 _compute_vectorized_heikin_ashi_and_rsi 를 그대로 부름 (closed_ha_ready = 완결봉 순번 14 이상).
+    체결 없는 분은 봉이 빠져 있으므로 빈 분을 채우지 않음 (간격 2분 이상 가능). 못 읽거나 비어 있으면 ready False → 호출한 쪽이 매수 보류 (원작 `(not ready) or shaved_bear` 와 같음)"""
+    import numpy as _np
+    import datetime as _dt
+    dt = _as_et(now_et)
+    bad = {"ready": False, "shaved_bear": False, "closed_mk": ""}
+    rows = [c for c in (candles or []) if isinstance(c, dict)]
+    keys = [candle_min_key(c.get("t"), dt, c.get("tz")) for c in rows]
+    if not rows or not all(keys):
+        return bad
+    order = sorted(range(len(rows)), key=lambda i: keys[i])
+    uniq, seen = [], set()
+    for i in order:
+        if keys[i] in seen:
+            continue
+        seen.add(keys[i])
+        uniq.append(i)
+    arr = lambda k: _np.array([float(rows[i][k]) for i in uniq], dtype=float)
+    m = QI._compute_vectorized_heikin_ashi_and_rsi(arr("o"), arr("h"), arr("l"), arr("c"), [keys[i] for i in uniq], dt.strftime("%Y-%m-%d %H:%M"))
+    closed_mk = str(m.get("closed_bar_minute_key") or "")
+    ready = bool(m.get("closed_ha_ready"))
+    # 판 39 수정 1차: 오래된 1분봉 가드 — API 가 낡은 데이터를 돌려주면 낡은 HA 로 사지 않게 보류 (나이가 음수 = 시계·시간대 어긋남이라 이것도 보류)
+    try:
+        age = (_dt.datetime.strptime(dt.strftime("%Y-%m-%d %H:%M"), "%Y-%m-%d %H:%M") - _dt.datetime.strptime(closed_mk, "%Y-%m-%d %H:%M")).total_seconds() / 60.0
+    except ValueError:
+        age = None
+    if ready and (age is None or age < 0 or age > FIRST_BUY_MAX_BAR_AGE_MIN):
+        return {"ready": False, "shaved_bear": False, "closed_mk": "", "stale": True, "age_min": age}
+    return {"ready": ready, "shaved_bear": bool(m.get("closed_ha_shaved_bear")), "closed_mk": closed_mk, "age_min": age}
+
+
+def zero_share_cutoff(now_et):
+    """분기 A 1번 검문: 원작 is_late_regular_new_cycle_cutoff_window 를 그대로 부름 (15:00~16:00 hm 포함, 주말 제외)"""
+    dt = _as_et(now_et)
+    return bool(QI.is_late_regular_new_cycle_cutoff_window(dt.hour * 100 + dt.minute, now_est=dt))
+
+
+def zero_share_open_shield(now_et):
+    """분기 A 3번 검문: 정규장 개장 7분 쉴드 09:30~09:36 (원작 REG_OPEN_VWAP_SHIELD_START_HM·END_HM 를 그대로 읽음)"""
+    dt = _as_et(now_et)
+    return bool(QC.REG_OPEN_VWAP_SHIELD_START_HM <= dt.hour * 100 + dt.minute <= QC.REG_OPEN_VWAP_SHIELD_END_HM)
