@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v2.0.1 · 2026-11-24 09:01 (KST)
+- 파일: bot_updater.py, fanding_trade.py
+- 내용: 버전 기록: bot-office-v2.0.0
+- 브랜치: staging
+
 ## v2.0.0 · 2026-11-24 08:55 (KST)
 - 파일: bot_updater.py, fanding_trade.py
 - 내용: 죽은 사무실 서비스 재시작 중단 + fanding 가격표 표기를 프라이버시 날짜로 (직접 적용, 풀이님 지시)
