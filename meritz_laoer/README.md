@@ -1,5 +1,11 @@
 # 7번 메리츠 SOXL 하이브리드 (meritz_laoer · 서비스 meritz_laoer.service) — v2.10.0
 
+## 판 38 — Audit-113 동기화 + 시간 확대 (v2.11.0, 코드 제출 단계)
+- **원작 복사본 2개를 23a16d5 로 교체**(`orig_sniper/sniper_exit_plugin.py`·`barbell_plugin.py`, 바이트 그대로) + `ORIGIN.json` 갱신 (commit 7718e29 → 23a16d5, 감시 파일 5개 해시). 직전분 산수 교정(1499 → 1459)·컷오프 안내 15:00·±1.0% 데드존 안내·로그 라벨 Case 113 은 교체로 자동 반영.
+- **시간 확대**: 매수 04:07~16:00 ET(프리장·정규장) · 매도는 평일 04:00~04:06 ET 7분만 빼고 전 구간 (원작 `is_active_buy_window`·`is_active_sell_window` 를 `sniper_adapter` 로 그대로 부름). 단 실제 주문은 장운영 코드 003·004·005 일 때만 (프리장 매수·프리장 시세·야간 코드는 메리츠 접수 여부 미확인). 10분 게이트도 04:07 부터 엶. 15:00 신규 진입 컷오프·개장 7분 쉴드는 그대로 (프리장 매수와 안 겹침).
+- **그대로**: 모니터 주기 30초, 16:10 ET 동기화(그 뒤 장후·야간 매도는 미적용 — 노션 질문), 바벨 틱 시각(09:30~), 바벨·SGOV·SCHD·암살자·탑쌓기·환전·계좌·종목·API. BOT_VERSION 은 v2.7.0 그대로.
+- 시험: `test_hybrid_v380.py` (19건). 옛 시험 4개 파일(v300·v340·v350·v360)의 고정값(원작 해시·바벨 1회분·sub_grid 해시)만 새 값으로 갱신.
+
 ## Case 113 이식 — 단일 통합 T4 엔진 (v2.10.0, 판 36)
 - **원작 복사본 5개를 7718e29 로 교체**(`orig_sniper/` quant_engine·quant_engine_core·quant_indicators_plugin·sniper_exit_plugin·toss_api_core, 바이트 그대로). `ORIGIN.json` 도 7718e29 로 갱신. 원작 코드는 수정하지 않고 어댑터(`sniper_adapter.py`)로만 부른다.
 - **돌파 매수 영구 폐기**: 눌림만 산다. 신호 기준가 = min(직전 매도가, 가장 낮은 F 평단). 표시도 같은 값 (`ref_anchor`). 눌림 깊이 -1/-2/-3.5/-5.5% 는 그대로.

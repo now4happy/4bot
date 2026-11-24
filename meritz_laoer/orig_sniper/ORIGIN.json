@@ -1,28 +1,28 @@
 {
   "repo": "https://github.com/pipios4006-boop/pipiosToss_bot",
-  "commit": "7718e292cf74a2b8050e2741d110498a895f0ac5",
-  "note": "코드 HEAD 7718e29 (Case 113 단일 통합 T4 엔진). 판 36: quant_engine·quant_engine_core·quant_indicators_plugin·sniper_exit_plugin·toss_api_core 5개를 7718e29 그대로 교체. barbell_plugin·assassin_plugin 은 d9170fa 와 7718e29 가 같아 그대로. 래칫·하드캡·RSI 수확 실행부(SniperL1TrailSlot)가 sniper_exit_plugin.py 안이라 import 되는 assassin_plugin·barbell_plugin·quant_indicators_plugin(numpy·pandas 필요) 도 함께 둠.",
+  "commit": "23a16d5fe35bd40163e478d378aa61ab342787bc",
+  "note": "코드 HEAD 23a16d5 (Audit-113, 2026-11-24 05:32). 판 38: 원작 diff 7718e29→23a16d5 는 7개 파일(barbell_plugin·defense_plugin·main_runtime·sniper_exit_plugin·sniper_plugin·sniper_plugin_core·tg_ui_plugin)이고 복사본에 닿는 건 sniper_exit_plugin·barbell_plugin 2개라 이 둘만 23a16d5 그대로 교체 (나머지 복사본 5개 quant_engine_core·quant_engine·toss_api_core·assassin_plugin·quant_indicators_plugin 은 7718e29 와 23a16d5 가 같아 그대로). 판 36: quant_engine·quant_engine_core·quant_indicators_plugin·sniper_exit_plugin·toss_api_core 5개를 7718e29 그대로 교체. 래칫·하드캡·RSI 수확 실행부(SniperL1TrailSlot)가 sniper_exit_plugin.py 안이라 import 되는 assassin_plugin·barbell_plugin·quant_indicators_plugin(numpy·pandas 필요) 도 함께 둠.",
   "files": {
     "quant_engine_core.py": "8be808a9f305f79bd7162535ac2014d7b2e3494e84e2e687fcbb05d3c4156ff1",
     "quant_engine.py": "a807ede98c4a0f25a019c8325fff61f06b0af0ccc25523295549f2c2c862ff32",
     "toss_api_core.py": "81361cffc3704d0c600cb6739ae2105bf3e2c4299afe3050e5bd487e00390e1b",
-    "sniper_exit_plugin.py": "e6da11f45b72b8000e24a6a0f5c0b579619f83d2e84b0c6205583a1a5ef5a7dc",
+    "sniper_exit_plugin.py": "f9fbf6e002a1490a9e5b5bfa5bd87ded2f48db7367b3dcc0ab19cd5f8b04a56d",
     "assassin_plugin.py": "d3edca8174d8779d0a21b82a7e00a514d2021015b4b01948db3b6e2a335abd00",
-    "barbell_plugin.py": "552080e307e167691a1c0c62db2d9da2b1e69734b62e9084d0988c6c642b3cc1",
+    "barbell_plugin.py": "43e916409505bb455951837674fcf986189ed302a7032104b42a0ffc358196a7",
     "quant_indicators_plugin.py": "2212f9f3d00728ace04e5c9d1cae3cd9245dfba9701389282d3d8725c528efc7"
   },
   "shim": [
     "toss_api.py"
   ],
   "watch": {
-    "sniper_plugin.py": "af6ce7813744364145bd09b0bf38f7df90bbce7369b543734854c820f6ea6288",
-    "sniper_plugin_core.py": "b8192dc33e86a6930ac2fd0939c498e668863f1f0441145ffe7d269ea43ecc9c",
-    "defense_plugin.py": "08443fb70b4d3a0173ef151e4b88ef1fd066ef6e497bc91ee0e154b283146e7d",
+    "sniper_plugin.py": "6f670e7319e4d4af4297474badd46a010e69b2c3b08196c8d871942ae4a45ca1",
+    "sniper_plugin_core.py": "66cd503b1dc4405bc94f0017b9d17b7e87837f1ad64af6f62777364294b8ee1b",
+    "defense_plugin.py": "6a9fb1341a3f0ad6af77d816beea9fe80a02b1b1cf539b710d289b2e315ce2e0",
     "main.py": "c12370a1cd0c1bf95a31b8cd59aef51ef126148139aa679bf98ce6c4c2ddd380",
-    "main_runtime.py": "daf265a9e4cee1600025846b8087f3f45a5103d5129e6cefc4110800c9832a73",
+    "main_runtime.py": "99a0ccb43ab36237f190edcae2f596728bf370200fb8beb0ce12d4744e904e6f",
     "mergy.py": "815d8dac85a28f00fe779a7f50a2c21cfa0ef329761cad6b90ef46b2c78b72dd",
     "plugin_updater.py": "92c7bb2f45f41b99c979f98f249b3e8053e2a0a663796fae534f7aad28c84941",
-    "tg_ui_plugin.py": "77e1edac1ecb0645a290001a3e7469eb6a1382f4a391ec3df5775a9fbf6f4f3f",
+    "tg_ui_plugin.py": "1634c88a76bfb6f82c6ffb6e54387ce3a52eefa29e9c622e01c1d95f7e42ec33",
     "toss_api.py": "e3f57d4d8aa6179890076886d6089bcc044961424966e47af8087316aae20d45"
   },
   "watch_note": "복사하지 않은 원작 파일들의 해시. sync_orig.py --from 이 이 해시와 다르면 '원작 업뎃이 어댑터에 영향 줄 수 있음' 으로 알려 줌."

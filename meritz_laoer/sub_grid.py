@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/sub_grid.py   (MERITZ_LAOER v2.5.0)
+# v2.11.0 (2026-11-24, 판 38): gate_status 의 시작 시각을 09:30 → 04:07 로 (원작 매수 창 04:07~16:00 에 맞춤). 버킷 번호 계산식·16:00 마감봉 72 는 그대로
 # v2.5.0 (2026-11-21, 판 25): 새 파일 — 토스 서브 그리드(Case 88)의 판정·장부 계산을 가져온 순수 계산부 (네트워크·시계·파일 없음. 시각·거래일 판정은 호출한 쪽이 넘김).
 #   근거(토스 기준 파일, 로직은 그대로·숫자만 설정 가능):
 #   - toss_quant_engine.py evaluate_sub_grid_dip_signal (SUB_STATIC_NEW_LOW · SUB_UNLOCK_10D_D10 · HOLD_SUB_CAP_4_LOTS_REACHED) → evaluate_dip
@@ -85,11 +86,11 @@ def business_days_since(day_iso, today_iso, is_trading_day=None):
 
 
 def gate_status(now_et, last_bucket, last_date):
-    """10분 게이트 (04:07 ET 기점 버킷 = (분 − 04:07) // 10, 16:00 마감봉 72). 메리츠 매수는 정규장 09:30~16:00 만이라 그 밖이면 닫힘.
+    """10분 게이트 (04:07 ET 기점 버킷 = (분 − 04:07) // 10, 16:00 마감봉 72). 판 38: 매수 창이 원작처럼 04:07~16:00 이라 그 밖이면 닫힘 (예전 09:30~16:00).
     → (열림, 지금 버킷 id, 오늘 글자). 같은 날 같은 버킷은 한 번만 판정 (열림 = 버킷이 바뀌었을 때)"""
     today = now_et.strftime("%Y-%m-%d")
     hm = now_et.hour * 100 + now_et.minute
-    if hm < 930 or hm > 1600:
+    if hm < 407 or hm > 1600:
         return False, -1, today
     mins = max(0, now_et.hour * 60 + now_et.minute - GATE_START_MIN_OF_DAY)
     cur = 72 if hm == 1600 else int(mins // GATE_INTERVAL_MIN)

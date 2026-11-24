@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/sniper_mode.py   (MERITZ_LAOER v2.10.0)
+# v2.11.0 (2026-11-24, 판 38 시간 확대): STATUS_*·SELL_STATUS·BUY_STATUS·sell_ok·buy_ok 추가 (원작 is_active_buy_window 04:07~16:00 · is_active_sell_window 04:00~04:06 제외 전 구간 을 어댑터로 그대로 부름). 10분 게이트는 sub_grid.gate_status 가 04:07 부터 엶. 15:00 신규 진입 컷오프·개장 7분 쉴드(09:30~09:36)는 그대로 — 컷오프는 15:00~16:00 에만, 쉴드는 정규장 개장 직후에만 걸려 프리장 매수와 겹치지 않음
 # v1.4.4 (판 37 Case 113 이식 + 후속 — 버전 번호는 Muse 지정 전이라 미확정): ① 개장 7분 쉴드 매번 적용 ② 10분 게이트(04:07 ET 기점·정규장 안, 보유 층이 있을 때 추가매수만) ③ 상한 가드·기준가 상한 = 가장 낮은 층 평단(그대로) ④ 눌림 계단(-1/-2/-3.5/-5.5) 유지(항목 2 취소) ⑤ 층 태그 GRID_L1~L7 고정·7층 상한·L2_L7_MERGE_SORT 합병 (grid_tiers.py·tower_strategy._tag_on_buy·sniper_adapter.tiered — 1층이 팔리면 새 1층 안 생김) ⑥ 2층 공석 돌파 연결(OFF — 원작 Case 113 폐기). 항목 6(시간외)은 미적용 → 노션 질문
 # v2.10.0 (2026-11-23, 판 36 Case 113 이식): 원작 복사본 5개를 7718e29 로 교체한 뒤 하이브리드 자체 값 정리 — ① 돌파 매수 삭제(BREAKOUT_* 상수·돌파 가격·돌파 매수액 분기) ② 눌림 타점 표시를 원작 결과(pullback_target_price = min(직전 매도가, 최하단 F 평단) 기준)로 맞춤 ③ 서브 그리드 끔(SUB_GRID_ON=False — plan_buy 가 plan_sub 를 안 부름, 서브 상태·체결 반영·수량 동기화 코드는 남김) ④ 신규 진입 컷오프 15:30 → 15:00 (보유 F 0개일 때만 매수 차단) ⑤ 개장 7분 쉴드(09:30~09:36): 보유 F 0개 첫 진입일 때만 원작 신호 함수에 시각(hm) 전달 ⑥ 1층 익절 기본값 1.5 → 1.0 (TP_L1_DEFAULT)
 # v2.9.0 6차 (2026-11-22, 판 33): plan_tower_buy 신설(탑쌓기 매매 매수 계획 = TW.make_plan 매수 쪽) · make_plan 미리보기가 tower 모드면 스나이퍼 매수 대신 탑쌓기 매수. 스나이퍼 매수·매도·래칫 계산은 안 바꿈
@@ -397,6 +398,22 @@ def is_late_cutoff(now_et):
     """15:00 ~ 16:00 ET 인가 (신규 진입 차단 구간, v2.10.0 판 36 D7)"""
     t = now_et.time()
     return LATE_CUTOFF <= t < datetime.time(16, 0)
+
+
+# ---- v2.11.0 판 38 시간 확대: 매수 창·매도 창 (원작 is_active_buy_window · is_active_sell_window 를 어댑터로 그대로 부름)
+STATUS_PRE, STATUS_REGULAR, STATUS_AFTER = "003", "004", "005"    # 메리츠 장운영 코드. 004 만 공식 근거(us_market_status 주석). 003(프리)·005(장후)는 v2.0.5 주석뿐 — 미확인
+SELL_STATUS = (STATUS_PRE, STATUS_REGULAR, STATUS_AFTER)          # 이 코드일 때만 매도 주문 (그 밖 코드는 메리츠 접수 여부 미확인이라 안 냄)
+BUY_STATUS = (STATUS_PRE, STATUS_REGULAR)                         # 프리장 매수 접수는 미확인 — 거절되면 main.py 가 5분 쉼 (buy_block_until)
+
+
+def sell_ok(status, now_et):
+    """매도 주문을 내도 되는가: 장운영 코드가 SELL_STATUS 이고 원작 매도 창(평일 04:00~04:06 ET 7분만 닫힘)이 열려 있음. now_et = 시간대 붙은 미국 동부 시각"""
+    return str(status) in SELL_STATUS and AD.sell_window_open(now_et)
+
+
+def buy_ok(status, now_et):
+    """매수 주문을 내도 되는가: 장운영 코드가 BUY_STATUS 이고 원작 매수 창(평일 04:07 ET~) 안이며 16:00 ET 전 (16:00 정각부터는 닫음 — 예전과 같음)"""
+    return str(status) in BUY_STATUS and AD.buy_window_open(now_et) and now_et.time() < datetime.time(16, 0)
 
 
 def anchor_info(st, state, s=None):

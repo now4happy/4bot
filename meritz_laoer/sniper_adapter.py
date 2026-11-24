@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/sniper_adapter.py   (MERITZ_LAOER v2.10.0 — 판 36 Case 113)
+# v2.11.0 (2026-11-24, 판 38): buy_window_open·sell_window_open 추가 (원작 quant_indicators_plugin.is_active_buy_window·is_active_sell_window 를 그대로 부름). orig_sniper/ 의 sniper_exit_plugin·barbell_plugin 은 원작 23a16d5 로 교체 (Audit-113)
 # v2.10.0 (2026-11-23, 판 36 Case 113 이식, D1·D3·D8): ① stalker_fire·rebound_policy 삭제 (스토커 영구 폐기, 호출처 없었음) ② reentry_signal 에 hm(ET 시각 HHMM) 전달 — 원작 신호 함수의 개장 7분 쉴드용 ③ sell_targets·sell_plan 기본 1층 익절 rise_l1_pct 1.50 → 1.00 (원작 Case 113 1층 기준 +1.00%)
 # 판 31: 매도 연결, 방식 B
 # 판 32 질문 1·2 (2026-11-22, 2차·부분): 래칫·하드캡·RSI 수확 — 원작 sniper_exit_plugin.py(SniperL1TrailSlot · _step_l1_trail_slot_candidate)를 orig_sniper/ 에 그대로 복사해 어댑터가 그 클래스·함수를 부름 (l1_trail_slot · l1_trail_step · minute_key). 거래 코드에는 아직 연결 안 함
@@ -22,9 +23,29 @@ if _DIR not in sys.path:
 import grid_tiers as GT             # noqa: E402  판 37 후속: 층 태그·7층 상한·합병 (원작 이식, orig 대조 시험 있음)
 import quant_engine as QE            # noqa: E402  원작 복사본 (orig_sniper/)
 import quant_engine_core as QC       # noqa: E402
+import quant_indicators_plugin as QI  # noqa: E402  판 38: 원작 매수·매도 시간창 (is_active_buy_window · is_active_sell_window)
 import toss_api_core as TC           # noqa: E402
 
 MODE_DEFAULT = TC.PORTION_MODE_SIMPLE        # 하이브리드는 단리 고정 (모드 전환 UI 는 다음 판)
+
+
+def _as_et(now_et):
+    """시간대가 없는 시각은 미국 동부 시각으로 읽음 (있으면 동부로 바꿈)"""
+    return now_et.replace(tzinfo=QI.EST_TZ) if now_et.tzinfo is None else now_et.astimezone(QI.EST_TZ)
+
+
+def buy_window_open(now_et):
+    """판 38 시간 확대: 원작 매수 창 그대로 — 평일 04:07~16:00 ET (is_active_buy_window, 주말·금 20:00 뒤는 닫힘). now_et 는 시간대가 붙은 미국 동부 시각.
+    이 함수는 시각만 본다 — 메리츠 장운영 코드(프리장 매수 접수 여부는 미확인)는 main.py 가 따로 확인"""
+    dt = _as_et(now_et)
+    return bool(QI.is_active_buy_window(dt.hour * 100 + dt.minute, now_est=dt))
+
+
+def sell_window_open(now_et):
+    """판 38 시간 확대: 원작 매도 창 그대로 — 평일 04:00~04:06 ET 7분만 닫고 나머지는 전 구간 열림 (is_active_sell_window, 주말·금 20:00 뒤 닫힘).
+    시각만 본다 — 메리츠가 실제로 받는 구간(장운영 코드)은 main.py 가 따로 확인"""
+    dt = _as_et(now_et)
+    return bool(QI.is_active_sell_window(dt.hour * 100 + dt.minute, now_est=dt))
 
 
 def origin():
