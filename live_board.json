@@ -1,21 +1,21 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-25 05:53:00",
-  "as_of_et": "2026-11-24 15:53:00",
+  "as_of_kst": "2026-11-25 05:54:00",
+  "as_of_et": "2026-11-24 15:54:00",
   "market_open": true,
   "source": "toss",
   "prices": {
     "soxl": 33.26,
-    "tqqq": 46.37,
+    "tqqq": 46.42,
     "btc": null,
     "eth": null,
     "usdkrw": 1345.8
   },
   "rows": {
-    "27": 1553.88,
+    "27": 1555.55,
     "28": 246.19,
     "29": 2640.92,
-    "30": 673.97,
+    "30": 674.7,
     "33": 660.38,
     "34": 975.8,
     "35": 189.09,
@@ -24,16 +24,16 @@
     "41": 14118.63
   },
   "totals": {
-    "api_sum": 47570.56,
+    "api_sum": 47572.97,
     "cash": 27551.09,
-    "total_assets": 65551.56
+    "total_assets": 65553.97
   },
   "market_open_us": true,
   "market_open_kr": false,
   "krx_count": 32,
   "e41_source": "krx",
   "base": {
-    "api_ex41": 33451.931774,
+    "api_ex41": 33454.334027,
     "cash": 27551.089501,
     "manual": 17981.0,
     "krx_total": 14118.633
