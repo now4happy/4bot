@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.5 · 2026-11-24 09:41 (KST)
+- 파일: main.py, ORIGIN.json, barbell_plugin.py, sniper_exit_plugin.py, sniper_adapter.py, sniper_mode.py, sub_grid.py
+- 내용: 메리츠 v2.11.0 (판 38): Audit-113 동기화 + 시간 확대
+- 브랜치: staging
+
 ## v1.4.5 · 2026-11-24 09:39 (KST)
 - 파일: README.md, main.py, orig_sniper/ORIGIN.json, orig_sniper/barbell_plugin.py, orig_sniper/sniper_exit_plugin.py, sniper_adapter.py, sniper_mode.py, sub_grid.py
 - 내용: 메리츠 v2.11.0 (판 38): Audit-113 동기화 (원작 23a16d5 복사본 2개 + ORIGIN.json, Audit-113-02 1499→1459) + 시간 확대 (매수 04:07~16:00, 매도 04:00~04:06 제외 전 세션 — 16:10 이후 미적용, 조건부 통과)
