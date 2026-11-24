@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.6 · 2026-11-24 11:15 (KST)
+- 파일: config.py, main.py, meritz_api.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.12.0 (판 39): 첫 매수 원작화 + 메뉴 원작화
+- 브랜치: staging
+
 ## v1.4.6 · 2026-11-24 10:13 (KST)
 - 파일: README.md, config.py, main.py, meritz_api.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py, 시험 파일(test_hybrid_v250·v260·v270·v320·v330·v340·v350·v351_render·v360·v370·v300·v390)
 - 내용: 메리츠 v2.12.0 (판 39): 첫 매수 원작 분기 A(가격 조건 없이 현재가·검문 포함) + 레이더 전술 제어반(복리 모드·바벨 관제보드) + 시드 설정 잔고 동기화로 이동 + 동기화 20:00 ET + 1분봉 함수 + 옛 시험 정리
