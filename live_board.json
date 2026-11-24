@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-24 15:29:00",
-  "as_of_et": "2026-11-24 01:29:00",
+  "as_of_kst": "2026-11-24 15:30:00",
+  "as_of_et": "2026-11-24 01:30:00",
   "market_open": true,
   "source": "toss",
   "prices": {
@@ -21,12 +21,12 @@
     "35": 189.04,
     "37": 28,
     "38": 29,
-    "41": 14086.49
+    "41": 14089.73
   },
   "totals": {
-    "api_sum": 48828.85,
+    "api_sum": 48832.09,
     "cash": 27550.82,
-    "total_assets": 66809.85
+    "total_assets": 66813.09
   },
   "market_open_us": false,
   "market_open_kr": true,
@@ -36,10 +36,10 @@
     "api_ex41": 34742.360374,
     "cash": 27550.820374,
     "manual": 17981.0,
-    "krx_total": 14086.488
+    "krx_total": 14089.725
   },
   "krx": {
-    "as_of_kst": "2026-11-24 15:29:00",
+    "as_of_kst": "2026-11-24 15:30:00",
     "stocks": [
       {
         "code": "411060",
@@ -142,8 +142,8 @@
         "name": "TIGER 차이나전기차SOLACTIVE",
         "qty": 679,
         "avg_price": 10554,
-        "price": 8060,
-        "value_manw": 547.27
+        "price": 8090,
+        "value_manw": 549.31
       },
       {
         "code": "371160",
@@ -286,8 +286,8 @@
         "name": "현대차",
         "qty": 12,
         "avg_price": 354000,
-        "price": 274000,
-        "value_manw": 328.8
+        "price": 275000,
+        "value_manw": 330
       },
       {
         "code": "145020",
@@ -298,7 +298,7 @@
         "value_manw": 384.75
       }
     ],
-    "total_manw": 14086.49,
+    "total_manw": 14089.73,
     "unavailable": []
   }
 }
