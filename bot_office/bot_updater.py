@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 사무실 v2.0.0 (2026-11-24, 방 fanding-label-privacy): 죽은 사무실 서비스 재시작 중단 — bot-office.service는 웹 사무실 제거로 server.py가 없어 시작 즉시 죽는데 업데이터가 재시작해 건강 확인이 실패해 fanding v1.6.1이 두 번 롤백됨. OFFICE_UNIT을 재시작 목록에 안 넣고, restart_service가 정지된 서비스는 시작하지 않게 함 (되돌림 때도 마찬가지). e4ab369f 의도가 791f8c6c 판 24 낡은 파일 덮기로 되살아난 것을 다시 고침.
 # 사무실 v1.9.8 (2026-11-22): meritz_laoer/ 하위 폴더(orig_sniper/)도 메리츠 단위로 분류 — 원작 복사본 7개 + ORIGIN.json 배포 (9번 브리핑 방식)
 # 사무실 v1.9.7 (2026-11-13): 서버 미저장 변경 중단 안내에서 'Claude나 Gemini에게 확인을 요청해 주세요.' 문구 제거
 # 사무실 v1.6.9 (2026-11-12): 재시작 때 실행 중인 서비스는 enable도 같이 함 — 재부팅 뒤에도 살아남게 (7번 비서 재발 방지)
@@ -903,15 +904,20 @@ def healthy(unit):
  
 def restart_service(unit, active=None):
     """재시작. active(업데이트 전 is-active 스냅샷)가 참일 때만 enable 먼저 — 재부팅 뒤에도 살아남게.
-    active 를 안 넘기면 지금 한 번 판정. 정지돼 있던 서비스는 enable 안 함. enable 실패는 로그만 남기고 재시작은 계속."""
+    active 를 안 넘기면 지금 한 번 판정. 정지돼 있던 서비스는 시작하지 않음 (멈춘 서비스를 업데이트가
+    깨우면, 죽은 서비스면 건강 확인이 실패해 전체 업데이트가 롤백된다 — 2026-11-24 bot-office.service 사례:
+    웹 사무실 제거로 server.py가 없어 시작 즉시 죽는데, 업데이터가 재시작해 건강 확인이 실패해 fanding v1.6.1이 두 번 롤백됨).
+    enable 실패는 로그만 남기고 재시작은 계속. 되돌림(rollback) 때도 정지된 서비스는 시작하지 않는다."""
     if active is None:
         active = sh(SYSTEMCTL, "is-active", unit)[1].strip() == "active"
-    if active:
-        rc, out = sh(SYSTEMCTL, "enable", unit)
-        if rc:
-            print("enable 실패(재시작은 계속):", unit, SECRET_RE.sub("***", out)[-200:], flush=True)
+    if not active:
+        print("정지된 서비스, 재시작 건너뜀:", unit, flush=True)
+        return False
+    rc, out = sh(SYSTEMCTL, "enable", unit)
+    if rc:
+        print("enable 실패(재시작은 계속):", unit, SECRET_RE.sub("***", out)[-200:], flush=True)
     sh(SYSTEMCTL, "restart", unit)
-    return active
+    return True
 
 
 def apply(st, key):
@@ -985,8 +991,10 @@ def apply(st, key):
     perm_fixed = office_perm_repair() if office_files else []
     self_update = any(os.path.basename(f) in (SELF_FILE, "update_conflicts.py", "sniper_upstream.py") for f in office_files)
     restart = [u for u in units if u != OFFICE_UNIT]
-    if any(os.path.basename(f) not in (SELF_FILE, "bot_updater_guard.py", "update_conflicts.py", "sniper_upstream.py") for f in office_files):
-        restart.append(OFFICE_UNIT)   # 비서 화면·브리핑 등이 바뀌면 사무실 서비스 다시 시작
+    # bot-office.service(5번 사무실 비서 대시보드)는 웹 사무실 제거(2026-11-14, e4ab369f)로 server.py가 없어
+    # 시작 즉시 죽는 서비스라 재시작하지 않는다. 재시작하면 건강 확인이 실패해 전체 업데이트가 롤백된다
+    # (2026-11-24 fanding v1.6.1 두 번 롤백). 비서·팬딩은 OFFICE_EXTRA에서 따로 재시작한다.
+    # (참고: e4ab369f가 OFFICE_UNIT 재시작을 없앴는데 791f8c6c 판 24가 낡은 파일로 덮어 되살아남 — 이번에 다시 없앰.)
     names_changed = {os.path.basename(f) for f in office_files}
     for xu, xfiles in OFFICE_EXTRA.items():   # 비서·팬딩 상시 서비스도 관련 파일이 바뀌었으면 재시작 (설치돼 있을 때만)
         if names_changed & set(xfiles) and sh(SYSTEMCTL, "is-active", xu)[1].strip() == "active":   # 지금 실행 중인 것만 (비서는 disabled 지만 실행 중)
@@ -995,8 +1003,7 @@ def apply(st, key):
     was_active = {u: sh(SYSTEMCTL, "is-active", u)[1].strip() == "active" for u in restart}
     failed = []
     for u in restart:
-        restart_service(u, was_active[u])
-        if not healthy(u):
+        if restart_service(u, was_active[u]) and not healthy(u):
             failed.append(u)
     if failed:
         git("reset", "-q", "--hard", old_head)
