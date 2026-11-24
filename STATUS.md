@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-24 11:15 (KST) · 계기: 업데이트 적용 (staging: 메리츠 v2.12.0 (판 39): 첫 매수 원작화 + 메뉴 원작화)
+- 갱신: 2026-11-24 12:41 (KST) · 계기: 업데이트 적용 (staging: 메리츠 v2.13.0 (판 40): 1.5초 루프 + 암살자 실전(부분) + 매도 창 전체 + GUARD30 검문 + 금고 + B-0)
 
 ## 봇별 현재 상태
 
@@ -14,7 +14,7 @@
 | 3번 토스 적립 | `toss_dca` | ⚪ 꺼짐 | - | - | - |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-20 12:16 KST부터) | v4.4.1 | 2026-11-20 12:17 | audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, |
 | 5번 사무실 비서 | `bot-office` | ⚪ 꺼짐 | v2.0.2 | 2026-11-24 09:12 | bot_updater: captures/ 데이터 브랜치를 업데이트 대기에서 제외 |
-| 메리츠 SOXL 하이브리드모드 | `meritz_laoer` | 🟢 실행 중 (11-24 11:15 KST부터) | v1.4.6 | 2026-11-24 11:15 | 메리츠 v2.12.0 (판 39): 첫 매수 원작화 + 메뉴 원작화 |
+| 메리츠 SOXL 하이브리드모드 | `meritz_laoer` | 🟢 실행 중 (11-24 12:40 KST부터) | v1.4.7 | 2026-11-24 12:41 | 메리츠 v2.13.0 (판 40): 1.5초 루프 + 암살자 실전(부분) + 매도 창 전체 + GUARD30 |
 | 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-23 16:32 KST부터) | v1.3.4 | 2026-11-20 13:53 | audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6 |
 
 ## 사무실 상시 서비스
@@ -28,6 +28,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-24 12:41 · 메리츠 SOXL 하이브리드모드 v1.4.7 · barbell_adapter.py, config.py, main.py, sniper_adapter.py, s · 메리츠 v2.13.0 (판 40): 1.5초 루프 + 암살자 실전(부분) + 매도 창 전체 + GUARD30
 - 2026-11-24 11:15 · 메리츠 SOXL 하이브리드모드 v1.4.6 · config.py, main.py, meritz_api.py, sniper_adapter.py, sniper · 메리츠 v2.12.0 (판 39): 첫 매수 원작화 + 메뉴 원작화
 - 2026-11-24 10:13 · 메리츠 SOXL 하이브리드모드 v1.4.6 · README.md, config.py, main.py, meritz_api.py, sniper_adapter · 메리츠 v2.12.0 (판 39): 첫 매수 원작 분기 A(가격 조건 없이 현재가·검문 포함) + 레이더 전
 - 2026-11-24 09:41 · 메리츠 SOXL 하이브리드모드 v1.4.5 · main.py, ORIGIN.json, barbell_plugin.py, sniper_exit_plugin. · 메리츠 v2.11.0 (판 38): Audit-113 동기화 + 시간 확대
@@ -37,7 +38,6 @@
 - 2026-11-24 08:55 · 5번 사무실 비서 v2.0.0 · bot_updater.py, fanding_trade.py · 죽은 사무실 서비스 재시작 중단 + fanding 가격표 표기를 프라이버시 날짜로 (직접 적용, 풀이님 지시
 - 2026-11-23 21:32 · 메리츠 SOXL 하이브리드모드 v1.4.4 · grid_tiers.py, main.py, sniper_adapter.py, sniper_mode.py, t · 판 37 후속: Case 113 100% 이식 (암살자 제외) — 7층 상한·합병·고정 태그·계단 복원·2층
 - 2026-11-23 11:43 · 메리츠 SOXL 하이브리드모드 v1.4.3 · config.py, main.py, ORIGIN.json, quant_engine.py, quant_engi · 메리츠 v2.10.0 (판 36): 브리핑 타이머를 스테이징에서 제외 — 메리츠 파일만 적용 대상으로
-- 2026-11-23 11:25 · 메리츠 SOXL 하이브리드모드 v1.4.3 · README.md, config.py, main.py, orig_sniper/ORIGIN.json, orig · 메리츠 v2.10.0 (판 36): Case 113 이식 (단일 통합 T4 엔진 — 황금비율 눌림 10%·바
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
