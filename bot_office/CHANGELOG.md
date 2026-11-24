@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v2.0.2 · 2026-11-24 09:12 (KST)
+- 파일: bot_updater.py
+- 내용: bot_updater: captures/ 데이터 브랜치를 업데이트 대기에서 제외
+- 브랜치: fix/updater-skip-captures-branch
+
 ## v2.0.1 · 2026-11-24 09:01 (KST)
 - 파일: bot_updater.py, fanding_trade.py
 - 내용: 버전 기록: bot-office-v2.0.0

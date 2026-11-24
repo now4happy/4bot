@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 사무실 vNEXT (2026-11-24, 방 P매매 검증): captures/ 데이터 브랜치를 업데이트 대기에서 제외 — 매일 쌓이는 표·검증 데이터 커밋이 "허용되지 않은 파일" 알림으로 반복됨 (captures/p-verify v15, 무시해도 수동 확인 때 다시 뜸). scan()·live_branches()에서 건너뛰고, prune()이 남은 대기 건을 지움.
+# 사무실 v2.0.2 (2026-11-24, 방 P매매 검증): captures/ 데이터 브랜치를 업데이트 대기에서 제외 — 매일 쌓이는 표·검증 데이터 커밋이 "허용되지 않은 파일" 알림으로 반복됨 (captures/p-verify v15, 무시해도 수동 확인 때 다시 뜸). scan()·live_branches()에서 건너뛰고, prune()이 남은 대기 건을 지움.
 # 사무실 v2.0.0 (2026-11-24, 방 fanding-label-privacy): 죽은 사무실 서비스 재시작 중단 — bot-office.service는 웹 사무실 제거로 server.py가 없어 시작 즉시 죽는데 업데이터가 재시작해 건강 확인이 실패해 fanding v1.6.1이 두 번 롤백됨. OFFICE_UNIT을 재시작 목록에 안 넣고, restart_service가 정지된 서비스는 시작하지 않게 함 (되돌림 때도 마찬가지). e4ab369f 의도가 791f8c6c 판 24 낡은 파일 덮기로 되살아난 것을 다시 고침.
 # 사무실 v1.9.8 (2026-11-22): meritz_laoer/ 하위 폴더(orig_sniper/)도 메리츠 단위로 분류 — 원작 복사본 7개 + ORIGIN.json 배포 (9번 브리핑 방식)
 # 사무실 v1.9.7 (2026-11-13): 서버 미저장 변경 중단 안내에서 'Claude나 Gemini에게 확인을 요청해 주세요.' 문구 제거
