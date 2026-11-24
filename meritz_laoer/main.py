@@ -579,13 +579,13 @@ def barbell_ctx(s, api=None, dry=None):
 
 
 def barbell_record_sell(s, net_pnl):
-    """SOXL 매도 체결 순이익 → SCHD 매수 대기금에 더함 (Q7: 금고 대신 SCHD). 바벨 꺼짐이면 아무것도 안 함, 실패해도 매매에 영향 없음"""
+    """SOXL 매도 체결 순이익 → 수익금 금고에 기록 (v2.13.0 판 40 할 일 5: 원작 record_barbell_realized_profit — 이익(>0)만 금고에 쌓고 0-A 상환도 원작이 같이 함). 바벨 꺼짐이면 아무것도 안 함, 실패해도 매매에 영향 없음"""
     if s.get("barbell_enabled") is not True or net_pnl <= 0:
         return None
     try:
-        return BB.schd_add(s["state_dir"], net_pnl)
+        return BB.record_profit(barbell_ctx(s), net_pnl)
     except Exception as e:
-        logging.warning(f"바벨 SCHD 대기금 기록 실패 {type(e).__name__}")
+        logging.warning(f"바벨 금고 기록 실패 {type(e).__name__}")
         return None
 
 
@@ -616,8 +616,43 @@ def barbell_gate(s, api, o):
         return False, f"바벨 수혈 검문 오류 {type(e).__name__} (매수 보류)"
 
 
+def vault_locked_usd(s):
+    """금고 잔액 (바벨 장부의 vault_available_usd) — 복리·단리에서 쓸 수 있는 달러에서 뺌 (원작 vaulted_profit_locked_usd 제외). 읽기 실패·장부 없음 = 0"""
+    try:
+        led = BB.open_ledger(s["state_dir"], TW.params(dict(s, barbell_enabled=False))[0]).get_state()
+        return max(0.0, float(led.get("vault_available_usd") or 0.0))
+    except Exception:
+        return 0.0
+
+
+def guard_gate(s, order, cash_usd):
+    """v2.13.0 판 40 할 일 4: 바벨 꺼짐일 때 스나이퍼 매수 직전 GUARD30 (원작 단리·복리 온디맨드 검문). 바벨 켜짐이면 barbell_gate(원작 바벨 guard)가 이미 하므로 통과.
+    cash_usd = 금고를 뺀 쓸 수 있는 달러 → (통과, 판정 dict)"""
+    if s.get("barbell_enabled") is True:
+        return True, {}
+    return SN.guard30_check(cash_usd, order)
+
+
+def assassin_promote(s, api, want_live, apply=False):
+    """v2.13.0 판 40 할 일 2: 암살자 승격·복귀 (원작 toggle_assassin_live_promotion 규칙, BB.assassin_promote_plan). apply=False 면 계획만 (텔레그램 확인 전 미리보기) → (계획 dict, 현재 모드).
+    apply=True 면 계획대로 execution_mode 저장. 보유·미체결은 메리츠에서 읽음 (못 읽으면 verified=False → 승격 거절). 주문은 안 냄"""
+    sd = s["state_dir"]
+    cur = BB.assassin_mode(sd)
+    held, verified, open_orders = 0, False, []
+    try:
+        held = int(api.holding(s["symbol"])[0])
+        open_orders = list(api.open_orders_today(s["symbol"]))
+        verified = True
+    except Exception as e:
+        logging.warning(f"암살자 승격: 보유 확인 실패 {type(e).__name__}")
+    plan = BB.assassin_promote_plan(cur, want_live, held, open_orders, verified, s.get("assassin_live_unlock") is True)
+    if apply and plan["to"] is not None:
+        BB.assassin_set_mode(sd, plan["to"], demote_to_sim_after_exit=bool(plan["demote_after_exit"]), mode_changed_at=now_et().isoformat())
+    return plan, cur
+
+
 def barbell_tick(s, api, note):
-    """바벨 틱 (켜짐일 때만, 실패해도 SOXL 매매 안 막음): ① SGOV 틱(원작; 실거래면 실주문) ② 30초 틱→1분 종가 봉(SOXL·QQQ) + 암살자 모의 지표 ③ SCHD 대기금으로 살 수 있으면 매수"""
+    """바벨 틱 (켜짐일 때만, 실패해도 SOXL 매매 안 막음): ① SGOV 틱(원작; 실거래면 실주문) ② 30초 틱→1분 종가 봉(SOXL·QQQ) + 암살자 모의 지표 (SCHD 매수는 판 40 에서 뺌)"""
     if s.get("barbell_enabled") is not True:
         return None
     out = {}
@@ -636,24 +671,6 @@ def barbell_tick(s, api, note):
         out["assassin"] = BB.assassin_sim_metrics(sd, sb, qb, sx, qx)
     except Exception as e:
         logging.warning(f"암살자 모의 지표 실패 {type(e).__name__}")
-    try:
-        sd = s["state_dir"]
-        px = float(api.price(BB.SCHD, s["price_market"])["price"])
-        dry = bool(s.get("dry_run", True))
-
-        def _buy(q, p):
-            if dry:
-                return f"SIM-SCHD-{int(time.time())}"
-            exch = str(api.holding(BB.SCHD)[2] or s.get("sgov_exch_id") or s.get("exch_id") or "")
-            r = api.order("BUY", BB.SCHD, exch, "LIMIT", q, p)
-            if not str(r.get("no") or "").strip():
-                raise RuntimeError("주문 응답에 주문번호가 없음")
-            return str(r["no"])
-        out["schd"] = BB.schd_try_buy(sd, px, _buy)
-        if out["schd"].get("status") == "ORDERED":
-            note(f"SCHD 매수 {out['schd']['qty']}주 @ {out['schd']['price']} (실현수익 누적금{' · 모의' if dry else ''})")
-    except Exception as e:
-        logging.warning(f"SCHD 매수 실패 {type(e).__name__}")
     return out
 
 
@@ -684,7 +701,7 @@ def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sni
             _, closed = cfg.apply_fill(side, dq, da / dq, d, False, exec_id, cost_removed=(removed if side == "SELL" else None))
         done.append({"o": o, "side": side, "dq": dq, "da": da, "cq": it["q"], "closed": closed})
         if persist and side == "SELL":
-            barbell_record_sell(s, da - float(removed or 0.0))       # 판 34 3차: 바벨 켜짐일 때만 SCHD 매수 대기금에 더함 (금고 대신)
+            barbell_record_sell(s, da - float(removed or 0.0))       # 판 34 3차: 바벨 켜짐일 때만 수익금 금고에 기록 (판 40)
         if persist:
             barbell_fill_cash(s, side, da)                           # 판 34 3차: free_cash 장부 (매수 −, 매도 +)
     tst.pop("_cost_removed", None)
@@ -1246,6 +1263,113 @@ def run_order_day(s, api, note, live):
 
 # ---------------------------------------------------------------- v2.2.20 판 22 스나이퍼 모드 (장중 틱)
 _SNIPER = {"last": 0.0, "last_buy": 0.0, "err_day": ""}
+
+
+class SniperApi:
+    """v2.13.0 판 40 할 일 1: 1.5초 틱용 조회 캐시. 시세(price)·1분봉은 매번 새로 읽고, 천천히 바뀌는 조회(체결·잔고·미체결·예수금)는 book_sec(기본 10초)동안 다시 씀 · 장운영 코드는 30초.
+    주문(order)·환전을 낸 직후엔 캐시를 모두 버려 바로 다시 조회 (낸 주문이 체결 조회에 안 보이는 사이 중복 주문이 나가지 않게 — 주문 기록(orders_<날짜>.json)이 먼저 막고, 이건 두 번째 방어).
+    raw = 원래 api (캐시 없이 지금 값이 꼭 필요한 곳 — 매도가능수량 대기 — 에서 씀)"""
+    SLOW = ("holding", "open_orders_today", "fills_rows", "usd_cash")
+    STATUS_SEC = 30.0
+    DROP = ("order", "fx_exchange")
+
+    def __init__(self, raw, book_sec=10.0, clock=time.monotonic):
+        self.raw = raw
+        self.book_sec = max(1.0, float(book_sec or 10.0))
+        self._clock = clock
+        self._c = {}
+        self.calls = 0                     # 진짜로 나간 조회 수 (VERIFY.md 호출 수 측정용)
+
+    def __getattr__(self, name):
+        fn = getattr(self.raw, name)
+        if not callable(fn):
+            return fn
+        if name in self.SLOW or name == "us_market_status":
+            ttl = self.STATUS_SEC if name == "us_market_status" else self.book_sec
+
+            def cached(*a, **k):
+                key = (name, repr(a), repr(sorted(k.items())))
+                now = self._clock()
+                hit = self._c.get(key)
+                if hit is not None and now - hit[0] < ttl:
+                    return hit[1]
+                self.calls += 1
+                v = fn(*a, **k)
+                self._c[key] = (self._clock(), v)
+                return v
+            return cached
+        if name in self.DROP:
+            def dropping(*a, **k):
+                try:
+                    return fn(*a, **k)
+                finally:
+                    self._c.clear()
+            return dropping
+
+        def passthru(*a, **k):
+            self.calls += 1
+            return fn(*a, **k)
+        return passthru
+
+
+GUARD_RECHECK_SEC = 60            # 판 40: GUARD30 에 막힌 뒤 다시 보는 간격 (원작 60초 입금 감지)
+BARBELL_TICK_SEC = 30.0      # 판 40: 바벨 틱 간격 (스나이퍼 틱이 1.5초여도 바벨은 30초 — 예전 동작)
+QUIET_TICK = ("꺼짐", "해당 없음", "차단", "장 닫힘", "매도 창 밖", "휴장", "장 전", "정지", "미체결", "거래소", "chat_id")      # 이 결과면 이번 30초 동안은 더 안 돌림 (할 일이 없는 상태)
+
+
+def sniper_tick_window(s, n):
+    """v2.13.0 판 40 할 일 3: 스나이퍼 틱을 돌릴 때인가 — 원작 매도 창 (평일, 04:00~04:06 ET 7분만 닫힘, 주말 닫힘) 이 열려 있고, 하루 기록 마감(sync_time_et) 전이거나 오늘 기록이 이미 있을 때.
+    예전엔 평일·마감 시각(20:00) 전만 돌려서 마감 시각이 곧 틱 끝이었음 → 이제 틱 끝은 창이 정하고 마감 시각은 '하루 기록을 닫는 시각'일 뿐 (마감 시각을 늦추면 그만큼 틱이 이어짐). 기록이 없는 마감 뒤에는 안 돌림 (장 닫힘 알림이 매일 밤 나가지 않게)"""
+    if not SN.AD.sell_window_open(n):
+        return False
+    if n.time() < _hm(s.get("sync_time_et"), datetime.time(20, 0)):
+        return True
+    return os.path.isfile(os.path.join(s["state_dir"], "data", f"orders_{n.strftime('%Y-%m-%d')}.json"))
+
+
+def menu_poll():
+    """1.5초 틱 사이 텔레그램 메뉴를 기다림 없이 한 번 확인 (같은 스레드). 메뉴가 안 되면 조용히 건너뜀"""
+    try:
+        if _MENU["bot"] is None:
+            _MENU["bot"] = tg_menu.MenuBot(sys.modules[__name__])
+        _MENU["bot"].idle(load_settings(), time.time(), once=True)
+    except Exception as e:
+        logging.warning(f"텔레그램 메뉴 처리 오류: {type(e).__name__} {getattr(e, 'code', '')}".strip())
+
+
+def sniper_fast_wait(total, s, api, note, sleep=time.sleep, mono=time.monotonic):
+    """loop() 의 idle(30) 자리 (스나이퍼 켜짐일 때): total 초 동안 틱 간격(SN.tick_gap)마다 run_sniper_tick 을 돌림. 틱 사이엔 sleep + 3초에 한 번 텔레그램 메뉴 확인.
+    틱 결과가 QUIET_TICK(할 일 없음)이거나 창이 닫히면 남은 시간은 예전처럼 idle 로 기다림. 간격이 total 이상이면(30초로 되돌린 설정) 곧바로 idle(total)"""
+    gap = SN.tick_gap(s)
+    t_end = mono() + float(total)
+    if gap >= total:
+        idle(total)
+        return 0
+    capi = SniperApi(api, s.get("sniper_book_sec") or 10)
+    ticks, last_menu = 0, 0.0
+    while mono() < t_end:
+        sleep(min(gap, max(0.0, t_end - mono())))
+        if mono() - last_menu >= 3.0:
+            last_menu = mono()
+            menu_poll()
+        n = now_et()
+        if not sniper_tick_window(s, n):
+            break
+        try:
+            r = run_sniper_tick(s, capi, note)
+        except Exception as e:
+            logging.exception(f"스나이퍼 확인 중 오류: {type(e).__name__}")
+            if _SNIPER["err_day"] != n.strftime("%Y-%m-%d"):
+                _SNIPER["err_day"] = n.strftime("%Y-%m-%d")
+                note.send(f"스나이퍼 확인 중 오류가 났어요 ({type(e).__name__}) — 이미 낸 주문은 그대로예요. 서버 로그를 확인해 주세요.")
+            break
+        ticks += 1
+        if r in QUIET_TICK:
+            break
+    left = t_end - mono()
+    if left > 0:
+        idle(left)
+    return ticks
 SNIPER_STALE_BUY_SEC = 600           # 낸 매수가 이 시간(초)이 지나도 다 체결 안 되면 알림 (메리츠 API 에 주문 취소가 없어 취소는 못 함)
 
 
@@ -1383,6 +1507,8 @@ def sniper_preflight(s, api, note, cfg, d, mark, n):
         return None, "차단"
     status = str(api.us_market_status())
     if status not in SN.SELL_STATUS:                       # 판 38: 프리마켓(003)에도 하루 기록을 만듦 (예전엔 정규장·장후만)
+        if n.weekday() >= 5:                               # 판 40: 일요일 저녁 틱(원작 매도 창 18:00~) — 장운영 코드가 열림이 아니면 기록·알림 없이 다음 틱에 다시 (주말마다 '정규장 아님' 알림이 나가지 않게)
+            return None, "장 전"
         if n.time() >= _hm(s["order_time_et"], datetime.time(10, 5)):
             cfg._save_json(mark, {"skipped": f"장운영 코드 {status} (휴장 또는 정규장 아님)", "sniper_day": True})
             note.send(f"오늘은 정규장 아님 (코드 {status}) — 스나이퍼 주문 없음")
@@ -1454,7 +1580,7 @@ def run_sniper_dry(s, api, note):
     시뮬레이션 주문은 data/dry_orders_<날짜>.json 에 'sim' 으로 기록하고 [모의] 알림만 보냄 (체결은 가정하지 않아 층·장부는 그대로 → 같은 층 매도·같은 층 매수는 하루 한 번만 기록).
     눌림 깊이·RSI 용 시세 기록은 모의 전용 파일(dry_sniper_state.json)에만 저장. 시간대는 실거래와 같음 (매수 정규장·16:00 전, 매도 16:10 전)"""
     now_t = time.time()
-    if now_t - _SNIPER["last"] < max(30.0, float(s.get("intraday_sell_check_sec") or 30)):
+    if now_t - _SNIPER["last"] < SN.tick_gap(s):                       # 판 40: 틱 간격 = 설정 sniper_tick_sec (기본 1.5초). 되돌리기: 30 으로
         return "대기"
     _SNIPER["last"] = now_t
     n = now_et()
@@ -1517,7 +1643,7 @@ def run_sniper_dry(s, api, note):
                     out.append(rec)
     elif SN.buy_ok(status, n):           # v2.5.0: 하루 매수 F 수 제한 없음
         rsi = SN.rsi_from_state(ss, now_t)[0]
-        ha = first_buy_ha(s, api, sim, n)
+        ha = first_buy_ha(s, api, sim, n, ss=_SNIPER)
         pb = SN.plan_buy(s, sim, px, ss, rsi, api.usd_cash(), n, "LIMIT", is_trading_day=us_trading_day, ha=ha)
         if pb["order"] and not any(o.get("side") == "BUY" and o.get("floor_id") == pb["order"]["floor_id"] and o.get("signal") == pb["order"].get("signal") for o in m["orders"]):
             rec = dict(pb["order"], sim=True, at=n.isoformat())
@@ -1650,29 +1776,80 @@ def tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, statu
     return "탑쌓기 매수 접수" if placed else "탑쌓기 매수 실패"
 
 
-def first_buy_ha(s, api, sim, n):
-    """v2.12.0 판 39 할 일 1·6: 보유 층 0개(첫 매수 분기 A)일 때만 메리츠 1분봉을 읽어 직전 완결봉 HA 상태를 만듦 → plan_buy(ha=). 층이 있으면 호출 안 함(None).
-    못 읽으면(형식·통신 오류) None → 매수 보류 (HOLD_ZERO_SHARES_SHAVED_HA_BEAR). 읽기 전용 호출"""
+def first_buy_ha(s, api, sim, n, ss=None):
+    """v2.12.0 판 39 할 일 1·6: 보유 층 0개(첫 매수 분기 A)일 때만 메리츠 1분봉(api.minute_candles)을 읽어 직전 완결봉 HA 상태를 만듦 → plan_buy(ha=). 층이 있으면 호출 안 함(None).
+    못 읽으면(형식·통신 오류) None → 매수 보류 (HOLD_ZERO_SHARES_SHAVED_HA_BEAR). 읽기 전용 호출.
+    v2.13.0 판 40: ss(보통 _SNIPER)를 주면 분 경계 쉴드 적용 — 같은 분 안에서 HA음봉 보류 뒤엔 1분봉을 다시 안 읽고, 새 분 직후 직전 완결봉이 아직 안 보이면 기다림 (SN.ha_shield). ss 없으면 예전 그대로"""
     if SN.layer_count(SN.active_floors(sim)) > 0:
         return None
+    if ss is not None:
+        blocked, why, rem = SN.ha_shield(ss, n, None)
+        if blocked:
+            return {"ready": False, "shaved_bear": False, "closed_mk": "", "shield": why, "wait_sec": rem}
     try:
-        return SN.AD.first_buy_ha(api.minute_candles(s["symbol"], s["price_market"]), n)
+        ha = SN.AD.first_buy_ha(api.minute_candles(s["symbol"], s["price_market"]), n)
     except (MeritzError, ValueError, KeyError, TypeError):
         return None
+    if ss is not None:
+        blocked, why, rem = SN.ha_shield(ss, n, ha)
+        if blocked:
+            return dict(ha, ready=False, shield=why, wait_sec=rem)
+        if (not ha.get("ready")) or ha.get("shaved_bear"):
+            SN.ha_wait_mark(ss, n, ha)
+    return ha
+
+
+def topup_try(s, api, cfg, note, mark, m, rows, sim, ss, status, n, now_t, px, exch, d):
+    """v2.13.0 판 40 할 일 6 — 원작 분기 B-0 (본 그리드 1층) · S-B0 (서브): 부분체결로 남은 잔량이 있고 현재가가 그 단가에 다시 닿으면 잔량을 지정가로 재발주 (TOPUP_1FL).
+    조건: 매수 창·장운영 코드 열림 · 주문 뒤 60초 쉼(원작 60초 타임쉴드) · 5분 쉼(거절 뒤) · 열린 매수 주문 없음(호출 앞에서 확인됨) · 거래소 번호 있음. 보충 주문을 내면 이전 주문에 topup_done 표시 (같은 잔량 중복 방지).
+    메리츠 API 에 취소가 없으므로 '열린 채 남은 주문'은 보충하지 않음 (그 주문이 체결되거나 닫힐 때까지 기다림). 결과 글자 또는 None (할 일 없음 → 호출한 쪽이 보통 매수 판단을 이어 감)"""
+    if not SN.buy_ok(status, n) or not exch:
+        return None
+    if now_t - float(ss.get("last_order_ts") or 0) < SN.ORDER_SHIELD_SEC or now_t < float(ss.get("buy_block_until") or 0):
+        return None
+    tp = SN.topup_find(m.get("orders") or [], rows, [])
+    if not tp:
+        return None
+    if px > float(tp["book_price"]) + 1e-6:
+        return None                                              # 도래 전 — 조회 없이 기다림 (달러 조회도 안 함)
+    try:
+        cash = api.usd_cash()
+    except MeritzError:
+        return None
+    if s.get("barbell_enabled") is not True:
+        cash = max(0.0, cash - vault_locked_usd(s))
+    o, why = SN.topup_order(s, sim, tp, px, cash, n)
+    if o is None:
+        if why and "도래" not in why:
+            _warn_once(cfg, mark, m, "topup_" + str(tp["no"]), note, "스나이퍼 1층 잔량 보충 안 함: " + why)
+        return None
+    prev = next((x for x in m.get("orders") or [] if str(x.get("no")) == str(tp["no"])), None)
+    if prev is not None:
+        prev["topup_done"] = True                                 # 주문 전에 표시 (send_order 가 기록 파일을 저장함 — 응답을 못 받아도 같은 잔량을 다시 안 냄)
+    o = dict(o, ts=round(now_t, 1))
+    errs = []
+    res = send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True)
+    ss["last_order_ts"] = now_t
+    if res == "rejected":
+        ss["buy_block_until"] = now_t + 300
+    SN.save_state(cfg, ss)
+    note.send(f"스나이퍼 1층 잔량 보충(TOPUP_1FL) {'접수' if res == 'ok' else ('실패' if res == 'rejected' else '응답 못 받음')}\n현재가 ${px:.2f}\n" + fmt_orders([o]) + ("\n" + "\n".join(errs) if errs else ""))
+    return "보충 접수" if res == "ok" else "보충 실패"
 
 
 def run_sniper_tick(s, api, note):
     """v2.2.20 스나이퍼 한 번치 (실거래만, loop 가 09:30 ET ~ 체결 반영 시각 전에 부름. 간격 = intraday_sell_check_sec, 최소 30초). 순서:
     ① 오늘 기록이 없으면 만듦 ② 체결 확인 → 매도·스나이퍼 매수 체결은 즉시 장부·F에 반영 (탑쌓기 매수는 run_sync) ③ 체결 알림 ④ 잔고 = 예상 확인 (다르면 보류)
     ⑤ 시세를 분 단위로 모음(RSI 용) ⑥ F별 목표에 닿으면 그 F 전량 지정가 매도 (정규장·장후, 16:10 전까지) ⑦ 60초마다 눌림·돌파 신호 → F 완성 기준 금액의 남은 몫만큼 지정가 매수 (정규장·16:00 전까지, 15:30 뒤 돌파 차단)"""
-    if now_et().time() >= OPEN_TIME_ET:                            # 판 38: 틱이 04:00 부터 돌아도 바벨 틱은 예전 시각(09:30 ET~) 그대로 (바벨은 이번 판 범위 밖)
-        barbell_tick(s, api, note)                                 # 판 34 3차: 바벨 틱 (SGOV·암살자 모의 지표·SCHD 매수, 켜짐일 때만)
+    if now_et().time() >= OPEN_TIME_ET and time.time() - _SNIPER.get("last_barbell", 0.0) >= BARBELL_TICK_SEC:      # 판 38: 틱이 04:00 부터 돌아도 바벨 틱은 예전 시각(09:30 ET~) 그대로. 판 40: 틱이 1.5초가 돼도 바벨 틱은 예전 30초 간격 그대로 (SGOV·시세 조회 부하 방지)
+        _SNIPER["last_barbell"] = time.time()
+        barbell_tick(s, api, note)                                 # 판 34 3차: 바벨 틱 (SGOV·암살자 모의 지표, 켜짐일 때만)
     if s.get("dry_run", True):
         return run_sniper_dry(s, api, note)                    # 판 23 수정1 B7: 모의에서도 스나이퍼가 돌되 주문은 안 나가고 시뮬레이션 기록만
     if not sniper_on(s):
         return "꺼짐"
     now_t = time.time()
-    if now_t - _SNIPER["last"] < max(30.0, float(s.get("intraday_sell_check_sec") or 30)):
+    if now_t - _SNIPER["last"] < SN.tick_gap(s):                       # 판 40: 틱 간격 = 설정 sniper_tick_sec (기본 1.5초). 되돌리기: 30 으로
         return "대기"
     _SNIPER["last"] = now_t
     n = now_et()
@@ -1763,7 +1940,7 @@ def run_sniper_tick(s, api, note):
     busy_boxes |= sold_box_keys_today(m, rows, open_rows)
     need_q = sum(o["qty"] for o in SN.plan_sells(s, sim, px, 10 ** 9, skip_ids=busy, skip_boxes=busy_boxes)[0])       # 판 31 질문 3: 원작식 — 목표 수량을 먼저 구하고 매도가능이 그만큼 될 때까지 2초(0.25초 간격) 기다림
     if need_q > 0:
-        sellable = SN.wait_sellable(lambda: api.holding(s["symbol"])[1], need_q)
+        sellable = SN.wait_sellable(lambda: getattr(api, "raw", api).holding(s["symbol"])[1], need_q)      # 판 40: 캐시 말고 지금 값
     sells, _sn = SN.plan_sells(s, sim, px, max(0, int(sellable)), skip_ids=busy, skip_boxes=busy_boxes, ext=(status == MKT_AFTER))      # v2.6.0: 버킷별 매도 자동 (미완성 F: 버킷마다 자기 평단 기준 — 공격 버킷 +1.5% · 나머지 +1.0%, 그 버킷만 전량). 판 24 선택 질문은 안 부름
     tw_all, _tn, _tr = SN.tower_sells(s, sim, px, max(0, int(sellable) - sum(o["qty"] for o in sells)), skip_ids=busy | {a for a, _b in busy_boxes})      # 완성 F만 (탑 매도 +10% → 50%)
     tw_pick, tw_held = pick_sells([o for o in tw_all if not (int(o["floor_id"]) in rej and abs(rej[int(o["floor_id"])] - float(o["price"])) < 1e-9)],
@@ -1814,7 +1991,10 @@ def run_sniper_tick(s, api, note):
         if old:
             _warn_once(cfg, mark, m, "stale_buy", note, f"스나이퍼 매수 {int(old[0].get('qty') or 0)}주 @ ${float(old[0].get('price') or 0):.2f} 가 {SNIPER_STALE_BUY_SEC // 60}분 넘게 다 체결 안 됐어요 — 메리츠 API 에 주문 취소가 없어 그대로 두고, 이 주문이 끝나기 전엔 새 매수를 안 내요 (필요하면 앱에서 직접 취소)")
         return out[0] if out else "매수 주문 진행 중"
-    if (not SN.buy_ok(status, n) or now_t - _SNIPER["last_buy"] < SN.BUY_CHECK_SEC
+    tp_res = topup_try(s, api, cfg, note, mark, m, rows, sim, ss, status, n, now_t, px, exch, d)        # 판 40 할 일 6: B-0 부분체결 잔량 보충 (틱마다 확인 — 원작 1.5초 모니터)
+    if tp_res:
+        return tp_res
+    if (not SN.buy_ok(status, n) or now_t - _SNIPER["last_buy"] < SN.buy_check_gap(SN.layer_count(SN.active_floors(sim)), s)
             or now_t - float(ss.get("last_order_ts") or 0) < SN.ORDER_SHIELD_SEC or now_t < float(ss.get("buy_block_until") or 0)):
         return out[0] if out else "대기"
     _SNIPER["last_buy"] = now_t
@@ -1822,7 +2002,9 @@ def run_sniper_tick(s, api, note):
         return tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, status, out)
     rsi = SN.rsi_from_state(ss, now_t)[0]
     cash_now = api.usd_cash()
-    ha = first_buy_ha(s, api, sim, n)
+    if s.get("barbell_enabled") is not True:
+        cash_now = max(0.0, cash_now - vault_locked_usd(s))      # 판 40 할 일 4·5: 복리·단리는 금고 잔액을 쓸 수 있는 달러에서 뺌 (바벨 켜짐은 원작 바벨 guard 가 금고를 3순위 수혈원으로 씀)
+    ha = first_buy_ha(s, api, sim, n, ss=_SNIPER)
     pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day, ha=ha)
     buy_sig = bool(pb["signal"].get("should_buy")) or bool(pb.get("sub") and pb["sub"].get("buy"))
     if live_fx_ok(s) and buy_sig:          # v2.3.0 장중 자동환전: 매수 신호가 났는데 달러가 모자라면 부족분만 환전 (실시간 환전 시간·하루 한 번·상한은 auto_fx 가 지킴)
@@ -1840,6 +2022,16 @@ def run_sniper_tick(s, api, note):
         _warn_once(cfg, mark, m, "exch", note, "거래소 번호를 알 수 없어 스나이퍼 매수를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
         return "거래소"
     o = dict(pb["order"], ts=round(now_t, 1))
+    g_ok, g_info = guard_gate(s, o, cash_now)                    # 판 40 할 일 4: GUARD30 (바벨 꺼짐일 때만)
+    if not g_ok:
+        ss["buy_block_until"] = now_t + GUARD_RECHECK_SEC          # 원작: 60초마다 입금 감지
+        SN.save_state(cfg, ss)
+        if _SNIPER.get("guard_alert_day") != d:                    # 원작: 입금 요청 알림은 한 번만 (스팸 방지 래치)
+            _SNIPER["guard_alert_day"] = d
+            note.send(f"스나이퍼 매수 보류 (GUARD30 · 자투리 매수 차단)\n쓸 수 있는 달러 ${cash_now:,.2f} < 최소 ${float(g_info.get('min_req_cash') or 0.0):,.2f} (1주 값 또는 1회분의 30%)\n"
+                      f"달러를 넣어 주세요 (권장 ${float(g_info.get('recommended_deposit_usd') or 0.0):,.2f}). 입금되면 {GUARD_RECHECK_SEC}초 안에 다시 확인해요 (알림은 하루 한 번)")
+        return "수혈 검문 보류"
+    _SNIPER["guard_alert_day"] = ""                                 # 통과하면 래치 풀림
     errs = []
     res = send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True)
     ss["last_order_ts"] = now_t
@@ -2392,6 +2584,7 @@ def idle(seconds):
 def loop():
     last_idle = 0
     while True:
+        fast = None                          # 판 40: 스나이퍼 틱을 돌린 반복이면 (s, api, note) — 아래에서 30초 대기 대신 1.5초 틱
         try:
             s = load_settings()
             state = s["state_dir"]
@@ -2436,10 +2629,11 @@ def loop():
                     except Exception as e:
                         logging.warning(f"늦은 체결 반영 중 오류: {type(e).__name__}")
             if sniper_on(s):          # v2.2.20 스나이퍼 모드 · 판 38: 00:00 ET ~ 체결 반영 시각 전 (실제 주문은 SN.buy_ok 04:07~16:00 · SN.sell_ok 04:00~04:06 빼고 전 구간 + 장운영 코드 확인). 옛 설명: 09:30 ET ~ 체결 반영 시각 전 (정규장 매수·정규장+장후 매도). 탑쌓기 주문 시간·당일 매도 확인은 안 돌림
-                if n.weekday() < 5 and n.time() < _hm(s["sync_time_et"], datetime.time(20, 0)):      # 판 23 수정1 B7: 모의도 돌림 (run_sniper_tick 이 모의면 주문 없이 시뮬레이션)
+                if sniper_tick_window(s, n):      # 판 23 수정1 B7: 모의도 돌림 (run_sniper_tick 이 모의면 주문 없이 시뮬레이션). 판 40: 평일·마감 시각 전 → 매도 창 (주말·야간까지) — 하루 기록 마감은 따로
                     try:
                         api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                         run_sniper_tick(s, api, note)
+                        fast = (s, api, note)
                     except Exception as e:
                         logging.exception(f"스나이퍼 확인 중 오류: {type(e).__name__}")
                         if _SNIPER["err_day"] != n.strftime("%Y-%m-%d"):
@@ -2474,7 +2668,11 @@ def loop():
             except Exception:
                 pass
             idle(120)
-        idle(30)
+            fast = None
+        if fast:
+            sniper_fast_wait(30, *fast)      # 판 40 할 일 1: 30초 동안 틱 간격(기본 1.5초)마다 스나이퍼 틱 (되돌리기: sniper_tick_sec=30 이면 예전처럼 idle(30))
+        else:
+            idle(30)
 
 
 def cmd_check(s):

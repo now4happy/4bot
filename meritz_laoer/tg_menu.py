@@ -114,6 +114,7 @@ MEANS = {
 }
 _EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A0-\u25FF\u2300-\u23FF\u2900-\u297F\u2139\uFE0F\u200D])+ ?")   # 예전 이모티콘 키보드 글자를 새 버튼으로 읽는 데 씀
 BOOL_NAME = {"barbell_enabled": "바벨 모드", "compound_enabled": "복리 모드", "enabled": "봇", "auto_fx_enabled": "자동환전"}
+T_ASSN, ASSN_OK = "암살자 승격", "네, 암살자 바꿀게요"      # v2.13.0 판 40 할 일 2: 암살자 승격·복귀 (눌러도 바로 안 바뀌고 확인부터 — 원작은 한 번 누름. 실돈이라 확인 단계 추가)
 T_PMODE, PM_OK = "매수 비율 모드 바꾸기", "네, 모드 바꿀게요"      # v2.12.0 판 39: 복리→단리→바벨→복리 3순환 (원작 toggle_portion_mode). 예전 바벨 켜기/끄기 버튼은 여기에 흡수
 PM_KO = {"compound": "복리 8%", "simple": "단리 10%", "barbell": "바벨 15%"}
 PM_NEXT = {"compound": "simple", "simple": "barbell", "barbell": "compound"}      # 원작 순환 순서
@@ -147,7 +148,7 @@ WAIT_SEC = 300              # 제안값: 수량·평단 입력 기다림
 MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않음
 HEAD = "7번 메리츠 SOXL 하이브리드"
 ALL_LABELS = ({B_RADAR, B_SYNC, B_TOWER, B_FX, B_BBBOARD, BACK, R_REFRESH, T_TOOLS, I_FUNDS, I_PLAN, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
-               T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, T_MODE_TOWER, T_MODE_SNIPER, MODE_OK, T_PMODE, PM_OK} | set(SET_ITEMS))
+               T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, T_MODE_TOWER, T_MODE_SNIPER, MODE_OK, T_PMODE, PM_OK, T_ASSN, ASSN_OK} | set(SET_ITEMS))
 LABEL_LIST = sorted(ALL_LABELS)
 LABEL_IDX = {x: i for i, x in enumerate(LABEL_LIST)}      # 인라인 버튼 callback_data = "c:<번호>" (64바이트 제한 때문에 글자 대신 번호 — 같은 버전 안에서는 항상 같은 번호)
 
@@ -296,8 +297,9 @@ class MenuBot:
         except Exception as e:
             logging.warning(f"텔레그램 메뉴 전송 실패: {type(e).__name__}")
 
-    def idle(self, s, t_end):
-        """t_end 까지 getUpdates → 받은 것을 순서대로 처리 (이 스레드에서만)"""
+    def idle(self, s, t_end, once=False):
+        """t_end 까지 getUpdates → 받은 것을 순서대로 처리 (이 스레드에서만).
+        v2.13.0 판 40: once=True 면 기다리지 않고 한 번만 확인 (getUpdates timeout 0) 하고 돌아옴 — 1.5초 스나이퍼 틱 사이에 부름 (바쁜 대기 방지)"""
         c = self.creds(s)
         if not c:
             return
@@ -309,9 +311,9 @@ class MenuBot:
             self.primed = True
         while True:
             left = t_end - time.time()
-            if left < 1:
+            if left < 1 and not once:
                 return
-            q = {"timeout": int(min(25, max(0, left - 1))), "allowed_updates": ["message", "callback_query"]}
+            q = {"timeout": 0 if once else int(min(25, max(0, left - 1))), "allowed_updates": ["message", "callback_query"]}
             if self.offset is not None:
                 q["offset"] = self.offset
             r = self._call(tok, "getUpdates", q, q["timeout"] + 10)
@@ -376,6 +378,8 @@ class MenuBot:
                     self.send(c, "처리 중 오류가 났어요. 다시 눌러 주세요.", dry=s.get("dry_run", True))
             if stale:                 # 오래된 메시지를 말없이 버리지 않고 한 번 알림
                 self.send(c, "메시지가 늦게 도착해서(2분 넘음) 처리하지 않았어요. 버튼을 다시 눌러 주세요.", dry=s.get("dry_run", True))
+            if once:
+                return
 
     # ---------------------------------------------------------- 기존 함수 부르기
     def _out(self, fn, *a, **k):
@@ -700,11 +704,19 @@ class MenuBot:
             return (f"{KEY_ITEM[k]['name']}  {fmt_val(KEY_ITEM[k], cur_val(s, k))}  ▶ 변경", label)
         return [[lab(x)] for x in labels]
 
+    def _assn_ko(self, s):
+        """암살자 지금 모드 글자 (읽기 실패 = 모의)"""
+        try:
+            return self.o.BB.MODE_KO.get(self.o.BB.assassin_mode(s.get("state_dir") or ""), "모의")
+        except Exception:
+            return "모의"
+
     def radar_inline(self, s):
         """레이더 화면 = 원작 전술 제어반 (v2.12.0 판 39): [스나이퍼 켜기/끄기] [매수 비율 모드] [바벨 관제보드]. 뒤로 없음 (레이더가 최상위)"""
         pm = _TW.portion_mode(s)
         return [[("🔴 스나이퍼 끄기 (지금 켜짐)", BOT_OFF) if s.get("enabled") else ("🟢 스나이퍼 켜기 (지금 꺼짐)", BOT_ON)],
                 [(f"🔄 매수 비율 모드: {PM_KO[pm]} → {PM_KO[PM_NEXT[pm]]}", T_PMODE)],
+                [(f"🗡 암살자: {self._assn_ko(s)} (승격/복귀)", T_ASSN)],
                 [("🛡 바벨 관제보드", B_BBBOARD)]]
 
     def sync_inline(self, s):
@@ -753,7 +765,7 @@ class MenuBot:
                 "💡 버튼을 누르면 새 값을 입력해요 (현재값 → 바꿀 값 확인 뒤 바뀌고, 주문은 안 나가요)"]
 
     def barbell_text(self, s):
-        """바벨 관제보드 (v2.12.0 판 39 할 일 2): SGOV 보유 · 대기 현금(free_cash) · SCHD 대기금 — 조회만 (하이브리드는 별도수익금고 대신 SCHD 누적). 시드 줄은 넣지 않음"""
+        """바벨 관제보드 (v2.12.0 판 39 할 일 2): SGOV 보유 · 대기 현금(free_cash) · 금고 — 조회만 (v2.13.0 판 40: SCHD 뺌, 금고 되살림). 시드 줄은 넣지 않음"""
         esc = _html.escape
         on = s.get("barbell_enabled") is True
         lines = ["🛡 <b>[바벨 관제보드]</b>", "──────────────", f"· 바벨 모드: <b>{'켜짐' if on else '꺼짐'}</b> · 지금 모드 <b>{PM_KO[_TW.portion_mode(s)]}</b> · {'모의' if s.get('dry_run', True) else '실거래'}"]
@@ -763,8 +775,12 @@ class MenuBot:
             lines.append(f"· 대기 현금(free_cash): <b>${float(led.get('free_cash_usd') or 0):,.2f}</b>" + ("" if led.get("free_init") else " (바벨을 켠 뒤 처음 계산 전)"))
         except Exception as e:
             lines.append(f"· 대기 현금: 미확인 ({esc(type(e).__name__)})")
-        sc = self.o.BB._rw(self.o.BB.schd_path(sd), {}) or {}
-        lines.append(f"· SCHD 대기금: <b>${float(sc.get('pending_usd') or 0):,.2f}</b> · 산 수량 {int(float(sc.get('bought_qty') or 0))}주 · 쓴 금액 ${float(sc.get('spent_usd') or 0):,.2f}")
+        try:
+            vn = self.o.BB.vault_numbers(led)
+            lines.append(f"· 금고: 누적 <b>${vn['total']:,.2f}</b> · 쓸 수 있는 잔액 <b>${vn['available']:,.2f}</b> · 수혈로 나간 금액 ${vn['injected']:,.2f}")
+            lines.append(f"· 금고 적립: 오늘 ${vn['daily']:,.2f} · 이번 사이클 ${vn['cycle']:,.2f}")
+        except Exception as e:
+            lines.append(f"· 금고: 미확인 ({esc(type(e).__name__)})")
         try:
             hold = self._api(s).holding("SGOV")[0]
             lines.append(f"· SGOV 보유: <b>{int(hold)}주</b> (메리츠 잔고)")
@@ -923,7 +939,7 @@ class MenuBot:
             self.nav = "main"
             return self.show("main", s, say, "메뉴가 바뀌었어요 (하이브리드). 아래 버튼으로 써 주세요.")
         active, self.in_prompt, self.wait = self.in_prompt, False, None
-        if text not in (CHG_OK, MODE_OK, PM_OK):
+        if text not in (CHG_OK, MODE_OK, PM_OK, ASSN_OK):
             self.pending = None
         if text == BACK:
             return self.show(self.nav if active else PARENT.get(self.nav, self.nav), s, say)
@@ -1010,6 +1026,30 @@ class MenuBot:
             return say(f"매수 비율 모드를 바꿀까요?\n· 지금: {PM_KO[cur]} → 바꿀 모드: {PM_KO[to]}\n"
                        f"· 바꾼 뒤 F 완성 기준 금액 ${_TW.params(s2)[0]:,.0f} · 매수 1번 ${_TW.portion_usd(s2):,.0f}\n"
                        f"· 암살자는 모의(SIMULATED) 고정이에요. {CONFIRM_SEC}초 안에 [{PM_OK}] 를 눌러 주세요. 이미 낸 주문은 안 건드려요.", [[PM_OK, BACK]])
+        if text == T_ASSN:      # v2.13.0 판 40 할 일 2: 암살자 승격·복귀 — 계획을 먼저 보여 주고 확인 뒤에만 저장. 주문은 안 나감
+            self.nav = "radar"
+            try:
+                cur = self.o.BB.assassin_mode(s.get("state_dir") or "")
+                want = cur == self.o.BB.MODE_SIM
+                plan, _c = self.o.assassin_promote(s, self._api(s), want, apply=False)
+            except Exception as e:
+                return say(f"암살자 상태를 확인하지 못했어요 ({type(e).__name__}). 바뀐 건 없어요.")
+            if plan["to"] is None:
+                return say(f"암살자: {self.o.BB.MODE_KO.get(cur, cur)}\n· {plan['msg']}")
+            self.pending = {"changes": {}, "mode": "assn", "want": want}
+            self.confirm[ASSN_OK], self.in_prompt = time.time() + CONFIRM_SEC, True
+            return say(f"암살자 모드를 바꿀까요?\n· 지금: {self.o.BB.MODE_KO.get(cur, cur)} → 바꾼 뒤: {self.o.BB.MODE_KO.get(plan['to'], plan['to'])}\n· {plan['msg']}\n"
+                       f"· {CONFIRM_SEC}초 안에 [{ASSN_OK}] 를 눌러 주세요. 주문은 안 나가요.", [[ASSN_OK, BACK]])
+        if text == ASSN_OK:
+            p, self.pending = self.pending, None
+            if not p or p.get("mode") != "assn" or not self._ok_confirm(ASSN_OK):
+                return say("확인 시간이 지났거나 바꿀 것이 없어요. 암살자 버튼을 다시 눌러 주세요.")
+            self.nav = "radar"
+            try:
+                plan, cur = self.o.assassin_promote(s, self._api(s), p["want"], apply=True)
+            except Exception as e:
+                return say(f"저장하지 못했어요 ({type(e).__name__}). 바뀐 건 없어요.")
+            return say(f"암살자: {self.o.BB.MODE_KO.get(cur, cur)} → {self.o.BB.MODE_KO.get(plan['to'] or cur, '')}\n· {plan['msg']}")
         if text == PM_OK:
             p, self.pending = self.pending, None
             if not p or p.get("mode") != "pm" or not self._ok_confirm(PM_OK):

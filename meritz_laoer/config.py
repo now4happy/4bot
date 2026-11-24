@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.13.0 (2026-11-24, 판 40): sniper_tick_sec(기본 1.5)·sniper_book_sec(기본 10) 추가 + validate_settings 검사. sync_time_et 는 '하루 기록 마감 시각'이고 스나이퍼 틱 끝 시각이 아님 (틱은 매도·매수 창이 정함)
 # v2.12.0 (2026-11-24, 판 39): sniper_portion_pct·tower_remaining_seed_usd·sniper_first_anchor_usd 검사 삭제(옛 키는 남아 있어도 무시) · compound_enabled(복리 모드) 검사 추가 · 기본 sync_time_et 16:10 → 20:00
 # v2.10.0 (2026-11-23, 판 36 Case 113): 기본 sniper_tp_l1_pct 1.5 → 1.0 · sniper_breakout_portion_pct 검사 삭제(옛 키는 남아 있어도 무시)
 # v2.9.0 6차 (2026-11-22, 판 33): validate_settings 에 trade_mode(sniper|tower)·tower_buy_gap_usd(1~10 정수) 검사 추가 (없으면 통과 = 기본값)
@@ -60,6 +61,9 @@ SAFE_DEFAULTS = {
     "trading_mode": "tower",               # v2.2.20 판 22: "tower"(탑쌓기, 기본) | "sniper"(스나이퍼). 바꾸면 다음 매매 판단부터 적용 (이미 낸 주문은 안 건드림). F 장부는 두 모드가 같이 씀
     "sniper_tp_l1_pct": 1.0,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 F) 익절 % (F 평단 +이 % 에 그 F 전량)
     "sniper_tp_upper_pct": 1.0,            # v2.2.20 스나이퍼 상단층 익절 %
+    "sniper_tick_sec": 1.5,                # v2.13.0 판 40 할 일 1: 스나이퍼 틱 간격(초, 1.5~3600). 되돌리기: API·서버 부하 문제가 보이면 30 으로 (코드 수정 없이 설정만 — VERIFY.md '되돌리기 조건'). 서버 설정 파일 값이 우선
+    "assassin_live_unlock": False,         # v2.13.0 판 40 할 일 2: 암살자 실전 승격 잠금 (기본 잠김). 실전 매매 루프가 아직 연결 안 돼서 true 로 바꾸지 말 것 — 승격이 되면 스나이퍼·바벨 매매가 막힘
+    "sniper_book_sec": 10,                 # v2.13.0 판 40: 1.5초 틱 사이에 체결·잔고·미체결·예수금 조회를 다시 쓰는 시간(초, 1~60). 주문을 낸 직후엔 즉시 다시 조회
     "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
     "auto_fx_enabled": False,              # true 면 오늘 매수에 달러가 모자랄 때 원화→달러 환전 신청 (실주문 모드에서만)
@@ -232,6 +236,10 @@ def validate_settings(s):
     isec = s.get("intraday_sell_check_sec")
     if isinstance(isec, bool) or not isinstance(isec, (int, float)) or not (isec == 0 or 30 <= isec <= 3600):
         bad.append("intraday_sell_check_sec 는 0(끔) 또는 30~3600 (초)")
+    for k, lo, hi in (("sniper_tick_sec", 1.5, 3600), ("sniper_book_sec", 1, 60)):      # v2.13.0 판 40: 없으면 기본값 (SAFE_DEFAULTS)
+        v = s.get(k)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi)):
+            bad.append(f"{k} 는 {lo:g}~{hi:g} (초)")
     tm = s.get("trading_mode")      # v2.2.20: 없으면 탑쌓기 (예전 동작)
     if tm is not None and str(tm).strip().lower() not in ("sniper", "tower"):
         bad.append("trading_mode 는 sniper | tower")

@@ -1,5 +1,11 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.7 · 2026-11-24 (KST) — 봇 v2.13.0 (판 40)
+- 파일: barbell_adapter.py, config.py, main.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, 시험 파일(test_hybrid_v340·v351_render·v380·v390 수정, test_hybrid_v400 신규)
+- 내용: ① 1.5초 틱 루프 + 분 경계 쉴드 (되돌리기: sniper_tick_sec=30) ② 암살자 승격 버튼·확인·execution_mode 저장 (실전 매매 루프는 미연결, assassin_live_unlock 기본 False) ③ 틱을 매도 실효 창 전체(주말·야간)로 확장, 일일 기록 마감(sync_time_et)과 분리 ④ GUARD30 (바벨 꺼짐일 때 단리·복리 온디맨드 검문, 금고 제외) ⑤ 바벨 수익금 금고 되살림, SCHD 제거 ⑥ B-0 부분체결 잔량 보충 (본 그리드; 서브 S-B0 는 SUB_GRID_ON=False 라 꺼짐)
+- 원작 orig_sniper/ 바이트 동일, BOT_VERSION v2.7.0 유지
+- 브랜치: staging
+
 ## v1.4.6 · 2026-11-24 11:15 (KST)
 - 파일: config.py, main.py, meritz_api.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
 - 내용: 메리츠 v2.12.0 (판 39): 첫 매수 원작화 + 메뉴 원작화

@@ -287,3 +287,14 @@ def zero_share_open_shield(now_et):
     """분기 A 3번 검문: 정규장 개장 7분 쉴드 09:30~09:36 (원작 REG_OPEN_VWAP_SHIELD_START_HM·END_HM 를 그대로 읽음)"""
     dt = _as_et(now_et)
     return bool(QC.REG_OPEN_VWAP_SHIELD_START_HM <= dt.hour * 100 + dt.minute <= QC.REG_OPEN_VWAP_SHIELD_END_HM)
+
+
+# ---- v2.13.0 판 40 할 일 4: GUARD30 (30% 자투리 방지 가드) — 원작 evaluate_guard30_and_reserve_injection 을 그대로 부름 (복리·단리 모드, 바벨 꺼짐)
+def guard30(cash_usd, exec_price, portion_budget, l1_cost=0.0, is_dip=False, used_cnt=0):
+    """원작 판정기 그대로 → dict(action: PROCEED_NORMAL | INJECT_AND_PROCEED | BLOCK_AND_ALERT_DEPOSIT, min_req_cash, recommended_deposit_usd, is_dust_blocked ...).
+    하이브리드는 별도 시드 장부(free_cash)가 없어 쓸 수 있는 달러 = 메리츠 달러 예수금(금고 잔액 뺀 값)이라 free_cash 와 주문가능금액에 같은 값을 넣음 → 수혈(INJECT)은 안 나오고,
+    '1주 값 또는 1회분 30% 중 큰 금액' 보다 모자라면 BLOCK (자투리 매수 차단 + 입금 요청). 수혈 장부(used_reserve) 는 안 둠 — 노션 질문"""
+    c = float(cash_usd or 0.0)
+    return QC.evaluate_guard30_and_reserve_injection(
+        free_cash_usd=c, broker_bp_usd=c, exec_price=float(exec_price), portion_budget=float(portion_budget),
+        l1_actual_cost_usd=float(l1_cost or 0.0), is_dip_promotion=bool(is_dip), used_reserve_portions_cnt=int(used_cnt))

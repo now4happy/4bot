@@ -49,6 +49,9 @@ PULLBACK_DEEP = -5.50
 RSI_PERIOD = 14
 LATE_CUTOFF = datetime.time(15, 0)       # 15:00~16:00 ET 신규 진입 차단 (v2.10.0 판 36 D7: 원작 Case 113 컷오프 15:00 — 보유 F 0개일 때만 적용)
 SUB_GRID_ON = False                      # v2.10.0 판 36 D2: 서브 그리드 끔 (원작 Case 113 서브 폐기). True 로 바꾸면 plan_sub 가 다시 돈다 (코드는 남겨 둠)
+TICK_SEC_DEFAULT = 1.5          # v2.13.0 판 40 할 일 1: 틱 간격 (원작 NORMAL_LOOP_INTERVAL_SEC 1.50). 되돌리기 = 설정 sniper_tick_sec 30
+BOUNDARY_WAIT_SEC = 15          # 분 경계 쉴드: 새 분이 시작된 뒤 이 초 안에 직전 분 완결봉이 아직 안 보이면 기다림 (원작 :00.25s 캔들 레이더가 새 완결봉을 받을 때까지 정각 잠금과 같은 뜻)
+HA_WAIT_CAP_SEC = 65            # 원작 pullback_ha_wait 잠금 상한 (같은 분 안에서만 유효, 65초 넘으면 풀림)
 BUY_CHECK_SEC = 60             # 재장전 감시 주기 (판 22: 60초)
 ORDER_SHIELD_SEC = 60          # 주문 낸 뒤 이 시간 동안 새 매수 안 함 (참조 매수·매도 후 60초 타임쉴드)
 SERIES_KEEP = 120              # 분 단위 종가 보관 개수
@@ -829,3 +832,106 @@ def gauge(complete_cost, partial_cost, cash):
         else:
             nb += 1
     return "🟦" * na + "🟨" * nb + "🟩" * nc, pa, pb, round(max(0.0, 100.0 - pa - pb), 1)
+
+
+# ---------------------------------------------------------------- v2.13.0 판 40 할 일 1: 1.5초 틱 + 분 경계 쉴드
+def tick_gap(s):
+    """스나이퍼 틱 간격(초): 설정 sniper_tick_sec (없으면 1.5, 1.5 미만은 1.5). 되돌리기 조건: 메리츠 API·서버 부하 문제가 보이면 sniper_tick_sec 를 30 으로 (옛 동작)"""
+    v = _f((s or {}).get("sniper_tick_sec")) if (s or {}).get("sniper_tick_sec") is not None else TICK_SEC_DEFAULT
+    return max(TICK_SEC_DEFAULT, v)
+
+
+def buy_check_gap(n_layers, s=None):
+    """매수 판단 간격(초): 보유 층 0개(첫 매수, 분기 A)는 틱 간격 (원작은 1.5초마다 + 분 경계 쉴드) · 층이 있으면 예전 그대로 60초"""
+    return tick_gap(s) if int(n_layers) <= 0 else float(BUY_CHECK_SEC)
+
+
+def _min_key(now_et):
+    return now_et.strftime("%Y-%m-%d %H:%M")
+
+
+def _prev_min_key(now_et):
+    return (now_et - datetime.timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M")
+
+
+def ha_shield(state, now_et, ha, mono=None):
+    """분 경계 쉴드 (원작 Audit-113-01 is_within_reentry_monitor_time_shield 의 하이브리드 판) → (막힘, 이유, 남은 초).
+    ① 같은 분 안에서 HA음봉으로 한 번 보류됐으면(state['ha_wait']) 그 분 끝까지 다시 안 판정 — 새 완결봉이 오기 전엔 같은 봉이라 결과가 같음 (조회·연산 중복 차단). 새 분이 되면 저절로 풀림. 65초 상한
+    ② 새 분이 시작된 직후(BOUNDARY_WAIT_SEC 초 안)인데 직전 분 완결봉이 아직 안 보이면 기다림 — 낡은 완결봉으로 사지 않게 (1.5초마다 다시 봄). 이 초를 넘겨도 안 오면 예전처럼 낡음 가드(FIRST_BUY_MAX_BAR_AGE_MIN)가 판정.
+    ha = AD.first_buy_ha 결과 또는 None (None 이면 판정 재료 없음 → 쉴드는 아무것도 안 함). mono = 단조 시계 초 (테스트용)"""
+    mono = time.monotonic() if mono is None else float(mono)
+    cur = _min_key(now_et)
+    w = (state or {}).get("ha_wait") or {}
+    if w and w.get("mk") == cur and -0.01 <= mono - _f(w.get("mono")) < HA_WAIT_CAP_SEC:   # 저장값을 소수 3자리로 반올림하므로 아주 작은 음수 오차 허용
+        rem = max(0.5, 60.0 - (now_et.second + now_et.microsecond / 1e6))
+        return True, "HA_WAIT_SAME_MINUTE", round(rem, 1)
+    if ha and ha.get("closed_mk") is not None:
+        sec_in_min = now_et.second + now_et.microsecond / 1e6
+        if sec_in_min < BOUNDARY_WAIT_SEC and str(ha.get("closed_mk") or "") < _prev_min_key(now_et):
+            return True, "WAIT_CLOSED_BAR", round(BOUNDARY_WAIT_SEC - sec_in_min, 1)
+    return False, "", 0.0
+
+
+def ha_wait_mark(state, now_et, ha, mono=None):
+    """HA음봉(또는 준비 전)으로 첫 매수를 보류했을 때 부름 → 같은 분 안에서는 다시 안 봄 (원작 mark_pullback_ha_bear_minute_wait)"""
+    state["ha_wait"] = {"mk": _min_key(now_et), "closed": str((ha or {}).get("closed_mk") or ""), "mono": round(time.monotonic() if mono is None else float(mono), 3)}
+    return state["ha_wait"]
+
+
+def guard30_check(cash_usd, order):
+    """매수 직전 GUARD30 (바벨 꺼짐일 때): order = plan_buy 의 주문 → (통과, 판정 dict). 매수 금액은 그 주문의 계획 금액(plan_usd = 1회분 또는 남은 시드), 가격은 주문 가격"""
+    if not order or order.get("side") != "BUY":
+        return True, {}
+    g = AD.guard30(cash_usd, order.get("price"), order.get("plan_usd") or 0.0)
+    return bool(g.get("should_proceed")), g
+
+
+# ---------------------------------------------------------------- v2.13.0 판 40 할 일 6: B-0 부분체결 잔량 모니터 (원작 분기 B-0 · 서브는 S-B0 — Case 78, 88)
+TOPUP_SIGNAL = "TOPUP_1FL"
+TOPUP_DROP_KEYS = ("no", "placed_ts", "notified_qty", "ts", "topup_done", "status", "intraday", "new_floor", "empty_id")
+
+
+def topup_find(orders, rows, open_orders):
+    """오늘 낸 스나이퍼 매수 중 '일부만 체결되고 더는 열려 있지 않은 것'(앱에서 취소·장 마감 등 — 메리츠 API 에 취소가 없어 봇은 못 닫음) → 보충 대기 dict 또는 None.
+    원작 rem_quota_qty = 1층 목표 수량 − 체결 수량. 여기서는 주문 수량 − 누적 체결 수량. 이미 보충 주문을 낸 주문(topup_done)은 제외 (같은 잔량을 두 번 내지 않게).
+    orders = 오늘 기록 m["orders"] · rows = {주문번호: {"qty": 누적 체결}} · open_orders = 아직 열린 매수 주문 목록 (sniper_open_orders). 가장 나중에 낸 주문 1건"""
+    open_nos = {str(o.get("no")) for o in (open_orders or []) if isinstance(o, dict)}
+    found = None
+    for o in orders or []:
+        if not isinstance(o, dict) or o.get("side") != "BUY" or o.get("kind") != "buy_sniper" or not o.get("no") or o.get("topup_done"):
+            continue
+        no = str(o["no"])
+        q, f = int(_f(o.get("qty"))), int(_f((rows.get(no) or {}).get("qty")))
+        if no in open_nos or not (1 <= f < q) or o.get("floor_id") is None:
+            continue
+        found = {"no": no, "floor_id": int(_f(o["floor_id"])), "rem_qty": q - f, "book_price": round(_f(o.get("price")), 2), "sub": bool(o.get("sub")), "order": o}
+    return found
+
+
+def topup_order(s, st, tp, price, usd_cash, now_et, otype="LIMIT"):
+    """보충 주문 계획 → (주문 또는 None, 사유). 원작 조건: 잔량>0 · 현재가 ≤ 1층 단가(그 주문의 가격) · 쓸 수 있는 달러 ≥ 1주 비용 · 그 층이 아직 미완성.
+    가격 = min(현재가 소수 2자리 내림, 단가) (원작 exec_order_p) · 수량 = min(잔량, 달러로 살 수 있는 수). 층 상태가 바뀌었으면(층 없음·완성) 보충하지 않음 (원작 L1_STATE_CHANGED). 서브 주문은 서브 그리드가 켜져 있을 때만"""
+    if not tp:
+        return None, ""
+    if tp.get("sub") and not SUB_GRID_ON:
+        return None, "서브 그리드 꺼짐 — 서브 잔량 보충 안 함"
+    px = _f(price)
+    if px <= 0:
+        return None, "시세 없음"
+    fl = next((f for f in active_floors(st) if int(_f(f.get("id"))) == int(tp["floor_id"])), None)
+    if fl is None or TW.is_complete(fl):
+        return None, "층 상태가 바뀜 (없거나 완성) — 잔량 보충 안 함"
+    book = _f(tp["book_price"])
+    if px > book + 1e-6:
+        return None, f"현재가 ${px:.2f} > 단가 ${book:.2f} — 도래 대기"
+    opx = max(0.01, min(math.floor((px + 1e-9) * 100.0) / 100.0, book))
+    cash = _f(usd_cash)
+    if cash < opx:
+        return None, f"달러 ${cash:,.2f} < 1주 ${opx:.2f} — 보충 못 함"
+    q = min(int(tp["rem_qty"]), int(math.floor(cash / opx + 1e-9)))
+    if q < 1:
+        return None, "보충 수량 0"
+    base = {k: v for k, v in dict(tp["order"]).items() if k not in TOPUP_DROP_KEYS}
+    desc = f"{'서브 ' if tp.get('sub') else ''}1층 부분체결 잔량 보충(TOPUP) · 이전 주문 {tp['no']} 의 남은 {tp['rem_qty']}주 중 {q}주 @ ${opx:.2f} (단가 ${book:.2f})"
+    return dict(base, side="BUY", type=otype, qty=q, price=round(opx, 2), kind="buy_sniper", mode=MODE_SNIPER, floor_id=int(tp["floor_id"]), new_floor=None, empty_id=None,
+                plan_usd=round(q * opx, 2), signal=TOPUP_SIGNAL, desc=desc), ""
