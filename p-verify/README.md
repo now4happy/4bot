@@ -18,6 +18,11 @@
 | 01_report_k-rule_20261114.md | 클로드 k 규칙 보고서 (규칙 A/B/C 가설, 2026-11-14) | f11430d0 |
 | 02_verify_k_rule.py | 클로드 k 규칙 검증 스크립트 | d72dd200 |
 | 04_reference_laoer-live-1108_20261113.md | 라오어 라이브 11/8 발언 요약 — 힌트 참고용만, 숫자가 기준 | 88ad1de1 |
+| 14_k_pattern_analysis.md | 판 10 k 규칙 실패 패턴 분석 (k 규칙 못 찾음, 미확정) | 38ea9863 |
+| 15_verify_k_pattern.py | 판 10 k 패턴 검증 스크립트 (v0.1.0, 내부 점검 17/17) | c704fa79 |
+| 16_test_k_pattern.py | 판 10 k 패턴 시험 (16개 통과) | 3f7e39f2 |
+| 15_output_v16.txt | 판 10 k 패턴 검증 출력 (v16 기준) | 73b77095 |
+| VERIFY_k10.md | 판 10 VERIFY (ZIP 해시 31df6c55) | 832104e4 |
 
 ## 주의
 
