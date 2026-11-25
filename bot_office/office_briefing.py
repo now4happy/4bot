@@ -1282,12 +1282,32 @@ def _hantu_need():
     return total if valid else None
 
 
+def _fanding_state(kind, path):
+    """팬딩 상태 파일 읽기. 못 읽으면 원인을 stderr(서비스 로그)에 한 줄 남기고 None. 파일 내용은 찍지 않는다."""
+    try:
+        st = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError as e:
+        cause = "파일 없음 (%s)" % type(e).__name__
+    except PermissionError as e:
+        cause = "읽기 권한 없음 (%s)" % type(e).__name__
+    except OSError as e:
+        cause = "읽기 실패 (%s)" % type(e).__name__
+    except ValueError as e:
+        cause = "JSON 해석 실패 (%s)" % type(e).__name__
+    else:
+        if isinstance(st, dict):
+            return st
+        cause = "dict 아님 (%s)" % type(st).__name__
+    print("[FANDING_NEED] %s: need 확인 불가 — 상태 파일 %s: %s" % (kind, path, cause),
+          file=sys.stderr, flush=True)
+    return None
+
+
 def _fanding_need(kind, now=None):
     """기존 팬딩 계산 함수 우선, import 불가 시 동일한 상태·매수 줄 공식 적용."""
     path = R / "var/lib/bot-office/fanding" / ("state.json" if kind == "P" else "vr6.json")
-    missing = object()
-    st = load(path, missing)
-    if not isinstance(st, dict):
+    st = _fanding_state(kind, path)
+    if st is None:
         return None
     try:
         if kind == "P":
