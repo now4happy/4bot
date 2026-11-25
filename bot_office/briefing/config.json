@@ -8,7 +8,8 @@
     "meritz_dca_dir": "/opt/bot-office/meritz_dca_bot",
     "meritz_laoer_dir": "/opt/bot-office/meritz_laoer",
     "kiwoom_fixed": "~/briefing_state/kiwoom_fixed.json",
-    "targets": "portfolio_targets.json"
+    "targets": "portfolio_targets.json",
+    "telegram_need_cfg": "/etc/bot-office/telegram_briefing9.json"
   },
   "kiwoom": {
     "mode": "fixed",
@@ -30,7 +31,7 @@
     "snapshot_retention_days": 90
   },
   "send": {
-    "need": false,
+    "need": true,
     "portfolio": true
   },
   "need": {
