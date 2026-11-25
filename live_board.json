@@ -1,7 +1,7 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-25 15:29:00",
-  "as_of_et": "2026-11-25 01:29:00",
+  "as_of_kst": "2026-11-25 15:30:00",
+  "as_of_et": "2026-11-25 01:30:00",
   "market_open": true,
   "source": "toss",
   "prices": {
@@ -21,12 +21,12 @@
     "35": 189.09,
     "37": 28,
     "38": 29,
-    "41": 13634.9
+    "41": 13636.15
   },
   "totals": {
-    "api_sum": 47002.26,
+    "api_sum": 47003.5,
     "cash": 27551.3,
-    "total_assets": 64983.26
+    "total_assets": 64984.5
   },
   "market_open_us": false,
   "market_open_kr": true,
@@ -36,10 +36,10 @@
     "api_ex41": 33367.35703,
     "cash": 27551.29703,
     "manual": 17981.0,
-    "krx_total": 13634.9025
+    "krx_total": 13636.1475
   },
   "krx": {
-    "as_of_kst": "2026-11-25 15:29:00",
+    "as_of_kst": "2026-11-25 15:30:00",
     "stocks": [
       {
         "code": "411060",
@@ -238,8 +238,8 @@
         "name": "포스코DX",
         "qty": 249,
         "avg_price": 24125,
-        "price": 21150,
-        "value_manw": 526.63
+        "price": 21200,
+        "value_manw": 527.88
       },
       {
         "code": "352820",
@@ -298,7 +298,7 @@
         "value_manw": 400.9
       }
     ],
-    "total_manw": 13634.9,
+    "total_manw": 13636.15,
     "unavailable": []
   }
 }
