@@ -1,7 +1,7 @@
 # briefing/need_table.py — need.json 읽기 → 재발행 규칙 → 계좌 행 계산
 # need.json 구조 (Q1·Q16, Muse 서버 확인, 키만):
 #   ok(bool), as_of_kst(str), accounts[{name, lines[{label?, currency, holding|null, need|null, sufficient, auto_fx}]}],
-#   total_need_usd, total_need_krw.  skipped 키는 vNEXT 적용 전이라 아직 없음 → 있을 때/없을 때 둘 다 처리.
+#   total_need_usd, total_need_krw.  skipped 키는 v1.0.3 적용 전이라 아직 없음 → 있을 때/없을 때 둘 다 처리.
 #   계좌 name: "토스"·"메리츠"·"한투"·"빗썸". line.label: 바벨 씨드="바벨 씨드", 메리츠 "P"·"VR6"·"3번"(=메리츠 4번).
 #   토스 본 USD·KRW line, 한투 lines, 빗썸 line 은 label 없음. "메리츠 SOXL 3번" 은 need.json 에 없다 → settings.json 에서 만든다(Q17).
 import json
