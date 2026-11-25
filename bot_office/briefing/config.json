@@ -29,10 +29,6 @@
     "kiwoom_shadow_days": 5,
     "snapshot_retention_days": 90
   },
-  "send": {
-    "need": false,
-    "portfolio": true
-  },
   "need": {
     "barbell_match": "^바벨 씨드$",
     "account_rules": [
