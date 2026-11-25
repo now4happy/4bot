@@ -1,5 +1,10 @@
 # briefing 변경 기록
 
+## v1.0.5 · 2026-11-25 15:29 (KST)
+- 파일: need_table.py, run.py
+- 내용: 3차 rev3: 재발행 때 팬딩 원인을 briefing_latest.json에 기록
+- 브랜치: staging
+
 ## v1.0.4 · 2026-11-25 15:23 (KST)
 - 파일: tg_send.py
 - 내용: 3차 rev2: 가드 오판 고침 + VR6 상태 파일 원인 기록
