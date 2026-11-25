@@ -96,10 +96,7 @@ BARBELL_CASH_WEIGHT: float = float(
     getattr(toss_api, "BARBELL_CASH_WEIGHT", 0.10)
 )
 
-# MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 유효 모드 동기화
 VALID_PORTION_MODES: Tuple[str, ...] = (
-    "BARBELL_SIMPLE",
-    "BARBELL_COMPOUND",
     "COMP_08PCT",
     "SIMPLE_08PCT",
     "BARBELL_60_30_10",
@@ -212,12 +209,10 @@ RESERVE_DEPOSIT_TOLERANCE_RATIO: float = float(
 # ---------------------------------------------------------------------------
 def is_barbell_mode(portion_mode: Any) -> bool:
     """
-    # MODIFIED [Case 114]:
-    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_SIMPLE · BARBELL_COMPOUND · BARBELL_60_30_10)인지 판별한다.
+    # NEW:
+    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_60_30_10 · SOXL 60% / SGOV 30% / 현금 10%)인지 판별한다.
     """
     return str(portion_mode or "").upper().strip() in (
-        "BARBELL_SIMPLE",
-        "BARBELL_COMPOUND",
         "BARBELL_60_30_10",
         "BARBELL",
         "BARBELL_04PCT",
@@ -2229,62 +2224,3 @@ def evaluate_stalker_reversal_fire(
         "rebound_from_low_pct": round(reb_pct, 3),
         "fire_reason": "STALKING_FALLING_KNIFE",
     }
-# [CASE114_BARBELL_DUAL_MODE_LOCK]
-from toss_api_core import (
-    PORTION_MODE_BARBELL_SIMPLE,
-    PORTION_MODE_BARBELL_COMPOUND,
-    CASE114_ACTIVE_BARBELL_MODES,
-    CASE114_V6_CORE_PORTION_RATIO,
-    CASE114_V6_TOTAL_SEED_RATIO,
-    normalize_case114_barbell_mode,
-    next_case114_barbell_mode,
-    is_case114_v6_barbell_mode,
-    resolve_mode_portion_ratio,
-)
-
-# [C114_VAL_V2]
-for _fn_k in ("normalize_portion_mode", "_normalize_portion_mode", "sanitize_portion_mode"):
-    _ofn = globals().get(_fn_k)
-    if callable(_ofn) and not getattr(_ofn, "_c114_n", False):
-        def _mk_n(_f):
-            def _wn(m, *a, **kw):
-                u = str(m or "").upper().strip()
-                return u if u in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") else _f(m, *a, **kw)
-            _wn._c114_n = True
-            return _wn
-        globals()[_fn_k] = _mk_n(_ofn)
-
-_onx = globals().get("next_cycled_portion_mode")
-if callable(_onx) and not getattr(_onx, "_c114_x", False):
-    def next_cycled_portion_mode(m, *a, **kw):
-        u = str(m or "").upper().strip()
-        if u in ("BARBELL_SIMPLE", "BARBELL_60_30_10", "BARBELL"):
-            return "BARBELL_COMPOUND"
-        if u == "BARBELL_COMPOUND":
-            return "BARBELL_SIMPLE"
-        return _onx(m, *a, **kw)
-    next_cycled_portion_mode._c114_x = True
-
-if "StratumLedger" in globals() and hasattr(globals()["StratumLedger"], "update_state"):
-    _sl = globals()["StratumLedger"]
-    _oupd = _sl.update_state
-    if not getattr(_oupd, "_c114_lk", False):
-        async def _c114_upd(self, symbol: str, **kw):
-            rm = kw.get("portion_mode")
-            res = await _oupd(self, symbol, **kw)
-            if rm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-                if isinstance(res, dict):
-                    res["portion_mode"] = rm
-                    res["barbell_mode"] = rm
-                sr = self.get_state(symbol)
-                if isinstance(sr, dict):
-                    sr["portion_mode"] = rm
-                    sr["barbell_mode"] = rm
-                if hasattr(self, "_save_sync"):
-                    try:
-                        await asyncio.to_thread(self._save_sync)
-                    except Exception:
-                        pass
-            return res
-        _c114_upd._c114_lk = True
-        _sl.update_state = _c114_upd

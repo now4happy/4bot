@@ -59,10 +59,7 @@ BARBELL_SOXL_WEIGHT: float = 0.60
 BARBELL_SGOV_WEIGHT: float = 0.30
 BARBELL_CASH_WEIGHT: float = 0.10
 
-# MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 유효 모드 등록
 VALID_PORTION_MODES: Tuple[str, ...] = (
-    "BARBELL_SIMPLE",
-    "BARBELL_COMPOUND",
     "COMP_08PCT",
     "SIMPLE_08PCT",
     "BARBELL_60_30_10",
@@ -200,15 +197,12 @@ def safe_int(val: Any, default: int = 0) -> int:
 
 def is_barbell_mode(portion_mode: Any) -> bool:
     """
-    # MODIFIED [Case 114]:
-    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_SIMPLE · BARBELL_COMPOUND · BARBELL_60_30_10)인지 판별한다.
+    # NEW:
+    현재 운용 모드가 ⚖️ 바벨 모드(BARBELL_60_30_10 · SOXL 60% / SGOV 30% / 현금 10% · 실현수익 별도 장부 격리)인지 판별한다.
     """
     return str(portion_mode or "").upper().strip() in (
-        "BARBELL_SIMPLE",
-        "BARBELL_COMPOUND",
         "BARBELL_60_30_10",
         "BARBELL",
-        "BARBELL_04PCT",
     )
 
 
@@ -327,15 +321,7 @@ def resolve_smart_rebound_policy(
     - 전 모드 공통: 스토커 폐기 · ±1.0% 데드존 · 무꼬리HA 양방향 패스 · 24h +1.0% 점화 · 샤프래칫(1.35➔1.15 ~ 5.00➔4.50%) · 캡 +6.0%
     """
     p_ratio = resolve_mode_portion_ratio(portion_mode)
-    m_norm = str(portion_mode or "").upper().strip()
-    # MODIFIED [Case 114]: 바벨 2모드(코어19%=전체11.4%) 배지 분리 및 Case 113 T4-B15 호환 유지
-    if m_norm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-        spec_id = "V6-BC19" if m_norm == "BARBELL_COMPOUND" else "V6-BS19"
-        badge = (
-            f"🔥v6바벨·코어{p_ratio * 100.0:.0f}%(전체{p_ratio * 60.0:.1f}%)"
-            "·T-1h(+1%)/장외(+4%)·SMA120진공탈출"
-        )
-    elif is_barbell_mode(portion_mode):
+    if is_barbell_mode(portion_mode):
         spec_id = "T4-B15"
         badge = f"🔥T4통합·황금비율{p_ratio * 100.0:.0f}%(전체9%)·±1%데드존·샤프래칫·캡6%"
     elif is_simple_income_mode(portion_mode):
@@ -1229,20 +1215,13 @@ class SoxlStratumLedger:
         st["sell_interval_min"] = LOCKED_SELL_INTERVAL_MIN
         st["max_grid_tiers"] = MAX_GRID_TIERS_7
 
-        # MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 원본 보존 및 3단 호환
+        # MODIFIED [Case 91 + 바벨 모드 3단 보존]
         raw_p_mode = (
             str(st.get("portion_mode") or PORTION_MODE_COMPOUND)
             .upper()
             .strip()
         )
-        raw_b_mode = str(st.get("barbell_mode") or "").upper().strip()
-        if raw_p_mode in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-            st["portion_mode"] = raw_p_mode
-        elif raw_b_mode in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") and (
-            isinstance(raw_st, dict) and "portion_mode" not in raw_st
-        ):
-            st["portion_mode"] = raw_b_mode
-        elif is_barbell_mode(raw_p_mode):
+        if is_barbell_mode(raw_p_mode):
             st["portion_mode"] = PORTION_MODE_BARBELL
         elif is_simple_income_mode(raw_p_mode):
             st["portion_mode"] = PORTION_MODE_SIMPLE
@@ -1802,13 +1781,7 @@ class SoxlStratumLedger:
         vault_locked = st["vaulted_profit_locked_usd"]
 
         if is_barbell_mode(st["portion_mode"]):
-            # MODIFIED [Case 114]: BARBELL_COMPOUND 시 active_seed_usd 반영 및 60% 코어 항등식 강제
-            eff_b_seed = (
-                max(init_seed, safe_float(st.get("active_seed_usd"), init_seed))
-                if str(st["portion_mode"]).upper().strip() == "BARBELL_COMPOUND"
-                else init_seed
-            )
-            soxl_core_60 = round(eff_b_seed * BARBELL_SOXL_WEIGHT, 4)
+            soxl_core_60 = round(init_seed * BARBELL_SOXL_WEIGHT, 4)
             # MODIFIED [Case 94]: 선행 익절 격리분 차감 결손 보전으로 유령현금 0% 항등식 유지
             cyc_loss_adj = min(
                 0.0,
@@ -2402,13 +2375,9 @@ class SoxlStratumLedger:
             .strip()
         )
         if target_mode is not None and str(target_mode).strip():
-            # MODIFIED [Case 114]: BARBELL_SIMPLE · BARBELL_COMPOUND 명시적 지정 보존
-            t_clean = str(target_mode).upper().strip()
-            if t_clean in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-                next_mode = t_clean
-            elif is_barbell_mode(t_clean):
+            if is_barbell_mode(target_mode):
                 next_mode = PORTION_MODE_BARBELL
-            elif is_simple_income_mode(t_clean):
+            elif is_simple_income_mode(target_mode):
                 next_mode = PORTION_MODE_SIMPLE
             else:
                 next_mode = PORTION_MODE_COMPOUND
@@ -2479,109 +2448,3 @@ class SoxlStratumLedger:
 # 하위 호환 별칭 (타 모듈 임포트 호환 100% 보장)
 StratumLedger = SoxlStratumLedger
 AssassinLedger = SoxlStratumLedger
-# [CASE114_BARBELL_DUAL_MODE_LOCK]
-PORTION_MODE_BARBELL_SIMPLE: str = "BARBELL_SIMPLE"
-PORTION_MODE_BARBELL_COMPOUND: str = "BARBELL_COMPOUND"
-CASE114_ACTIVE_BARBELL_MODES = ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
-CASE114_V6_CORE_PORTION_RATIO: float = 0.19
-CASE114_V6_TOTAL_SEED_RATIO: float = 0.114
-
-_orig_c113_resolve_ratio = globals().get("resolve_mode_portion_ratio")
-
-
-def normalize_case114_barbell_mode(portion_mode) -> str:
-    m = str(portion_mode or "").upper().strip()
-    if m in ("BARBELL_COMPOUND", "COMPOUND", "BARBELL_COMP", "V6_BARBELL_COMP"):
-        return "BARBELL_COMPOUND"
-    return "BARBELL_SIMPLE"
-
-
-def next_case114_barbell_mode(portion_mode) -> str:
-    cur = normalize_case114_barbell_mode(portion_mode)
-    return "BARBELL_COMPOUND" if cur == "BARBELL_SIMPLE" else "BARBELL_SIMPLE"
-
-
-def is_case114_v6_barbell_mode(portion_mode) -> bool:
-    m = str(portion_mode or "").upper().strip()
-    return m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
-
-
-def resolve_mode_portion_ratio(portion_mode) -> float:
-    m = str(portion_mode or "").upper().strip()
-    if m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-        return CASE114_V6_CORE_PORTION_RATIO
-    if callable(_orig_c113_resolve_ratio):
-        return float(_orig_c113_resolve_ratio(portion_mode))
-    return 0.15
-
-# [C114_VAL_V2]
-for _fn_k in ("normalize_portion_mode", "_normalize_portion_mode", "sanitize_portion_mode"):
-    _ofn = globals().get(_fn_k)
-    if callable(_ofn) and not getattr(_ofn, "_c114_n", False):
-        def _mk_n(_f):
-            def _wn(m, *a, **kw):
-                u = str(m or "").upper().strip()
-                return u if u in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") else _f(m, *a, **kw)
-            _wn._c114_n = True
-            return _wn
-        globals()[_fn_k] = _mk_n(_ofn)
-
-_onx = globals().get("next_cycled_portion_mode")
-if callable(_onx) and not getattr(_onx, "_c114_x", False):
-    def next_cycled_portion_mode(m, *a, **kw):
-        u = str(m or "").upper().strip()
-        if u in ("BARBELL_SIMPLE", "BARBELL_60_30_10", "BARBELL"):
-            return "BARBELL_COMPOUND"
-        if u == "BARBELL_COMPOUND":
-            return "BARBELL_SIMPLE"
-        return _onx(m, *a, **kw)
-    next_cycled_portion_mode._c114_x = True
-
-if "StratumLedger" in globals() and hasattr(globals()["StratumLedger"], "update_state"):
-    _sl = globals()["StratumLedger"]
-    _oupd = _sl.update_state
-    if not getattr(_oupd, "_c114_lk", False):
-        async def _c114_upd(self, symbol: str, **kw):
-            rm = kw.get("portion_mode")
-            res = await _oupd(self, symbol, **kw)
-            if rm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-                if isinstance(res, dict):
-                    res["portion_mode"] = rm
-                    res["barbell_mode"] = rm
-                sr = self.get_state(symbol)
-                if isinstance(sr, dict):
-                    sr["portion_mode"] = rm
-                    sr["barbell_mode"] = rm
-                if hasattr(self, "_save_sync"):
-                    try:
-                        await asyncio.to_thread(self._save_sync)
-                    except Exception:
-                        pass
-            return res
-        _c114_upd._c114_lk = True
-        _sl.update_state = _c114_upd
-
-# [CASE114_EXACT_V4_FINAL]
-_c114_v4_orig_is_bb = is_barbell_mode
-def is_barbell_mode(portion_mode):
-    u = str(portion_mode or "").upper().strip()
-    if u in ("BARBELL_SIMPLE", "BARBELL_COMPOUND", "BARBELL_60_30_10", "BARBELL"):
-        return True
-    return bool(_c114_v4_orig_is_bb(portion_mode))
-
-if "SoxlStratumLedger" in globals():
-    _sl_v4 = SoxlStratumLedger
-    _orig_san_v4 = _sl_v4._sanitize_and_enforce_identity
-    if not getattr(_orig_san_v4, "_c114_v4", False):
-        def _c114_sanitize_v4(self, raw_st):
-            req_m = str((raw_st or {}).get("portion_mode") or "").upper().strip() if isinstance(raw_st, dict) else ""
-            st = _orig_san_v4(self, raw_st)
-            if req_m in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-                st["portion_mode"] = req_m
-                st["barbell_mode"] = req_m
-            elif getattr(self, "folder_slug", "") == "pipiosToss":
-                st["portion_mode"] = "BARBELL_SIMPLE"
-                st["barbell_mode"] = "BARBELL_SIMPLE"
-            return st
-        _c114_sanitize_v4._c114_v4 = True
-        _sl_v4._sanitize_and_enforce_identity = _c114_sanitize_v4

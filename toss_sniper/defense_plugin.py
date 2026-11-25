@@ -2633,12 +2633,7 @@ async def execute_1600_daily_closing_settlement_plugin(
                 f"{sub_day_note}{primer_day_note}{res_note} "
                 f"· 🛡️시드패스 {day_pass:,}회 / 자투리절약 +${day_saved:,.2f} "
                 f"· 오버나이트 이월: 본 {held_sh}주({held_tiers}개층·{lot_carry_str}){sub_carry_note} · 가용현금 ${free_cash:,.2f} "
-                + (
-                    "(🌇애프터·🌃데이·🌅프리장[16:00 ~ 09:29] 전층 +4.0% 개별스윕 연속가동 · 차기 매수 T-1h 14:59 EST)"
-                    if str(updated_st.get("portion_mode") or "").upper().strip()
-                    in ("BARBELL_SIMPLE", "BARBELL_COMPOUND")
-                    else "(🌇애프터·🌃데이장 ⚡1.5s 본1·2층 개별채굴 & 3~7층 통합졸업 연속가동 · 매수잠금)"
-                )
+                f"(🌇애프터·🌃데이장 ⚡1.5s 본1·2층 개별채굴 & 3~7층 통합졸업 연속가동 · 매수잠금)"
             ),
         )
 
@@ -2763,50 +2758,3 @@ execute_1600_market_close_settlement_plugin = (
 execute_macro_defense_plugin = reconcile_stratum_with_broker_holdings_plugin
 enforce_0930_regular_cutoff_plugin = reconcile_stratum_with_broker_holdings_plugin
 execute_moc_zero_overnight_plugin = execute_1600_daily_closing_settlement_plugin
-
-# [C114_VAL_V2]
-for _fn_k in ("normalize_portion_mode", "_normalize_portion_mode", "sanitize_portion_mode"):
-    _ofn = globals().get(_fn_k)
-    if callable(_ofn) and not getattr(_ofn, "_c114_n", False):
-        def _mk_n(_f):
-            def _wn(m, *a, **kw):
-                u = str(m or "").upper().strip()
-                return u if u in ("BARBELL_SIMPLE", "BARBELL_COMPOUND") else _f(m, *a, **kw)
-            _wn._c114_n = True
-            return _wn
-        globals()[_fn_k] = _mk_n(_ofn)
-
-_onx = globals().get("next_cycled_portion_mode")
-if callable(_onx) and not getattr(_onx, "_c114_x", False):
-    def next_cycled_portion_mode(m, *a, **kw):
-        u = str(m or "").upper().strip()
-        if u in ("BARBELL_SIMPLE", "BARBELL_60_30_10", "BARBELL"):
-            return "BARBELL_COMPOUND"
-        if u == "BARBELL_COMPOUND":
-            return "BARBELL_SIMPLE"
-        return _onx(m, *a, **kw)
-    next_cycled_portion_mode._c114_x = True
-
-if "StratumLedger" in globals() and hasattr(globals()["StratumLedger"], "update_state"):
-    _sl = globals()["StratumLedger"]
-    _oupd = _sl.update_state
-    if not getattr(_oupd, "_c114_lk", False):
-        async def _c114_upd(self, symbol: str, **kw):
-            rm = kw.get("portion_mode")
-            res = await _oupd(self, symbol, **kw)
-            if rm in ("BARBELL_SIMPLE", "BARBELL_COMPOUND"):
-                if isinstance(res, dict):
-                    res["portion_mode"] = rm
-                    res["barbell_mode"] = rm
-                sr = self.get_state(symbol)
-                if isinstance(sr, dict):
-                    sr["portion_mode"] = rm
-                    sr["barbell_mode"] = rm
-                if hasattr(self, "_save_sync"):
-                    try:
-                        await asyncio.to_thread(self._save_sync)
-                    except Exception:
-                        pass
-            return res
-        _c114_upd._c114_lk = True
-        _sl.update_state = _c114_upd

@@ -1970,6 +1970,10 @@ async def run_auto_update_loop(
     context: Any,
     interval_sec: float = AUTO_UPDATE_CHECK_INTERVAL_SEC,
 ) -> None:
+    # [USER 2026-11-25] 자동업뎃 OFF — 23a16d5 롤백 유지용. 다시 켜려면 이 블록을 지울 것.
+    # (바로 return하면 Case 108 워치독이 워커 사망으로 보고 os.execv 재기동 루프를 타서, 종료 신호 올 때까지 대기한다.)
+    await context.shutdown_event.wait()
+    return
     raw_iv = float(interval_sec or AUTO_UPDATE_CHECK_INTERVAL_SEC)
     if raw_iv >= 3600.0:
         raw_iv = AUTO_UPDATE_CHECK_INTERVAL_SEC
