@@ -405,8 +405,8 @@ def is_late_cutoff(now_et):
 
 
 # ---- v2.11.0 판 38 시간 확대: 매수 창·매도 창 (원작 is_active_buy_window · is_active_sell_window 를 어댑터로 그대로 부름)
-STATUS_PRE, STATUS_REGULAR, STATUS_AFTER = "003", "004", "005"    # 메리츠 장운영 코드. 004 만 공식 근거(us_market_status 주석). 003(프리)·005(장후)는 v2.0.5 주석뿐 — 미확인
-SELL_STATUS = (STATUS_PRE, STATUS_REGULAR, STATUS_AFTER)          # 이 코드일 때만 매도 주문 (그 밖 코드는 메리츠 접수 여부 미확인이라 안 냄)
+STATUS_NIGHT, STATUS_PRE, STATUS_REGULAR, STATUS_AFTER = "001", "003", "004", "005"    # 메리츠 장운영 코드. 004 만 공식 근거(us_market_status 주석). 003(프리)·005(장후)는 v2.0.5 주석뿐 — 미확인. 001(야간·데이마켓 20:00~03:50 ET)은 2026-11-24 실시간 확인 (판 42 Q1)
+SELL_STATUS = (STATUS_NIGHT, STATUS_PRE, STATUS_REGULAR, STATUS_AFTER)          # 이 코드일 때만 매도 주문 (그 밖 코드는 메리츠 접수 여부 미확인이라 안 냄)
 BUY_STATUS = (STATUS_PRE, STATUS_REGULAR)                         # 프리장 매수 접수는 미확인 — 거절되면 main.py 가 5분 쉼 (buy_block_until)
 
 
@@ -892,7 +892,7 @@ TOPUP_DROP_KEYS = ("no", "placed_ts", "notified_qty", "ts", "topup_done", "statu
 
 
 def topup_find(orders, rows, open_orders):
-    """오늘 낸 스나이퍼 매수 중 '일부만 체결되고 더는 열려 있지 않은 것'(앱에서 취소·장 마감 등 — 메리츠 API 에 취소가 없어 봇은 못 닫음) → 보충 대기 dict 또는 None.
+    """오늘 낸 스나이퍼 매수 중 '일부만 체결되고 더는 열려 있지 않은 것'(앱에서 취소·장 마감·60초 안전 취소 등 — 판 42부터 봇도 60초 뒤 취소함) → 보충 대기 dict 또는 None.
     원작 rem_quota_qty = 1층 목표 수량 − 체결 수량. 여기서는 주문 수량 − 누적 체결 수량. 이미 보충 주문을 낸 주문(topup_done)은 제외 (같은 잔량을 두 번 내지 않게).
     orders = 오늘 기록 m["orders"] · rows = {주문번호: {"qty": 누적 체결}} · open_orders = 아직 열린 매수 주문 목록 (sniper_open_orders). 가장 나중에 낸 주문 1건"""
     open_nos = {str(o.get("no")) for o in (open_orders or []) if isinstance(o, dict)}
