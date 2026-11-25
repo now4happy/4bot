@@ -87,7 +87,9 @@ def send(text, cfg_path, opener=None, sleep=time.sleep):
 
 
 def same_bot_or_room(cfg_a, cfg_b):
-    """두 설정 파일이 같은 봇 토큰이거나 같은 방이면 이유 문자열, 아니면 None (섞임 방지).
+    """두 설정 파일이 같은 봇 토큰이거나 같은 그룹 방이면 이유 문자열, 아니면 None (섞임 방지).
+    개인 채팅의 chat_id(양수)는 사용자 번호라 어느 봇이든 같다 → 토큰이 다르면 다른 채팅이므로 막지 않는다.
+    양수 숫자가 아닌 chat_id(음수 그룹, @이름)가 같으면 막는다.
     값은 출력하지 않는다. 한쪽이라도 못 읽으면 비교할 수 없으니 None (못 읽는 설정으로는 어차피 못 보낸다)."""
     try:
         ta, ca = load_cfg(cfg_a)
@@ -96,7 +98,7 @@ def same_bot_or_room(cfg_a, cfg_b):
         return None
     if hashlib.sha256(str(ta).encode("utf-8")).digest() == hashlib.sha256(str(tb).encode("utf-8")).digest():
         return "같은 봇 토큰"
-    if str(ca) == str(cb):
+    if str(ca) == str(cb) and not str(ca).isdigit():
         return "같은 방(chat_id)"
     return None
 
