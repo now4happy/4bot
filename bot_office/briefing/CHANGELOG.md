@@ -1,5 +1,10 @@
 # briefing 변경 기록
 
+## v1.0.4 · 2026-11-25 15:23 (KST)
+- 파일: tg_send.py
+- 내용: 3차 rev2: 가드 오판 고침 + VR6 상태 파일 원인 기록
+- 브랜치: staging
+
 ## v1.0.3 · 2026-11-25 14:22 (KST)
 - 파일: need_table.py, render.py, run.py, tg_send.py
 - 내용: 3차: 새 봇 방 + 9시 KST + 읽기 편한 형식 + 완충 규칙 (rev1)

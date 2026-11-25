@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v2.0.3 · 2026-11-25 15:23 (KST)
+- 파일: office_briefing.py
+- 내용: 3차 rev2: 가드 오판 고침 + VR6 상태 파일 원인 기록
+- 브랜치: staging
+
 ## v2.0.2 · 2026-11-24 09:12 (KST)
 - 파일: bot_updater.py
 - 내용: bot_updater: captures/ 데이터 브랜치를 업데이트 대기에서 제외

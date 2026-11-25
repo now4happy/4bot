@@ -3,7 +3,7 @@
 > ⚠️ 이 파일은 업데이트 비서가 자동으로 씁니다. **손으로 고치지 마세요** (고쳐도 다음 기록 때 덮어씀).
 > 규칙·설명은 START.md · docs/handoff/ · 작업 기록은 docs/log/ 에 새 파일로.
 
-- 갱신: 2026-11-25 13:51 (KST) · 계기: 업데이트 적용 (staging: 판 43 (v2.16.0): 탑 매도 후 미완성 F 2개 방지 — 빈 F 삭제 + Q1 합치기 + Q5 초과분 분리)
+- 갱신: 2026-11-25 15:23 (KST) · 계기: 업데이트 적용 (staging: 3차 rev2: 가드 오판 고침 + VR6 상태 파일 원인 기록)
 
 ## 봇별 현재 상태
 
@@ -13,13 +13,13 @@
 | 2번 토스 스나이퍼 | `toss_sniper` | 🟢 실행 중 (11-25 11:59 KST부터) | v1.2.8 | 2026-11-18 19:45 | toss: 공유 토큰 복원 (a) + 동기화 뒤 훅 자동 재적용 Q5 (방 room2-toss-sniper) |
 | 3번 토스 적립 | `toss_dca` | ⚪ 꺼짐 | - | - | - |
 | 4번 빗썸 적립 | `bithumb_bot` | 🟢 실행 중 (11-20 12:16 KST부터) | v4.4.1 | 2026-11-20 12:17 | audit-fix-v2 r3: 7번 탑쌓기 전용 (사다리 삭제) + 전 봇 구멍 고침, 7번 v2.2.10, |
-| 5번 사무실 비서 | `bot-office` | ⚪ 꺼짐 | v2.0.2 | 2026-11-24 09:12 | bot_updater: captures/ 데이터 브랜치를 업데이트 대기에서 제외 |
+| 5번 사무실 비서 | `bot-office` | ⚪ 꺼짐 | v2.0.3 | 2026-11-25 15:23 | 3차 rev2: 가드 오판 고침 + VR6 상태 파일 원인 기록 |
 | 메리츠 SOXL 하이브리드모드 | `meritz_laoer` | 🟢 실행 중 (11-25 13:51 KST부터) | v1.5.0 | 2026-11-25 13:51 | 판 43 (v2.16.0): 탑 매도 후 미완성 F 2개 방지 — 빈 F 삭제 + Q1 합치기 + Q5 초과 |
 | 메리츠 적립 | `meritz_dca` | 🟢 실행 중 (11-25 11:52 KST부터) | v1.3.4 | 2026-11-20 13:53 | audit-fix-v2 r4 + r4-fix: 7번 v2.2.13, 6번 v1.3.4, 1번 v1.0.6 |
 
 ## 사무실 상시 서비스
 
-- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-20 12:17 KST부터)
+- 7번 비서(브리핑·PC감시) `bot-office-secretary`: 🟢 실행 중 (11-25 15:23 KST부터)
 - 5번 팬딩 가격표 `bot-office-fanding`: 🟢 실행 중 (11-24 09:01 KST부터)
 - 사무실 터널 `bot-office-tunnel`: ⚪ 꺼짐
 - 6번 업데이트 비서 `bot-updater`: 🟢 실행 중 (11-24 09:12 KST부터)
@@ -28,6 +28,7 @@
 
 ## 최근 적용 10건
 
+- 2026-11-25 15:23 · 5번 사무실 비서 v2.0.3 · office_briefing.py · 3차 rev2: 가드 오판 고침 + VR6 상태 파일 원인 기록
 - 2026-11-25 13:51 · 메리츠 SOXL 하이브리드모드 v1.5.0 · main.py, tower_strategy.py · 판 43 (v2.16.0): 탑 매도 후 미완성 F 2개 방지 — 빈 F 삭제 + Q1 합치기 + Q5 초과
 - 2026-11-25 13:40 · 메리츠 SOXL 하이브리드모드 v1.4.10 · main.py, tower_strategy.py · 메리츠 v2.16.0 (판 43): 탑 매도 후 미완성 F 2개 방지 — 빈 F 삭제(완성 F가 다시 미완성
 - 2026-11-25 13:14 · 메리츠 SOXL 하이브리드모드 v1.4.9 · assassin_live.py, barbell_adapter.py, config.py, free_cash.p · 메리츠 v2.15.0 (판 41): 암살자 실전 루프 + GUARD30 수혈 + 틱 종료 분리 + 마감 일일
@@ -37,7 +38,6 @@
 - 2026-11-24 12:41 · 메리츠 SOXL 하이브리드모드 v1.4.7 · barbell_adapter.py, config.py, main.py, sniper_adapter.py, s · 메리츠 v2.13.0 (판 40): 1.5초 루프 + 암살자 실전(부분) + 매도 창 전체 + GUARD30
 - 2026-11-24 11:15 · 메리츠 SOXL 하이브리드모드 v1.4.6 · config.py, main.py, meritz_api.py, sniper_adapter.py, sniper · 메리츠 v2.12.0 (판 39): 첫 매수 원작화 + 메뉴 원작화
 - 2026-11-24 10:13 · 메리츠 SOXL 하이브리드모드 v1.4.6 · README.md, config.py, main.py, meritz_api.py, sniper_adapter · 메리츠 v2.12.0 (판 39): 첫 매수 원작 분기 A(가격 조건 없이 현재가·검문 포함) + 레이더 전
-- 2026-11-24 09:41 · 메리츠 SOXL 하이브리드모드 v1.4.5 · main.py, ORIGIN.json, barbell_plugin.py, sniper_exit_plugin. · 메리츠 v2.11.0 (판 38): Audit-113 동기화 + 시간 확대
 
 ## 대기 중인 업로드 (아직 승인 안 됨)
 
