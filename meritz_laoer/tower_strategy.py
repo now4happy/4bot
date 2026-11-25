@@ -1,5 +1,8 @@
 # ==========================================================
 # FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.16.0 (2026-11-25, 판 43): _apply_sell — 매도로 완성 F가 다시 미완성이 되면 빈 F(st['empty'])를 전부 없앰 → 다음 매수가 그 미완성 F부터 채움 (미완성 F 2개 방지)
+#   + Q1 합치기: 탑 매도로 미완성 F가 2개가 되면 방금 미완성이 된 F를 원래 있던 미완성 F에 합침 (merge_due — 매도 주문 전량 체결 때, 부분 체결로 끝나면 reconcile 때)
+#   + Q5 초과분 분리: 합산 원가가 F 목표($15,000)를 넘으면 목표를 안 넘는 가장 큰 정수 주식수는 원래 F 번호의 완성 F, 나머지는 같은 평단의 새 공사중 F (_split_over)
 # v2.15.0 (2026-11-25, 판 41 할 일 5): 바벨 삭제 — barbell_factor(F 완성 기준·버킷 시드 0.60 배율)·BARBELL_PORTION_PCT·portion_mode 의 바벨 분기 제거. portion_mode 는 단리 10%·복리 8% 둘뿐. 바벨이 꺼져 있었으므로 지금 동작(배율 1.0) 그대로
 # v2.12.0 (2026-11-24, 판 39): portion_mode 신설(복리 8%·단리 10%·바벨 15%) · portion_pct 가 설정 sniper_portion_pct 를 더 안 읽음 · tower_remaining_seed_usd·REMAINING_SEED_USD 삭제
 # v2.10.0 (2026-11-23, 판 36 D5): 눌림 매수 기본 8% → 10%, 바벨 켜짐이면 15%(BARBELL_PORTION_PCT, 시드 $9,000 → $1,350). 돌파 매수 비율(BREAKOUT_PORTION_PCT·breakout_portion_pct/usd) 삭제 (설정 키는 남아 있어도 무시)
@@ -703,6 +706,10 @@ def _absorb_into_open_floor(st, order, q, amt):
 def _apply_buy(st, order, q, amt):
     f = _by_id(st, order.get("floor_id"))
     nf = order.get("new_floor")
+    if f is None and not isinstance(nf, dict):
+        f = _by_moved_id(st, order.get("floor_id"))
+    if not isinstance(nf, dict):
+        f = _split_rest(st, f) or f
     amt0 = amt
     if f is None and isinstance(nf, dict):                           # 새 F 계획 (그 F는 아직 없음)
         q, amt = _absorb_into_open_floor(st, order, q, amt)          # v2.2.5·v2.2.6: 위에 미완성 F가 있으면 그 F 빈칸 먼저
@@ -735,6 +742,10 @@ def _apply_sniper_buy(st, order, q, amt, gap, start_usd):
     F 원가가 목표에서 TOL_USD 이내로 모자라거나, 남은 몫(목표 − 원가)이 체결 평균가 1주보다 작으면 완성(done). 아니면 남은 시드를 다음 스나이퍼 매수가 채우도록 미완성으로 둠 (탑쌓기로 바꿔도 칸은 _topup_setup 이 준비)"""
     f = _by_id(st, order.get("floor_id"))
     nf = order.get("new_floor")
+    if f is None and not isinstance(nf, dict):
+        f = _by_moved_id(st, order.get("floor_id"))
+    if not isinstance(nf, dict):
+        f = _split_rest(st, f) or f
     if f is None and isinstance(nf, dict):
         f = _floor(nf["id"], 0, 0.0, nf["target"], "sniper")
         f["indep"] = bool(nf.get("indep"))                            # v2.4.0: 스나이퍼 선택으로 만든 F는 평단이 위 F보다 높아도 합병하지 않음
@@ -795,8 +806,20 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
     """매도 체결 반영. 주문에 floor_id 가 있으면 그 F만 (v2.2.6 F별 매도). 없으면(예전 주문) 예전처럼 F별 보유 비율대로.
     잔여 원가 계산에 쓴 '뺀 원가'는 st["_cost_removed"] 에 임시로 둠 (main 이 장부에 같은 값을 쓰고 지움 — 파일에 저장하지 않음)"""
     floors = top_down(st)
+    was_complete = [f for f in floors if is_complete(f)]             # v2.16.0 판 43: 매도 전 완성 F
     removed, sold = 0.0, []
     tf = _by_id(st, order.get("floor_id")) if order.get("floor_id") is not None else None
+    rest = _split_rest(st, tf) if order.get("mode") == "sniper" else None
+    if rest is not None:                                             # v2.16.0 Q5: 나누기 전에 나간 버킷 매도 → 공사중 F 에서 먼저 빼고, 모자라는 몫만 완성 F 에서 (미완성 F 1개 유지)
+        k = min(q, int(_f(rest.get("qty"))))
+        _apply_sell(st, dict(order, floor_id=int(rest["id"]), box_id=None), k, amt * k / q, gap, start_usd)
+        first = _f(st.pop("_cost_removed", 0.0))
+        if q > k:
+            tf.pop("split_to", None)
+            _apply_sell(st, dict(order, box_id=None), q - k, amt * (q - k) / q, gap, start_usd)
+            first += _f(st.pop("_cost_removed", 0.0))
+        st["_cost_removed"] = round(first, 4)
+        return
     if tf is not None:
         a = min(q, int(_f(tf.get("qty"))))
         bid = order.get("box_id")
@@ -849,6 +872,11 @@ def _apply_sell(st, order, q, amt, gap, start_usd):
             f["rebuy_pending"] = not f.get("done")                   # 다시 살 게 없는(완성) F는 매도 금지를 걸지 않음 — 걸면 풀 매수가 영영 없음
             if not f.get("done"):                                    # v2.5.0 판 25: 탑 매도로 일부 비워진 F는 잠금을 풀어 다시 공사중 버킷으로 (스나이퍼가 채움 · 채워지면 다시 완성 F)
                 f["locked"] = False
+    if any(int(_f(f.get("qty"))) > 0 and not is_complete(f) for f in was_complete):
+        st["empty"] = []                                             # v2.16.0 판 43: 완성 F가 다시 미완성 → 빈 F 전부 삭제 (plan_buy 는 빈 F를 미완성 F보다 먼저 채움)
+    if (tf is not None and order.get("mode") != "sniper" and any(tf is f for f in was_complete) and int(_f(tf.get("qty"))) > 0 and not is_complete(tf)
+            and any(not any(f is w for w in was_complete) and not is_complete(f) for f in st["floors"])):
+        tf["merge_due"] = str(order.get("no") or "")                 # v2.16.0 Q1: 탑 매도로 미완성 F가 2개 → 합치기 예약 (부분 체결 중에는 F 번호를 유지)
     st["_cost_removed"] = removed
 
 
@@ -888,6 +916,8 @@ def apply_fill_delta(st, order, cum_qty, cum_amount, gap=GAP_USD, start_usd=0.0)
     if dq <= 0 or da <= 0:
         return 0, 0.0
     apply_fill(st, order, dq, da, gap, start_usd)
+    if order.get("kind") == "sell" and cq >= int(_f(order.get("qty"))):
+        merge_due(st, gap, start_usd, no=no)                          # v2.16.0 Q1: 매도 주문이 전량 체결되면 합침
     if no:
         st["applied"][no] = {"q": cq, "amt": round(ca, 4)}
         while len(st["applied"]) > APPLIED_KEEP:
@@ -984,6 +1014,71 @@ def _merge(a, b, gap, start_usd=0.0, st=None):
     return m
 
 
+def merge_due(st, gap=GAP_USD, start_usd=0.0, no=None):
+    """v2.16.0 판 43 Q1: 합치기 예약(merge_due)이 있는 F를 원래 있던 미완성 F(여럿이면 가장 위)에 합침. 주식수·원가는 합산 (평단 = 원가 가중평균), id 는 원래 있던 F 것을 유지.
+    no 를 주면 그 매도 주문의 예약만, 없으면 전부. 그 사이 둘 중 하나가 완성됐거나 없어졌으면 합치지 않고 예약만 지움. → 알림 글자 목록"""
+    notes = []
+    for src in [f for f in top_down(st) if "merge_due" in f and (no is None or f["merge_due"] == no)]:
+        key = src.pop("merge_due")
+        if int(_f(src.get("qty"))) <= 0 or is_complete(src):
+            continue
+        dst = next((f for f in top_down(st) if f is not src and "merge_due" not in f and int(_f(f.get("qty"))) > 0 and not is_complete(f)), None)
+        if dst is None:
+            continue
+        m = _merge(dst, src, gap, start_usd, st)
+        m["id"] = int(dst["id"])                                      # 원래 있던 F 번호 유지 (그 F에 이미 나간 주문의 floor_id 가 계속 맞음)
+        _topup_setup(m, gap, start_usd)
+        m["rebuy_pending"] = bool((dst.get("rebuy_pending") or src.get("rebuy_pending")) and not m["done"])
+        m["indep"] = bool(dst.get("indep") or src.get("indep"))
+        m["keep_once"] = True                                         # 다음 normalize 한 번은 꼬인 F 합병에서 제외 (합친 평단이 중간 완성 F보다 높아져도 그 F까지 합치지 않음)
+        m["merged_ids"] = list(dst.get("merged_ids") or []) + list(src.get("merged_ids") or []) + [int(src["id"])]
+        m["merged_sell_nos"] = list(dst.get("merged_sell_nos") or []) + list(src.get("merged_sell_nos") or []) + ([key] if key else [])
+        notes.append(f"미완성 F 합치기: {int(src['qty'])}주·${_f(src['cost']):,.2f} + {int(dst['qty'])}주·${_f(dst['cost']):,.2f} → {m['qty']}주 평단 ${floor_avg(m):.2f}")
+        rest = _split_over(st, m, gap, start_usd) if _f(m["cost"]) > _f(m["target"]) + 1e-6 else None
+        st["floors"] = [m if f is dst else f for f in st["floors"] if f is not src]
+        if rest is not None:
+            st["floors"].append(rest)
+            notes.append(f"목표 초과분 분리: 완성 F {m['qty']}주·${_f(m['cost']):,.2f} + 새 공사중 F {rest['qty']}주·${_f(rest['cost']):,.2f} (평단 ${floor_avg(rest):.2f})")
+    return notes
+
+
+def _split_over(st, m, gap, start_usd=0.0):
+    """v2.16.0 판 43 Q5: 합친 F m 의 원가가 목표를 넘을 때 — m 은 목표를 안 넘는 가장 큰 정수 주식수의 완성 F 로 줄이고, 나머지(평단 같음, 원가 합 보존)를 담은 새 공사중 F 를 돌려줌 (st["floors"] 에는 부른 쪽이 넣음). 나눌 수 없으면 None"""
+    q, c, tg = int(m["qty"]), _f(m["cost"]), _f(m["target"])
+    avg = c / q
+    n = int(math.floor(tg / avg + 1e-9))
+    if not 1 <= n < q:
+        return None
+    full_cost = min(round(n * avg, 4), tg)
+    nid = max(int(_f(st.get("next_id"))), max(int(_f(f.get("id"))) for f in st["floors"]) + 1)
+    rest = _floor(nid, q - n, c - full_cost, tg, "merged")
+    _topup_setup(rest, gap, start_usd)
+    rest["rebuy_pending"] = bool(m.get("rebuy_pending") and not rest["done"])
+    rest["indep"] = True                                              # 완성 F 와 평단이 같아서, 이 표시가 없으면 normalize 가 둘을 다시 합침
+    rest["merged_sell_nos"] = list(m.get("merged_sell_nos") or [])    # 새 F 도 오늘은 매도 안 함 (방금 판 F의 잔여분이 섞여 있음)
+    rest["merged_ids"] = m.pop("merged_ids", [])                      # 없어진 F 번호의 늦은 매수는 공사중 F 로
+    st["next_id"] = nid + 1
+    m.update(qty=n, cost=full_cost, done=True, closed=False, levels=[], settled=[], base_usd=0.0, carry_usd=0.0, rebuy_pending=False, locked=False, boxes=[])
+    m["split_to"] = nid                                               # 원래 F 번호로 이미 나간 주문의 늦은 체결 → 공사중 F (매수는 거기에, 스나이퍼 매도는 거기서 먼저)
+    return rest
+
+
+def _split_rest(st, f):
+    """v2.16.0 Q5: f 가 방금 나눈 완성 F 이면 짝이 되는 공사중 F, 아니면 None"""
+    return _by_id(st, f.get("split_to")) if f is not None and f.get("split_to") is not None else None
+
+
+def _by_moved_id(st, fid):
+    """v2.16.0 Q1: 합쳐져 없어진 F 번호로 낸 매수의 체결 → 합친 F"""
+    return next((f for f in st.get("floors") or [] if fid is not None and int(_f(fid)) in (f.get("merged_ids") or [])), None)
+
+
+def merged_floor_ids(st, sell_nos):
+    """v2.16.0 Q1: sell_nos(오늘 매도 주문번호들)의 매도 잔여분을 받은 F id 집합 — 방금 판 잔여분이 같은 날 다시 팔리지 않게 main 이 그 F의 매도를 건너뜀"""
+    nos = {str(n) for n in sell_nos if n}
+    return {int(f["id"]) for f in st.get("floors") or [] if nos & set(f.get("merged_sell_nos") or [])}
+
+
 def normalize(st, gap=GAP_USD, start_usd=0.0):
     """수량 0 인 F 정리 → 꼬인 F 합병(위 F보다 평단이 같거나 높으면 가중평균으로 합침) → 평단 오름차순 재배치(id 는 위에서부터 다시 붙임). → 알림 글자 목록"""
     notes = []
@@ -993,7 +1088,7 @@ def normalize(st, gap=GAP_USD, start_usd=0.0):
     out = []
     for f in fl:
         cur = f
-        while out and floor_avg(cur) >= floor_avg(out[-1]) - 1e-9 and not (cur.get("indep") or out[-1].get("indep")):
+        while out and floor_avg(cur) >= floor_avg(out[-1]) - 1e-9 and not (cur.get("indep") or out[-1].get("indep") or cur.get("keep_once") or out[-1].get("keep_once")):
             top = out.pop()
             notes.append(f"F 합병: 평단 ${floor_avg(top):.2f} + 평단 ${floor_avg(cur):.2f} → 수량 {int(top['qty']) + int(cur['qty'])}주")
             cur = _merge(top, cur, gap, start_usd, st)
@@ -1001,6 +1096,9 @@ def normalize(st, gap=GAP_USD, start_usd=0.0):
     out.sort(key=lambda f: -floor_avg(f))                            # 위(평단 높은 F)부터 번호를 다시 붙임
     for i, f in enumerate(out, 1):
         f["id"] = i
+        f.pop("keep_once", None)
+        f.pop("merged_ids", None)                                     # 번호를 다시 붙였으니 옛 번호 기록은 뜻이 없음
+        f.pop("split_to", None)
     st["floors"] = sorted(out, key=floor_avg)                        # 저장은 평단 오름차순 (수량·투자금 보존)
     st["next_id"] = len(out) + 1
     return notes
@@ -1026,6 +1124,7 @@ def reconcile(st, qty, principal, gap=GAP_USD, s=None):
         st["applied"] = keep                                          # 반영한 주문번호 기록은 지키지 않으면 같은 체결을 다시 넣을 수 있음
         notes.append(f"F 없음 → 현재 보유분 {qty}주를 1F로 만듦")
         return st, notes
+    notes += merge_due(st, gap, start_usd)                           # v2.16.0 Q1: 부분 체결로 끝난 탑 매도의 합치기 (합계는 안 바뀜)
     tq, tc = totals(st)
     dq, dc = qty - tq, round(principal - tc, 4)
     if dq != 0 or abs(dc) > 0.01:

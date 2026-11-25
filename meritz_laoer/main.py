@@ -890,7 +890,8 @@ def run_intraday_sell(s, api, note, allow_new_sells=True):
     n_sell = TW.sell_layers(s)
     sold_n = len(used) + anon_sold
     left_n = max(0, n_sell - sold_n)
-    reached_now = [o for o in plan["orders"] if o.get("kind") == "sell" and o.get("reached") and int(o["floor_id"]) not in used]
+    merged_today = TW.merged_floor_ids(sim, [x.get("no") for x in m["orders"] if isinstance(x, dict) and x.get("side") in (None, "SELL")])      # v2.16.0 판 43 Q1: 오늘 판 F의 잔여분을 받은 F도 오늘은 안 팜
+    reached_now = [o for o in plan["orders"] if o.get("kind") == "sell" and o.get("reached") and int(o["floor_id"]) not in used | merged_today]
     sells, held_back = pick_sells(reached_now, left_n)
     nos = SN.sniper_numbers(sim)      # 표시용 F 번호 {층 id: 스나이퍼 번호} (sim = 오늘 체결 반영 뒤 상태)
     if left_n <= 0 and held_back:
@@ -1597,6 +1598,7 @@ def run_sniper_dry(s, api, note):
     SN.update_peak(ss, SN.layer_count(SN.active_floors(sim)), q)
     cfg._save_json(DRY_SNIPER_FILE, ss)
     done_sell = {int(o["floor_id"]) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is None}
+    done_sell |= TW.merged_floor_ids(sim, [o.get("no") for o in m["orders"] if o.get("side") == "SELL"])      # v2.16.0 판 43 Q1
     done_boxes = {(int(o["floor_id"]), int(o["box_id"])) for o in m["orders"] if o.get("side") == "SELL" and o.get("floor_id") is not None and o.get("box_id") is not None}      # v2.6.0 버킷별 매도: 버킷 단위로 건너뜀
     out = []
     if n.time() < datetime.time(20, 0):                                      # 판 39 수정 1차: 16:10 → 20:00 (실거래 틱·동기화 시각과 같게 — 모의만 16:10 에 매도를 멈추면 16:10~20:00 이 실거래와 달라짐)
@@ -1963,6 +1965,7 @@ def run_sniper_tick(s, api, note):
             busy_boxes.add(k)
     busy |= sold_floor_ids_today(m, rows, open_rows)                    # v2.3.0: 오늘 이미 매도 주문이 나간 F는 다시 안 냄 (F 단위 주문만 — 버킷 주문은 버킷 단위로 아래에서 봄)
     busy_boxes |= sold_box_keys_today(m, rows, open_rows)
+    busy |= TW.merged_floor_ids(sim, [x.get("no") for x in m["orders"] if isinstance(x, dict) and x.get("side") == "SELL"])      # v2.16.0 판 43 Q1: 방금 판 잔여분이 합쳐진 F는 오늘 매도 안 함
     need_q = sum(o["qty"] for o in SN.plan_sells(s, sim, px, 10 ** 9, skip_ids=busy, skip_boxes=busy_boxes)[0])       # 판 31 질문 3: 원작식 — 목표 수량을 먼저 구하고 매도가능이 그만큼 될 때까지 2초(0.25초 간격) 기다림
     if need_q > 0:
         sellable = SN.wait_sellable(lambda: getattr(api, "raw", api).holding(s["symbol"])[1], need_q)      # 판 40: 캐시 말고 지금 값

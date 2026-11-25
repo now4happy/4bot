@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.10 · 2026-11-25 13:40 (KST)
+- 파일: main.py, tower_strategy.py
+- 내용: 메리츠 v2.16.0 (판 43): 탑 매도 후 미완성 F 2개 방지 — 빈 F 삭제(완성 F가 다시 미완성이 되면 빈 F 전부 삭제) + Q1 합치기(방금 판 F를 원래 미완성 F에 합침, 전량 체결 때·부분 체결로 끝나면 동기화 때, 원래 F 번호 유지) + Q5 초과분 분리(합산 15,000달러 초과분은 같은 평단의 새 공사중 F로, 스나이퍼가 계속 채움) + 합친 F·새 공사중 F 당일 매도 차단. 시험 파일(test_hybrid_v430)은 검토 폴더에만 둠
+- 브랜치: staging
+
 ## v1.4.9 · 2026-11-25 13:14 (KST)
 - 파일: assassin_live.py, barbell_adapter.py, config.py, free_cash.py, main.py, meritz_api.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
 - 내용: 메리츠 v2.15.0 (판 41): 암살자 실전 루프 + GUARD30 수혈 + 틱 종료 분리 + 마감 일일결산 + 바벨 삭제
