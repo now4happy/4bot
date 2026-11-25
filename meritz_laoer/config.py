@@ -62,7 +62,7 @@ SAFE_DEFAULTS = {
     "sniper_tp_l1_pct": 1.0,               # v2.2.20 스나이퍼 1층(공격 층 = 평단 가장 낮은 F) 익절 % (F 평단 +이 % 에 그 F 전량)
     "sniper_tp_upper_pct": 1.0,            # v2.2.20 스나이퍼 상단층 익절 %
     "sniper_tick_sec": 1.5,                # v2.13.0 판 40 할 일 1: 스나이퍼 틱 간격(초, 1.5~3600). 되돌리기: API·서버 부하 문제가 보이면 30 으로 (코드 수정 없이 설정만 — VERIFY.md '되돌리기 조건'). 서버 설정 파일 값이 우선
-    "assassin_live_unlock": False,         # v2.13.0 판 40 할 일 2: 암살자 실전 승격 잠금 (기본 잠김). 실전 매매 루프가 아직 연결 안 돼서 true 로 바꾸지 말 것 — 승격이 되면 스나이퍼·바벨 매매가 막힘
+    "assassin_live_unlock": True,          # 판 41 할 일 1: 암살자 실전 루프 연결됨 → 승격 잠금 해제 (되돌리기: false). 승격은 텔레그램 2단계 확인 그대로
     "sniper_book_sec": 10,                 # v2.13.0 판 40: 1.5초 틱 사이에 체결·잔고·미체결·예수금 조회를 다시 쓰는 시간(초, 1~60). 주문을 낸 직후엔 즉시 다시 조회
     "intraday_sell_check_sec": 30,         # v2.0.3 당일 매도 (v2.2.6 기본 120→30): 장중 이 간격(초)마다 매도 조건·체결(알림) 확인. 0 이면 끄고 예전처럼 아침 주문만. LIMIT 주문일 때만 동작. 서버 설정 파일에 값이 있으면 그 값이 우선
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
@@ -207,16 +207,13 @@ def validate_settings(s):
         if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or _f(v) <= 0):
             bad.append(f"{k} 는 0 보다 큰 숫자 ({nm})")
     # v2.10.0 판 36 D4: sniper_breakout_portion_pct(돌파 매수 비율)는 돌파 폐기로 안 씀 — 설정 파일에 남아 있어도 검사·사용 없이 무시
-    # v2.12.0 판 39: sniper_portion_pct(눌림 매수%) 삭제 — 비율은 모드(복리 8·단리 10·바벨 15)로만 정함. 설정 파일에 남아 있어도 검사·사용 없이 무시
+    # v2.12.0 판 39: sniper_portion_pct(눌림 매수%) 삭제 — 비율은 모드(복리 8·단리 10)로만 정함. 설정 파일에 남아 있어도 검사·사용 없이 무시
     ce = s.get("compound_enabled")      # v2.12.0 판 39: 복리 모드 — 없으면 꺼짐(단리), 있으면 true/false 만
     if ce is not None and not isinstance(ce, bool):
         bad.append("compound_enabled 는 true 또는 false (복리 모드)")
     tm = s.get("trade_mode")      # v2.9.0 6차 판 33: 매매 모드 — 없으면 sniper(하이브리드 스나이퍼), 있으면 sniper | tower 만
     if tm is not None and tm not in ("sniper", "tower"):
         bad.append("trade_mode 는 sniper 또는 tower (매매 모드)")
-    be = s.get("barbell_enabled")      # v2.9.0 7차 판 34 2차: 바벨 모드 켜기 — 없으면 꺼짐, 있으면 true/false 만
-    if be is not None and not isinstance(be, bool):
-        bad.append("barbell_enabled 는 true 또는 false (바벨 모드 켜기)")
     bg = s.get("tower_buy_gap_usd")      # 탑쌓기 매매 매수 간격 — 없으면 5, 있으면 1~10 정수
     if bg is not None and (isinstance(bg, bool) or not isinstance(bg, (int, float)) or not (1 <= _f(bg) <= 10) or _f(bg) != int(_f(bg))):
         bad.append("tower_buy_gap_usd 는 1~10 정수 (탑쌓기 매매 매수 간격, 달러)")

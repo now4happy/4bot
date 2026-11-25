@@ -878,14 +878,6 @@ def ha_wait_mark(state, now_et, ha, mono=None):
     return state["ha_wait"]
 
 
-def guard30_check(cash_usd, order):
-    """매수 직전 GUARD30 (바벨 꺼짐일 때): order = plan_buy 의 주문 → (통과, 판정 dict). 매수 금액은 그 주문의 계획 금액(plan_usd = 1회분 또는 남은 시드), 가격은 주문 가격"""
-    if not order or order.get("side") != "BUY":
-        return True, {}
-    g = AD.guard30(cash_usd, order.get("price"), order.get("plan_usd") or 0.0)
-    return bool(g.get("should_proceed")), g
-
-
 # ---------------------------------------------------------------- v2.13.0 판 40 할 일 6: B-0 부분체결 잔량 모니터 (원작 분기 B-0 · 서브는 S-B0 — Case 78, 88)
 TOPUP_SIGNAL = "TOPUP_1FL"
 TOPUP_DROP_KEYS = ("no", "placed_ts", "notified_qty", "ts", "topup_done", "status", "intraday", "new_floor", "empty_id")
