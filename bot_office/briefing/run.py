@@ -40,19 +40,51 @@ def parse_args(argv):
     return ap.parse_args(argv)
 
 
+FANDING_PREFIX = "[FANDING_NEED]"      # office_briefing._fanding_state 가 stderr 에 남기는 원인 줄 머리말
+
+
+class ReissueResult(tuple):
+    """(ok, 실패 이유) 2-튜플 그대로 (풀기·비교 호환) + 진단용 fanding_causes (원인 줄 목록)."""
+
+    def __new__(cls, ok, msg, fanding_causes=None):
+        self = super().__new__(cls, (ok, msg))
+        self.fanding_causes = list(fanding_causes or [])
+        return self
+
+
+def fanding_cause_lines(stderr):
+    """stderr 에서 [FANDING_NEED] 로 시작하는 줄만 고른다 (같은 줄은 한 번). 다른 stderr 줄은 저장하지 않는다."""
+    if not stderr:
+        return []
+    out = []
+    for line in stderr.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if line.startswith(FANDING_PREFIX) and line not in out:
+            out.append(line)
+    return out
+
+
 def reissue_cmd(cfg, need_path):
     """재발행 (Q21 정정) = office_briefing.py --print 를 실행해 stdout JSON 을 받고, 그 JSON 을 우리가 need.json 에 직접 쓴다.
     --print 는 need.json 을 다시 쓰지 않는다(Muse 서버 확인: 실행 전후 타임스탬프·SHA-256 동일). stdout 으로만 새 데이터를 낸다.
     systemctl start 는 쓰지 않는다 (텔레그램 중복 알림).
     stdout 이 올바른 JSON(구조 포함)이 아니면 파일을 건드리지 않고 재발행 실패로 처리한다. 쓰기는 임시파일→rename 이라
-    중간에 죽어도 옛 need.json 이 남는다. 반환: (ok, 실패 이유)."""
+    중간에 죽어도 옛 need.json 이 남는다. 반환: ReissueResult — (ok, 실패 이유) 2-튜플,
+    stderr 의 [FANDING_NEED] 줄은 .fanding_causes 에 담는다 (진단용, need.json 에는 안 넣음)."""
     rc = cfg.get("reissue", {})
     try:
         r = subprocess.run(rc["cmd"], capture_output=True, timeout=rc.get("timeout_sec", 120))
-    except subprocess.TimeoutExpired:
-        return False, "시간초과"
+    except subprocess.TimeoutExpired as e:
+        return ReissueResult(False, "시간초과", fanding_cause_lines(e.stderr))
     except Exception as e:
-        return False, type(e).__name__
+        return ReissueResult(False, type(e).__name__)
+    causes = fanding_cause_lines(r.stderr)
+    ok, msg = _apply_reissue_output(r, need_path)
+    return ReissueResult(ok, msg, causes)
+
+
+def _apply_reissue_output(r, need_path):
+    """재발행 프로세스 결과를 검증해 need.json 에 쓴다. 반환: (ok, 실패 이유)."""
     if r.returncode != 0:
         return False, "종료코드 %s (실행 권한·경로 확인 필요)" % r.returncode
     try:
@@ -162,6 +194,8 @@ def main(argv=None, deps=None):
                             "totals": res["totals"], "notes": res["notes"], "error": res.get("error"),
                             "stale": res.get("stale"), "reissued": res.get("reissued"),
                             "reissue_ok": res.get("reissue_ok"), "run_id": run_id, "generated_at": gen}
+                if res.get("fanding_causes"):      # 원인이 있을 때만 (진단용, 메시지에는 안 보임)
+                    res_json["fanding_causes"] = res["fanding_causes"]
                 out["need"] = res_json
                 out["telegram"]["need"] = deliver("need", text)
                 if not dry:

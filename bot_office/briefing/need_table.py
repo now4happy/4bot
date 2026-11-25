@@ -187,20 +187,24 @@ def collect(cfg, today_kst, need_path, reissue_fn, sleep=time.sleep, dry=False,
             seed_reader=read_soxl3_seed):
     """필요 달러 표 데이터를 만든다.
     재발행 규칙(설계 7절): need.json 없음/깨짐/stale/holding null 이면 1회 재발행 → (선택 대기) → 재독.
-    재발행은 호출자가 넘긴 reissue_fn() 만 쓴다 ((ok, msg) 반환). 실제 구현은 run.reissue_cmd: --print stdout JSON 을 검증해\n    need.json 에 직접 쓴다(Q21, 텔레그램 중복 없음)."""
+    재발행은 호출자가 넘긴 reissue_fn() 만 쓴다 ((ok, msg) 반환). 실제 구현은 run.reissue_cmd: --print stdout JSON 을 검증해\n    need.json 에 직접 쓴다(Q21, 텔레그램 중복 없음).
+    reissue_fn 결과에 fanding_causes 속성이 있고 비어 있지 않으면 반환값의 "fanding_causes" 에 넣는다 (진단용)."""
     wait = cfg.get("reissue", {}).get("wait_sec", 20)
     notes = []
     data, err = load_need(need_path)
     stale0 = (data is not None) and is_stale(data, today_kst)
     null0 = (data is not None) and has_null_holding(data)
     reissued, reissue_ok = False, None
+    causes = []
     if err or stale0 or null0:
         reissued = True
         if dry:
             notes.append("dry: 재발행 건너뜀")
             reissue_ok = None
         else:
-            reissue_ok, msg = reissue_fn()
+            result = reissue_fn()
+            reissue_ok, msg = result
+            causes = list(getattr(result, "fanding_causes", None) or [])
             if reissue_ok:
                 if wait and wait > 0:
                     sleep(wait)      # Q21: 재발행이 동기식(stdout→파일 쓰기)이라 기본 0초. 설정으로만 켠다.
@@ -211,8 +215,9 @@ def collect(cfg, today_kst, need_path, reissue_fn, sleep=time.sleep, dry=False,
                     err = e2
             else:
                 notes.append("재발행 실패: %s" % msg)   # 기존 파일로 진행, 반복 안 함
+    extra = {"fanding_causes": causes} if causes else {}     # 없으면 키 자체를 만들지 않는다
     if data is None:
-        return {"status": "failed", "error": err or "알 수 없음", "as_of": None, "stale": None,
+        return {**extra, "status": "failed", "error": err or "알 수 없음", "as_of": None, "stale": None,
                 "reissued": reissued, "reissue_ok": reissue_ok, "null_cause": None,
                 "rows": [], "totals": {}, "notes": notes}
     stale = is_stale(data, today_kst)
@@ -223,7 +228,7 @@ def collect(cfg, today_kst, need_path, reissue_fn, sleep=time.sleep, dry=False,
     status = "ok"
     if unavailable or stale or data.get("ok") is False or (reissued and reissue_ok is False):
         status = "degraded"
-    return {"status": status, "error": None, "as_of": data.get("as_of_kst"), "stale": stale,
+    return {**extra, "status": status, "error": None, "as_of": data.get("as_of_kst"), "stale": stale,
             "reissued": reissued, "reissue_ok": reissue_ok,
             "null_cause": bool(null0), "rows": rows, "totals": totals, "notes": notes,
             "unavailable": unavailable}

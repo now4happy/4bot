@@ -17,6 +17,11 @@
 
 # 9번 브리핑 변경 기록
 
+## vNEXT · 2026-11-25 (타이베이) — 3차 rev3: 재발행 때 팬딩 원인을 briefing_latest.json 에 기록
+- 파일: run.py, need_table.py (시험 tests/test_fanding_cause.py는 검토용으로만 두고 staging에는 안 올림)
+- 내용: 재발행(office_briefing.py --print)의 stderr 에서 [FANDING_NEED] 줄만 골라 briefing_latest.json need.fanding_causes 에 남긴다. 원인이 없으면 필드를 만들지 않는다. 메시지 형식·need.json 구조·need 계산식은 그대로.
+- 브랜치: staging
+
 ## vNEXT · 2026-11-25 (타이베이) — 3차 rev2: 가드 오판 고침 + VR6 상태 파일 원인 기록
 - 파일: tg_send.py, ../office_briefing.py (시험 tests/test_guard_vr6.py는 검토용으로만 두고 staging에는 안 올림)
 - 내용: 섞임 방지 가드는 토큰이 다르면 같은 개인 채팅 번호(양수)를 막지 않는다. 같은 토큰·같은 그룹 방은 계속 막는다. 팬딩 상태 파일(P·VR6)을 못 읽으면 원인을 [FANDING_NEED] 로그로 남긴다. need 계산식·need.json 구조·메시지 형식은 그대로.
