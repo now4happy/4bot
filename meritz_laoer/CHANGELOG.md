@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.9 · 2026-11-25 13:14 (KST)
+- 파일: assassin_live.py, barbell_adapter.py, config.py, free_cash.py, main.py, meritz_api.py, sniper_adapter.py, sniper_mode.py, tg_menu.py, tower_strategy.py
+- 내용: 메리츠 v2.15.0 (판 41): 암살자 실전 루프 + GUARD30 수혈 + 틱 종료 분리 + 마감 일일결산 + 바벨 삭제
+- 브랜치: staging
+
 ## v1.4.9 · 2026-11-25 11:44 (KST)
 - 파일: main.py, assassin_live.py(신규), free_cash.py(신규), barbell_adapter.py, meritz_api.py, tower_strategy.py, tg_menu.py, config.py, sniper_adapter.py, sniper_mode.py, 시험 파일(test_hybrid_v260·v340·v350·v351_render·v360·v390·v400 수정, test_v2_15_0 신규)
 - 내용: 메리츠 v2.15.0 (판 41): ① 암살자 실전 루프 연결(원작 틱을 메리츠 API로 호출·1분 폴링 400봉 누적·정정(modify) API·승격 잠금 해제, LIVE면 하이브리드 정지) ② GUARD30 수혈 장부(free_cash·INJECT·매도 시 수혈금 먼저 상환) 이식 ③ 틱 종료 분리(20:00 ET 마감 뒤에도 매도 창 동안 틱) ④ 마감 일일결산 텔레그램 1개 ⑤ 바벨(금고·SGOV 30%·60/30/10·버튼) 삭제. 승격 1탭·SCHD 삭제는 파기라 안 함. 수정 1차: modify 본문에 oder_cond_cls_code "0" 추가(공식 스펙 필수 6필드), 옛 시험 48건 정리(삭제 15건·수정 33건)

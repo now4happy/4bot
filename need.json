@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-25 09:05:00",
+  "as_of_kst": "2026-11-25 11:50:00",
   "accounts": [
     {
       "name": "토스",
@@ -8,7 +8,7 @@
         {
           "currency": "USD",
           "holding": 13102.93,
-          "need": 1203.61,
+          "need": 1126.34,
           "sufficient": true,
           "auto_fx": "unavailable"
         },
@@ -55,6 +55,14 @@
           "need": 0.0,
           "sufficient": true,
           "auto_fx": "on"
+        },
+        {
+          "label": "SGOV 11/30",
+          "currency": "USD",
+          "holding": 670.24,
+          "need": 1059.72,
+          "sufficient": false,
+          "auto_fx": "on"
         }
       ]
     },
@@ -63,14 +71,14 @@
       "lines": [
         {
           "currency": "USD",
-          "holding": 2038.18,
-          "need": 1267.065,
+          "holding": 1798.37,
+          "need": 1506.875,
           "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
           "currency": "KRW",
-          "holding": 3364746.0,
+          "holding": null,
           "need": null,
           "sufficient": null,
           "auto_fx": "unavailable"
@@ -90,6 +98,6 @@
       ]
     }
   ],
-  "total_need_usd": 20863.295000000002,
+  "total_need_usd": 22085.555000000004,
   "total_need_krw": 60000.0
 }
