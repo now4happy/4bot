@@ -105,6 +105,23 @@ def read_soxl3_seed(seed_cfg):
     return {"total": t, "day": t / n}
 
 
+# need 를 아예 계산하지 않는 줄 (need.json 에서 need=None 인 채로 나옴). 부족 판단에 안 쓰이는 잔고 표시용 줄이라
+# 부족 목록에도 안 나오고 완충 판정도 막지 않는다 (3차 rev1). 서버 config.json 은 업데이터가 못 올리니 기본값을 코드에 둔다.
+#   한투 KRW: office_briefing.need_data 가 need=None 고정.  토스 KRW: 마스터 계좌가 아니면 need=None.
+# config.json need.untracked 가 있으면 그 목록으로 바꾼다. need 가 숫자인 줄은 이 목록에 있어도 일반 줄 (부족 계산 그대로).
+DEFAULT_UNTRACKED = [{"account": "^한투$", "currency": "KRW"}, {"account": "^토스$", "currency": "KRW"}]
+
+
+def is_untracked(acct_name, currency, rules):
+    for r in rules or []:
+        try:
+            if re.search(r.get("account", ""), acct_name or "") and (r.get("currency") in (None, currency)):
+                return True
+        except re.error:
+            continue
+    return False
+
+
 def _line_row(label, kind, ln):
     cur = ln.get("currency") or "USD"
     need = _num(ln.get("need"))
@@ -140,6 +157,8 @@ def build_rows(data, ncfg, seed_reader=read_soxl3_seed):
             rule = classify(aname, _line_label(ln), rules)
             kind = rule.get("kind", "normal")
             row = _line_row(rule.get("label") or aname, kind, ln)
+            if row["need"] is None and is_untracked(aname, row["currency"], ncfg.get("untracked", DEFAULT_UNTRACKED)):
+                row["untracked"] = True          # need 가 없는 줄: 완충·부족 판정 제외 (holding 이 null 이어도)
             skipped = ln.get("skipped", acct.get("skipped"))
             if kind == "meritz4" and isinstance(skipped, list) and skipped:
                 row["skipped"] = [str(x) for x in skipped]

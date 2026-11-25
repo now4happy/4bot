@@ -1,5 +1,7 @@
 # briefing/run.py — 진입점: python3 -m briefing.run [need|portfolio|all] [--force] [--dry]
 # 한 번 실행이 briefing_latest.json 을 만들고 텔레그램 렌더와 조타실 렌더가 같은 JSON 을 쓴다 (설계 6절).
+# 텔레그램 방이 둘이다: 필요 달러(need·streak 알림) = paths.telegram_need_cfg (새 봇·새 전용 방),
+# 포트폴리오 = paths.telegram_cfg (9번 봇·업데이트 방, 그대로). 두 설정은 섞지 않는다 (make_need_sender).
 # 순서: need → portfolio. 각 단계는 독립 try/except (앞 단계 실패가 뒤 단계를 막지 않는다).
 # --dry: 텔레그램 전송·재발행 실행·상태/마커/스냅샷 저장을 하지 않고 화면에 출력만 한다.
 # 시험용 보조 옵션(설계에 없음, 기본 동작 불변): --config --state-dir --need-json --targets --now
@@ -72,6 +74,27 @@ def reissue_cmd(cfg, need_path):
     return True, ""
 
 
+def make_need_sender(cfg, tg_cfg):
+    """필요 달러 메시지 전송 함수. 새 봇 설정(paths.telegram_need_cfg)으로만 보낸다.
+    키가 없으면 보내지 않는다 (옛 9번 설정으로 대신 보내지 않음 — 섞임 방지).
+    새 설정이 옛 9번 설정과 같은 봇 토큰이거나 같은 방이면 보내지 않는다. 비밀값은 출력하지 않는다."""
+    need_cfg = cfg.get("paths", {}).get("telegram_need_cfg")
+
+    def _send(text):
+        if not need_cfg:
+            print("need: paths.telegram_need_cfg 없음 — 보내지 않음", file=sys.stderr)
+            return False
+        if tg_cfg and os.path.abspath(expand(need_cfg)) == os.path.abspath(expand(tg_cfg)):
+            print("need: 새 봇 설정 경로가 9번 설정 경로와 같음 — 보내지 않음", file=sys.stderr)
+            return False
+        why = tg_send.same_bot_or_room(expand(need_cfg), expand(tg_cfg)) if tg_cfg else None
+        if why:
+            print("need: 새 봇 설정이 9번 설정과 %s — 보내지 않음" % why, file=sys.stderr)
+            return False
+        return tg_send.send(text, expand(need_cfg))
+    return _send
+
+
 def _cutoff_minutes(cfg):
     h, m = cfg.get("schedule", {}).get("late_cutoff_cst", "12:00").split(":")
     return int(h) * 60 + int(m)
@@ -90,7 +113,8 @@ def main(argv=None, deps=None):
     st = State(state_dir)
     need_path = args.need_json or cfg["paths"]["need_json"]
     tg_cfg = cfg["paths"]["telegram_cfg"]
-    send = deps.get("send") or (lambda text: tg_send.send(text, tg_cfg))
+    send = deps.get("send") or (lambda text: tg_send.send(text, tg_cfg))                 # 포트폴리오 (9번 방)
+    send_need_fn = deps.get("send_need") or deps.get("send") or make_need_sender(cfg, tg_cfg)   # 필요 달러 (새 방)
     reissue = deps.get("reissue") or (lambda: reissue_cmd(cfg, need_path))
     sleep = deps.get("sleep") or time.sleep
     run_id = deps.get("run_id") or secrets.token_hex(3)
@@ -99,7 +123,7 @@ def main(argv=None, deps=None):
     send_cfg = cfg.get("send", {})
     if not isinstance(send_cfg, dict):
         send_cfg = {}
-    send_need = send_cfg.get("need", True)          # 없으면 예전처럼 보냄 (옛 config.json 호환)
+    send_need = send_cfg.get("need", True)          # true = 새 봇 방으로 보냄. 되돌리기 = false (VERIFY.md)
     send_port = send_cfg.get("portfolio", True)
 
     latest = st.read_latest() or {}
@@ -113,7 +137,8 @@ def main(argv=None, deps=None):
         if dry:
             print("----- [dry] %s 메시지 -----\n%s\n" % (kind, text))
             return "dry"
-        if send(text):
+        sender = send if kind == "portfolio" else send_need_fn      # need·streak 알림은 새 방, 포트폴리오는 9번 방
+        if sender(text):
             st.mark_sent(today, kind)
             return "sent"
         return "failed" if late else "pending"
@@ -123,7 +148,7 @@ def main(argv=None, deps=None):
 
     if do_need:
         if not dry and not send_need:
-            print("need: 발송 중단 (send.need=false) — 보내지 않음")
+            print("need: 발송 꺼짐 (send.need=false) — 보내지 않음")
             out["need"] = {"status": "disabled", "run_id": run_id, "generated_at": gen}
             out["telegram"]["need"] = "disabled"
         elif not dry and not args.force and st.is_sent(today, "need"):

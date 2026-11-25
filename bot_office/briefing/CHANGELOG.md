@@ -7,6 +7,12 @@
 
 # 9번 브리핑 변경 기록
 
+## vNEXT · 2026-11-25 (타이베이) — 3차: 새 봇 방 + 9시 + 읽기 편한 형식
+- 파일: render.py, need_table.py, run.py, tg_send.py, config.json, systemd/briefing.timer, systemd/bot-office-briefing.timer (시험 tests/test_briefing.py는 검토용으로만 두고 staging에는 안 올림)
+- 내용: 필요 달러(부족 금액) 브리핑을 새 텔레그램 봇·새 전용 방으로 보낸다 (paths.telegram_need_cfg, 9번 봇·업데이트 방과 섞지 않음, 토큰 해시·방 비교 가드). 형식은 pre 표 대신 일반 글자 + 굵은 글씨, 부족 있는 계좌만 한 줄씩, 합계·바벨 씨드 참고 줄(합계 제외), 전부 충분하고 전부 확인되면 "오늘 계좌 완충" 한 줄만 (확인 불가 줄이 있으면 완충 안 보냄). 시간 기준 KST 09:00 (briefing.timer 00:00 UTC), need.json 아침 발행 08:00 KST로 앞당김. send.need=true 는 새 방 발송 시작, false 는 중단(되돌리기). 포트폴리오 브리핑·need.json 계산(office_briefing.py)은 그대로.
+  완충 판정에서 need 를 계산 안 하는 줄(한투 KRW, 토스 KRW need=None)은 제외하고, 필요 달러 메시지의 USD 는 정수(올림)로 보여 준다 (3차 rev1).
+- 브랜치: staging
+
 ## vNEXT · 2026-11-25 (타이베이)
 - 파일: config.json, run.py (시험 tests/test_briefing.py는 검토용으로만 두고 staging에는 안 올림)
 - 내용: 필요 달러 브리핑 발송 중단. send.need=false면 need 단계를 보내지 않고 latest에 status disabled로 기록. 포트폴리오 브리핑은 그대로 (send.portfolio=true). need.json 계산(office_briefing.py)은 건드리지 않음. 타이머·서비스는 그대로 두고 발송만 끔. 발송 중단 범위는 풀이님 확정 (2026-11-25).

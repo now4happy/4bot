@@ -1,12 +1,11 @@
-# briefing/render.py — JSON → 텔레그램 글자 (HTML, pre 블록 글자 표). Q8 (가).
-# 열 규격(설계 3-1): 부족액(오른쪽 정렬) / 계좌명(가운데) / 보유 현금(오른쪽). 전체 40칸을 14·12·14칸 근사.
-# 한글·이모지는 2칸으로 센다. 계좌명은 줄바꿈하지 않으므로, 내용이 기본 폭을 넘으면 그 열만 넓힌다
-# (비율 근사 포기 — 설계 3-1 의 해결 (a)).
+# briefing/render.py — JSON → 텔레그램 글자 (HTML).
+# 필요 달러(부족 금액) 메시지: pre 표를 버리고 일반 글자 + 굵은 글씨 (풀이님 결정 2026-11-25, 시안 02_render_sian_readable.md).
+# 포트폴리오 메시지는 그대로 (pre 표). 한글·이모지는 2칸으로 센다 (portfolio 정렬용 dw/pad 는 그대로 둔다).
+import datetime as dt
 import html
+import math
 import unicodedata
 
-BASE_WIDTHS = (14, 12, 14)
-SEP = " | "
 UNAVAIL = "확인 불가 ⚠️"
 _WIDE = set("⚠")
 
@@ -41,109 +40,141 @@ def fmt_num(v, cur="USD"):
     return "{:,.2f}".format(v)
 
 
-def row_lines(r):
-    """한 행을 (부족액 줄들, 보유 줄들) 로 바꾼다."""
-    cur = r.get("currency", "USD")
-    kind = r.get("kind")
-    if kind == "barbell_only":
-        short, hold = ["—"], [""]
-    elif kind == "soxl3":
-        short = ["—"]
-        s = r.get("soxl")
-        hold = ["전체 " + fmt_num(s["total"], cur), "당일 " + fmt_num(s["day"], cur)] if s else [UNAVAIL]
-    else:
-        st = r.get("status")
-        if st == "unavailable":
-            short, hold = [UNAVAIL], [UNAVAIL]
-        elif st == "need_null":
-            short, hold = ["계산 불가"], [fmt_num(r.get("holding"), cur)]
-        else:
-            short, hold = [fmt_num(r.get("shortage"), cur)], [fmt_num(r.get("holding"), cur)]
-    b = r.get("barbell_ref")
-    if b is not None:
-        if b.get("shortage") is None:
-            short.append("바벨 참고 " + UNAVAIL)
-        else:
-            short.append("바벨 참고 " + fmt_num(b["shortage"], b.get("currency", cur)))
-    sk = r.get("skipped")
-    if sk and kind == "meritz4":
-        short.append(", ".join(sk) + " 오늘 매수 없음")
-    return short, hold
-
-
-def render_need_table(rows):
-    header = ("부족액", "계좌명", "보유 현금")
-    parsed = []
-    for r in rows:
-        short, hold = row_lines(r)
-        parsed.append((r.get("label", "?"), short, hold))
-    # 폭: 전체 40칸을 14·12·14 로 나누는 것이 기본. 계좌명(가운데 열)은 줄바꿈하지 않으므로 이름이 12칸을 넘으면
-    # 가운데 열을 넓히고 남은 칸을 양쪽에 나눈다. 양쪽 열도 첫 줄 내용이 넘으면 그만큼만 넓힌다(40칸 초과 가능).
-    total = sum(BASE_WIDTHS)
-    wm = max(BASE_WIDTHS[1], dw(header[1]), *(dw(p[0]) for p in parsed)) if parsed \
-        else max(BASE_WIDTHS[1], dw(header[1]))
-    min_l = max(dw(header[0]), *(dw(p[1][0]) for p in parsed)) if parsed else dw(header[0])
-    min_r = max(dw(header[2]), *(dw(h) for p in parsed for h in p[2])) if parsed else dw(header[2])
-    rem = total - wm
-    wl = max(min_l, rem // 2)
-    wr = max(min_r, rem - wl)
-    out = [SEP.join((pad(header[0], wl, "r"), pad(header[1], wm, "c"), pad(header[2], wr, "r")))]
-    out.append("-" * (wl + wm + wr + 2 * len(SEP)))
-    for label, short, hold in parsed:
-        n = max(len(short), len(hold))
-        for i in range(n):
-            s = short[i] if i < len(short) else ""
-            h = hold[i] if i < len(hold) else ""
-            lab = label if i == 0 else ""
-            if i > 0 and not lab and dw(s) > wl:
-                span = wl + wm + len(SEP)         # 계좌명 칸이 비어 있으니 두 칸을 이어 쓴다
-                if dw(s) <= span:
-                    out.append(SEP.join((pad(s, span, "r"), pad(h, wr, "r"))))
-                    continue
-            out.append(SEP.join((pad(s, wl, "r"), pad(lab, wm, "c"), pad(h, wr, "r"))))
-    return "\n".join(out)
-
-
-def table_width(table_text):
-    return max((dw(l) for l in table_text.split("\n")), default=0)
-
-
 def _esc(s):
     return html.escape(str(s), quote=False)
 
 
-def _totals_line(totals):
-    parts = []
-    for cur in ("USD", "KRW"):
-        if totals.get(cur, 0) > 0:
-            parts.append("%s 부족 합계 %s" % (cur, fmt_num(totals[cur], cur)))
-    for cur, v in totals.items():
-        if cur not in ("USD", "KRW") and v > 0:
-            parts.append("%s 부족 합계 %s" % (cur, fmt_num(v, cur)))
-    return " · ".join(parts) if parts else "부족 합계 없음"
+_WEEKDAY = "월화수목금토일"
+ALL_CLEAR = "오늘 계좌 완충"
+NEED_TIME_LABEL = "09:00"          # 풀이님 결정: 9시 기준은 KST 09:00 (타이머 00:00 UTC)
+
+
+def _title(date_kst):
+    """'[계좌별 부족] 11-25 (수) 09:00' — 굵게. 날짜를 못 읽으면 요일 없이 원문."""
+    try:
+        d = dt.date.fromisoformat(date_kst)
+        stamp = "%s (%s)" % (d.strftime("%m-%d"), _WEEKDAY[d.weekday()])
+    except (TypeError, ValueError):
+        stamp = str(date_kst)
+    return "<b>[계좌별 부족] %s %s</b>" % (_esc(stamp), NEED_TIME_LABEL)
+
+
+def _unknown(r):
+    """holding 또는 need 가 null 이라 부족 여부를 모르는 줄 (need_table 의 unavailable·need_null)."""
+    return r.get("status") in ("unavailable", "need_null")
+
+
+def _shown_rows(rows):
+    """메시지에 올릴 후보 행. 메리츠 SOXL 3번(시드 참고용, 부족 개념 없음)과 바벨 전용 행, need 를 계산 안 하는 줄
+    (untracked: 한투 KRW·토스 KRW 가 need=None 일 때)은 제외한다 — 부족 목록에도 안 나오고 완충도 안 막는다."""
+    return [r for r in rows if r.get("kind") not in ("soxl3", "barbell_only") and not r.get("untracked")]
+
+
+def _barbell_refs(rows):
+    return [r["barbell_ref"] for r in rows if r.get("barbell_ref") is not None]
+
+
+def _barbell_unknown(b):
+    return b.get("status") in ("unavailable", "need_null") or b.get("shortage") is None
+
+
+def _degraded(res):
+    """오늘 값이라고 믿을 수 없는 이유 (완충 금지). SOXL 3번 시드 읽기 실패는 여기 안 넣는다 (부족 줄이 아님)."""
+    notes = res.get("notes") or []
+    return bool(res.get("stale") or ("need.json ok=false" in notes)
+                or (res.get("reissued") and res.get("reissue_ok") is False))
+
+
+def _cents(v):
+    """부족액을 센트 단위로 맞춘다 (부동소수 찌꺼기 1250.0000000000002 방지). 부족 여부도 이 값으로 본다."""
+    return round(v or 0.0, 2)
+
+
+def fmt_need_amount(v, cur):
+    """필요 달러 메시지 전용 금액: USD 는 정수 (올림 — 부족을 적게 보이지 않게, 1달러 미만 부족도 1), KRW 등은 fmt_num 그대로.
+    fmt_num 은 포트폴리오가 쓰므로 건드리지 않는다."""
+    if cur == "USD":
+        return "{:,d}".format(int(math.ceil(_cents(v))))
+    return fmt_num(v, cur)
+
+
+def _fmt_total(v, cur):
+    return "%s %s" % (cur, fmt_need_amount(v, cur))
+
+
+def need_all_clear(res):
+    """완충 메시지를 보내도 되는가: 모든 계좌 줄의 holding·need 가 확인됐고 (바벨 참고 줄 포함) 전부 충분,
+    오늘 값(stale 아님·ok=false 아님·재발행 실패 아님)일 때만 True. 확인할 줄이 하나도 없으면 False."""
+    rows = res.get("rows", [])
+    cand = _shown_rows(rows)
+    if not cand or _degraded(res):
+        return False
+    if any(_unknown(r) for r in cand):
+        return False
+    if any(_barbell_unknown(b) for b in _barbell_refs(rows)):
+        return False
+    if any(_cents(r.get("shortage")) > 0 for r in cand):
+        return False
+    return True
 
 
 def need_message(res, date_kst, run_id, late=False):
-    lines = ["💵 필요 달러 · %s 09:30 CST   (need.json %s)" % (date_kst, _esc(res.get("as_of") or "?"))]
+    """부족 있는 계좌만 한 줄씩. 전부 확인돼서 전부 충분하면 '오늘 계좌 완충' 한 줄만 (제목·바벨 줄 없음).
+    run_id 는 호환용 (메시지에는 안 넣는다 — briefing_latest.json 에 남는다)."""
+    if need_all_clear(res):
+        return ALL_CLEAR
+    rows = res.get("rows", [])
+    lines = [_title(date_kst)]
     if late:
         lines.append("⚠️ 오늘 브리핑 늦음 (마감 이후 전송)")
     if res.get("stale"):
         lines.append("⚠️ %s 기준 (오늘 아님)" % _esc(res.get("as_of") or "?"))
-    if res.get("unavailable"):
-        lines.append("⚠️ 일부 계좌 확인 불가 — 문제 있음")
+    if "need.json ok=false" in (res.get("notes") or []):
+        lines.append("⚠️ need.json 계산 실패 표시 (ok=false)")
     if res.get("reissued") and res.get("reissue_ok") is False:
         lines.append("⚠️ 재발행 실패 — 기존 파일 기준")
-    lines.append(_totals_line(res.get("totals", {})))
-    lines.append("<pre>" + _esc(render_need_table(res.get("rows", []))) + "</pre>")
-    lines.append("run " + run_id)
+    lines.append("")
+    totals, n_short, n_unknown = {}, 0, 0
+    for r in _shown_rows(rows):
+        cur = r.get("currency", "USD")
+        label = "<b>%s</b>" % _esc(r.get("label", "?"))
+        if _unknown(r):
+            lines.append("%s %s: 확인 불가" % (label, cur))
+            n_unknown += 1
+        elif _cents(r.get("shortage")) > 0:
+            lines.append("%s %s 부족" % (label, _fmt_total(r["shortage"], cur)))
+            totals[cur] = totals.get(cur, 0.0) + r["shortage"]
+            n_short += 1
+        else:
+            continue
+        if r.get("kind") == "meritz4" and r.get("skipped"):
+            lines.append("└ %s 오늘 매수 없음" % _esc(", ".join(r["skipped"])))
+    if not n_short and not n_unknown:
+        lines.append("확인된 부족 계좌 없음 (위 경고 확인)")
+    if n_short:
+        parts = [_fmt_total(totals[c], c) for c in ("USD", "KRW") if totals.get(c, 0) > 0]
+        parts += [_fmt_total(v, c) for c, v in totals.items() if c not in ("USD", "KRW") and v > 0]
+        lines.append("")
+        lines.append("<b>합계</b> " + " · ".join(parts) + (" (확인 불가 줄 제외)" if n_unknown else ""))
+    refs = []
+    for b in _barbell_refs(rows):
+        cur = b.get("currency", "USD")
+        if _barbell_unknown(b):
+            refs.append("바벨 씨드 %s: 확인 불가 (합계 제외)" % cur)
+        elif _cents(b["shortage"]) > 0:
+            refs.append("바벨 씨드 %s (합계 제외)" % _fmt_total(b["shortage"], cur))
+    if refs:
+        lines.append("")
+        lines.extend(refs)
     return "\n".join(lines)
 
 
 def need_failed_message(date_kst, run_id, late=False):
-    s = "⚠️ need.json 읽기 실패 — 문제 있음 (%s)" % date_kst
+    lines = [_title(date_kst)]
     if late:
-        s += "\n⚠️ 오늘 브리핑 늦음 (마감 이후 전송)"
-    return s + "\nrun " + run_id
+        lines.append("⚠️ 오늘 브리핑 늦음 (마감 이후 전송)")
+    lines.append("⚠️ need.json 읽기 실패 — 확인 불가 (완충 아님)")
+    return "\n".join(lines)
 
 
 def streak_alert_message(n):
