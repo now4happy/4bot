@@ -313,3 +313,18 @@ class MeritzApi:
         if warn and warn != "0":
             raise WarnNeeded(str(data.get("warn_msg") or f"경고코드 {warn}"))
         return {"no": str(data.get("oder_no", "")), "body": body}
+
+    def cancel_order(self, oder_date, orgl_oder_no, oder_cls_code, odqt):
+        """판 42: 접수된 해외주식 주문 1건을 취소함 (원작 60초 미체결 안전 취소용 — 원작 BUY_ORDER_MAX_WAIT_SEC=60.0).
+        oder_date = 주문일 "YYYYMMDD" · orgl_oder_no = 원주문번호 · oder_cls_code = "01"(지정가)·"05"(시장가) 등 · odqt = 취소할 수량(미체결 잔량).
+        실제 취소 호출은 실주문 상태 변경이라 라이브 테스트 안 함 (공식 스펙 확인만 — 메리츠 open-api openapi.json, POST /trading/v1/overseas/orders/cancel)."""
+        body = {"oder_date": str(oder_date), "orgl_oder_no": str(orgl_oder_no),
+                "oder_cls_code": str(oder_cls_code), "odqt": int(odqt)}
+        try:
+            d = self._call("POST", "/trading/v1/overseas/orders/cancel", body=body)
+        except MeritzError:
+            raise
+        except Exception as e:      # 시간 초과·연결 끊김·알 수 없는 응답: 취소가 됐는지 모름 → 불확실로 표시 (main 이 자동 확인)
+            raise MeritzError(f"취소 응답을 못 받음 ({type(e).__name__}) — 취소가 됐는지 불확실")
+        data = d.get("data") or {}
+        return {"no": str(data.get("oder_no") or orgl_oder_no), "body": body}

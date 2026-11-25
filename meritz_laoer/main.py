@@ -75,7 +75,7 @@
 # v2.0.3 (2026-11-18): ① 당일 매도 — 오늘 산 주식이 평단(오늘 체결 반영) +목표% 에 닿으면 그날 바로 매도 비중만큼 매도.
 #     장중 intraday_sell_check_sec(기본 120초)마다 run_intraday_sell 이 확인 (실거래·LIMIT 주문일 때만). 매수는 하루 1회차 그대로(장중 재매수 없음),
 #     하루 매도 주문은 1건 (이미 오늘 매도 주문이 있으면 안 냄), 연속 매도 금지(sell_block)는 make_plan 규칙 그대로 (오늘 체결된 매수가 있으면 풀림).
-#     오늘 매수 주문이 있는 날은 아침 계획에서 매도 주문을 빼고 장중 확인으로 넘김(defer_sell) — 오늘 체결로 평단이 바뀌는데 메리츠 API 에 주문 취소가 없어 낡은 평단의 매도 주문이 남기 때문.
+#     오늘 매수 주문이 있는 날은 아침 계획에서 매도 주문을 빼고 장중 확인으로 넘김(defer_sell) — 오늘 체결로 평단이 바뀌는데 메리츠 API 에 주문 취소가 없어 낡은 평단의 매도 주문이 남기 때문. (매수 취소는 판 42에서 연결됨, 매도 취소는 아직 안 함)
 #     장부·적립 상태는 장중에 안 바꿈 (체결 반영은 기존 run_sync). 0 으로 두면 예전 동작(아침 주문만).
 #   ② 화면 글자: 영어 변수 이름 제거(notifier.to_korean), 속쓸 가격(현재가·평단·매도 목표·사다리·체결 단가)만 소수점, 달러 금액·환율은 정수.
 #   v2.0.2(따로 적용 안 함)의 내용 포함. 주문 계산(accum_strategy.py)은 안 바뀜
@@ -133,7 +133,7 @@ import seed_adjust as SA                  # noqa: E402  v2.9.0 6차 판 33 F 완
 import barbell_adapter as BB              # noqa: E402  v2.9.0 7차 판 34 2차 바벨 어댑터 (원작 orig_sniper 호출)
 from tower_strategy import ceil2          # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
-from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint   # noqa: E402
+from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint, ORDER_TYPES   # noqa: E402  판 42: 미체결 매수 취소 시 주문 유형→oder_cls_code 변환용
 from notifier import Notifier, _read_chat, _read_token, token_fp, to_korean   # noqa: E402
 import tg_menu                                # noqa: E402  v1.0.3 텔레그램 메뉴 (폴링은 idle() 안에서만)
 
@@ -1370,7 +1370,8 @@ def sniper_fast_wait(total, s, api, note, sleep=time.sleep, mono=time.monotonic)
     if left > 0:
         idle(left)
     return ticks
-SNIPER_STALE_BUY_SEC = 600           # 낸 매수가 이 시간(초)이 지나도 다 체결 안 되면 알림 (메리츠 API 에 주문 취소가 없어 취소는 못 함)
+SNIPER_STALE_BUY_SEC = 600           # 낸 매수가 이 시간(초)이 지나도 다 체결 안 되면 알림 (60초 취소가 실패했을 때만 남는 경우 — 판 42에서 취소 API 연결됨)
+SNIPER_BUY_CANCEL_SEC = 60            # 판 42: 미체결 매수 주문은 이 시간(초)이 지나면 취소함 (원작 BUY_ORDER_MAX_WAIT_SEC=60.0과 같게)
 
 
 def sniper_on(s):
@@ -1471,7 +1472,7 @@ def tower_sold_count_today(m, rows=None, open_rows=None):
 
 
 def sniper_open_orders(m, rows, side, open_rows=None):
-    """우리가 낸 side 주문 중 아직 다 체결 안 된 것 + 응답 못 받은 시도(attempts). 메리츠 API 에 취소가 없어 낸 주문은 체결되거나 장이 끝날 때까지 남음.
+    """우리가 낸 side 주문 중 아직 다 체결 안 된 것 + 응답 못 받은 시도(attempts). 판 42부터 미체결 매수는 60초 뒤 취소됨 (원작과 같게). 취소 실패 시에만 장 끝까지 남음.
     판 23 수정1 B3: open_rows(미체결 조회)를 주면 거기 없는 주문(앱에서 취소)은 빠짐 — 취소한 주문 때문에 그날 매수·매도가 잠기지 않음"""
     if open_rows is None:
         out = [o for o in m.get("orders") or [] if isinstance(o, dict) and o.get("side") == side and o.get("no")
@@ -1837,6 +1838,45 @@ def topup_try(s, api, cfg, note, mark, m, rows, sim, ss, status, n, now_t, px, e
     return "보충 접수" if res == "ok" else "보충 실패"
 
 
+def _order_placed_ts(o):
+    """주문 낸 시각 (send_order 가 저장한 placed_ts 우선, 옛 ts 대체). 둘 다 없으면 None — 시각을 알 수 없는 주문은 취소하지 않음."""
+    for k in ("placed_ts", "ts"):
+        try:
+            v = float(o.get(k) or 0)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return None
+
+
+def _cancel_stale_buys(s, api, cfg, note, mark, m, rows, open_buys, d, now_t):
+    """판 42: 60초(SNIPER_BUY_CANCEL_SEC) 넘게 미체결인 매수 주문을 취소함 (원작 BUY_ORDER_MAX_WAIT_SEC=60.0과 같게).
+    잔량 = 주문 수량 − 누적 체결 수량. 잔량 0이면 이미 다 체결된 거라 취소 안 함. 번호·시각이 없는 주문(attempts 등)은 취소 못 해서 건너뜀.
+    → 취소한 주문이 1건이라도 있으면 True (호출처는 주문 뒤 60초 쉼을 걸고 이번 틱은 새 매수 없이 돌아감). 취소 실패는 로그만 남기고 False 쪽으로 (새 매수는 계속 막힘)."""
+    cancelled_any = False
+    for o in open_buys:
+        if not isinstance(o, dict) or not str(o.get("no") or "").strip():
+            continue                                                # 번호 없으면 취소할 주문을 특정 못 함
+        placed = _order_placed_ts(o)
+        if placed is None or now_t - placed <= SNIPER_BUY_CANCEL_SEC:
+            continue                                                # 60초 안 지났거나 시각 모름 → 취소 안 함
+        filled = int((rows.get(str(o["no"])) or {}).get("qty", 0))
+        remain = int(o.get("qty") or 0) - filled
+        if remain <= 0:
+            continue                                                # 다 체결됨 — 다음 틱에서 open_buys 에서 빠짐
+        otype = str(o.get("type") or "LIMIT").upper().strip()
+        cls = ORDER_TYPES.get(otype, ("01", "0"))[0] if otype in ORDER_TYPES else "01"
+        try:
+            api.cancel_order(oder_date=d.replace("-", ""), orgl_oder_no=str(o["no"]), oder_cls_code=cls, odqt=remain)
+        except Exception as e:
+            logging.warning(f"스나이퍼 미체결 매수 60초 취소 실패 (주문 {o.get('no')}): {type(e).__name__} {e}")
+            continue
+        cancelled_any = True
+        note.send(f"미체결 매수 60초 지나 취소했어요: {remain}주 @ ${float(o.get('price') or 0):.2f} (주문 {o.get('no')}) — 체결된 {filled}주는 장부에 반영돼요")
+    return cancelled_any
+
+
 def run_sniper_tick(s, api, note):
     """v2.2.20 스나이퍼 한 번치 (실거래만, loop 가 09:30 ET ~ 체결 반영 시각 전에 부름. 간격 = intraday_sell_check_sec, 최소 30초). 순서:
     ① 오늘 기록이 없으면 만듦 ② 체결 확인 → 매도·스나이퍼 매수 체결은 즉시 장부·F에 반영 (탑쌓기 매수는 run_sync) ③ 체결 알림 ④ 잔고 = 예상 확인 (다르면 보류)
@@ -1984,12 +2024,16 @@ def run_sniper_tick(s, api, note):
         note.send(f"{ {MKT_PRE: '장전(003) ', MKT_AFTER: '장후(005) '}.get(status, '') }매도 {'접수' if ok_n == len(results) else ('실패' if ok_n == 0 and all(r == 'rejected' for r in results) else '일부 접수 · 실패·응답 없음 있음')}\n"
                   f"현재가 ${px:.2f}\n" + fmt_orders(placed) + ("\n" + "\n".join(errs_all) if errs_all else ""))
         out.append("매도 접수" if ok_n else "매도 실패")
-    # ---- 매수: 04:07~16:00 ET(프리장·정규장, 판 38)·60초마다·주문 뒤 60초 쉼 · 낸 매수가 안 끝났으면 새로 안 냄 (취소 불가)
+    # ---- 매수: 04:07~16:00 ET(프리장·정규장, 판 38)·60초마다·주문 뒤 60초 쉼 · 낸 매수가 안 끝났으면 새로 안 냄 (판 42: 60초 지나면 취소 — 원작과 같게)
     open_buys = sniper_open_orders(m, rows, "BUY", open_rows)
     if open_buys:
-        old = [o for o in open_buys if o.get("ts") and now_t - float(o["ts"]) > SNIPER_STALE_BUY_SEC]
+        if _cancel_stale_buys(s, api, cfg, note, mark, m, rows, open_buys, d, now_t):
+            ss["last_order_ts"] = now_t                             # 취소한 틱에는 새 매수 안 냄 (원작 60초 쉴드와 같은 효과 — 다음 틱부터 다시 판단)
+            SN.save_state(cfg, ss)
+            return out[0] if out else "매수 주문 취소함"
+        old = [o for o in open_buys if (_order_placed_ts(o) or 0) and now_t - _order_placed_ts(o) > SNIPER_STALE_BUY_SEC]
         if old:
-            _warn_once(cfg, mark, m, "stale_buy", note, f"스나이퍼 매수 {int(old[0].get('qty') or 0)}주 @ ${float(old[0].get('price') or 0):.2f} 가 {SNIPER_STALE_BUY_SEC // 60}분 넘게 다 체결 안 됐어요 — 메리츠 API 에 주문 취소가 없어 그대로 두고, 이 주문이 끝나기 전엔 새 매수를 안 내요 (필요하면 앱에서 직접 취소)")
+            _warn_once(cfg, mark, m, "stale_buy", note, f"스나이퍼 매수 {int(old[0].get('qty') or 0)}주 @ ${float(old[0].get('price') or 0):.2f} 가 {SNIPER_STALE_BUY_SEC // 60}분 넘게 다 체결 안 됐어요 — 60초 취소가 안 돼서 그대로 두고 있어요 (이 주문이 끝나기 전엔 새 매수를 안 내요)")
         return out[0] if out else "매수 주문 진행 중"
     tp_res = topup_try(s, api, cfg, note, mark, m, rows, sim, ss, status, n, now_t, px, exch, d)        # 판 40 할 일 6: B-0 부분체결 잔량 보충 (틱마다 확인 — 원작 1.5초 모니터)
     if tp_res:

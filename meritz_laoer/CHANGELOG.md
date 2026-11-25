@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.4.8 · 2026-11-25 09:53 (KST)
+- 파일: main.py, meritz_api.py, sniper_mode.py, 시험 파일(test_hybrid_v380 수정, test_hybrid_v410 신규)
+- 내용: 메리츠 v2.14.0 (판 42): P1 미체결 매수 60초 안전 취소 (원작 BUY_ORDER_MAX_WAIT_SEC=60.0 이식, 취소 API 연결) + Q1 야간 코드 "001" SELL_STATUS 확장 (판 41 항목 3)
+- 브랜치: staging
+
 ## v1.4.7 · 2026-11-24 12:41 (KST)
 - 파일: barbell_adapter.py, config.py, main.py, sniper_adapter.py, sniper_mode.py, tg_menu.py
 - 내용: 메리츠 v2.13.0 (판 40): 1.5초 루프 + 암살자 실전(부분) + 매도 창 전체 + GUARD30 검문 + 금고 + B-0
