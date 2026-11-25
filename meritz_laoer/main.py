@@ -130,7 +130,8 @@ import config as cfgmod                      # noqa: E402
 import tower_strategy as TW               # noqa: E402  탑쌓기 (v2.2.9 부터 7번은 탑쌓기만 씀)
 import sniper_mode as SN                  # noqa: E402  v2.2.20 스나이퍼 모드 계산부
 import seed_adjust as SA                  # noqa: E402  v2.9.0 6차 판 33 F 완성 기준 금액 조정
-import barbell_adapter as BB              # noqa: E402  v2.9.0 7차 판 34 2차 바벨 어댑터 (원작 orig_sniper 호출)
+import barbell_adapter as BB              # noqa: E402  암살자 어댑터 (원작 orig_sniper 호출 — 파일 이름은 옛 바벨 어댑터 그대로. 바벨 기능은 v2.15.0 판 41 에서 삭제)
+import free_cash as FC                    # noqa: E402  v2.15.0 판 41 할 일 2: GUARD30 수혈 장부
 from tower_strategy import ceil2          # noqa: E402
 from config import ConfigManager, load_settings, validate_settings   # noqa: E402
 from meritz_api import MeritzApi, MeritzError, WarnNeeded, key_fingerprint, ORDER_TYPES   # noqa: E402  판 42: 미체결 매수 취소 시 주문 유형→oder_cls_code 변환용
@@ -560,77 +561,38 @@ def fill_items(m, rows):
     return out
 
 
-def barbell_ctx(s, api=None, dry=None):
-    """판 34 3차: 바벨 원작 함수용 context (SOXL 원장 shim·API shim). 총 시드 $15,000 기준. dry 기본 = 설정 dry_run (실거래면 SGOV 실주문). free_cash 는 처음 한 번 $9,000 − 미완성 F 원가로 시작"""
-    dry = bool(s.get("dry_run", True)) if dry is None else dry
-    d = now_et().strftime("%Y-%m-%d")
-
-    def _px(sym):
-        return float(api.price(sym, s["price_market"])["price"]) if api else 0.0
-    ctx = BB.Context(s["state_dir"], TW.params(dict(s, barbell_enabled=False))[0], _px, dry=dry, meritz=api, settings=s,
-                     fills_fn=(lambda: fill_rows_for(api, s, d)) if api else None)
-    try:
-        tst = ConfigManager(s)._load_json(TOWER_FILE, {}) or {}
-        inc = sum(float(f.get("cost") or 0.0) for f in (tst.get("floors") or []) if not TW.is_complete(f))
-        BB.free_cash_init_once(ctx, inc)
-    except Exception as e:
-        logging.warning(f"바벨 free_cash 시작값 실패 {type(e).__name__}")
-    return ctx
+def free_cash_ctx(s):
+    """v2.15.0 판 41 할 일 2: free_cash 장부(free_cash.py)를 처음 한 번 시작 — 시작값 = 버킷 시드 − 미완성 F 원가 (이미 시작했으면 그대로). 장부 파일 위치(state_dir)를 돌려줌"""
+    sd = s["state_dir"]
+    tst = ConfigManager(s)._load_json(TOWER_FILE, {}) or {}
+    inc = sum(float(f.get("cost") or 0.0) for f in (tst.get("floors") or []) if not TW.is_complete(f))
+    FC.ensure_init(sd, TW.box_seed(s), inc)
+    return sd
 
 
-def barbell_record_sell(s, net_pnl):
-    """SOXL 매도 체결 순이익 → 수익금 금고에 기록 (v2.13.0 판 40 할 일 5: 원작 record_barbell_realized_profit — 이익(>0)만 금고에 쌓고 0-A 상환도 원작이 같이 함). 바벨 꺼짐이면 아무것도 안 함, 실패해도 매매에 영향 없음"""
-    if s.get("barbell_enabled") is not True or net_pnl <= 0:
+def free_cash_fill(s, side, amount, cost_removed=None):
+    """SOXL 체결 → free_cash 장부 (매수 −, 매도 + 수혈금 먼저 상환 — 판 41 Q5·Q7). 실패해도 체결 반영은 안 막음 (로그만)"""
+    if amount <= 0:
         return None
     try:
-        return BB.record_profit(barbell_ctx(s), net_pnl)
+        return FC.on_fill(free_cash_ctx(s), side, amount, cost_removed)
     except Exception as e:
-        logging.warning(f"바벨 금고 기록 실패 {type(e).__name__}")
+        logging.warning(f"free_cash 기록 실패 {type(e).__name__}")
         return None
-
-
-def barbell_fill_cash(s, side, amount):
-    """Q6: SOXL 체결 → free_cash 장부 (매수 −, 매도 +). 바벨 꺼짐이면 안 함"""
-    if s.get("barbell_enabled") is not True or amount <= 0:
-        return None
-    try:
-        return BB.free_cash_add(barbell_ctx(s, dry=True), -amount if side == "BUY" else amount)
-    except Exception as e:
-        logging.warning(f"바벨 free_cash 기록 실패 {type(e).__name__}")
-        return None
-
-
-def barbell_gate(s, api, o):
-    """Q8·수혈: SOXL 매수 직전 4단계 수혈 검문 (원작 guard). 통과 못하면 (False, 이유). 꺼짐이면 항상 통과. 검문 자체가 고장이면 안전하게 보류"""
-    if s.get("barbell_enabled") is not True or o.get("side") != "BUY":
-        return True, ""
-    try:
-        ctx = barbell_ctx(s, api)
-        px = float(o.get("price") or 0.0)
-        cost = px * int(o.get("qty") or 0)
-        ok, info = BB.buy_gate(ctx, api.usd_cash(), px, TW.portion_usd(s), cost, str(o.get("kind") or "hybrid_buy"), int(o.get("qty") or 0))
-        for t_, b_ in ctx.alerts:
-            logging.info(f"바벨 알림 {t_}")
-        return ok, str(info.get("action") or "")
-    except Exception as e:
-        return False, f"바벨 수혈 검문 오류 {type(e).__name__} (매수 보류)"
-
-
-def vault_locked_usd(s):
-    """금고 잔액 (바벨 장부의 vault_available_usd) — 복리·단리에서 쓸 수 있는 달러에서 뺌 (원작 vaulted_profit_locked_usd 제외). 읽기 실패·장부 없음 = 0"""
-    try:
-        led = BB.open_ledger(s["state_dir"], TW.params(dict(s, barbell_enabled=False))[0]).get_state()
-        return max(0.0, float(led.get("vault_available_usd") or 0.0))
-    except Exception:
-        return 0.0
 
 
 def guard_gate(s, order, cash_usd):
-    """v2.13.0 판 40 할 일 4: 바벨 꺼짐일 때 스나이퍼 매수 직전 GUARD30 (원작 단리·복리 온디맨드 검문). 바벨 켜짐이면 barbell_gate(원작 바벨 guard)가 이미 하므로 통과.
-    cash_usd = 금고를 뺀 쓸 수 있는 달러 → (통과, 판정 dict)"""
-    if s.get("barbell_enabled") is True:
+    """v2.15.0 판 41 할 일 2: 스나이퍼 매수 직전 GUARD30 + 수혈(INJECT) — 원작 evaluate_guard30_and_reserve_injection 그대로 (FC.guard). 장부 free_cash 와 메리츠 실제 달러(cash_usd)를 견줌:
+    PROCEED_NORMAL 통과 · INJECT_AND_PROCEED 는 장부에 수혈을 반영하고 통과 · BLOCK_AND_ALERT_DEPOSIT 는 보류. 판정이 고장나면 안전하게 보류 → (통과, 판정 dict)"""
+    if not order or order.get("side") != "BUY":
         return True, {}
-    return SN.guard30_check(cash_usd, order)
+    try:
+        sd = free_cash_ctx(s)
+        info = FC.guard(sd, cash_usd, order.get("price"), order.get("plan_usd") or 0.0)
+        injected = FC.apply_inject(sd, info)
+        return bool(info.get("should_proceed")), dict(info, injected=injected)
+    except Exception as e:
+        return False, {"action": "GUARD_ERROR", "error": type(e).__name__, "min_req_cash": 0.0, "recommended_deposit_usd": 0.0}
 
 
 def assassin_promote(s, api, want_live, apply=False):
@@ -651,18 +613,9 @@ def assassin_promote(s, api, want_live, apply=False):
     return plan, cur
 
 
-def barbell_tick(s, api, note):
-    """바벨 틱 (켜짐일 때만, 실패해도 SOXL 매매 안 막음): ① SGOV 틱(원작; 실거래면 실주문) ② 30초 틱→1분 종가 봉(SOXL·QQQ) + 암살자 모의 지표 (SCHD 매수는 판 40 에서 뺌)"""
-    if s.get("barbell_enabled") is not True:
-        return None
+def assassin_poll(s, api, note):
+    """1분 봉 모으기 + 암살자 모의 지표 (실패해도 SOXL 매매 안 막음). v2.15.0 판 41: 바벨 틱에서 분리 — 바벨이 없어졌으니 바벨 켜짐과 무관하게 돈다 (SGOV 틱은 삭제)"""
     out = {}
-    try:
-        ctx = barbell_ctx(s, api)
-        out["sgov"] = BB.sgov_tick(ctx)
-        for t_, b_ in ctx.alerts:
-            note(f"{t_}\n{b_}")
-    except Exception as e:
-        logging.warning(f"바벨 SGOV 틱 실패 {type(e).__name__}")
     try:
         sd = s["state_dir"]
         sx = float(api.price(s["symbol"], s["price_market"])["price"])
@@ -672,6 +625,33 @@ def barbell_tick(s, api, note):
     except Exception as e:
         logging.warning(f"암살자 모의 지표 실패 {type(e).__name__}")
     return out
+
+
+ASSASSIN_TICK_SEC = 5.0               # 판 41 할 일 1: 암살자 틱 간격 (모의·예약 때). 실전(LIVE)이면 매 틱 (정정·스윕이 빨라야 해서)
+
+
+def assassin_live_step(s, api, note):
+    """판 41 할 일 1: 원작 암살자 틱(모의⇄0주예약⇄실전 통합 상태 머신)을 메리츠 API 로 한 번 부름 → 원작 결과 글자 (실패·건너뜀이면 None).
+    알림(원작이 만든 title·body)은 텔레그램으로 보냄. 주문·정정·취소는 assassin_live.py 를 거침 (dry_run 이면 주문 없이 가짜 번호)"""
+    try:
+        n = now_et()
+        if not BB.assassin_blocks(s["state_dir"]) and time.time() - _SNIPER.get("assassin_last", 0.0) < ASSASSIN_TICK_SEC:
+            return None
+        _SNIPER["assassin_last"] = time.time()
+        import assassin_live as AL
+        d = n.strftime("%Y-%m-%d")
+        seed = TW.box_seed(s)
+        ctx = AL.get_context(api, s, lambda: fill_rows_for(api, s, d), lambda: n.strftime("%Y%m%d"),
+                             lambda: {"initial_seed_usd": seed, "buckets": [], "sub_buckets": [], "buy_order_id": "", "sell_order_id": ""},
+                             dry=bool(s.get("dry_run", True)))
+        ctx.alerts.clear()
+        r = AL.tick(ctx, n)
+        for title, body in list(ctx.alerts):
+            note.send(f"{title}\n{body}" if body else title)
+        return r
+    except Exception as e:
+        logging.warning(f"암살자 틱 실패 {type(e).__name__}: {str(e)[:120]}")
+        return None
 
 
 def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sniper_only=False):
@@ -700,10 +680,8 @@ def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sni
             exec_id = f"{d}_{o['no']}" if pq == 0 else f"{d}_{o['no']}_{it['q']}"
             _, closed = cfg.apply_fill(side, dq, da / dq, d, False, exec_id, cost_removed=(removed if side == "SELL" else None))
         done.append({"o": o, "side": side, "dq": dq, "da": da, "cq": it["q"], "closed": closed})
-        if persist and side == "SELL":
-            barbell_record_sell(s, da - float(removed or 0.0))       # 판 34 3차: 바벨 켜짐일 때만 수익금 금고에 기록 (판 40)
         if persist:
-            barbell_fill_cash(s, side, da)                           # 판 34 3차: free_cash 장부 (매수 −, 매도 +)
+            free_cash_fill(s, side, da, removed if side == "SELL" else None)      # v2.15.0 판 41 할 일 2: free_cash 장부 (매수 −, 매도 + 수혈금 먼저 상환)
     tst.pop("_cost_removed", None)
     if persist and done:
         cfg._save_json(TOWER_FILE, tst)
@@ -1063,10 +1041,6 @@ def reconcile_attempts(s, api, cfg, m, final):
 def send_order(s, api, cfg, mark, m, o, exch, errors, intraday=False):
     """주문 1건. 주문 전에 '시도'를 표시 파일에 먼저 저장하고(→ 응답이 안 와도 같은 날 다시 안 냄), 결과에 따라
     성공: m['orders'] 에 번호와 함께 · 서버가 분명히 거절/경고: errors 에만 · 응답을 못 받음/번호 없음: m['attempts'] 에 남김(나중에 자동으로 찾음). → 'ok'|'rejected'|'unsure'"""
-    _ok, _why = barbell_gate(s, api, o)                         # 판 34 3차: 바벨 켜짐이면 SOXL 매수 직전 4단계 수혈 검문 (원작 guard)
-    if not _ok:
-        errors.append(f"{o.get('desc')}: 바벨 수혈 검문 보류 {_why}")
-        return "rejected"
     a = dict(o, status="접수 시도 (응답 확인 전)")
     m.setdefault("attempts", []).append(a)
     cfg._save_json(mark, m)
@@ -1313,7 +1287,7 @@ class SniperApi:
 
 
 GUARD_RECHECK_SEC = 60            # 판 40: GUARD30 에 막힌 뒤 다시 보는 간격 (원작 60초 입금 감지)
-BARBELL_TICK_SEC = 30.0      # 판 40: 바벨 틱 간격 (스나이퍼 틱이 1.5초여도 바벨은 30초 — 예전 동작)
+ASSASSIN_POLL_SEC = 30.0      # 판 40: 1분 봉 모으기·모의 지표 간격 (스나이퍼 틱이 1.5초여도 30초 — 예전 동작. 판 41: 옛 이름 BARBELL_TICK_SEC)
 QUIET_TICK = ("꺼짐", "해당 없음", "차단", "장 닫힘", "매도 창 밖", "휴장", "장 전", "정지", "미체결", "거래소", "chat_id")      # 이 결과면 이번 30초 동안은 더 안 돌림 (할 일이 없는 상태)
 
 
@@ -1325,6 +1299,14 @@ def sniper_tick_window(s, n):
     if n.time() < _hm(s.get("sync_time_et"), datetime.time(20, 0)):
         return True
     return os.path.isfile(os.path.join(s["state_dir"], "data", f"orders_{n.strftime('%Y-%m-%d')}.json"))
+
+
+def night_tick_ok(s, m, n):
+    """v2.15.0 판 41 할 일 3: 하루 기록이 마감(synced, 기본 20:00 ET)된 뒤에도 틱을 계속 돌려도 되는가 — 원작 매도 창이 열려 있고(일요일 18:00 ~ 금요일 20:00 ET, 04:00~04:06 제외),
+    오늘 기록이 마감 시각 뒤에 '마감됨'이 된 스나이퍼 기록일 때. 마감은 '하루 기록을 닫는 일'일 뿐 틱 끝이 아님 (틱 끝은 매도 창이 정함).
+    반영 안 된 밤 체결은 다음 날 첫 확인(run_late_fills)이 주문번호별 증분만 장부·층에 넣음. 매수는 원래 SN.buy_ok(04:07~16:00 ET)가 막아서 밤에 매수는 안 나감 (판 41 범위 밖)"""
+    return bool(isinstance(m, dict) and m.get("sniper_day") and m.get("synced") is True and isinstance(m.get("orders"), list)
+                and n.time() >= _hm(s.get("sync_time_et"), datetime.time(20, 0)) and SN.AD.sell_window_open(n))
 
 
 def menu_poll():
@@ -1817,8 +1799,6 @@ def topup_try(s, api, cfg, note, mark, m, rows, sim, ss, status, n, now_t, px, e
         cash = api.usd_cash()
     except MeritzError:
         return None
-    if s.get("barbell_enabled") is not True:
-        cash = max(0.0, cash - vault_locked_usd(s))
     o, why = SN.topup_order(s, sim, tp, px, cash, n)
     if o is None:
         if why and "도래" not in why:
@@ -1881,9 +1861,12 @@ def run_sniper_tick(s, api, note):
     """v2.2.20 스나이퍼 한 번치 (실거래만, loop 가 09:30 ET ~ 체결 반영 시각 전에 부름. 간격 = intraday_sell_check_sec, 최소 30초). 순서:
     ① 오늘 기록이 없으면 만듦 ② 체결 확인 → 매도·스나이퍼 매수 체결은 즉시 장부·F에 반영 (탑쌓기 매수는 run_sync) ③ 체결 알림 ④ 잔고 = 예상 확인 (다르면 보류)
     ⑤ 시세를 분 단위로 모음(RSI 용) ⑥ F별 목표에 닿으면 그 F 전량 지정가 매도 (정규장·장후, 16:10 전까지) ⑦ 60초마다 눌림·돌파 신호 → F 완성 기준 금액의 남은 몫만큼 지정가 매수 (정규장·16:00 전까지, 15:30 뒤 돌파 차단)"""
-    if now_et().time() >= OPEN_TIME_ET and time.time() - _SNIPER.get("last_barbell", 0.0) >= BARBELL_TICK_SEC:      # 판 38: 틱이 04:00 부터 돌아도 바벨 틱은 예전 시각(09:30 ET~) 그대로. 판 40: 틱이 1.5초가 돼도 바벨 틱은 예전 30초 간격 그대로 (SGOV·시세 조회 부하 방지)
-        _SNIPER["last_barbell"] = time.time()
-        barbell_tick(s, api, note)                                 # 판 34 3차: 바벨 틱 (SGOV·암살자 모의 지표, 켜짐일 때만)
+    if now_et().time() >= OPEN_TIME_ET and time.time() - _SNIPER.get("last_poll", 0.0) >= ASSASSIN_POLL_SEC:      # 판 38: 틱이 04:00 부터 돌아도 1분 봉 모으기는 예전 시각(09:30 ET~) 그대로. 판 40: 틱이 1.5초가 돼도 30초 간격
+        _SNIPER["last_poll"] = time.time()
+        assassin_poll(s, api, note)                                # 판 41: 1분 봉 모으기 + 암살자 모의 지표 (바벨 켜짐과 무관)
+    ar = assassin_live_step(s, api, note)                          # 판 41 할 일 1: 원작 암살자 틱 (모의·예약·실전 모두)
+    if BB.assassin_blocks(s["state_dir"]):                         # 실전(LIVE)이면 하이브리드는 서 있음 — 암살자가 SOXL 을 단독 운용 (원작 is_live_assassin_standalone_active). 보유·잔고 대조도 안 함
+        return "해당 없음" if ar in ("WEEKEND_CLOSED", "WAIT_0407_OPEN", "ASSASSIN_DISABLED", "NO_TRADE_OFFWORK_0815", "NO_LIVE_PRICE") else "암살자 실전"
     if s.get("dry_run", True):
         return run_sniper_dry(s, api, note)                    # 판 23 수정1 B7: 모의에서도 스나이퍼가 돌되 주문은 안 나가고 시뮬레이션 기록만
     if not sniper_on(s):
@@ -1901,7 +1884,9 @@ def run_sniper_tick(s, api, note):
         m, why = sniper_preflight(s, api, note, cfg, d, mark, n)
         if m is None:
             return why
-    if m.get("skipped") or m.get("synced", True) or not isinstance(m.get("orders"), list):
+    if m.get("skipped") or not isinstance(m.get("orders"), list):
+        return "해당 없음"
+    if m.get("synced", True) and not night_tick_ok(s, m, n):         # 판 41 할 일 3: 마감(20:00 ET) 뒤에도 매도 창이 열려 있으면 틱을 이어 감 (야간 매도 실질화)
         return "해당 없음"
     bad = gate_problems(s, cfg, live=True)
     if bad:
@@ -2046,8 +2031,6 @@ def run_sniper_tick(s, api, note):
         return tower_buy_tick(s, api, cfg, note, mark, m, d, n, px, sim, q, pr, exch, status, out)
     rsi = SN.rsi_from_state(ss, now_t)[0]
     cash_now = api.usd_cash()
-    if s.get("barbell_enabled") is not True:
-        cash_now = max(0.0, cash_now - vault_locked_usd(s))      # 판 40 할 일 4·5: 복리·단리는 금고 잔액을 쓸 수 있는 달러에서 뺌 (바벨 켜짐은 원작 바벨 guard 가 금고를 3순위 수혈원으로 씀)
     ha = first_buy_ha(s, api, sim, n, ss=_SNIPER)
     pb = SN.plan_buy(s, sim, px, ss, rsi, cash_now, n, "LIMIT", is_trading_day=us_trading_day, ha=ha)
     buy_sig = bool(pb["signal"].get("should_buy")) or bool(pb.get("sub") and pb["sub"].get("buy"))
@@ -2066,7 +2049,7 @@ def run_sniper_tick(s, api, note):
         _warn_once(cfg, mark, m, "exch", note, "거래소 번호를 알 수 없어 스나이퍼 매수를 못 냄 — 설정에 거래소 번호를 넣어 주세요")
         return "거래소"
     o = dict(pb["order"], ts=round(now_t, 1))
-    g_ok, g_info = guard_gate(s, o, cash_now)                    # 판 40 할 일 4: GUARD30 (바벨 꺼짐일 때만)
+    g_ok, g_info = guard_gate(s, o, cash_now)                    # 판 41 할 일 2: GUARD30 + 수혈(INJECT) — free_cash 장부 vs 메리츠 실제 달러
     if not g_ok:
         ss["buy_block_until"] = now_t + GUARD_RECHECK_SEC          # 원작: 60초마다 입금 감지
         SN.save_state(cfg, ss)
@@ -2076,6 +2059,9 @@ def run_sniper_tick(s, api, note):
                       f"달러를 넣어 주세요 (권장 ${float(g_info.get('recommended_deposit_usd') or 0.0):,.2f}). 입금되면 {GUARD_RECHECK_SEC}초 안에 다시 확인해요 (알림은 하루 한 번)")
         return "수혈 검문 보류"
     _SNIPER["guard_alert_day"] = ""                                 # 통과하면 래치 풀림
+    if g_info.get("injected"):
+        note.send(f"수혈(INJECT) — 장부에 ${float(g_info.get('inject_usd') or 0.0):,.2f} 넣었어요 ({int(g_info.get('inject_portions') or 0)}회분, 누적 {int(g_info.get('used_portions_after') or 0)}회분)\n"
+                  f"메리츠 실제 달러에는 변화 없어요 (장부 안 이동). 매도가 나면 이 금액부터 먼저 갚아요")
     errs = []
     res = send_order(s, api, cfg, mark, m, o, exch, errs, intraday=True)
     ss["last_order_ts"] = now_t
@@ -2493,6 +2479,26 @@ def run_fx_tasks(s, note, live):
 
 
 # ---------------------------------------------------------------- 체결 반영
+def daily_close_text(s, d, items, tst):
+    """v2.15.0 판 41 할 일 4: 마감 일일결산 메시지 글자 (텔레그램 1개). items = 그날 기록의 체결 있는 주문(fill_items), tst = 체결 반영·잔고 맞춤을 마친 F 상태.
+    · 매매 횟수 = 체결이 1주라도 있는 주문 수 (매수+매도) · 매수/매도 주식수 = 그 주문들의 누적 체결 수량 · 변경 = 매수 − 매도 (순증감)
+    · 보유 F = 수량이 있는 F 개수 · 진행중 F = 그중 미완성 F, 진행률 = F 원가 ÷ 그 F 목표(F 완성 기준 금액, 기본 $15,000)"""
+    bq = sum(int(i["q"]) for i in items if i["side"] == "BUY")
+    sq = sum(int(i["q"]) for i in items if i["side"] == "SELL")
+    act = SN.active_floors(tst if isinstance(tst, dict) else {})
+    base = TW.params(s)[0]
+    lines = [f"📊 {d} 마감 일일결산", f"· 매매 {len(items)}회 (체결 있는 주문 수)", f"· 매수 {bq}주 · 매도 {sq}주 · 변경 {bq - sq:+d}주 (매수−매도)", f"· 보유 F {len(act)}층"]
+    inc = [f for f in act if not TW.is_complete(f)]
+    if inc:
+        lbl = TW.floor_labels(tst)
+        for f in inc:
+            tgt = float(f.get("target") or base) or base
+            lines.append(f"· 진행중 {lbl.get(int(f['id']), 'F')}: ${float(f.get('cost') or 0):,.0f} / ${tgt:,.0f} ({float(f.get('cost') or 0) / tgt * 100:.1f}%)")
+    else:
+        lines.append("· 진행중 F 없음 (보유 F 모두 완성)")
+    return "\n".join(lines)
+
+
 def run_sync(s, api, note, mark_path):
     cfg = ConfigManager(s)
     m = cfg._load_json(mark_path, {})
@@ -2555,6 +2561,10 @@ def run_sync(s, api, note, mark_path):
         cfg.halt(f"체결 반영 뒤 잔고 {hold}주 ≠ 장부 {pos['qty']}주")
         msg += f"\n정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인한 뒤 정지 해제)"
     note.send(msg)
+    try:                                            # v2.15.0 판 41 할 일 4: 마감 일일결산 (체결 반영 알림 바로 뒤, 별도 메시지 1개) — 실패해도 동기화는 이미 끝남
+        note.send(daily_close_text(s, d, items, tst))
+    except Exception as e:
+        logging.warning(f"마감 일일결산 메시지 실패 {type(e).__name__}")
     return "완료"
 
 
@@ -2687,7 +2697,7 @@ def loop():
                 api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                 run_order_day(s, api, note, live)
             # v2.0.3 당일 매도 확인 + v2.2.6 체결 반영·알림 (실패해도 주문·체결 반영 흐름은 계속). 주문 마감(order_deadline_et) 뒤~체결 반영 시각 전에는 새 매도 주문 없이 체결 반영·알림만
-            if live and not sniper_on(s) and n.weekday() < 5 and ot <= n.time() < _hm(s["sync_time_et"], datetime.time(20, 0)):
+            if live and not BB.assassin_blocks(state) and not sniper_on(s) and n.weekday() < 5 and ot <= n.time() < _hm(s["sync_time_et"], datetime.time(20, 0)):
                 try:
                     api = api or MeritzApi(s["key_file"], os.path.join(state, "data", "meritz_token.json"))
                     run_intraday_sell(s, api, note, allow_new_sells=(n.time() <= dl))
@@ -2696,7 +2706,7 @@ def loop():
                     if _INTRA["err_day"] != n.strftime("%Y-%m-%d"):
                         _INTRA["err_day"] = n.strftime("%Y-%m-%d")
                         note.send(f"당일 매도 확인 중 오류가 났어요 ({type(e).__name__}) — 이미 낸 주문은 그대로예요. 서버 로그를 확인해 주세요.")
-            if live:
+            if live and not BB.assassin_blocks(state):                 # 판 41: 암살자 실전이면 하이브리드 마감 동기화(잔고=장부 대조)도 멈춤 — 암살자 보유분이 장부와 달라서
                 today = n.strftime("%Y-%m-%d")
                 for mp in pending_syncs(state):
                     md = os.path.basename(mp)[7:17]

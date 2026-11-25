@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/tower_strategy.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.15.0 (2026-11-25, 판 41 할 일 5): 바벨 삭제 — barbell_factor(F 완성 기준·버킷 시드 0.60 배율)·BARBELL_PORTION_PCT·portion_mode 의 바벨 분기 제거. portion_mode 는 단리 10%·복리 8% 둘뿐. 바벨이 꺼져 있었으므로 지금 동작(배율 1.0) 그대로
 # v2.12.0 (2026-11-24, 판 39): portion_mode 신설(복리 8%·단리 10%·바벨 15%) · portion_pct 가 설정 sniper_portion_pct 를 더 안 읽음 · tower_remaining_seed_usd·REMAINING_SEED_USD 삭제
 # v2.10.0 (2026-11-23, 판 36 D5): 눌림 매수 기본 8% → 10%, 바벨 켜짐이면 15%(BARBELL_PORTION_PCT, 시드 $9,000 → $1,350). 돌파 매수 비율(BREAKOUT_PORTION_PCT·breakout_portion_pct/usd) 삭제 (설정 키는 남아 있어도 무시)
 # v2.9.0 6차 (2026-11-22, 판 33): trade_mode(s)·buy_gap(s) 추가 — params 의 간격(칸 수)은 tower 모드에서만 설정 tower_buy_gap_usd(1~10, 기본 5), 스나이퍼 모드는 예전처럼 GAP_USD=5. 그 밖의 계산은 안 바꿈
@@ -54,7 +55,6 @@ GAP_USD = 5                # v2.7.0 판 27: F 칸 수 (내부 고정값) — 한
 TOL_USD = 100.0            # 완성 허용 오차: F 투자금이 목표에서 이만큼 이내로 모자라면 완성 (슬리피지·반올림)
 BOX_SEED_USD = 15000.0     # v2.5.0 버킷 시드 기본값 (달러) — 설정 tower_box_seed_usd. 풀이님 결정 2026-11-21 (Q9): 기존 완성 F($15,000)과 같은 금액
 PORTION_PCT = 10.0         # v2.10.0 판 36 D5: 신호 한 번에 사는 금액 = 버킷 시드의 10% (Case 113 단리 10%; 예전 8%)
-BARBELL_PORTION_PCT = 15.0   # v2.10.0 판 36 D5: 바벨 켜짐(barbell_enabled True)이면 기본 15% (원작 바벨 코어 15%) — 시드 $9,000 × 15% = $1,350
 SUB_PORTION_PCT = 4.0      # v2.5.0 서브 그리드 한 번에 사는 금액 = 버킷 시드의 4% (토스 SUB_PORTION_RATIO_4PCT = 0.04)
 COMPOUND_PORTION_PCT = 8.0  # v2.12.0 판 39: 복리 모드(compound_enabled True) 첫·눌림 매수 = 버킷 시드의 8% (원작 PORTION_RATIO_COMPOUND 0.08). 하이브리드는 시드가 버킷 고정이라 '복리 = 비율만 8%' (원금 재투자 계산은 안 함)
 PCT_BAND_HI_USD = 30.0     # 퍼센트 작업: 고르게 나눌 가격 구간 위쪽 ($30) — 근거 percent_work.md
@@ -86,18 +86,13 @@ def floor_sell_qty(q, frac):
     return max(0, min(rnd(q * _f(frac) / 100.0), q - 1))
 
 
-def barbell_factor(s):
-    """v2.9.0 7차 판 34 2차: 바벨 모드(설정 barbell_enabled 가 정확히 True)면 SOXL 60% 몫 → F 완성 기준 금액·버킷 시드에 0.60 배율. 꺼짐(기본)이면 1.0 = 판 33 과 같음"""
-    return 0.60 if (s or {}).get("barbell_enabled") is True else 1.0
-
-
 def params(s):
     """(F 완성 기준 금액, F 수, 간격=칸 수). 설정에 없거나 이상하면 기본값. v2.7.0 판 27: 간격은 사용자 설정이 아니라 내부 고정값 GAP_USD=5로만 돌려줌 (설정 파일에 tower_gap_usd가 남아 있어도 무시)."""
     s = s or {}
     fu = _f(s.get("tower_floor_usd")) or FLOOR_USD
     fl = int(_f(s.get("tower_floors"))) or FLOORS
     fu = fu if fu > 0 else FLOOR_USD
-    return round(fu * barbell_factor(s), 2), (fl if fl >= 1 else FLOORS), buy_gap(s)
+    return round(fu, 2), (fl if fl >= 1 else FLOORS), buy_gap(s)
 
 
 def trade_mode(s):
@@ -116,24 +111,21 @@ def buy_gap(s):
 def box_seed(s):
     """v2.5.0 버킷 시드(달러): 설정 tower_box_seed_usd, 없거나 0 이하면 기본 $15,000"""
     v = _f((s or {}).get("tower_box_seed_usd"))
-    return round((v if v > 0 else BOX_SEED_USD) * barbell_factor(s), 2)
+    return round(v if v > 0 else BOX_SEED_USD, 2)
 
 
 def portion_mode(s):
-    """v2.12.0 판 39: 매수 비율 모드 'compound'(복리 8%) | 'simple'(단리 10%, 기본) | 'barbell'(바벨 15%). 바벨(barbell_enabled True)이 우선, 다음 복리(compound_enabled True), 아니면 단리"""
-    s = s or {}
-    if s.get("barbell_enabled") is True:
-        return "barbell"
-    return "compound" if s.get("compound_enabled") is True else "simple"
+    """v2.15.0 판 41 할 일 5: 매수 비율 모드 'compound'(복리 8%) | 'simple'(단리 10%, 기본) 둘뿐 (바벨 15% 삭제). 복리(compound_enabled True)가 아니면 단리"""
+    return "compound" if (s or {}).get("compound_enabled") is True else "simple"
 
 
 def portion_pct(s):
-    """첫·눌림(본) 매수 비율(%): 모드로만 결정 (v2.12.0 판 39: 설정 sniper_portion_pct 삭제) — 복리 8.0 · 단리 10.0(PORTION_PCT) · 바벨 15.0(BARBELL_PORTION_PCT)"""
-    return {"compound": COMPOUND_PORTION_PCT, "barbell": BARBELL_PORTION_PCT}.get(portion_mode(s), PORTION_PCT)
+    """첫·눌림(본) 매수 비율(%): 모드로만 결정 — 복리 8.0(COMPOUND_PORTION_PCT) · 단리 10.0(PORTION_PCT)"""
+    return COMPOUND_PORTION_PCT if portion_mode(s) == "compound" else PORTION_PCT
 
 
 def portion_usd(s):
-    """v2.6.0 신호 한 번에 사는 금액 = 버킷 시드 × 눌림 비율(portion_pct, 기본 10% · 바벨 15%) (단리 고정, 달러 2자리). 시드 $15,000 × 10% = $1,500 · 바벨 시드 $9,000 × 15% = $1,350"""
+    """v2.6.0 신호 한 번에 사는 금액 = 버킷 시드 × 눌림 비율(portion_pct, 단리 10% · 복리 8%) (달러 2자리). 시드 $15,000 × 10% = $1,500"""
     return round(box_seed(s) * portion_pct(s) / 100.0, 2)
 
 

@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/meritz_api.py   (MERITZ_LAOER v2.2.6 · 판 39 v2.12.0 1분봉)
+# v2.15.0 (2026-11-25, 판 41 할 일 1): modify_order 추가 — POST /trading/v1/overseas/orders/modify. 요청 본문 필드명 미확인(cancel·order 에서 확인된 필드 재사용으로 가정), 라이브 호출 안 해 봄
 # v2.12.0 (2026-11-24, 판 39 할 일 6): minute_candles(symbol, mrkt_cls_code, delayed) 추가 — GET /market/v1/overseas/candles/minutes (hour_cls_code=60). 응답 필드명 미확인 → 후보 키로 읽고 못 찾으면 MeritzError (값을 지어내지 않음)
 # v2.2.6 (2026-11-20, 판 16 본격): fills_rows(date_from, date_to, time_key="") — 체결 행의 체결 시각을 time_key 로 읽어 row["t"] 에 담음 (체결 반영 순서용). 체결 시각 필드 이름은 이 ZIP 의 근거 파일(공식 openapi.json 없음)에서 확인 못 해 '미확인' —
 #   time_key 가 비어 있으면(기본) t 는 None → main 이 매도를 먼저 반영. 설정 fill_time_field 에 필드 이름을 넣으면 그 값을 씀. 나머지 함수·반환 모양은 그대로
@@ -313,6 +314,23 @@ class MeritzApi:
         if warn and warn != "0":
             raise WarnNeeded(str(data.get("warn_msg") or f"경고코드 {warn}"))
         return {"no": str(data.get("oder_no", "")), "body": body}
+
+    def modify_order(self, oder_date, orgl_oder_no, oder_cls_code, odqt, price):
+        """판 41 할 일 1: 접수된 해외주식 지정가 주문 1건의 가격을 정정함 (POST /trading/v1/overseas/orders/modify — 암살자 실전 출구 추격·스윕용).
+        본문 6필드 필수 (공식 스펙 openapi.json — 수정 1차에서 확인, 클로드 5필드 가정은 틀렸음): oder_date·orgl_oder_no·oder_cls_code·odqt·ovrs_stck_oder_prc·oder_cond_cls_code.
+        oder_cond_cls_code는 지정가(01) 기준 "0" (조건 없음). odqt = 정정 뒤 수량(미체결 잔량으로 보냄 — 이 필드가 '정정 수량'인지 '원 수량'인지 미확인). 응답에 새 주문번호가 오는지는 스펙에 없어 미확인 (없으면 원번호 유지).
+        라이브 호출 안 해 봄 (실주문 상태 변경). 응답 못 받으면 정정이 됐는지 불확실이라 MeritzError"""
+        px = f"{float(price):.4f}".rstrip("0").rstrip(".")
+        body = {"oder_date": str(oder_date), "orgl_oder_no": str(orgl_oder_no), "oder_cls_code": str(oder_cls_code),
+                "odqt": int(odqt), "ovrs_stck_oder_prc": px, "oder_cond_cls_code": "0"}
+        try:
+            d = self._call("POST", "/trading/v1/overseas/orders/modify", body=body)
+        except MeritzError:
+            raise
+        except Exception as e:      # 시간 초과·연결 끊김·알 수 없는 응답: 정정이 됐는지 모름 → 불확실로 표시
+            raise MeritzError(f"정정 응답을 못 받음 ({type(e).__name__}) — 정정이 됐는지 불확실")
+        data = d.get("data") or {}
+        return {"no": str(data.get("oder_no") or orgl_oder_no), "body": body}
 
     def cancel_order(self, oder_date, orgl_oder_no, oder_cls_code, odqt):
         """판 42: 접수된 해외주식 주문 1건을 취소함 (원작 60초 미체결 안전 취소용 — 원작 BUY_ORDER_MAX_WAIT_SEC=60.0).
