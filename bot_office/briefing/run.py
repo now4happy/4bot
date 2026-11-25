@@ -96,6 +96,11 @@ def main(argv=None, deps=None):
     run_id = deps.get("run_id") or secrets.token_hex(3)
     gen = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     dry = args.dry
+    send_cfg = cfg.get("send", {})
+    if not isinstance(send_cfg, dict):
+        send_cfg = {}
+    send_need = send_cfg.get("need", True)          # 없으면 예전처럼 보냄 (옛 config.json 호환)
+    send_port = send_cfg.get("portfolio", True)
 
     latest = st.read_latest() or {}
     out = {"schema_version": 1, "run_id": run_id, "generated_at": gen,
@@ -117,7 +122,11 @@ def main(argv=None, deps=None):
     do_port = args.stage in ("portfolio", "all")
 
     if do_need:
-        if not dry and not args.force and st.is_sent(today, "need"):
+        if not dry and not send_need:
+            print("need: 발송 중단 (send.need=false) — 보내지 않음")
+            out["need"] = {"status": "disabled", "run_id": run_id, "generated_at": gen}
+            out["telegram"]["need"] = "disabled"
+        elif not dry and not args.force and st.is_sent(today, "need"):
             print("need: 오늘 이미 전송됨 (--force 로만 재실행)")
         else:
             try:
@@ -139,7 +148,11 @@ def main(argv=None, deps=None):
                 exit_code = 1
 
     if do_port:
-        if not dry and not args.force and st.is_sent(today, "portfolio"):
+        if not dry and not send_port:
+            print("portfolio: 발송 중단 (send.portfolio=false) — 보내지 않음")
+            out["portfolio"] = {"status": "disabled", "run_id": run_id, "generated_at": gen}
+            out["telegram"]["portfolio"] = "disabled"
+        elif not dry and not args.force and st.is_sent(today, "portfolio"):
             print("portfolio: 오늘 이미 전송됨 (--force 로만 재실행)")
         else:
             try:
