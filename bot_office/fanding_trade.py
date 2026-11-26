@@ -168,7 +168,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.6.4"
+VERSION = "v1.6.5"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1102,13 +1102,13 @@ def account_lines(sheet, snapshot=None):
     # 사용자 결정(2026-10-28): 환전 판단 기준은 추정 예수금. 예수금 기준 부족은 참고로만 표시한다.
     def whole(x):   # 소수점 첫째 자리에서 반올림한 정수, 천 단위 쉼표
         return f"${x.quantize(Decimal(1), rounding=ROUND_HALF_UP):,}"
-    lines = ["\n<b>달러</b>",
+    lines = ["\n💰 [달러]",
              f"· {whole(est)} 보유 달러" if est is not None else "· 보유 달러: 조회 불가",
              f"· {whole(need)} 표 매수 필요 달러",
              f"· {whole(est_gap)} 환전 필요 달러" if est_gap is not None else "· 환전 필요 달러: 계산 보류"]
     target = number(sheet["parsed"].get("holding_qty"))
     actual = number(market.get("holding"))
-    lines.append("\n<b>보유 수량 비교</b>")
+    lines.append("\n🏛️ [보유 수량 비교]")
     if target is None or mult is None or actual is None:
         lines.append("· 차이 계산 보류: 표 보유 개수 또는 계좌 수량 확인 필요")
     else:
@@ -1311,40 +1311,45 @@ def seen_exch(symbol):
     return load(EXCH_SEEN, {}).get(symbol)
 
 
-def sheet_text(sheet, head="<b>팬딩 가격표 도착</b>"):
+def sheet_text(sheet, head="📋 [팬딩 가격표 도착]"):
     c = cfg()
     p, mult = sheet["parsed"], sheet["mult"]
     alarm, auto, cutoff = deadlines(sheet)
     us = datetime.strptime(sheet["us_date"], "%Y%m%d")
     L = [head, f"· {c['symbol']} · {html.escape(p['close_date'])} 종가 {p['close']} · {html.escape(p.get('cycle') or '')}",
-         f"· 배수 <b>×{mult}</b> · 주문일(미국) {us:%m/%d} · Limit VWAP 예약 · <b>{RESERVE_NAMES.get(str(c.get('reserve_time', '2')), '')} 발주</b>"]
-    for (side, price, rq), (_, _, qty) in zip(raw_lines(sheet), order_lines(sheet, keep_zero=True)):
-        cut = f" ← 매도가능 부족으로 {rq}에서 줄임" if qty < rq else ""
-        L.append(f"{'매수' if side == 'buy' else '매도'} <b>{price:g} × {qty}</b>"
-                 f"  {fmt_money(price * qty)}{cut}")
+         f"📐 배수 ×{mult} · 주문일(미국) {us:%m/%d} · Limit VWAP 예약 · {RESERVE_NAMES.get(str(c.get('reserve_time', '2')), '')} 발주"]
+    lines = list(zip(raw_lines(sheet), order_lines(sheet, keep_zero=True)))
+    for side_name, side in (("매수", "buy"), ("매도", "sell")):
+        rows = [(price, qty, rq) for (s, price, rq), (_, _, qty) in lines if s == side]
+        if not rows:
+            continue
+        L.append(f"🛒 [{side_name}]")
+        for price, qty, rq in rows:
+            cut = f" ← 매도가능 부족으로 {rq}에서 줄임" if qty < rq else ""
+            L.append(f"· {price:g} × {qty} → {fmt_money(price * qty)}{cut}")
     cq = int(sheet.get("catchup_qty") or 0)
     cp = sheet.get("catchup_price")
     if cq > 0 and cp is not None:
-        L.append(f"배수 맞추기: {cq}주가 가장 낮은 매수가({cp:g})에 포함돼 있어요  {fmt_money(float(cp) * cq)}")
+        L.append(f"📐 배수 맞추기: {cq}주가 가장 낮은 매수가({cp:g})에 포함돼 있어요  {fmt_money(float(cp) * cq)}")
     bad = [x for x in sheet["checks"] if not x["ok"]]
     if bad:
-        L.append("\n<b>확인 필요</b>")
-        L += [f"  · {html.escape(x['msg'])}" for x in bad]
+        L.append("\n⚠️ [확인 필요]")
+        L += [f"· {html.escape(x['msg'])}" for x in bad]
     else:
-        L.append("\n안전점검 모두 통과")
+        L.append("\n✅ 안전점검 모두 통과")
     sub = datetime(*now_kst().timetuple()[:3], *hm(c["submit_kst"]), tzinfo=KST)
-    L.append(f"\n주문 접수: 승인 후 {('지금 바로' if now_kst() >= sub else c['submit_kst'] + ' 이후')}")
+    L.append(f"\n⏰ 주문 접수: 승인 후 {('지금 바로' if now_kst() >= sub else c['submit_kst'] + ' 이후')}")
     mode = auto_mode(c)
     if c["auto_order"] and mode:
         at = auto_mode_time(sheet, mode)
-        L.append(f"{AUTO_MODES[mode]} {at:%H:%M} " +
-                 (("자동주문" if sheet["auto_ok"] else "<b>자동주문 안 함</b>(점검 미통과)") if not sheet.get("auto_late")
-                  else "<b>자동주문 안 함</b>(시각 지남 · 버튼으로 결정)") + f" · 마감 {cutoff:%m/%d %H:%M}")
+        L.append(f"⏰ {AUTO_MODES[mode]} {at:%H:%M} " +
+                 (("자동주문" if sheet["auto_ok"] else "자동주문 안 함(점검 미통과)") if not sheet.get("auto_late")
+                  else "자동주문 안 함(시각 지남 · 버튼으로 결정)") + f" · 마감 {cutoff:%m/%d %H:%M}")
     elif c["auto_order"]:
-        L.append(f"마감 {alarm:%m/%d %H:%M} 알림 → {auto:%H:%M} " +
-                 ("자동주문" if sheet["auto_ok"] else "<b>자동주문 안 함</b>(점검 미통과)"))
+        L.append(f"⏰ 마감 {alarm:%m/%d %H:%M} 알림 → {auto:%H:%M} " +
+                 ("자동주문" if sheet["auto_ok"] else "자동주문 안 함(점검 미통과)"))
     else:
-        L.append(f"마감 {cutoff:%m/%d %H:%M} (자동주문 꺼짐)")
+        L.append(f"⏰ 마감 {cutoff:%m/%d %H:%M} (자동주문 꺼짐)")
     L += account_lines(sheet)
     return "\n".join(L)
 
@@ -1618,24 +1623,24 @@ def fx_pick_info(sheet=None, fresh=True):
     return dict(info)
 
 
-def fx_pick_view(info, amount, title="<b>P 환전 — 금액 입력</b>", prefix="fx"):
+def fx_pick_view(info, amount, title="💱 [P 환전 — 금액 입력]", prefix="fx"):
     """금액 입력 화면 (글자, 버튼). VR6 도 같은 틀을 씀 (prefix 만 다름). v1.6.0: 숫자 버튼(±$100·프리셋) 없앰 → 숫자를 직접 보냄"""
     from decimal import Decimal
     amount = amount if amount is not None else Decimal(0)
     L = [title,
-         f"지금 값: 보유 달러 {fx_money(info.get('est'))} (추정 예수금)"
+         f"💰 지금 값: 보유 달러 {fx_money(info.get('est'))} (추정 예수금)"
          + (f" · 예수금 {fx_money(info.get('cash'))}" if info.get("cash") is not None else ""),
          "· 이번 회차 필요 달러: " + (f"{fx_money(info['need'])}" + (f" ({info['sheet_date']})" if info.get("sheet_date") else "")
                                 if info.get("need") is not None else FX_NO_SHEET)]
     gap = info.get("gap")
     if gap is not None:
         L.append("· 부족액(추정 기준): " + (fx_money(gap) if gap > 0 else "없음"))
-    L += [f"넣을 수 있는 값: 0 초과 ~ ${FX_MAX_PICK:,} (달러)",
+    L += [f"📐 넣을 수 있는 값: 0 초과 ~ ${FX_MAX_PICK:,} (달러)",
           "무슨 뜻: 원화를 달러로 바꿀 금액(환전)이에요.",
           "바꾸면: 확인 화면에서 적용환율·필요 원화를 보여 주고, 실행 버튼을 눌러야 환전돼요 (10분 안 · 환율이 1% 넘게 바뀌면 실행 안 함).",
           "새 값을 숫자로 보내 주세요. 예: 1500" + (f" (부족액을 채우려면 {fx_cb_amount(gap)})" if gap is not None and gap > 0 else "")]
     if amount > 0:
-        L.append(f"\n지금 입력된 금액: <b>{fx_money(amount)}</b>")
+        L.append(f"\n💰 지금 입력된 금액: {fx_money(amount)}")
     rows = []
     if amount > 0:
         rows.append([{"text": f"{fx_money(amount)}로 확인 화면", "callback_data": f"{prefix}:cf:{fx_cb_amount(amount)}"}])
@@ -1678,7 +1683,7 @@ def fx_show_calc(tg_s, amount=None, sheet=None, msg_id=None):
         rate = Decimal(str(rate_info["rate"]))
         exrt_time = str(rate_info.get("exrt_stnd_time") or "")
     except Exception as e:
-        fx_screen(tg_s, f"<b>P 환전 — 확인</b>\n적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). "
+        fx_screen(tg_s, f"💱 [P 환전 — 확인]\n적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). "
                   "환전 가능 시간(평일 낮)인지 확인하고 다시 눌러 주세요. 돈은 움직이지 않았어요.", [[back, cancel]], msg_id)
         return True
     try:
@@ -1687,10 +1692,10 @@ def fx_show_calc(tg_s, amount=None, sheet=None, msg_id=None):
         krw = None
     krw_needed = amount * rate
     short = (krw_needed - krw).quantize(Decimal(1), rounding=ROUND_UP) if krw is not None and krw < krw_needed else None
-    L = ["<b>P 환전 — 확인</b> (아직 실행하지 않았어요)"]
+    L = ["💱 [P 환전 — 확인] (아직 실행하지 않았어요)"]
     if short is not None:
-        L.append(f"<b>원화가 {short:,.0f}원 모자라요</b> — 그래서 실행 버튼이 없어요. 원화를 먼저 넣거나 금액을 줄여 주세요.")
-    L += [f"· 환전할 달러: <b>{fx_money(amount)}</b>",
+        L.append(f"⚠️ 원화가 {short:,.0f}원 모자라요 — 그래서 실행 버튼이 없어요. 원화를 먼저 넣거나 금액을 줄여 주세요.")
+    L += [f"· 환전할 달러: {fx_money(amount)}",
           f"· 적용환율: {rate:,.4f} (기준 {html.escape(exrt_time)})",
           f"· 필요 원화(추정): 약 {krw_needed:,.0f}원 (수수료 별도 · 실제 금액은 실행 결과 기준)",
           "· 원화 예수금: " + (f"{krw:,.0f}원" if krw is not None else "조회 불가")]
@@ -1818,7 +1823,7 @@ def fx_handle_callback(tg_s, cb):
                      "메리츠 앱의 환전 내역에서 먼저 확인해 주세요.")
             return True
         snap = account_snapshot(m)
-        tg_s.send("\n".join(fx_result_lines("<b>P 환전 완료</b>", amount, result, new_rate, snap)))
+        tg_s.send("\n".join(fx_result_lines("✅ [P 환전 완료]", amount, result, new_rate, snap)))
         return True
     tg_s.answer(cb_id, "모르는 환전 버튼이에요")
     return True
@@ -2023,16 +2028,16 @@ def auto_fx_core(date, sh, now=None, mark=None):
     status, info = auto_fx_execute(m, amount, before_exchange=mark)
     base = f"부족액(추정 기준) {fx_money(gap)} → 자동환전 {fx_money(amount)}"
     if status == "stop":
-        out.update(result="stop", lines=[f"<b>자동환전 중단</b> · {base}", f"  이유: {html.escape(info['why'])}",
+        out.update(result="stop", lines=[f"⏸️ [자동환전 중단] · {base}", f"  이유: {html.escape(info['why'])}",
                                          "  돈은 움직이지 않았어요 · 이 회차는 다시 안 해요 · 아래 버튼으로 직접 환전"])
         return out
     if status == "uncertain":
-        out.update(result="uncertain", lines=[f"<b>자동환전 결과 확인 안 됨</b> · {base}",
+        out.update(result="uncertain", lines=[f"⚠️ [자동환전 결과 확인 안 됨] · {base}",
                                               f"  ({html.escape(info['why'])}) 환전이 됐을 수도 있어 다시 하지 않아요. 메리츠 앱의 환전 내역에서 먼저 확인해 주세요."])
         return out
     after = account_snapshot(m)
     res = info["res"]
-    full = fx_result_lines(f"<b>자동환전 완료</b> · {base}", amount, res, info["rate"], after)
+    full = fx_result_lines(f"✅ [자동환전 완료] · {base}", amount, res, info["rate"], after)
     out.update(result="ok", after=after, full=full, lines=["" + full[0]] + ["  · " + x.replace("· ", "", 1) for x in full[2:6]])
     return out
 
@@ -2206,7 +2211,7 @@ def auto_rfx_tick(tg, now=None):
 
 
 def _auto_rfx_run(tg, m, key, amount, est, need):
-    head = f"<b>P 역자동환전"
+    head = f"💱 [P 역자동환전"
     base = f"· 보유 달러(추정) {fx_money(est)} − 남길 달러 {fx_money(max(_dec(RFX_KEEP_USD), need))} → {fx_money(amount)}"
     try:
         cash = _dec(m.usd_cash())
@@ -2220,19 +2225,19 @@ def _auto_rfx_run(tg, m, key, amount, est, need):
     elif amount > cash:
         why = f"결제된 달러(예수금 {fx_money(cash)})보다 많아요 — 미결제 달러는 원화로 못 바꿀 수 있어요"
     if why:
-        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n{html.escape(why)}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
+        tg.send(f"{head} 중단] · {key} 회차\n{base}\n{html.escape(why)}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
         return "stop"
     status, info = auto_fx_execute(m, amount, direction="2", before_exchange=_fx_mark_locked)
     if status == "stop":
-        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n{html.escape(info['why'])}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
+        tg.send(f"{head} 중단] · {key} 회차\n{base}\n{html.escape(info['why'])}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
         return "stop"
     if status == "uncertain":
-        tg.send(f"<b>P 역자동환전 결과 확인 안 됨</b> · {key} 회차\n{base}\n"
+        tg.send(f"⚠️ [P 역자동환전 결과 확인 안 됨] · {key} 회차\n{base}\n"
                 f"실행 결과를 확인하지 못했어요 ({html.escape(info['why'])}). 환전이 됐을 수도 있어 다시 하지 않아요.\n"
                 "메리츠 앱의 환전 내역에서 먼저 확인해 주세요.")
         return "uncertain"
     after = account_snapshot(m)
-    text = "\n".join(fx_result_lines(f"<b>P 역자동환전 완료</b> · {key} 회차", amount, info["res"], info["rate"], after,
+    text = "\n".join(fx_result_lines(f"✅ [P 역자동환전 완료] · {key} 회차", amount, info["res"], info["rate"], after,
                                      krw_label="입금 원화") + [base])
     tg.send(text); _hub_alert('4번 팬딩 가격표', 'info', text)
     return "ok"
@@ -2244,7 +2249,7 @@ def sheet_notice_time(sheet):
     return day.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=KST)
 
 
-def send_sheet_alert(tg, sheet, head="<b>팬딩 가격표 도착</b>", st=None):
+def send_sheet_alert(tg, sheet, head="📋 [팬딩 가격표 도착]", st=None):
     sheet["notice_not_before"] = sheet_notice_time(sheet).isoformat()
     sheet["notice_head"] = head
     if now_kst() < sheet_notice_time(sheet):
@@ -2272,7 +2277,7 @@ def send_sheet_alert(tg, sheet, head="<b>팬딩 가격표 도착</b>", st=None):
     if sheet.get("auto_fx_lines"):
         text += "\n\n" + "\n".join(sheet["auto_fx_lines"])
     # 판51 P 레이더: 표 알림 전에 현황판을 먼저 보냄. 메인 09:00 알림에만, 이 버전 표에 1번만.
-    if head == "<b>팬딩 가격표 도착</b>" and sheet.get("radar_sent_ver") != sheet.get("ver"):
+    if head == "📋 [팬딩 가격표 도착]" and sheet.get("radar_sent_ver") != sheet.get("ver"):
         try:
             rr = tg.send(radar_text(sheet))
             if (rr or {}).get("message_id"):
@@ -2540,7 +2545,7 @@ def handle_image(tg, data, sha, meta):
         st["sheets"][date] = sheet
         for k in sorted(st["sheets"])[:-20]:
             st["sheets"].pop(k, None)
-        head = "<b>팬딩 가격표가 바뀌었어요 (새 숫자)</b>" if old else "<b>팬딩 가격표 도착</b>"
+        head = "📋 [팬딩 가격표가 바뀌었어요 (새 숫자)]" if old else "📋 [팬딩 가격표 도착]"
         if sheet["status"] == "pending":
             send_sheet_alert(tg, sheet, head, st)
     if agree:   # 수익금 분리 그림자 기록 (주문·계좌 조회 없음, 실패해도 매매에 영향 없음) — 두 번 판독이 일치한 표만
@@ -2694,7 +2699,7 @@ def tick(tg):
                 sh["status"] = "expired"
                 continue
             if sh["status"] == "pending" and sh.get("notice_pending") and now >= sheet_notice_time(sh):
-                send_sheet_alert(tg, sh, sh.get("notice_head") or "<b>팬딩 가격표 도착</b>", st)
+                send_sheet_alert(tg, sh, sh.get("notice_head") or "📋 [팬딩 가격표 도착]", st)
             if sh["status"] == "pending" and c["auto_order"]:
                 due = auto_due(sh, c, now)
                 if due == "late" and not sh.get("auto_late"):      # 고른 시각이 이미 지남 → 소급 자동주문 안 함, 수동 결정
@@ -3541,7 +3546,7 @@ def bot_message(tg_s, text):
             label = {"pending": "결정 대기 · 자동주문 안 함(버튼으로 결정)" if sh.get("auto_skipped") else "결정 대기", "approved": "승인됨·접수 대기", "submitting": "접수 중", "submitted": "접수 완료",
                      "partial": "일부 실패", "cancelled": "안 함", "skipped": "자동주문 안 함", "expired": "마감 지남"}
             view = dict(sh, market=current_account)
-            res = tg_s.send(sheet_text(view, f"<b>최근 가격표</b> · 상태: {label.get(sh['status'], sh['status'])}"),
+            res = tg_s.send(sheet_text(view, f"📋 [최근 가격표] · 상태: {label.get(sh['status'], sh['status'])}"),
                             sheet_rows(sh) if sh["status"] == "pending" else None)
             if sh["status"] == "pending":
                 track_buttons(sh, res)

@@ -55,7 +55,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.7.3"
+VERSION = "2.7.4"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -712,18 +712,18 @@ def run_checks(plan, st, now):
 def info_lines(plan):
     acc, p, k = plan.get("account") or {}, plan["parsed"], int(plan["mult"])
     need = need_usd(plan)
-    L = ["\n<b>매수 자금 (VR6 계좌)</b>", f"· 매수 줄이 모두 체결될 때 필요한 달러: <b>${need:,.2f}</b>"]
+    L = ["\n💰 [매수 자금 (VR6 계좌)]", f"· 매수 줄이 모두 체결될 때 필요한 달러: ${need:,.2f}"]
     cash, est = acc.get("usd_cash"), acc.get("usd_est")
     L.append("· 보유 달러(예수금): " + (f"${cash:,.2f}" if cash is not None else "조회 불가"))
     if est is not None:
         L.append(f"· 외화 추정 예수금(미결제 포함): ${est:,.2f}")
     if cash is not None:
         gap = round(need - cash, 2)
-        L.append(f"· <b>부족: ${gap:,.2f} → 환전 필요</b>" if gap > 0 else f"· 부족 없음 (여유 ${-gap:,.2f})")
-    L.append("· 부족하면 아래 [환전 금액 확인] 버튼이나 <code>/vr6환전</code> 으로 환전할 수 있어요 (확인 후 실행).")
+        L.append(f"· ⚠️ 부족: ${gap:,.2f} → 환전 필요" if gap > 0 else f"· 부족 없음 (여유 ${-gap:,.2f})")
+    L.append("· 부족하면 아래 [환전 금액 확인] 버튼이나 /vr6환전 으로 환전할 수 있어요 (확인 후 실행).")
     base = p.get("buy_base_qty") or p.get("sell_base_qty")
     if base:
-        L.append("\n<b>보유 수량 비교</b>")
+        L.append("\n🏛️ [보유 수량 비교]")
         exp = base * k
         if acc.get("holding") is not None:
             diff = acc["holding"] - exp
@@ -738,37 +738,37 @@ def info_lines(plan):
     return L
 
 
-def plan_text(plan, st, head="<b>VR6 주문표</b>"):
+def plan_text(plan, st, head="📋 [VR6 주문표]"):
     p, k = plan["parsed"], int(plan["mult"])
     L = [f"{head} · {html.escape(p.get('title') or '')} · {st['symbol']} · 배수 ×{k}",
-         f"기간 {plan.get('start') or '?'} ~ {plan.get('end') or '?'} · 첫 발주일 {plan.get('order_start') or '-'} (미국)",
-         "주문 방식: 지정가 · 기간잔량 · 장개시 발주 (줄마다 " + f"{k}주)"]
+         f"📅 기간 {plan.get('start') or '?'} ~ {plan.get('end') or '?'} · 첫 발주일 {plan.get('order_start') or '-'} (미국)",
+         "📐 주문 방식: 지정가 · 기간잔량 · 장개시 발주 (줄마다 " + f"{k}주)"]
     if p["buys"]:
-        L.append(f"\n<b>매수 {len(p['buys'])}줄</b> (최소값 {p.get('min_value')})")
-        L += [f"  {r['price']:g} × {k}주 → 보유 {r['qty'] * k}주" for r in p["buys"]]
+        L.append(f"\n📈 [매수 {len(p['buys'])}줄] (최소값 {p.get('min_value')})")
+        L += [f"· {r['price']:g} × {k}주 → 보유 {r['qty'] * k}주" for r in p["buys"]]
     if p["sells"]:
-        L.append(f"\n<b>매도 {len(p['sells'])}줄</b> (최대값 {p.get('max_value')})")
+        L.append(f"\n📉 [매도 {len(p['sells'])}줄] (최대값 {p.get('max_value')})")
         capped = [q for sd, _, q in order_lines(plan, keep_zero=True) if sd == "sell"]
         for r, q in zip(p["sells"], capped):
-            L.append(f"  {r['price']:g} × {q}주 → 보유 {r['qty'] * k}주" if q == k else
-                     f"  {r['price']:g} × <b>{q}주</b> (표 {k}주 → 매도가능 부족으로 줄임)")
+            L.append(f"· {r['price']:g} × {q}주 → 보유 {r['qty'] * k}주" if q == k else
+                     f"· {r['price']:g} × {q}주 (표 {k}주 → 매도가능 부족으로 줄임)")
     L += info_lines(plan)
     bad = [x for x in plan["checks"] if not x["ok"]]
-    L.append("\n<b>안전점검</b> " + ("모두 통과" if not bad else f"{len(bad)}건 미통과"))
-    L += [("  " if x["ok"] else "  ") + html.escape(x["msg"]) for x in plan["checks"]]
+    L.append("\n" + ("✅ [안전점검] 모두 통과" if not bad else f"⚠️ [안전점검] {len(bad)}건 미통과"))
+    L += ["· " + html.escape(x["msg"]) for x in plan["checks"]]
     if plan["status"] == "pending" and plan.get("order_start"):
         _, auto, cut = deadlines(plan, st)
         mode = auto_mode(st)
         if mode:
             auto = auto_mode_time(plan, st, mode)
         if not st["auto_order"]:
-            L.append(f"\n자동주문 꺼짐 · 버튼으로 결정해 주세요 (마감 {cut:%m-%d %H:%M} KST)")
+            L.append(f"\n⏰ 자동주문 꺼짐 · 버튼으로 결정해 주세요 (마감 {cut:%m-%d %H:%M} KST)")
         elif plan.get("auto_late"):
-            L.append(f"\n{AUTO_MODES[mode] if mode else '자동주문'}({auto:%m-%d %H:%M})가 지나 자동주문 안 해요 · 버튼으로 결정해 주세요 (마감 {cut:%m-%d %H:%M} KST)")
+            L.append(f"\n⏰ {AUTO_MODES[mode] if mode else '자동주문'}({auto:%m-%d %H:%M})가 지나 자동주문 안 해요 · 버튼으로 결정해 주세요 (마감 {cut:%m-%d %H:%M} KST)")
         elif plan["auto_ok"]:
-            L.append(f"\n버튼을 안 누르면 <b>{auto:%m-%d %H:%M} KST</b> 에 자동주문해요." + (f" ({AUTO_MODES[mode]})" if mode else ""))
+            L.append(f"\n⏰ 버튼을 안 누르면 {auto:%m-%d %H:%M} KST 에 자동주문해요." + (f" ({AUTO_MODES[mode]})" if mode else ""))
         else:
-            L.append("\n점검 미통과라 자동주문 안 해요. 숫자를 확인하고 직접 [주문] 하거나 앱에서 주문해 주세요.")
+            L.append("\n⚠️ 점검 미통과라 자동주문 안 해요. 숫자를 확인하고 직접 [주문] 하거나 앱에서 주문해 주세요.")
     return "\n".join(L)
 
 
@@ -888,7 +888,7 @@ def build_plan(tg, cycle, now=None):
                 "status": "pending", "orders": [], "ver": int((old or {}).get("ver", 0)) + 1, "alarm_sent": False,
                 "received": now.isoformat(timespec="minutes")}
     plan["account"] = account(st)
-    head = "<b>VR6 주문표 도착</b>" if not old else "<b>VR6 주문표 (다시 판독)</b>"
+    head = "📋 [VR6 주문표 도착]" if not old else "📋 [VR6 주문표 (다시 판독)]"
     with locked() as st:
         plan["checks"], plan["auto_ok"] = run_checks(plan, st, now)
         if old and old.get("msg_id"):
@@ -1043,7 +1043,7 @@ def tick(tg, now=None):
     with locked() as st:
         for cycle, pl in st["plans"].items():
             if pl.get("notice_pending") and now >= notice_time(now, st):
-                notices.append((cycle, pl.get("notice_head") or "<b>VR6 주문표 도착</b>"))
+                notices.append((cycle, pl.get("notice_head") or "📋 [VR6 주문표 도착]"))
                 pl["notice_pending"] = False
             # 밤 마감 30분 전: 이미 승인·접수된 회차는 달러가 모자랄 때만 알림 (결정 대기는 아래에서 따로)
             if (pl["status"] in ("approved", "submitting", "submitted", "partial", "retry", "retry_warn")
@@ -1226,7 +1226,7 @@ def fx_picker(tg, amount=None, plan=None, msg_id=None, fresh=True):
     info = fx_pick_info(plan, fresh=fresh)
     if amount is None:
         amount = info["gap"] if info.get("gap") is not None and info["gap"] > 0 else Decimal(0)
-    text, rows = ft.fx_pick_view(info, amount, title="<b>VR6 환전 — 금액 입력</b>", prefix="vm")
+    text, rows = ft.fx_pick_view(info, amount, title="💱 [VR6 환전 — 금액 입력]", prefix="vm")
     ft.fx_screen(tg, text, rows, msg_id)
     ft.await_set("fx", prefix="vm")
 
@@ -1249,7 +1249,7 @@ def fx_show(tg, amount=None, plan=None, msg_id=None):
         info = m.fx_applied_rate()
         rate, rtime = Decimal(str(info["rate"])), str(info.get("exrt_stnd_time") or "")
     except Exception as e:
-        ft.fx_screen(tg, f"<b>VR6 환전 — 확인</b>\n적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). "
+        ft.fx_screen(tg, f"💱 [VR6 환전 — 확인]\n적용환율을 못 가져왔어요 ({html.escape(type(e).__name__)}). "
                      "환전 가능 시간(평일 낮)인지 확인하고 다시 해 주세요. 돈은 움직이지 않았어요.", [[back, cancel]], msg_id); return
     try:
         krw = ft._dec(m.krw_cash())
@@ -1257,10 +1257,10 @@ def fx_show(tg, amount=None, plan=None, msg_id=None):
         krw = None
     krw_need = amount * rate
     short = (krw_need - krw).quantize(Decimal(1), rounding=ROUND_UP) if krw is not None and krw < krw_need else None
-    L = ["<b>VR6 환전 — 확인</b> (아직 실행하지 않았어요)"]
+    L = ["💱 [VR6 환전 — 확인] (아직 실행하지 않았어요)"]
     if short is not None:
-        L.append(f"<b>원화가 {short:,.0f}원 모자라요</b> — 그래서 실행 버튼이 없어요. 원화를 먼저 넣거나 금액을 줄여 주세요.")
-    L += [f"· 환전할 달러: <b>${amount:,.2f}</b>",
+        L.append(f"⚠️ 원화가 {short:,.0f}원 모자라요 — 그래서 실행 버튼이 없어요. 원화를 먼저 넣거나 금액을 줄여 주세요.")
+    L += [f"· 환전할 달러: ${amount:,.2f}",
           f"· 적용환율: {rate:,.4f} (기준 {html.escape(rtime)})",
           f"· 필요 원화(추정): 약 {krw_need:,.0f}원 (수수료 별도 · 실제 금액은 실행 결과 기준)",
           "· VR6 계좌 원화 예수금: " + (f"{krw:,.0f}원" if krw is not None else "조회 불가")]
@@ -1317,7 +1317,7 @@ def fx_exec(tg, cb, amount_str):
                 "환전이 됐을 수도 있어 다시 실행하지 않았어요. 메리츠 앱의 환전 내역을 먼저 확인해 주세요."); return
     replay("vr6_fx_exchange", "ok", event_type="external_call", broker_no=res.get("tr_srno"))
     acc = account(_fill(load(STATE, {})), m)
-    L = _ft().fx_result_lines("<b>VR6 환전 완료</b>", amount, res, new_rate, acc)
+    L = _ft().fx_result_lines("✅ [VR6 환전 완료]", amount, res, new_rate, acc)
     pl = _latest_plan(_fill(load(STATE, {})))
     if pl and acc.get("usd_cash") is not None:
         gap = usd_gap(pl, acc)
@@ -1417,15 +1417,15 @@ def auto_fx_core(cycle, pl, now=None):
     status, info = ft.auto_fx_execute(m, amount, before_exchange=_mark_locked)
     base = f"부족액(추정 기준) {ft.fx_money(gap)} → 자동환전 {ft.fx_money(amount)}"
     if status == "stop":
-        out.update(result="stop", lines=[f"<b>자동환전 중단</b> · {base}", f"  이유: {html.escape(info['why'])}",
+        out.update(result="stop", lines=[f"⏸️ [자동환전 중단] · {base}", f"  이유: {html.escape(info['why'])}",
                                          "  돈은 움직이지 않았어요 · 이 회차는 다시 안 해요 · 아래 버튼으로 직접 환전"])
         return out
     if status == "uncertain":
-        out.update(result="uncertain", lines=[f"<b>자동환전 결과 확인 안 됨</b> · {base}",
+        out.update(result="uncertain", lines=[f"⚠️ [자동환전 결과 확인 안 됨] · {base}",
                                               f"  ({html.escape(info['why'])}) 환전이 됐을 수도 있어 다시 하지 않아요. 메리츠 앱의 환전 내역에서 먼저 확인해 주세요."])
         return out
     after = account(_fill(load(STATE, {})), m)
-    full = ft.fx_result_lines(f"<b>자동환전 완료</b> · {base}", amount, info["res"], info["rate"], after)
+    full = ft.fx_result_lines(f"✅ [자동환전 완료] · {base}", amount, info["res"], info["rate"], after)
     out.update(result="ok", after=after, full=full, lines=["" + full[0]] + ["  · " + x.replace("· ", "", 1) for x in full[2:6]])
     return out
 
@@ -1569,7 +1569,7 @@ def auto_rfx_tick(tg, now=None):
 
 def _auto_rfx_run(tg, m, key, amount, est, need):
     ft = _ft()
-    head = "<b>VR6 역자동환전"
+    head = "💱 [VR6 역자동환전"
     base = f"· 보유 달러(추정) {ft.fx_money(est)} − 남길 달러 {ft.fx_money(max(ft._dec(ft.RFX_KEEP_USD), need))} → {ft.fx_money(amount)}"
     try:
         cash = ft._dec(m.usd_cash())
@@ -1583,19 +1583,19 @@ def _auto_rfx_run(tg, m, key, amount, est, need):
     elif amount > cash:
         why = f"결제된 달러(예수금 {ft.fx_money(cash)})보다 많아요 — 미결제 달러는 원화로 못 바꿀 수 있어요"
     if why:
-        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n{html.escape(why)}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
+        tg.send(f"{head} 중단] · {key} 회차\n{base}\n{html.escape(why)}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
         return "stop"
     status, info = ft.auto_fx_execute(m, amount, direction="2", before_exchange=_mark_locked)
     if status == "stop":
-        tg.send(f"{head} 중단</b> · {key} 회차\n{base}\n{html.escape(info['why'])}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
+        tg.send(f"{head} 중단] · {key} 회차\n{base}\n{html.escape(info['why'])}\n돈은 움직이지 않았어요. 이 회차는 다시 안 해요.")
         return "stop"
     if status == "uncertain":
-        tg.send(f"<b>VR6 역자동환전 결과 확인 안 됨</b> · {key} 회차\n{base}\n"
+        tg.send(f"⚠️ [VR6 역자동환전 결과 확인 안 됨] · {key} 회차\n{base}\n"
                 f"실행 결과를 확인하지 못했어요 ({html.escape(info['why'])}). 환전이 됐을 수도 있어 다시 하지 않아요.\n"
                 "메리츠 앱의 환전 내역에서 먼저 확인해 주세요.")
         return "uncertain"
     after = account(_fill(load(STATE, {})), m)
-    tg.send("\n".join(ft.fx_result_lines(f"<b>VR6 역자동환전 완료</b> · {key} 회차", amount, info["res"], info["rate"], after,
+    tg.send("\n".join(ft.fx_result_lines(f"✅ [VR6 역자동환전 완료] · {key} 회차", amount, info["res"], info["rate"], after,
                                          krw_label="입금 원화") + [base]))
     return "ok"
 
@@ -1853,7 +1853,7 @@ def handle_text(tg, text):
         pl = _latest_plan(st)
         if not pl:
             tg.send("아직 VR6 주문표가 없어요. 표를 받으면 자동으로 판독해서 알려 드려요."); return True
-        head = f"<b>VR6 주문표</b> [{STATUS_NAMES.get(pl['status'], pl['status'])}]"
+        head = f"📋 [VR6 주문표] [{STATUS_NAMES.get(pl['status'], pl['status'])}]"
         r = tg.send(plan_text(pl, st, head), plan_rows(pl, decide=pl["status"] == "pending" and bool(pl.get("order_start"))) or None)
         if pl["status"] == "pending" and (r or {}).get("message_id"):
             with locked() as st2:
