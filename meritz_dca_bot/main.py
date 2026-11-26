@@ -34,6 +34,7 @@
 # =====================================================================
 # v1.3.3 (2026-11-20, audit-fix-v2 6-9): 익절 외 일차·이월(buy_carry)은 주문 접수가 아니라 전량 체결 확인(sync_fills) 때 올림 — 접수만 되고 체결 안 되면 일차 그대로(오늘 재주문은 막음). 6-10 은 미확인(기록만)
 import argparse, copy, os, re, signal, subprocess, sys
+from datetime import timedelta
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -1246,8 +1247,24 @@ async def dca_fx_plan(client, cfg):
         q, _ = int_buy_qty(budget, float(s.get("buy_carry") or 0), p, SETTINGS.get("us_int_buy_mode", "carry"))
         total += round(q * p * (1 + float(SETTINGS.get("buy_cash_buffer_pct", 10.0))/100), 2)
     # v1.1.0: 오늘 밤 SGOV 회차(관문 통과 시) 몫도 아침 환전에 포함 (실패하면 0 → 적립 몫 환전은 그대로)
-    total += await SG.sgov_fx_need(client, cfg, datetime.now(FX_KST).strftime("%Y-%m-%d"))
+    # 판47: 오늘이 미국 휴장일이면 오늘 회차는 없어서 0이 나오므로, 다음 거래일 회차 몫으로 내다봄.
+    #   다음 거래일에 회차가 없으면 sgov_fx_need가 0을 돌려줘서 환전 안 함 (과다 환전 없음).
+    #   참고: 내다본 날짜로 관문을 보면 그날 적용환율이 미래 날짜로 한 번 기록되나, 당일 실제 환율로 덮어씀.
+    today_kst = datetime.now(FX_KST)
+    sgov_need = await SG.sgov_fx_need(client, cfg, today_kst.strftime("%Y-%m-%d"))
+    if sgov_need <= 0 and not is_trading_day(today_kst.date()):
+        nxt = _next_trading_day(today_kst.date())
+        sgov_need = await SG.sgov_fx_need(client, cfg, nxt.strftime("%Y-%m-%d"))
+    total += sgov_need
     return round(total, 2)
+
+
+def _next_trading_day(d):
+    """다음 미국 거래일 (주말·미국 휴장일 건너뜀). 판47 내다보기 환전용."""
+    nxt = d + timedelta(days=1)
+    while not is_trading_day(nxt):
+        nxt += timedelta(days=1)
+    return nxt
 
 def _fx_record_path(day):
     return Path(SETTINGS["state_dir"]) / ("auto_fx_" + day + ".json")
@@ -1264,9 +1281,6 @@ async def maybe_auto_fx(client, now=None):
     day = now.strftime("%Y-%m-%d")
     hm = now.strftime("%H:%M")
     if now.weekday() >= 5 or not ("09:00" <= hm <= "15:30"): return "outside_hours"
-    if not is_trading_day(now.date()):
-        RL.ev("decision", "auto_fx", "skipped", "us_holiday", actor="scheduler")
-        return "us_holiday"
     if not kr_fx_day(now.date()):          # audit-fix 6-10: 한국 공휴일은 메리츠 환전 불가 (7번과 같은 목록)
         RL.ev("decision", "auto_fx", "skipped", "kr_holiday", actor="scheduler")
         return "kr_holiday"
@@ -1280,12 +1294,20 @@ async def maybe_auto_fx(client, now=None):
         try:
             need = await dca_fx_plan(client,cfg)
         except FxNoPrice as e:
+            # 판47: 휴장이면 가격 없음도 휴장 건너뜀으로 (기존 동작 유지 — 당일 기록 안 남김)
+            if not is_trading_day(now.date()):
+                RL.ev("decision", "auto_fx", "skipped", "us_holiday", actor="scheduler")
+                return "us_holiday"
             _fx_mark(day,"no_price",str(e))
             RL.ev("decision","auto_fx","skipped","no_price",actor="scheduler",level="WARN",symbol=str(e))
             return "no_price"
         usd = Decimal(str(await asyncio.to_thread(client.api.usd_estimated)))
         amount = fx_auto_amount(Decimal(str(need))-usd)
         if amount is None:
+            # 판47: 휴장 + 내다본 필요액 없음 → 휴장 건너뜀, 평일 + 필요액 없음 → no_gap (기존 동작 유지)
+            if not is_trading_day(now.date()):
+                RL.ev("decision", "auto_fx", "skipped", "us_holiday", actor="scheduler", need_usd=need)
+                return "us_holiday"
             RL.ev("decision","auto_fx","skipped","no_gap",actor="scheduler",need_usd=need)
             return "no_gap"
         r1 = await asyncio.to_thread(client.api.fx_applied_rate)
