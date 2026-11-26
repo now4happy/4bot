@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/fanding_trade.py   (FANDING_TRADE_vNEXT)
+# v1.6.2 (2026-11-26, 판51 P 레이더): 표 알림 전에 📡 [P매매 레이더] 현황판을 먼저 보냄 (토스 스나이퍼 레이더 기준). 표에 있는 값만 씀. [수익금 분리] SGOV 분리분은 값이 없어서 뺌.
 # v1.6.1 (2026-11-24, 방 fanding-label-privacy): 가격표 표기를 종가 날짜에서 팬딩 게시글 제목으로 — 텔레그램 메시지에서 "{종가 날짜} 가격표"를 "프라이버시 {M/D} 가격표"로 바꿈 (글 제목 날짜 = us_date, 종가일 다음 거래일; post URL이 비어 있어도 us_date에서 유도) · price_label() 헬퍼 추가 · 시트 내부 키·로그·주문·환전·판독 로직 불변
 # v1.6.0 (2026-11-19, 방 telegram-bot-menu-review 3차): 4번 메뉴 정리 — 첫 화면 4칸(P 매매·VR6 매매·전체 현황·전체 도움말) · 배수(P)·환전 금액·배수 맞추기 일수를 숫자 버튼 대신 입력창으로(범위 안내) · 배수는 지금 값→새 값 확인 후 적용 · 단순 이모티콘 제거(예전 키보드 글자도 같은 버튼으로 읽음)
 #        · 주문·매수·매도·자동환전·재예약·재판독 판단 로직은 바꾸지 않음 (환전 확인 화면·10분 유효·1% 환율 변동 중단은 그대로)
@@ -167,7 +168,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.6.1"
+VERSION = "v1.6.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -1348,6 +1349,49 @@ def sheet_text(sheet, head="<b>팬딩 가격표 도착</b>"):
     return "\n".join(L)
 
 
+def radar_text(sheet):
+    """📡 [P매매 레이더] — 토스 스나이퍼 레이더 형식. 표(sheet)에 있는 값만 씀 (없는 값은 빼).
+    판51: [수익금 분리] SGOV 분리분은 코드에 값이 없어서 뺌. [오늘 매매]는 실제 주문 수량(×배수).
+    [보유] 평단은 표 평단. [다음 표]는 내일 새벽 5시 판독."""
+    p = sheet.get("parsed") or {}
+    ex = p.get("extra") or {}
+    mult = sheet.get("mult") or 1
+    c = cfg()
+    season = str(p.get("close_date") or "")[:4] or "-"
+    close = p.get("close")
+    buys = p.get("buys") or []
+    sells = p.get("sells") or []
+    buy_n = "매수 없음" if not buys else f"매수 {len(buys)}줄"
+    sell_n = "매도 없음" if not sells else f"매도 {len(sells)}줄"
+    orders = order_lines(sheet)
+    ob = [(pr, q) for (s, pr, q) in orders if s == "buy"]
+    os_ = [(pr, q) for (s, pr, q) in orders if s == "sell"]
+    ob_s = "없음" if not ob else " · ".join(f"{pr:g}×{q}" for pr, q in ob)
+    os_s = "없음" if not os_ else " · ".join(f"{pr:g}×{q}" for pr, q in os_)
+    status = STATUS_KO.get(str(sheet.get("status") or ""), str(sheet.get("status") or ""))
+    hold = p.get("holding_qty")
+    hold_m = f"{int(float(hold) * mult)}주" if hold is not None else "-"
+    avg = p.get("avg_price")
+    avg_s = f"${float(avg):,.2f}" if avg is not None else "-"
+    cash = ex.get("cash_usd")
+    cash_s = f"${float(cash):,.2f}" if cash is not None else "-"
+    tot = ex.get("total_realized_usd")
+    ret = ex.get("total_return_pct")
+    nxt = now_kst() + timedelta(days=1)
+    L = ["📡 [P매매 레이더] (" + ("🟢 가동중" if c.get("auto_order") else "🔴 꺼짐") + f" · {season} 시즌)",
+         (f"📈 SOXL 종가 ${float(close):,.2f}" if close is not None else "📈 SOXL 종가 -")
+         + f" · 오늘 표 결과: {buy_n} · {sell_n}",
+         f"🛒 [오늘 매매] 매수 {ob_s} · 매도 {os_s}" + (f" · {status}" if status else ""),
+         f"🏛️ [보유] {hold_m} · 표 평단 {avg_s} · 잔금 {cash_s}"]
+    if tot is not None or ret is not None:
+        tot_s = f"+${float(tot):,.2f}" if tot is not None and float(tot) >= 0 else (f"-${abs(float(tot)):,.2f}" if tot is not None else "-")
+        ret_s = f"+{float(ret):.2f}%" if ret is not None and float(ret) >= 0 else (f"{float(ret):.2f}%" if ret is not None else "-")
+        L.append(f"💰 [시즌 실현수익] {tot_s} · 총수익률 {ret_s}")
+    L += [f"🎯 [다음 표] 내일({nxt:%m/%d}) 새벽 5시 판독",
+          f"🕐 {now_kst().strftime('%Y-%m-%d %H:%M')} KST"]
+    return "\n".join(L)
+
+
 # ---------------------------------------------------------- 환전 (1.12.0)
 # 수동: 💱 환전 → 금액 고르기(버튼) → 확인 화면(아직 실행 아님) → [✅ $XXX 환전 실행] → 완료 화면.
 #       /환전 [금액] 은 바로 확인 화면. 실행은 확인 화면의 실행 버튼에서만 (10분 유효 · 실행 직전 환율 1% 초과 변동 중단 ·
@@ -2227,6 +2271,14 @@ def send_sheet_alert(tg, sheet, head="<b>팬딩 가격표 도착</b>", st=None):
     text = sheet_text(sheet, head)
     if sheet.get("auto_fx_lines"):
         text += "\n\n" + "\n".join(sheet["auto_fx_lines"])
+    # 판51 P 레이더: 표 알림 전에 현황판을 먼저 보냄. 메인 09:00 알림에만, 이 버전 표에 1번만.
+    if head == "<b>팬딩 가격표 도착</b>" and sheet.get("radar_sent_ver") != sheet.get("ver"):
+        try:
+            rr = tg.send(radar_text(sheet))
+            if (rr or {}).get("message_id"):
+                sheet["radar_sent_ver"] = sheet.get("ver")
+        except Exception as e:
+            print("P 레이더 발송 실패:", type(e).__name__, flush=True)
     if img.is_file() and len(text.encode("utf-16-le")) // 2 > 950:
         tg.photo(img, head)
         res = tg.send(text, sheet_rows(sheet))
