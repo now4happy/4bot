@@ -2247,11 +2247,20 @@ def run_fx_morning(s, api, note, live):
         if bad:
             _fxm_later(note, d, "gate", "자동환전 안 함\n" + "\n".join("- " + b for b in bad) + "\n(고치면 주문 시간 전까지 5분마다 다시 확인해요. 못 하면 마감 60분 전에 달러부족 알림을 보내요)")
             return "차단"
-        for mp in pending_syncs(state):                        # 어제 체결 반영 전이면 장부 상태가 낡아 '다음 회차'가 틀릴 수 있음 → 환전 안 함
-            m = cfg._load_json(mp, {})
-            if isinstance(m, dict) and (m.get("orders") or m.get("attempts")) and not m.get("synced", True):
-                _fxm_later(note, d, "sync", f"자동환전 안 함 — 체결 반영 전인 주문 기록이 있어요 ({os.path.basename(mp)}). 장부 상태가 최신이 아니에요")
-                return "체결 반영 전"
+        # 판 44 (2026-11-26): 미동기화 주문 기록이 있어도 아침 자동환전은 막지 않음 — 옛 동기화 게이트 삭제.
+        #   이유: 아침 환전 필요액(hybrid_fx_plan)은 설정값(F 완성 기준 금액 × 하루 매수 F 수 × 회차)만으로 계산하고
+        #   달러 예수금·적용환율·원화 예수금은 실시간 API 조회라 장부·주문 기록을 전혀 안 읽음. 미동기화 장부가 환전 금액을
+        #   틀리게 만들 수 없음 (장중 자동환전 intraday_fx 도 같은 auto_fx 를 동기화 검사 없이 씀).
+        #   옛 게이트는 환전 창(09:00 KST = 19:00 ET 전날)이 동기화 시각(20:00 ET = 10:00 KST)보다 1시간 먼저 열려
+        #   매일 09:00~10:00 KST에 '자동환전 안 함 — 체결 반영 전인 주문 기록' 알림을 보내고 환전을 막았음 (11-24·11-25 이틀 연속 확인).
+        #   동기화 자체는 그대로 20:00 ET run_sync 가 하고, 늦은 체결은 run_late_fills 가 다음 날 반영함. 진단용으로만 로그에 남김.
+        _unsynced = []
+        for mp in pending_syncs(state):
+            _m = cfg._load_json(mp, {})
+            if isinstance(_m, dict) and (_m.get("orders") or _m.get("attempts")) and not _m.get("synced", True):
+                _unsynced.append(os.path.basename(mp))
+        if _unsynced:
+            logging.info("아침 자동환전: 미동기화 주문 기록이 있으나 환전 계산은 설정·실시간 잔고만 써서 그대로 진행: %s", ", ".join(_unsynced))
     ca = closure_ahead(w["day"], s)
     rounds = 1 + (ca["extra"] if ca else 0)
     try:

@@ -86,6 +86,9 @@ _NAME_RE = re.compile(r"(?<![A-Za-z0-9_.])(" + "|".join(sorted((re.escape(k) for
 _BOOL_RE = re.compile(r"(?<![A-Za-z0-9_.])(" + "|".join(_BOOL_KO) + r")\s*=\s*(true|false)\b", re.I)
 _FLAG_RE = re.compile("|".join(re.escape(k) for k in sorted(_FLAG_KO, key=len, reverse=True)) + r"(?![A-Za-z-])")
 _WORD_RE = re.compile(r"(?<![A-Za-z0-9_.$])(" + "|".join(sorted(_WORD_KO, key=len, reverse=True)) + r")(?![A-Za-z0-9_])")
+# 파일 이름(orders_2026-11-25.json 같은)은 to_korean 이 영어 변수 이름으로 바꿔 버리지 않게 잠시 빼 둠 (판 44:
+# _IDENT_RE 가 orders_2026 을 '설정값' 으로 바꿔 '설정값-11-25.json' 이 됐고, 어느 파일인지 알 수 없었음)
+_FILE_RE = re.compile(r"[A-Za-z0-9_.\-/]+\.(?:json|py|txt|log|md|csv)\b")
 _IDENT_RE = re.compile(r"(?<![A-Za-z0-9_.])[A-Za-z]+(?:_[A-Za-z0-9]+)+(?![A-Za-z0-9_])")
 # 탑쌓기 가격이 아닌 달러 금액(회차 금액·차감·필요·가용·부족…)은 소수점 없이. 가격(현재가·평단·1주·@)은 그대로 둠
 _AMT_RE = re.compile(r"(= |필요 |가용 |부족 |예수금 |원금 |기존 보유 \u2212)\$([\d,]+(?:\.\d+)?)(?![\d,])")
@@ -97,8 +100,17 @@ def _int_amt(m):
 
 def to_korean(text):
     """화면에 나갈 글자 정리 (표시 전용·같은 글자를 두 번 넣어도 결과가 같음).
-    영어 변수 이름·옵션 이름 → 한국말, '(이름=값)' 설명 괄호 삭제, 달러 금액(가격 제외) 소수점 삭제"""
+    영어 변수 이름·옵션 이름 → 한국말, '(이름=값)' 설명 괄호 삭제, 달러 금액(가격 제외) 소수점 삭제.
+    파일 이름은 그대로 둠 (판 44: orders_2026-11-25.json 이 '설정값-11-25.json' 으로 바뀌던 문제)."""
     t = str(text)
+    _kept = {}
+
+    def _stash(m):
+        _key = "QQFILE%dQQ" % len(_kept)
+        _kept[_key] = m.group(0)
+        return _key
+
+    t = _FILE_RE.sub(_stash, t)
     t = re.sub(r"\s*\(\s*[A-Za-z_.]+\s*=\s*[^()]*\)", "", t)                       # (enabled=True · dry_run=False) 같은 괄호 통째로 삭제
     t = re.sub(r"\s*\(\s*[a-z_.]+(?:\s*/\s*[a-z_.]+)*\s*\)", "", t)                 # (key_file) · (app_key/app_secret) 같은 이름만 든 괄호 삭제
     t = re.sub(r"(?:,\s*)?(?:\u2014\s*)?노션 질문(?: Q\d+)?", "", t)                       # '노션 질문 Q11' 같은 내부 표시 삭제
@@ -111,6 +123,8 @@ def to_korean(text):
     t = _AMT_RE.sub(_int_amt, t)
     t = _IDENT_RE.sub("설정값", t)                                                        # 그래도 남은 영어 변수 이름
     t = re.sub(r"\b(true|false)\b", lambda m: "켜짐" if m.group(1) == "true" else "꺼짐", t)
+    for _key, _val in _kept.items():
+        t = t.replace(_key, _val)
     return re.sub(r"[ \t]{2,}", " ", t)
 
 
