@@ -1,6 +1,7 @@
 from datetime import datetime
 from b_core import *
 
+# v4.4.2 (2026-11-26, 판54 빗썸 레이더): 자산 상황판·코인별 상황판을 📡 [빗썸 레이더] 형식으로 바꿈 (토스 스나이퍼 레이더 기준). 값은 그대로, 형식만 바꿈.
 # v4.3.6: 하단 키보드 전환 — 처음 화면·전체 상황판은 (본문, None), 코인별 상황판·거래내역 추가
 # v4.3.1: 자산 상황판의 코드 블록 제거 — 텔레그램 기본 글씨 크기 사용
 
@@ -58,8 +59,15 @@ def _coin_row_lines(row):
     ]
 
 
+def _coin_radar_lines(row):
+    """레이더용 코인 1개 줄 (판54): 헤더 1줄 + 상세 1줄."""
+    cur, method, status, bal, ev, profit, avg, current = row
+    return [f"🪙 [{cur}] {method} · {status} · 수익률 {profit:+.2f}%",
+            f"· 수량 {bal:.6f} · 평가액 {ev:,.0f}원 · 평단 {avg:,.0f}원 · 현재가 {current:,.0f}원"]
+
+
 def build_balance_board():
-    """Compact fixed-width board. No account changes, only presentation."""
+    """📡 [빗썸 레이더] — 토스 스나이퍼 레이더 형식 (판54). 값은 그대로, 형식만 바꿈."""
     accs = {a["currency"]: a for a in get_accounts() if isinstance(a, dict) and "currency" in a}
     krw_bal = float(accs.get("KRW", {}).get("balance", 0))
     req_krw, _ = calc_today_required_krw(accs)
@@ -72,41 +80,36 @@ def build_balance_board():
             continue
         total_eval += row[4]
         rows.append(row)
-    # Monospace code blocks use a smaller font on mobile.
-    # Plain text restores the user's normal Telegram chat font size.
+    today = datetime.now(KST).strftime("%m-%d")
     lines = [
-        f"빗썸 자산 상황판  {BOT_VERSION}",
-        f"현금: {krw_bal:,.0f}원",
-        f"오늘 필요: {req_krw:,.0f}원",
-        f"잔액: {'부족 ' + format(shortfall, ',.0f') + '원' if shortfall else '충분'}",
-        f"전체 전원: {'켜짐' if config.get('power', True) else '꺼짐'}",
+        f"📡 [빗썸 레이더] ({'🟢 가동중' if config.get('power', True) else '🔴 꺼짐'} · {today})",
+        f"💰 [현금] 현금 {krw_bal:,.0f}원 · 오늘 필요 {req_krw:,.0f}원 · 잔액 {'부족 ' + format(shortfall, ',.0f') + '원' if shortfall else '충분'}",
     ]
     for row in rows:
-        lines.append("──────────────")
-        lines.extend(_coin_row_lines(row))
+        lines.extend(_coin_radar_lines(row))
     if not rows:
         lines.append("설정된 BTC/ETH가 없습니다")
     lines.extend([
-        "──────────────",
-        f"총 추정자산: {total_eval:,.0f}원",
-        f"완성 일봉 추세: {trend_line()}",
-        f"{datetime.now(KST).strftime('%H:%M:%S')} 기준",
+        f"📊 [총 추정자산] {total_eval:,.0f}원",
+        f"📈 [추세] {trend_line()}",
+        f"🕐 {datetime.now(KST).strftime('%H:%M:%S')} 기준",
     ])
     return "\n".join(lines), None   # v4.3.6: 인라인 버튼 없음 → 하단 키보드
 
 
 def build_coin_board(coin):
-    """코인별 상황판 (v4.3.6): 그 코인 행 + 그 코인 추세 한 줄만. 현금·오늘 필요·총 추정자산은 전체 상황판에만."""
+    """코인별 레이더 (판54): 그 코인 행 + 그 코인 추세 한 줄만. 현금·오늘 필요·총 추정자산은 전체 레이더에만."""
     if coin not in TREND_PERIOD or coin not in config.get("coins", {}):
         return "등록된 BTC·ETH만 설정할 수 있습니다.", None
     accs = {a["currency"]: a for a in get_accounts() if isinstance(a, dict) and "currency" in a}
     row = _coin_row(coin, accs)
     # 추세는 전체 상황판과 같은 trend_line() 출처에서 그 코인 조각만 고른다
     trend = [p for p in trend_line().split(" · ") if p.split(" ", 1)[0] == coin]
-    lines = [f"{coin} 상황판 {BOT_VERSION}", "──────────────"]
-    lines.extend(_coin_row_lines(row))
-    lines.extend(["──────────────", f"완성 일봉 추세: {trend[0] if trend else coin + ' 확인불가'}",
-                  f"{datetime.now(KST).strftime('%H:%M:%S')} 기준"])
+    today = datetime.now(KST).strftime("%m-%d")
+    lines = [f"📡 [{coin} 레이더] ({today})"]
+    lines.extend(_coin_radar_lines(row))
+    lines.extend([f"📈 [추세] {trend[0] if trend else coin + ' 확인불가'}",
+                  f"🕐 {datetime.now(KST).strftime('%H:%M:%S')} 기준"])
     return "\n".join(lines), None
 
 

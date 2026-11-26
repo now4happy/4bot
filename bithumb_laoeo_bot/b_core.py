@@ -4,7 +4,7 @@ from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 from math import isfinite
 
-BOT_VERSION = "v4.4.1"
+BOT_VERSION = "v4.4.2"
 # v4.4.1 (2026-11-20, audit-fix-v2 3-2~3-7): 익절 매도 거절·응답불명 구분, 매수 재시도 전 주문 조회(중복 방지), 소수 지수표기 방지(plain_decimal), 시드 5,000원 미만 건너뜀+경고, SMA 대기 신호 유지, 체결 확인(confirm_fill)
 # v4.4.0 (2026-11-19): 메뉴 정리 — 하단 4칸(BTC 설정·ETH 설정·전체 상황판·도움말), 숫자 버튼 제거→입력창+범위 안내, 값 변경 전 지금→새 값 확인, 익절·매도비율 0 초과 100 이하 검사, 이모티콘 제거 (매매 동작 변경 없음)
 # v4.2.0 (draft rework): unified SMA법; separate per-coin buy amount and explicit approval.
