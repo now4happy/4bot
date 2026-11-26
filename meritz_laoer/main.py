@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 46 v2.19.0)
+# v2.19.0 (2026-11-26, 판 46 — BOT_VERSION 은 v2.7.0 그대로): ① 마감 일일결산에 당일 실현수익(봇 장부 기준·수수료·세금 미반영)·당일 매수/익절 횟수·누적실현 추가 — 체결을 장부에 반영할 때마다 data/realized_daily.json 에 주문별로 쌓음(장중 반영분 포함, exec_id 로 중복 방지) ② 결산 줄마다 이모티콘. 발송 시점·횟수·매매 로직 변경 없음
 # v2.12.0 수정 1차 (2026-11-24, 판 39 수정 1차): ① 모의 매도 컷오프 16:10 → 20:00 (run_sniper_dry) ② ANCHOR_KO 의 죽은 라벨 "first" 삭제 (1분봉 필드명 수정은 meritz_api.py·어댑터 파일)
 # v2.12.0 (2026-11-24, 판 39 — BOT_VERSION 은 v2.7.0 그대로): ① first_buy_ha 추가 — 보유 층 0개일 때만 메리츠 1분봉(api.minute_candles)을 읽어 plan_buy(ha=) 로 전달 (실거래·모의 둘 다) ② 동기화 시각 기본 16:10 → 20:00 ET (_hm 대체값 3곳) ③ run_late_fills 안내 글자 '동기화 시각 이후'
 # v2.11.0 (2026-11-24, 판 38 시간 확대 — BOT_VERSION 은 이번에도 그대로): 스나이퍼 시간을 원작 시간으로 — 매수 04:07~16:00 ET(프리장·정규장, SN.buy_ok) · 매도는 평일 04:00~04:06 ET 7분만 빼고 전 구간(SN.sell_ok) 인데 장운영 코드 003·004·005 일 때만 주문 (그 밖 코드 = 야간 등은 메리츠 접수 여부 미확인이라 안 냄). 틱이 00:00 ET 부터 돌고(바벨 틱은 예전 09:30 ET~ 그대로), 16:10 ET 체결 반영 뒤에는 그날 기록이 닫혀 예전처럼 주문 안 함 (16:10~20:00 장후·야간 매도는 미적용 — 노션 질문).
@@ -260,6 +261,79 @@ def market_inputs(s, api):
 
 
 TOWER_FILE = "data/tower_state.json"      # v2.2.0 탑쌓기 층 상태 (state_dir 기준)
+REALIZED_FILE = "data/realized_daily.json"  # v2.19.0 판 46 봇 장부 기준 실현수익 기록 (state_dir 기준). 판 46 적용 뒤 체결부터 쌓음 — 그 전 실현은 없음(지어내지 않음)
+REALIZED_KEEP_DAYS = 45                    # 이보다 오래된 주문별 기록은 날짜 합계(past)로 접어 파일이 커지지 않게 함
+
+
+def _realized_blank(d):
+    return {"since": str(d), "orders": {}, "past": {"pnl": 0.0, "sells": 0, "wins": 0, "buys": 0, "through": ""}}
+
+
+def realized_load(cfg, d=None):
+    """실현수익 기록 읽기. 파일이 없거나 깨졌으면 d 날짜부터 새로 시작하는 빈 기록 (저장은 안 함)"""
+    r = cfg._load_json(REALIZED_FILE, None)
+    if isinstance(r, dict) and isinstance(r.get("orders"), dict) and isinstance(r.get("past"), dict):
+        return r
+    return _realized_blank(d or now_et().strftime("%Y-%m-%d"))
+
+
+def realized_init(cfg, d):
+    """파일이 없으면 d 날짜를 기준일(since)로 만들어 둠 — 체결 없는 날에도 '누적 시작일'이 남게"""
+    if not os.path.exists(REALIZED_FILE):
+        cfg._save_json(REALIZED_FILE, _realized_blank(d))
+
+
+def record_realized(cfg, d, o, side, dq, da, cost, exec_id):
+    """v2.19.0 판 46: 체결 증분 1건을 주문별로 쌓음 (장부 반영 직후 apply_tower_fills 가 부름 — 장중 반영도 같은 길).
+    · 키 = 날짜_주문번호 (주문번호 없으면 exec_id). 같은 exec_id 는 한 번만 (장부와 같은 규칙 — 다시 불러도 안 늘어남)
+    · 매도의 cost = F별 뺀 원가(cost_removed) — 장부 원금을 줄인 값과 같은 값 (없으면 호출한 쪽이 평단 × 수량으로 채워 줌)
+    · 실패해도 체결 반영은 안 막음 (호출한 쪽이 try/except)"""
+    r = realized_load(cfg, d)
+    no = str(o.get("no") or "").strip() or str(exec_id)
+    key = f"{d}_{no}"
+    e = r["orders"].get(key) or {"date": str(d), "side": side, "qty": 0, "amt": 0.0, "cost": 0.0, "ids": []}
+    if exec_id in e["ids"]:
+        return
+    e["qty"] = int(e["qty"]) + int(dq)
+    e["amt"] = round(float(e["amt"]) + float(da), 4)
+    if side == "SELL":
+        e["cost"] = round(float(e["cost"]) + float(cost or 0.0), 4)
+    e["ids"] = (e["ids"] + [exec_id])[-20:]
+    r["orders"][key] = e
+    try:                                              # 오래된 주문별 기록은 합계로 접음 (익절 판정은 주문 단위라 접기 전에 계산)
+        cut = (datetime.date.fromisoformat(str(d)) - datetime.timedelta(days=REALIZED_KEEP_DAYS)).isoformat()
+        old = [k for k, v in r["orders"].items() if str(v.get("date")) < cut]
+        for k in old:
+            v = r["orders"].pop(k)
+            pa = r["past"]
+            if v.get("side") == "SELL":
+                pa["pnl"] = round(float(pa["pnl"]) + float(v["amt"]) - float(v["cost"]), 4)
+                pa["sells"] = int(pa["sells"]) + 1
+                pa["wins"] = int(pa["wins"]) + (1 if float(v["amt"]) > float(v["cost"]) else 0)
+            else:
+                pa["buys"] = int(pa["buys"]) + 1
+            pa["through"] = max(str(pa.get("through") or ""), str(v.get("date")))
+    except (ValueError, TypeError):
+        pass
+    cfg._save_json(REALIZED_FILE, r)
+
+
+def realized_summary(cfg, d):
+    """마감 결산용 숫자. 기준(코드 주석으로 고정):
+    · 당일 실현수익 = 그날 매도 주문들의 (체결 금액 − 원가) 합계 · 수수료·세금 안 뺌
+    · 당일 매수 횟수 = 체결이 있는 매수 주문 수 · 익절 횟수 = 체결이 있는 매도 주문 중 (체결 금액 > 원가) 인 주문 수 (손실·본전 매도는 익절 아님)
+    · 누적실현 = since(기록 시작일)부터 모든 날 매도 주문 (체결 금액 − 원가) 합계 (접힌 past 포함)"""
+    r = realized_load(cfg, d)
+    day = [v for v in r["orders"].values() if str(v.get("date")) == str(d)]
+    sells = [v for v in day if v.get("side") == "SELL"]
+    pnl = sum(float(v["amt"]) - float(v["cost"]) for v in sells)
+    total = float(r["past"].get("pnl") or 0.0) + sum(float(v["amt"]) - float(v["cost"]) for v in r["orders"].values() if v.get("side") == "SELL")
+    return {"pnl": round(pnl, 2), "buys": sum(1 for v in day if v.get("side") == "BUY"), "sells": len(sells),
+            "wins": sum(1 for v in sells if float(v["amt"]) > float(v["cost"])), "total": round(total, 2), "since": r.get("since")}
+
+
+def _usd_signed(v):
+    return ("+" if v > 0 else "-" if v < 0 else "") + f"${abs(v):,.2f}"
 
 
 def strategy_ko(s=None):
@@ -676,10 +750,17 @@ def apply_tower_fills(s, cfg, d, items, tst, only_sells=False, persist=True, sni
         if dq <= 0:
             continue
         closed = None
+        cost = removed if side == "SELL" else None             # v2.19.0 판 46: 매도 원가 — 장부 원금을 줄인 값과 같은 값 (done 에도 실어 줌)
         if persist:
             exec_id = f"{d}_{o['no']}" if pq == 0 else f"{d}_{o['no']}_{it['q']}"
+            if side == "SELL" and cost is None:                # 원가를 못 받았으면 장부(config.apply_fill)와 같은 규칙: 평단 × 수량
+                cost = dq * cfg.avg_price(cfg.get_position())
             _, closed = cfg.apply_fill(side, dq, da / dq, d, False, exec_id, cost_removed=(removed if side == "SELL" else None))
-        done.append({"o": o, "side": side, "dq": dq, "da": da, "cq": it["q"], "closed": closed})
+            try:                                               # 실현수익 기록 (실패해도 체결 반영은 계속)
+                record_realized(cfg, d, o, side, dq, da, cost, exec_id)
+            except Exception as e:
+                logging.warning(f"실현수익 기록 실패 {type(e).__name__}: {str(e)[:100]}")
+        done.append({"o": o, "side": side, "dq": dq, "da": da, "cq": it["q"], "closed": closed, "cost": cost})
         if persist:
             free_cash_fill(s, side, da, removed if side == "SELL" else None)      # v2.15.0 판 41 할 일 2: free_cash 장부 (매수 −, 매도 + 수혈금 먼저 상환)
     tst.pop("_cost_removed", None)
@@ -2491,23 +2572,37 @@ def run_fx_tasks(s, note, live):
 
 
 # ---------------------------------------------------------------- 체결 반영
-def daily_close_text(s, d, items, tst):
-    """v2.15.0 판 41 할 일 4: 마감 일일결산 메시지 글자 (텔레그램 1개). items = 그날 기록의 체결 있는 주문(fill_items), tst = 체결 반영·잔고 맞춤을 마친 F 상태.
+def daily_close_text(s, d, items, tst, cfg=None):
+    """v2.15.0 판 41 할 일 4 + v2.19.0 판 46: 마감 일일결산 메시지 글자 (텔레그램 1개). items = 그날 기록의 체결 있는 주문(fill_items), tst = 체결 반영·잔고 맞춤을 마친 F 상태.
     · 매매 횟수 = 체결이 1주라도 있는 주문 수 (매수+매도) · 매수/매도 주식수 = 그 주문들의 누적 체결 수량 · 변경 = 매수 − 매도 (순증감)
-    · 보유 F = 수량이 있는 F 개수 · 진행중 F = 그중 미완성 F, 진행률 = F 원가 ÷ 그 F 목표(F 완성 기준 금액, 기본 $15,000)"""
+    · 보유 F = 수량이 있는 F 개수 · 진행중 F = 그중 미완성 F, 진행률 = F 원가 ÷ 그 F 목표(F 완성 기준 금액, 기본 $15,000)
+    · 판 46: 당일 실현수익·매수/익절·누적실현은 realized_summary (봇 장부 기준 · 수수료·세금 미반영 · 기준은 그 함수 설명). cfg 가 없으면 이 세 줄은 '확인 불가'
+    · 이모티콘: 📊 제목 · 💰 당일 실현수익 · 🛒 매수/익절 · 📈 누적실현 · 📦 보유 F · 🔨 진행중 F (매매·매수/매도 줄은 그대로)"""
     bq = sum(int(i["q"]) for i in items if i["side"] == "BUY")
     sq = sum(int(i["q"]) for i in items if i["side"] == "SELL")
     act = SN.active_floors(tst if isinstance(tst, dict) else {})
     base = TW.params(s)[0]
-    lines = [f"📊 {d} 마감 일일결산", f"· 매매 {len(items)}회 (체결 있는 주문 수)", f"· 매수 {bq}주 · 매도 {sq}주 · 변경 {bq - sq:+d}주 (매수−매도)", f"· 보유 F {len(act)}층"]
+    lines = [f"📊 {d} 마감 일일결산"]
+    try:
+        if cfg is None:
+            raise ValueError("cfg 없음")
+        rs = realized_summary(cfg, d)
+        lines.append(f"💰 당일 실현수익 {_usd_signed(rs['pnl'])} (봇 장부 기준 · 수수료·세금 미반영)")
+        lines.append(f"🛒 당일 매수 {rs['buys']}회 · 익절 {rs['wins']}회 (이익 매도 주문 수)")
+        lines.append(f"📈 누적실현 {_usd_signed(rs['total'])} ({str(rs['since'])[5:]}부터 기록)")
+    except Exception as e:
+        logging.warning(f"결산 실현수익 계산 실패 {type(e).__name__}: {str(e)[:100]}")
+        lines.append("💰 당일 실현수익 확인 불가 (기록을 못 읽음)")
+    lines += [f"· 매매 {len(items)}회 (체결 있는 주문 수)", f"· 매수 {bq}주 · 매도 {sq}주 · 변경 {bq - sq:+d}주 (매수−매도)", f"📦 보유 F {len(act)}층"]
     inc = [f for f in act if not TW.is_complete(f)]
     if inc:
         lbl = TW.floor_labels(tst)
         for f in inc:
             tgt = float(f.get("target") or base) or base
-            lines.append(f"· 진행중 {lbl.get(int(f['id']), 'F')}: ${float(f.get('cost') or 0):,.0f} / ${tgt:,.0f} ({float(f.get('cost') or 0) / tgt * 100:.1f}%)")
+            lines.append(f"🔨 진행중 {lbl.get(int(f['id']), 'F')}: ${float(f.get('cost') or 0):,.0f} / ${tgt:,.0f} ({float(f.get('cost') or 0) / tgt * 100:.1f}%)")
     else:
-        lines.append("· 진행중 F 없음 (보유 F 모두 완성)")
+        lines.append("🔨 진행중 F 없음 (보유 F 모두 완성)")
+    lines.append("봇 장부 기준이라 메리츠 앱 실현손익과 다를 수 있어")
     return "\n".join(lines)
 
 
@@ -2564,7 +2659,8 @@ def run_sync(s, api, note, mark_path):
     if alert:
         note.send(f"{d} 체결 반영 확인 필요\n" + "\n".join(alert))
     try:                                            # v2.15.0 판 41 할 일 4: 마감 일일결산 (체결 반영 알림 바로 뒤, 별도 메시지 1개) — 실패해도 동기화는 이미 끝남
-        note.send(daily_close_text(s, d, items, tst))
+        realized_init(cfg, d)                      # 판 46: 기록 파일이 없으면 오늘을 누적 시작일로 만들어 둠
+        note.send(daily_close_text(s, d, items, tst, cfg))
     except Exception as e:
         logging.warning(f"마감 일일결산 메시지 실패 {type(e).__name__}")
     return "완료"
