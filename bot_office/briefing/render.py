@@ -1,5 +1,6 @@
 # briefing/render.py — JSON → 텔레그램 글자 (HTML).
-# 필요 달러(부족 금액) 메시지: pre 표를 버리고 일반 글자 + 굵은 글씨 (풀이님 결정 2026-11-25, 시안 02_render_sian_readable.md).
+# 필요 달러(부족 금액) 메시지: 토스 스나이퍼 레이더 형식 (판53, 풀이님 결정 2026-11-26).
+#   pre 표를 버리고 일반 글자 + 굵은 글씨 (풀이님 결정 2026-11-25, 시안 02_render_sian_readable.md) → 2026-11-26 레이더 형식으로 바꿈.
 # 포트폴리오 전환 메시지는 2026-11-26에 삭제됐다 (풀이님 결정).
 import datetime as dt
 import html
@@ -25,14 +26,27 @@ ALL_CLEAR = "오늘 계좌 완충"
 NEED_TIME_LABEL = "09:00"          # 풀이님 결정: 9시 기준은 KST 09:00 (타이머 00:00 UTC)
 
 
-def _title(date_kst):
-    """'[계좌별 부족] 11-25 (수) 09:00' — 굵게. 날짜를 못 읽으면 요일 없이 원문."""
+def _stamp(date_kst):
+    """'11-26 (목)' — 날짜를 못 읽으면 요일 없이 원문."""
     try:
         d = dt.date.fromisoformat(date_kst)
-        stamp = "%s (%s)" % (d.strftime("%m-%d"), _WEEKDAY[d.weekday()])
+        return "%s (%s)" % (d.strftime("%m-%d"), _WEEKDAY[d.weekday()])
     except (TypeError, ValueError):
-        stamp = str(date_kst)
-    return "<b>[계좌별 부족] %s %s</b>" % (_esc(stamp), NEED_TIME_LABEL)
+        return str(date_kst)
+
+
+def _title(date_kst):
+    """'📡 [계좌별 부족 레이더] (11-26 (목) 09:00)' — 판53 레이더 형식."""
+    return "📡 [계좌별 부족 레이더] (%s %s)" % (_stamp(date_kst), NEED_TIME_LABEL)
+
+
+def _ts(date_kst):
+    """'🕐 2026-11-26 09:00 KST' — 브리핑 기준 시각."""
+    try:
+        d = dt.date.fromisoformat(date_kst)
+        return "🕐 %s %s KST" % (d.strftime("%Y-%m-%d"), NEED_TIME_LABEL)
+    except (TypeError, ValueError):
+        return "🕐 %s %s KST" % (str(date_kst), NEED_TIME_LABEL)
 
 
 def _unknown(r):
@@ -94,10 +108,10 @@ def need_all_clear(res):
 
 
 def need_message(res, date_kst, run_id, late=False):
-    """부족 있는 계좌만 한 줄씩. 전부 확인돼서 전부 충분하면 '오늘 계좌 완충' 한 줄만 (제목·바벨 줄 없음).
+    """판53 레이더 형식. 부족 있는 계좌만 한 줄씩. 전부 확인돼서 전부 충분하면 레이더 머리말 + '✅ 오늘 계좌 완충' + 시각.
     run_id 는 호환용 (메시지에는 안 넣는다 — briefing_latest.json 에 남는다)."""
     if need_all_clear(res):
-        return ALL_CLEAR
+        return "\n".join([_title(date_kst), "✅ " + ALL_CLEAR, _ts(date_kst)])
     rows = res.get("rows", [])
     lines = [_title(date_kst)]
     if late:
@@ -108,29 +122,31 @@ def need_message(res, date_kst, run_id, late=False):
         lines.append("⚠️ need.json 계산 실패 표시 (ok=false)")
     if res.get("reissued") and res.get("reissue_ok") is False:
         lines.append("⚠️ 재발행 실패 — 기존 파일 기준")
-    lines.append("")
     totals, n_short, n_unknown = {}, 0, 0
+    short_lines = []
     for r in _shown_rows(rows):
         cur = r.get("currency", "USD")
-        label = "<b>%s</b>" % _esc(r.get("label", "?"))
+        label = _esc(r.get("label", "?"))
         if _unknown(r):
-            lines.append("%s %s: 확인 불가" % (label, cur))
+            short_lines.append("· %s %s: 확인 불가" % (label, cur))
             n_unknown += 1
         elif _cents(r.get("shortage")) > 0:
-            lines.append("%s %s 부족" % (label, _fmt_total(r["shortage"], cur)))
+            short_lines.append("· %s %s 부족" % (label, _fmt_total(r["shortage"], cur)))
             totals[cur] = totals.get(cur, 0.0) + r["shortage"]
             n_short += 1
         else:
             continue
         if r.get("kind") == "meritz4" and r.get("skipped"):
-            lines.append("└ %s 오늘 매수 없음" % _esc(", ".join(r["skipped"])))
+            short_lines.append("└ %s 오늘 매수 없음" % _esc(", ".join(r["skipped"])))
     if not n_short and not n_unknown:
         lines.append("확인된 부족 계좌 없음 (위 경고 확인)")
+    else:
+        lines.append("💰 [부족]")
+        lines.extend(short_lines)
     if n_short:
         parts = [_fmt_total(totals[c], c) for c in ("USD", "KRW") if totals.get(c, 0) > 0]
         parts += [_fmt_total(v, c) for c, v in totals.items() if c not in ("USD", "KRW") and v > 0]
-        lines.append("")
-        lines.append("<b>합계</b> " + " · ".join(parts) + (" (확인 불가 줄 제외)" if n_unknown else ""))
+        lines.append("📊 [합계] " + " · ".join(parts) + (" (확인 불가 줄 제외)" if n_unknown else ""))
     refs = []
     for b in _barbell_refs(rows):
         cur = b.get("currency", "USD")
@@ -139,8 +155,8 @@ def need_message(res, date_kst, run_id, late=False):
         elif _cents(b["shortage"]) > 0:
             refs.append("바벨 씨드 %s (합계 제외)" % _fmt_total(b["shortage"], cur))
     if refs:
-        lines.append("")
         lines.extend(refs)
+    lines.append(_ts(date_kst))
     return "\n".join(lines)
 
 
@@ -149,6 +165,7 @@ def need_failed_message(date_kst, run_id, late=False):
     if late:
         lines.append("⚠️ 오늘 브리핑 늦음 (마감 이후 전송)")
     lines.append("⚠️ need.json 읽기 실패 — 확인 불가 (완충 아님)")
+    lines.append(_ts(date_kst))
     return "\n".join(lines)
 
 
