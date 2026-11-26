@@ -1,5 +1,7 @@
 # ==========================================================
 # FILE: /opt/bot-office/office_sgov.py   (OFFICE_SGOV — 새 파일)
+# 사무실 v1.9.8 (2026-11-26, 판50 SGOV 레이더): 상황판을 📡 [SGOV 레이더] 형식으로 바꿈 (토스 스나이퍼 레이더 기준). 스냅샷에 있는 값만 씀.
+# 사무실 v1.9.7 (2026-11-26, 판49 처음 화면 고침): 예전 키보드의 이모티콘 없는 "처음 화면"도 처음 화면으로 받음.
 # 사무실 v1.9.6 (2026-11-26, 판48 최소 UI): SGOV 메뉴 전부 제거 — 상황판 + [자동환전 실행]·[새로고침]만 남김.
 #   설정(시드·건너뜀·분배금·게이트·SGOV 켜기/끄기)은 텔레그램 버튼이 아니라 뮤즈랑 대화로 바꿈 (같은 bridge 요청 파일을 씀).
 #   매일 09:00 KST 상황판 자동 발송은 office_secretary.main 에서 show_chart 를 부름.
@@ -122,6 +124,35 @@ def _bar(pct):
     return "[" + "#" * n + "-" * (10 - n) + "]"
 
 
+def radar_text(snap, stale, age):
+    """📡 [SGOV 레이더] — 토스 스나이퍼 레이더 형식. 스냅샷에 있는 값만 씀 (없는 값은 빼).
+    판50: 상황판(B2)을 레이더(D1) 형식으로 바꿈. SGOV 현재가는 스냅샷에 없어서 빼고 분배금 누적만 씀.
+    [이번 회차]는 마지막으로 끝난 회차(최근 판단), [다음 회차]는 다음 예정일."""
+    if not snap:
+        return "[SGOV 레이더]\n" + _snap_line(snap, stale, age)
+    sg = snap.get("sgov") or {}
+    lg = sg.get("ledger") or {}
+    done, total = _i(sg.get("tranches_done")), _i(sg.get("tranches_total"))
+    q, pr = float(lg.get("qty") or 0), float(lg.get("principal") or 0)
+    ld = sg.get("last_decision") or {}
+    act = {"buy": "관문 통과 (매수)", "skip_a": "건너뜀 (a 평균 환율)", "skip_b": "건너뜀 (b 7일 상승)"}.get(ld.get("action"), "-")
+    next_due = sg.get("next_due_date") or "-"
+    lines = ["📡 [SGOV 레이더] (" + ("🟢 가동중" if sg.get("enabled") else "🔴 꺼짐") + f" · 다음 회차 {next_due})"]
+    if stale:
+        lines.append("아래 값은 마지막 스냅샷 기준이라 미확인이에요. 새로고침을 눌러 주세요.")
+    lines += [
+        f"💵 분배금 누적 {_m(lg.get('distributions_usd'))}",
+        f"🔄 [이번 회차] 회차 {done} · {_m(sg.get('tranche_usd'))} · {act}" + (f" ({ld.get('date')})" if ld.get("date") else ""),
+        f"🏛️ [보유] {q:g}주 · 원금 {_m(pr)}",
+        f"🎯 [다음 회차] {next_due} · {_m(snap.get('sgov_tranche_now'))}",
+        f"💰 [대기 달러] {_m(sg.get('wait_usd'))}",
+        f"🕐 {snap.get('ts_kst', '-') or '-'} KST",
+    ]
+    for p in (snap.get("sgov_problems") or [])[:5]:
+        lines.append("설정 확인 필요: " + str(p))
+    return "\n".join(lines)
+
+
 def chart_text(snap, stale, age):
     if not snap:
         return "[SGOV 상황판]\n" + _snap_line(snap, stale, age)
@@ -157,7 +188,7 @@ def _send(tg, text, rows):
 
 def show_chart(tg, st, notice=""):
     snap, stale, age = snapshot()
-    _send(tg, (notice + "\n\n" if notice else "") + chart_text(snap, stale, age), main_kb([FX_PREVIEW, REFRESH]))
+    _send(tg, (notice + "\n\n" if notice else "") + radar_text(snap, stale, age), main_kb([FX_PREVIEW, REFRESH]))
 
 
 # ---------------------------------------------------------- 버튼·입력 처리 (등록된 채팅방 확인은 office_secretary.main 이 이미 함)
