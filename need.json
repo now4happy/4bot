@@ -1,22 +1,22 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-25 16:30:00",
+  "as_of_kst": "2026-11-26 08:00:00",
   "accounts": [
     {
       "name": "토스",
       "lines": [
         {
           "currency": "USD",
-          "holding": 13102.93,
-          "need": 1074.71,
+          "holding": 15220.83,
+          "need": 1603.91,
           "sufficient": true,
           "auto_fx": "unavailable"
         },
         {
           "label": "바벨 씨드",
           "currency": "USD",
-          "holding": 13102.93,
-          "need": 18210.4,
+          "holding": 15220.83,
+          "need": 20000.0,
           "sufficient": false,
           "auto_fx": "unavailable"
         },
@@ -35,8 +35,8 @@
         {
           "label": "P",
           "currency": "USD",
-          "holding": 230.56,
-          "need": 182.22,
+          "holding": 50.39,
+          "need": 0.0,
           "sufficient": true,
           "auto_fx": "on"
         },
@@ -51,17 +51,17 @@
         {
           "label": "3번",
           "currency": "USD",
-          "holding": 1170.24,
+          "holding": 162.82,
           "need": 0.0,
           "sufficient": true,
           "auto_fx": "on"
         },
         {
-          "label": "SGOV 11/25",
+          "label": "SGOV 11/27",
           "currency": "USD",
-          "holding": 1170.24,
-          "need": 1059.72,
-          "sufficient": true,
+          "holding": 162.82,
+          "need": 736.9,
+          "sufficient": false,
           "auto_fx": "on"
         }
       ]
@@ -72,7 +72,7 @@
         {
           "currency": "USD",
           "holding": 1798.37,
-          "need": 1506.875,
+          "need": 1461.355,
           "sufficient": true,
           "auto_fx": "unavailable"
         },
@@ -90,7 +90,7 @@
       "lines": [
         {
           "currency": "KRW",
-          "holding": 430365.603587,
+          "holding": 370341.888537,
           "need": 60000.0,
           "sufficient": true,
           "auto_fx": "na"
@@ -98,6 +98,6 @@
       ]
     }
   ],
-  "total_need_usd": 22033.925000000003,
+  "total_need_usd": 23802.165,
   "total_need_krw": 60000.0
 }
