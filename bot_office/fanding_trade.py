@@ -168,7 +168,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.6.3"
+VERSION = "v1.6.4"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -2804,17 +2804,15 @@ def loop():
             os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
 
 
-HELP_TEXT = ("· <b>/가격표</b> 최근 가격표·주문 상태\n· <b>/배수</b> 현재 배수 · <b>/배수</b> 입력창에 숫자(1~50) 보내면 확인 후 바뀜 (<b>/배수 6</b> 도 확인 화면으로)\n"
-             "· <b>/맞추기</b> 배수 맞추기(따라잡기) — 부족한 보유를 정한 거래일 수 동안 매일 조금씩 추가 매수 · <b>/맞추기</b> 뒤 입력창에 거래일 수(1~60) 보내기 · <b>/맞추기 12</b> 12일로 확인 화면\n"
-             "· <b>/자동</b> 자동주문 상태 · <b>/자동켜기</b> · <b>/자동끄기</b>\n· <b>/과거</b> 과거 가격표 수집 현황\n"
-             "· <b>/과거자료다운</b> 과거 숫자 파일 받기(누를 때만) · <b>/빠진날짜</b> 빠진 매매일 목록\n"
-             "· <b>/재판독</b> PC 사이트 재접속·최신 자료 요청 · <b>/진단</b> 단계별 상태\n"
-             "· <b>/판독</b> 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
-             "· <b>/발주시간</b> 예약 발주 시간 보기·바꾸기 · <b>/재예약</b> 오늘 예약을 새 시간으로 다시\n"
-             "· <b>/재예약강제</b> 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기\n"
-             "· <b>/환전</b> 금액(0 초과 ~ $99,999)을 숫자로 보내기 → 확인 → 실행 · <b>/환전 [금액]</b> 바로 확인 화면 (실행은 확인 화면 버튼으로만)\n"
-             "· <b>/자동환전</b> 부족금 자동환전 상태 · <b>/자동환전켜기</b> · <b>/자동환전끄기</b> (P 계좌만, 기본 꺼짐, 평일 09:00~15:30)\n"
-             "· <b>/역환전자동</b> 남는 달러 원화로 역자동환전 상태 · <b>/역환전자동켜기</b> · <b>/역환전자동끄기</b> (P 계좌만, 기본 꺼짐)")
+HELP_TEXT = ("📋 /가격표 최근 가격표·주문 상태\n📐 /배수 현재 배수 · /배수 입력창에 숫자(1~50) 보내면 확인 후 바뀜 (/배수 6 도 확인 화면으로)\n"
+             "📐 /맞추기 배수 맞추기(따라잡기) — 부족한 보유를 정한 거래일 수 동안 매일 조금씩 추가 매수 · /맞추기 뒤 입력창에 거래일 수(1~60) 보내기 · /맞추기 12 12일로 확인 화면\n"
+             "🤖 /자동 자동주문 상태 · /자동켜기 · /자동끄기\n📜 /과거 과거 가격표 수집 현황 · /과거자료다운 과거 숫자 파일 받기(누를 때만) · /빠진날짜 빠진 매매일 목록\n"
+             "🔄 /재판독 PC 사이트 재접속·최신 자료 요청 · /진단 단계별 상태\n"
+             "🔍 /판독 오늘 쓰는 이미지 판독 AI (Gemini·DeepSeek)\n"
+             "⏰ /발주시간 예약 발주 시간 보기·바꾸기 · /재예약 오늘 예약을 새 시간으로 다시 · /재예약강제 앱에서 직접 다 취소했을 때 취소 없이 새로 넣기\n"
+             "💱 /환전 금액(0 초과 ~ $99,999)을 숫자로 보내기 → 확인 → 실행 · /환전 [금액] 바로 확인 화면 (실행은 확인 화면 버튼으로만)\n"
+             "💱 /자동환전 부족금 자동환전 상태 · /자동환전켜기 · /자동환전끄기 (P 계좌만, 기본 꺼짐, 평일 09:00~15:30)\n"
+             "💱 /역환전자동 남는 달러 원화로 역자동환전 상태 · /역환전자동켜기 · /역환전자동끄기 (P 계좌만, 기본 꺼짐)")
 
 # ---------------------------------------------------------- 4번 봇 하단 버튼 메뉴
 # 버튼은 기존 명령 글자와 똑같이 처리된다(새 기능이 아니라 같은 기능을 버튼으로 누르는 것).
@@ -3099,7 +3097,7 @@ def menu_text(tg_s, t):
         st = load(STATE, {})
         tg_s.send(f"과거 가격표 수집: <b>{st.get('past_count', 0)}개</b> 기록됨 (윈도우 PC가 하루 10개씩 보내요)"); return True
     if t in ("/help", "도움말"):
-        tg_s.send("<b>P 사용법</b>\n" + HELP_TEXT); return True
+        tg_s.send("📖 [P 사용법]\n" + HELP_TEXT); return True
     return bot_message(tg_s, t)
 
 
@@ -3134,21 +3132,21 @@ def poll_own_bot(tg):
                 elif t == HELP_LABEL:
                     try:
                         import fanding_vr6
-                        vh = "\n\n<b>VR6 사용법</b>\n" + fanding_vr6.HELP
+                        vh = "\n\n📖 [VR6 사용법]\n" + fanding_vr6.HELP
                     except Exception:
                         vh = ""
-                    tg.send("<b>P 사용법</b>\n" + HELP_TEXT + vh + "\n\n· 첫 화면은 <b>/start</b>", keyboard=main_keyboard())
+                    tg.send("📖 [P 사용법]\n" + HELP_TEXT + vh + "\n\n· 첫 화면은 /start", keyboard=main_keyboard())
                 elif t in (P_LABEL, P_BACK_LABEL) + OLD_P_LABELS or t.lower() == "/p":
                     tg.send(p_status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 도구에 있어요.", keyboard=menu_keyboard())
                 elif t == P_TOOLS_LABEL:
-                    tg.send("<b>P 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard())
+                    tg.send("🛠️ [P 도구] — 가끔 쓰는 기능", keyboard=tools_keyboard())
                 elif t in (AUTO_ON_LABEL, AUTO_OFF_LABEL):
                     toggle_auto(tg)
                 elif t == MENU_UNKNOWN:
                     tg.send("P·VR6 중 어느 메뉴의 버튼인지 몰라서 아무것도 바꾸지 않았어요. 메뉴를 다시 열고 눌러 주세요.",
                             keyboard=main_keyboard())
                 elif t.lower() in ("/help", "도움말"):
-                    tg.send("<b>P 사용법</b>\n" + HELP_TEXT + "\n\n· VR6 는 <b>/vr6</b> · 첫 화면은 <b>/start</b>",
+                    tg.send("📖 [P 사용법]\n" + HELP_TEXT + "\n\n· VR6 는 /vr6 · 첫 화면은 /start",
                             keyboard=menu_keyboard())
                 elif t in ("/판독", "판독"):
                     tg.send(vision_status())
