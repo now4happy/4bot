@@ -168,7 +168,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.6.2"
+VERSION = "v1.6.3"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -2907,25 +2907,31 @@ STATUS_KO = {"pending": "결정 대기", "approved": "주문 대기", "submittin
 
 
 def p_status_line():
+    """📡 [P매매 레이더] — 메뉴·처음 화면용 (판55). 이모티콘으로 구역 구분."""
     c, st = cfg(), load(STATE, {})
     sheets = st.get("sheets") or {}
     last = sheets[max(sheets)] if sheets else None
-    head = (f"<b>P 매매</b> · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])} · 자동 {'켜짐' if c['auto_order'] else '꺼짐'}"
-            f" · 자동환전 {'켜짐' if auto_fx_state(st)[0] else '꺼짐'} · 역자동환전 {'켜짐' if auto_rfx_state(st)[0] else '꺼짐'}")
+    on = "🟢 가동중" if c['auto_order'] else "🔴 꺼짐"
+    lines = [
+        f"📡 [P매매 레이더] ({on} · {c['symbol']} · 배수 ×{st.get('multiplier', c['multiplier'])})",
+        f"🤖 [자동] 자동 {'켜짐' if c['auto_order'] else '꺼짐'} · 자동환전 {'켜짐' if auto_fx_state(st)[0] else '꺼짐'} · 역자동환전 {'켜짐' if auto_rfx_state(st)[0] else '꺼짐'}",
+    ]
     plan = catchup_plan(st)
     if plan:
-        head += (f"\n배수 맞추기 진행 중: 목표 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · "
-                 f"{plan.get('days')}거래일 중 {int(plan.get('applied', 0)) + 1}거래일째")
-    return head + ("\n최근 가격표: " + f"{last['date']} · {STATUS_KO.get(last['status'], last['status'])}" if last else "\n최근 가격표: 없음")
+        lines.append(f"📐 [배수 맞추기] 목표 ×{plan.get('target_mult')} · 총 {plan.get('total')}주 · "
+                     f"{plan.get('days')}거래일 중 {int(plan.get('applied', 0)) + 1}거래일째")
+    lines.append("📈 [최근 가격표] " + (f"{last['date']} · {STATUS_KO.get(last['status'], last['status'])}" if last else "없음"))
+    return "\n".join(lines)
 
 
 def main_menu_text():
+    """전체 현황 (판55): P 레이더 + VR6 레이더를 쌓음. 이모티콘으로 구역 구분."""
     try:
         import fanding_vr6
         vr6 = fanding_vr6.status_line()
     except Exception:
-        vr6 = "<b>VR6 매매</b> · 상태를 못 읽었어요 (/vr6진단)"
-    return "<b>팬딩 봇</b>\n\n" + p_status_line() + "\n\n" + vr6 + "\n\n아래 버튼에서 골라 주세요."
+        vr6 = "📡 [VR6 레이더] 상태를 못 읽었어요 (/vr6진단)"
+    return p_status_line() + "\n" + vr6 + "\n\n아래 버튼에서 골라 주세요."
 
 
 # ---------- 자동주문 시간 선택 (1.14.0): 켤 때 판독후 30분뒤(A) / 마감 1시간전(B) 중 고름. 모드 없는 ON(legacy)은 마감 10분 전

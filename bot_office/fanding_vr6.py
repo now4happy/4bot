@@ -55,7 +55,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.7.1"
+VERSION = "2.7.2"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -1714,14 +1714,16 @@ def _latest_plan(st):
 
 
 def status_line():
-    """메뉴·처음 화면에 쓰는 상태 두 줄"""
+    """📡 [VR6 레이더] — 메뉴·처음 화면용 (판55). 이모티콘으로 구역 구분."""
     st = _fill(load(STATE, {}))
     nd = _d(st["next_due"])
     pl = _latest_plan(st)
     last = f"{pl['cycle']} 회차 · {STATUS_NAMES.get(pl['status'], pl['status'])}" if pl else "없음"
-    return (f"<b>VR6 매매</b> · {st['symbol']} · 배수 ×{st['multiplier']} · 자동 {'켜짐' if st['auto_order'] else '꺼짐'}"
+    on = "🟢 가동중" if st['auto_order'] else "🔴 꺼짐"
+    return (f"📡 [VR6 레이더] ({on} · {st['symbol']} · 배수 ×{st['multiplier']})\n"
+            f"🤖 [자동] 자동 {'켜짐' if st['auto_order'] else '꺼짐'}"
             f" · 자동환전 {'켜짐' if auto_fx_state(st)[0] else '꺼짐'} · 역자동환전 {'켜짐' if auto_rfx_state(st)[0] else '꺼짐'}\n"
-            f"다음 진행 {nd.isoformat()}({_wd(nd)}) · 최근 주문표: {last}")
+            f"⏰ [다음 진행] {nd.isoformat()}({_wd(nd)}) · 최근 주문표: {last}")
 
 
 def summary_text(now=None):
