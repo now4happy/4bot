@@ -1,10 +1,10 @@
-# briefing/run.py — 진입점: python3 -m briefing.run [need|portfolio|all] [--force] [--dry]
-# 한 번 실행이 briefing_latest.json 을 만들고 텔레그램 렌더와 조타실 렌더가 같은 JSON 을 쓴다 (설계 6절).
-# 텔레그램 방이 둘이다: 필요 달러(need·streak 알림) = paths.telegram_need_cfg (새 봇·새 전용 방),
-# 포트폴리오 = paths.telegram_cfg (9번 봇·업데이트 방, 그대로). 두 설정은 섞지 않는다 (make_need_sender).
-# 순서: need → portfolio. 각 단계는 독립 try/except (앞 단계 실패가 뒤 단계를 막지 않는다).
-# --dry: 텔레그램 전송·재발행 실행·상태/마커/스냅샷 저장을 하지 않고 화면에 출력만 한다.
-# 시험용 보조 옵션(설계에 없음, 기본 동작 불변): --config --state-dir --need-json --targets --now
+# briefing/run.py — 진입점: python3 -m briefing.run [need|all] [--force] [--dry]
+# 한 번 실행이 briefing_latest.json 을 만든다 (설계 6절). 보내는 건 필요 달러(need·streak 알림)뿐이다.
+# 포트폴리오 전환 브리핑은 2026-11-26에 삭제됐다 (풀이님 결정: 메시지 중단 + 코드 삭제).
+# 텔레그램 방: 필요 달러 = paths.telegram_need_cfg (새 봇·새 전용 방). 9번 설정(paths.telegram_cfg)은
+# 새 봇과 같은 방인지 가드 대조용으로만 쓴다 (make_need_sender). 두 설정은 섞지 않는다.
+# --dry: 텔레그램 전송·재발행 실행·상태/마커 저장을 하지 않고 화면에 출력만 한다.
+# 시험용 보조 옵션(설계에 없음, 기본 동작 불변): --config --state-dir --need-json --now
 import argparse
 import datetime as dt
 import json
@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from . import need_table, portfolio, render, state as st_mod, tg_send
+from . import need_table, render, state as st_mod, tg_send
 from .state import State, expand
 
 KST = dt.timezone(dt.timedelta(hours=9))
@@ -29,13 +29,12 @@ def load_config(path=None):
 
 def parse_args(argv):
     ap = argparse.ArgumentParser(prog="briefing.run")
-    ap.add_argument("stage", nargs="?", default="all", choices=["need", "portfolio", "all"])
+    ap.add_argument("stage", nargs="?", default="all", choices=["need", "all"])   # all = need (포트폴리오 삭제됨)
     ap.add_argument("--force", action="store_true", help="sent 마커를 무시하고 다시 보냄")
     ap.add_argument("--dry", action="store_true", help="전송·저장·재발행 없이 출력만")
     ap.add_argument("--config")
     ap.add_argument("--state-dir")
     ap.add_argument("--need-json")
-    ap.add_argument("--targets")
     ap.add_argument("--now", help="시험용 현재 시각(ISO, UTC 기준)")
     return ap.parse_args(argv)
 
@@ -145,7 +144,6 @@ def main(argv=None, deps=None):
     st = State(state_dir)
     need_path = args.need_json or cfg["paths"]["need_json"]
     tg_cfg = cfg["paths"]["telegram_cfg"]
-    send = deps.get("send") or (lambda text: tg_send.send(text, tg_cfg))                 # 포트폴리오 (9번 방)
     send_need_fn = deps.get("send_need") or deps.get("send") or make_need_sender(cfg, tg_cfg)   # 필요 달러 (새 방)
     reissue = deps.get("reissue") or (lambda: reissue_cmd(cfg, need_path))
     sleep = deps.get("sleep") or time.sleep
@@ -156,12 +154,11 @@ def main(argv=None, deps=None):
     if not isinstance(send_cfg, dict):
         send_cfg = {}
     send_need = send_cfg.get("need", True)          # true = 새 봇 방으로 보냄. 되돌리기 = false (VERIFY.md)
-    send_port = send_cfg.get("portfolio", True)
 
     latest = st.read_latest() or {}
     out = {"schema_version": 1, "run_id": run_id, "generated_at": gen,
-           "need": latest.get("need"), "portfolio": latest.get("portfolio"),
-           "telegram": latest.get("telegram") or {"need": None, "portfolio": None}}
+           "need": latest.get("need"),
+           "telegram": latest.get("telegram") or {"need": None}}
     exit_code = 0
 
     def deliver(kind, text):
@@ -169,14 +166,13 @@ def main(argv=None, deps=None):
         if dry:
             print("----- [dry] %s 메시지 -----\n%s\n" % (kind, text))
             return "dry"
-        sender = send if kind == "portfolio" else send_need_fn      # need·streak 알림은 새 방, 포트폴리오는 9번 방
+        sender = send_need_fn      # need·streak 알림은 새 방으로만 보낸다
         if sender(text):
             st.mark_sent(today, kind)
             return "sent"
         return "failed" if late else "pending"
 
     do_need = args.stage in ("need", "all")
-    do_port = args.stage in ("portfolio", "all")
 
     if do_need:
         if not dry and not send_need:
@@ -206,48 +202,16 @@ def main(argv=None, deps=None):
                 print("need 단계 예외: %r" % e, file=sys.stderr)
                 exit_code = 1
 
-    if do_port:
-        if not dry and not send_port:
-            print("portfolio: 발송 중단 (send.portfolio=false) — 보내지 않음")
-            out["portfolio"] = {"status": "disabled", "run_id": run_id, "generated_at": gen}
-            out["telegram"]["portfolio"] = "disabled"
-        elif not dry and not args.force and st.is_sent(today, "portfolio"):
-            print("portfolio: 오늘 이미 전송됨 (--force 로만 재실행)")
-        else:
-            try:
-                targets = portfolio.load_targets(args.targets or _pkg_path(cfg["paths"]["targets"]))
-                prev = st.prev_snapshot(today)
-                results = portfolio.fetch_all(cfg, today, st, deps.get("fetchers"))
-                prices = deps["prices"](results) if deps.get("prices") else {}
-                section, snap = portfolio.collect(cfg, today, gen, prev, results, targets, prices)
-                section["run_id"], section["generated_at"] = run_id, gen
-                if not dry:
-                    try:
-                        st.save_snapshot(today, snap)
-                    except Exception:
-                        section["snapshot_save_failed"] = True
-                out["portfolio"] = section
-                out["telegram"]["portfolio"] = deliver("portfolio", render.portfolio_message(section, run_id, late))
-            except Exception as e:
-                out["portfolio"] = {"status": "failed", "error": "예외: %s" % type(e).__name__,
-                                    "run_id": run_id, "generated_at": gen}
-                print("portfolio 단계 예외: %r" % e, file=sys.stderr)
-                exit_code = 1
-
     if dry:
         print("----- [dry] briefing_latest.json -----\n" + json.dumps(out, ensure_ascii=False, indent=2))
     else:
         try:
             st.save_latest(out, today)
-            st.prune(today, cfg.get("schedule", {}).get("snapshot_retention_days", 90))
+            st.prune(today, cfg.get("schedule", {}).get("retention_days", 90))
         except Exception as e:
             print("latest 저장 실패: %r" % e, file=sys.stderr)
             exit_code = 1
     return exit_code
-
-
-def _pkg_path(rel):
-    return rel if os.path.isabs(rel) else os.path.join(os.path.dirname(os.path.abspath(__file__)), rel)
 
 
 def _update_streak(st, today, res, deliver, run_id):

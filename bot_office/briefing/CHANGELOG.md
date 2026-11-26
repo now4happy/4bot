@@ -1,5 +1,11 @@
 # briefing 변경 기록
 
+## vNEXT · 2026-11-26 (타이베이) — 포트폴리오 전환 브리핑 삭제 (풀이님 결정)
+- 파일: run.py, render.py, state.py, portfolio.py(삭제), sources/(삭제), portfolio_targets.json(삭제), systemd/briefing.service, tests/test_briefing.py(검토용으로만 두고 staging에는 안 올림)
+- 내용: 포트폴리오 전환 메시지 발송을 없앤다. 서버 config send.portfolio=false로 11-27 09:00 KST 실행부터 안 나감 (백업 config.json.bak-20261126, 서버에서 직접 바꿈 — config.json은 업데이터가 못 올려서 staging에 안 넣음. 적용 때 서버 config에서 portfolio·kiwoom·send.portfolio 키도 정리할 것). 코드는 run.py의 portfolio 단계·render.portfolio_message·state 스냅샷·sources 4개·targets 파일을 전부 지운다. `run all`은 need만 돌린다. need 브리핑(새 봇·09:00 KST)·need.json 계산은 그대로. 다른 곳에서 portfolio 코드를 쓰는 곳은 없음 (staging 전체 grep 확인: briefing_latest.json portfolio 항목을 읽는 곳 없음, alert-hub briefing은 별개).
+- 시험: tests/test_briefing.py 27건 중 22건 통과, 실패 2건·오류 3건은 삭제 전 기준과 동일 (need_table 메시지 문구 drift, 삭제와 무관). 포트폴리오 시험(Sources·Portfolio·TargetsFile·TossAdapter·Width)은 삭제와 함께 지움.
+- 브랜치: staging
+
 ## v1.0.5 · 2026-11-25 15:29 (KST)
 - 파일: need_table.py, run.py
 - 내용: 3차 rev3: 재발행 때 팬딩 원인을 briefing_latest.json에 기록

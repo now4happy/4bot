@@ -2,7 +2,7 @@
 # WorkingDirectory=/opt/bot-office (Q21 확인: 패키지 위치 /opt/bot-office/briefing/ 맞음). briefing 패키지가
 # 그 아래 briefing/ 에 놓인다. OnFailure 는 systemd 규칙상 [Unit] 에 둔다. 이 파일은 /etc/systemd/system/ 에 수동 복사 (업데이터는 재시작·설치 안 함).
 [Unit]
-Description=Telegram briefing (need + portfolio)
+Description=Telegram briefing (need)
 OnFailure=briefing-fail.service
 
 [Service]

@@ -1,4 +1,4 @@
-# briefing/state.py — 스냅샷·상태·sent 마커·latest.json 원자적 저장
+# briefing/state.py — 상태·sent 마커·latest.json 원자적 저장 (포트폴리오 스냅샷은 2026-11-26에 삭제됨)
 import json
 import os
 import re
@@ -44,14 +44,13 @@ def read_json(path, default=None):
 class State:
     def __init__(self, root):
         self.root = expand(root)
-        self.snap_dir = os.path.join(self.root, "snapshots")
         self.hist_dir = os.path.join(self.root, "history")
         self.sent_dir = os.path.join(self.root, "sent")
         self.latest_path = os.path.join(self.root, "briefing_latest.json")
         self.state_path = os.path.join(self.root, "state.json")
 
     def ensure(self):
-        for d in (self.root, self.snap_dir, self.hist_dir, self.sent_dir):
+        for d in (self.root, self.hist_dir, self.sent_dir):
             os.makedirs(d, exist_ok=True)
 
     # latest / history
@@ -62,26 +61,6 @@ class State:
         self.ensure()
         atomic_write_json(self.hist_dir + "/%s.json" % date, obj)
         atomic_write_json(self.latest_path, obj)
-
-    # snapshots (수량·가격 포함 → 서버 전용, 0600)
-    def save_snapshot(self, date, snap):
-        self.ensure()
-        atomic_write_json(os.path.join(self.snap_dir, date + ".json"), snap, mode=0o600)
-
-    def load_snapshot(self, date):
-        return read_json(os.path.join(self.snap_dir, date + ".json"), None)
-
-    def prev_snapshot(self, date):
-        """date 보다 앞선 가장 최근 스냅샷. 없으면 None. (주말·휴일은 자연히 건너뜀)"""
-        try:
-            names = sorted(n[:-5] for n in os.listdir(self.snap_dir)
-                           if n.endswith(".json") and _DATE_RE.match(n[:-5]))
-        except OSError:
-            return None
-        earlier = [n for n in names if n < date]
-        if not earlier:
-            return None
-        return self.load_snapshot(earlier[-1])
 
     # sent 마커
     def _marker(self, date, kind):
@@ -112,7 +91,7 @@ class State:
         import datetime as dt
         limit = (dt.date.fromisoformat(today) - dt.timedelta(days=days)).isoformat()
         removed = 0
-        for d, ext in ((self.snap_dir, ".json"), (self.hist_dir, ".json")):
+        for d, ext in ((self.hist_dir, ".json"),):
             try:
                 names = os.listdir(d)
             except OSError:
