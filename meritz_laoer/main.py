@@ -2531,48 +2531,38 @@ def run_sync(s, api, note, mark_path):
         cfg._save_json(mark_path, m)
     rows = fill_rows_for(api, s, d)                   # v2.2.6: 체결 시각(t)까지 읽음 — 필드 이름 미확인이면 t 는 None → 매도 먼저
     items = fill_items(m, rows)
-    lines, done = [], None
+    done = None
     # v2.2.0 탑쌓기: F 상태 (파일이 없으면 이 체결들을 넣기 전 장부로 1F)
     _p0 = cfg.get_position() or {"qty": 0, "principal": 0.0}
     tst = tower_state_for(cfg, int(_p0["qty"]), float(_p0["principal"]), s)[0]
-    labs = TW.floor_labels(tst) if isinstance(tst, dict) else {}      # 체결 반영 전 F 라벨 (체결 뒤엔 F가 사라질 수 있음)
     # v2.2.6: 시간순(없으면 매도 먼저)·새 F 계획 매수는 매도 뒤·주문번호별 증분만 (장중에 이미 반영한 매도는 다시 안 넣음)·장부와 F를 같은 묶음으로 저장
     applied = apply_tower_fills(s, cfg, d, items, tst)
-    got = {id(a["o"]) for a in applied}
-    for it in items:
-        if id(it["o"]) not in got:
-            lines.append(f"- {SIDE_KO.get(it['side'], it['side'])} {it['q']}주 (이미 반영한 체결 — 다시 안 넣음) ({it['o'].get('desc', '')})")
+    # v2.18.0 판 45: 건별 체결 줄은 메시지에 안 써서 안 쌓음 (마감 일일결산이 요약해 보냄). done만 applied에서 계산.
     for a in applied:
-        o = a["o"]
-        lines.append(f"- {SIDE_KO.get(a['side'], a['side'])} {a['dq']}주 @ ${a['da'] / a['dq']:.2f} ({o.get('desc', '')})")
-        if a["side"] == "SELL":
-            flab = labs.get(int(o["floor_id"]), TW.price_label(o.get("floor_avg") or 0)) if o.get("floor_id") is not None else None
-            lines.append(f"  매도 체결 → {flab}의 버킷(평단 ${float(o.get('box_avg') or 0):.2f})만 줄임 (F 원가·수량도 그 버킷 몫만큼만)" if o.get("floor_id") is not None and o.get("box_id") is not None
-                         else f"  매도 체결 → {flab}만 줄이고 그 F 탑업 단계 시작 (F 평단 ${float(o.get('floor_avg') or 0):.2f})" if o.get("floor_id") is not None
-                         else "  매도 체결 → F별로 나눠 줄이고 탑업 단계 시작")
         done = a["closed"] or done
     hold, _, _ = api.holding(s["symbol"])
     pos = cfg.get_position()
     if tst is not None:                   # 매일 동기화: 층 상태를 장부(실제 보유분)에 맞추고, 꼬인 층은 합침
-        tst, tnotes = TW.reconcile(tst, int(pos["qty"]), float(pos["principal"]), TW.params(s)[2], s)
-        tst, snotes = SA.adjust(tst, s)               # 판 33: 잔고 동기화의 둘째 일 — F 완성 기준 금액 조정 (시드가 안 바뀌었으면 아무것도 안 함)
+        tst, _tnotes = TW.reconcile(tst, int(pos["qty"]), float(pos["principal"]), TW.params(s)[2], s)
+        tst, _snotes = SA.adjust(tst, s)               # 판 33: 잔고 동기화의 둘째 일 — F 완성 기준 금액 조정 (시드가 안 바뀌었으면 아무것도 안 함)
         cfg._save_json(TOWER_FILE, tst)
-        lines += [f"  {n}" for n in tnotes] + [f"  {n}" for n in snotes]
     try:                                            # v2.2.6 체결 알림: 장중에 못 보낸(또는 아직 안 보낸) 몫만 — 주문별 notified_qty 기준
         send_fill_alerts(s, api, note, cfg, m, mark_path, items, d, tst)
     except Exception as e:
         logging.warning(f"체결 알림 중 오류 {type(e).__name__}")
     m["synced"] = True
     cfg._save_json(mark_path, m)
-    msg = f"{d} 체결 반영\n" + ("\n".join(lines) if lines else "- 체결 없음") + f"\n장부 {pos['qty']}주 평단 ${cfg.avg_price(pos):.2f}"
+    # v2.18.0 판 45: 평소 체결 반영 메시지는 안 보냄 — 마감 일일결산이 같은 날 매매를 요약해서 보내. 비정상 때만 짧게 알림.
+    alert = []
     if lost:
-        msg += f"\n주문 응답을 못 받은 주문 {lost}건은 체결 내역에서 못 찾았어요 (체결 안 된 것으로 봄 — 아래 잔고 확인이 맞는지 검사)"
+        alert.append(f"주문 응답을 못 받은 주문 {lost}건은 체결 내역에서 못 찾았어요 (체결 안 된 것으로 봄 — 잔고 확인이 맞는지 검사)")
     if done:
-        msg += "\n보유 0주가 되어 사이클 종료 처리됨 — 이 봇의 매도 규칙으로는 생기지 않는 상황, 확인 필요"
+        alert.append("보유 0주가 되어 사이클 종료 처리됨 — 이 봇의 매도 규칙으로는 생기지 않는 상황, 확인 필요")
     if hold != pos["qty"]:
         cfg.halt(f"체결 반영 뒤 잔고 {hold}주 ≠ 장부 {pos['qty']}주")
-        msg += f"\n정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인한 뒤 정지 해제)"
-    note.send(msg)
+        alert.append(f"정지: 잔고 {hold}주 ≠ 장부 {pos['qty']}주 (확인한 뒤 정지 해제)")
+    if alert:
+        note.send(f"{d} 체결 반영 확인 필요\n" + "\n".join(alert))
     try:                                            # v2.15.0 판 41 할 일 4: 마감 일일결산 (체결 반영 알림 바로 뒤, 별도 메시지 1개) — 실패해도 동기화는 이미 끝남
         note.send(daily_close_text(s, d, items, tst))
     except Exception as e:
