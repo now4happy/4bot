@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/fanding_vr6.py   (FANDING_VR6_vNEXT)
+#  2.7.1 (2026-11-26, 판52 VR6 레이더): 주문표 알림 전에 📡 [VR6 레이더] 현황판을 먼저 보냄 (토스 스나이퍼 레이더 기준). 표에 있는 값만 씀.
 #  2.7.0 (2026-11-19, 방 telegram-bot-menu-review 3차): 배수·환전 금액을 숫자 버튼 대신 입력창으로(범위 안내) · 배수는 지금 값→새 값 확인 후 적용 · 단순 이모티콘 제거. 주문·환전 실행 로직 불변.
 # 팬딩 VR6기 (TQQQ) — 2주에 한 번 게시글의 표 이미지를 받아 판독 → 메리츠 VR6 계좌에 2주 기간잔량 지정가 예약
 #
@@ -54,7 +55,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.7.0"
+VERSION = "2.7.1"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -772,6 +773,49 @@ def plan_text(plan, st, head="<b>VR6 주문표</b>"):
     return "\n".join(L)
 
 
+def radar_text(plan, st):
+    """📡 [VR6 레이더] — 토스 스나이퍼 레이더 형식. 표(plan)에 있는 값만 씀 (없는 값은 빼).
+    판52: Pool은 매도 줄 중 마지막 pool(누적). [다음 자동주문]은 대기 중이면 예약마감, 제출 완료면 다음 표 날짜."""
+    p = plan.get("parsed") or {}
+    acc = plan.get("account") or {}
+    start, end = plan.get("start") or "-", plan.get("end") or "-"
+    buys = p.get("buys") or []
+    sells = p.get("sells") or []
+    if buys:
+        buy_s = f"매수 {len(buys)}다리 · 다음 {buys[0]['price']:g} · 필요 ${need_usd(plan):,.2f}"
+    else:
+        buy_s = "매수 없음"
+    if sells:
+        sell_s = f"매도 {len(sells)}줄 · 다음 {sells[0]['price']:g}"
+    else:
+        sell_s = "매도 없음"
+    holding = acc.get("holding")
+    hold_s = f"{holding}주" if holding is not None else "-"
+    pool = None
+    for r in sells:
+        if r.get("pool") is not None:
+            pool = r["pool"]
+    pool_s = f"${float(pool):,.2f}" if pool is not None else "-"
+    cash = acc.get("usd_cash")
+    cash_s = f"${float(cash):,.2f}" if cash is not None else "-"
+    gap = usd_gap(plan, acc)
+    gap_s = f"부족 ${gap:,.2f}" if gap is not None and gap > 0 else "부족 없음"
+    if plan.get("status") == "pending" and plan.get("order_start"):
+        _, _, cut = deadlines(plan, st)
+        next_s = f"예약마감 {cut:%m/%d %H:%M} KST"
+    else:
+        nxt = st.get("next_due")
+        next_s = f"다음 표 {nxt}" if nxt else "다음 표 -"
+    L = ["📡 [VR6 레이더] (" + ("🟢 가동중" if st.get("auto_order") else "🔴 꺼짐") + f" · {start}~{end})",
+         f"📊 [매수계획] {buy_s}",
+         f"📉 [매도계획] {sell_s}",
+         f"🏛️ [보유] {hold_s} · Pool {pool_s}",
+         f"💱 [달러] 보유 {cash_s} · {gap_s}",
+         f"⏰ [다음 자동주문] {next_s}",
+         f"🕐 {datetime.now(KST).strftime('%Y-%m-%d %H:%M')} KST"]
+    return "\n".join(L)
+
+
 def usd_gap(plan, acc=None):
     """매수 필요 달러 - 보유 달러(예수금). 조회 못 하면 None"""
     cash = (acc if acc is not None else plan.get("account") or {}).get("usd_cash")
@@ -892,12 +936,23 @@ def send_plan_notice(tg, cycle, head, refresh=False):
     text = plan_text(plan, st, head)
     if plan.get("auto_fx_lines"):
         text += "\n\n" + "\n".join(plan["auto_fx_lines"])
+    # 판52 VR6 레이더: 주문표 알림 전에 현황판을 먼저 보냄. 이 버전 표에 1번만.
+    radar_sent = False
+    if plan.get("radar_sent_ver") != plan.get("ver"):
+        try:
+            rr = tg.send(radar_text(plan, st))
+            if (rr or {}).get("message_id"):
+                radar_sent = True
+        except Exception as e:
+            print("VR6 레이더 발송 실패:", type(e).__name__, flush=True)
     tg.photo(VDIR / plan["img"], f"VR6 주문표 · {html.escape(plan['parsed'].get('title') or cycle)}")
     r = tg.send(text, plan_rows(plan, decide=plan["status"] == "pending" and bool(plan["order_start"])) or None)
     with locked() as st:
         if cycle in st["plans"]:
             st["plans"][cycle]["msg_id"] = (r or {}).get("message_id")
             st["plans"][cycle].pop("notice_pending", None)
+            if radar_sent:
+                st["plans"][cycle]["radar_sent_ver"] = plan.get("ver")
             if (r or {}).get("message_id"):
                 st["plans"][cycle]["notice_sent_at"] = datetime.now(KST).isoformat()   # 2.6.0: 판독후 1시간뒤 소급 판단용
     replay("vr6_plan_ready", "ok" if plan["auto_ok"] else "partial", "" if plan["auto_ok"] else "checks_failed",
