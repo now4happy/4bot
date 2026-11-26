@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "as_of_kst": "2026-11-26 11:50:00",
+  "as_of_kst": "2026-11-26 16:30:00",
   "accounts": [
     {
       "name": "토스",
@@ -51,7 +51,7 @@
         {
           "label": "3번",
           "currency": "USD",
-          "holding": 762.82,
+          "holding": 862.82,
           "need": 0.0,
           "sufficient": true,
           "auto_fx": "on"
@@ -59,7 +59,7 @@
         {
           "label": "SGOV 11/27",
           "currency": "USD",
-          "holding": 762.82,
+          "holding": 862.82,
           "need": 736.9,
           "sufficient": true,
           "auto_fx": "on"
