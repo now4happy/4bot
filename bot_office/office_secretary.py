@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 v1.9.7 (2026-11-26, 판49 처음 화면 고침): 예전 키보드의 이모티콘 없는 "처음 화면"도 처음 화면으로 받음.
 # 사무실 v1.9.6 (2026-11-26, 판48 최소 UI): SGOV 메뉴 전부 제거 — 상황판 + [자동환전 실행]·[새로고침]만 남김.
 #   설정(시드·건너뜀·분배금·게이트·SGOV 켜기/끄기)은 텔레그램 버튼이 아니라 뮤즈랑 대화로 바꿈.
 #   매일 09:00 KST 상황판 자동 발송 (09:00~09:30 안에 1번, maybe_daily_chart).
@@ -179,7 +180,7 @@ def handle_message(tg, st, msg):
     raw = text
     if office_sgov and office_sgov.handle(tg, st, raw, OFFICE_LABELS):   # SGOV 상황판·자동환전 글자 (📈 상황판 포함)
         return
-    if raw in (HOME, SGOV_HOME):
+    if raw in (HOME, SGOV_HOME, "처음 화면", "메인 메뉴"):   # 판49: 예전 키보드의 이모티콘 없는 "처음 화면"도 처음 화면으로
         tg.send("🏠 <b>처음 화면</b> · 아래 버튼을 눌러 주세요", keyboard=MENU_KB); return
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?") or raw == "❓ 도움말":
