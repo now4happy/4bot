@@ -735,6 +735,7 @@ def seed_group(key):
 #   SGOV 그룹(총 목표·회차 금액·1회차 금액·총 회차 수·회차 간격)은 비서봇 ⚙️ 시드·SGOV → 요청 파일 → bridge_handle 이 같은 검증으로 저장.
 SGOV_SEED_KEYS = ("target_usd_total", "tranche_usd", "first_tranche_usd", "tranches_total", "interval_days")
 SGOV_MOVED = "SGOV는 비서봇으로 옮겼어요. 비서봇 메뉴에서 봐 주세요."
+MENU_GONE_DCA = "메뉴는 없어졌어요. 이 봇은 알림만 보내요. SGOV 상황판·자동환전은 비서봇에서, 설정(시드·매매 규칙·전원)은 뮤즈랑 대화로 바꿔 주세요."
 
 
 def build_seed_group_menu(cfg, group):
@@ -842,139 +843,12 @@ async def handle_callback(cb: dict, client):
 
 
 async def dispatch_action(data: str, msg_id, client):
-    """버튼 1개 처리 (예전 handle_callback 본문). v1.2.6: 맨밑 버튼 글자(REPLY_MAP·고정 메뉴)도 여기로 옴"""
-    wait_state["mode"] = None
-    cfg = await ensure_cycle_fields()
-    # v1.2.6 메뉴 이동 (맨밑 키보드)
-    if data == "menu": send_keyboard("메뉴 · 아래 버튼을 눌러 주세요", MENU_ROWS); return
-    if data in ("tools", "rules"): send_keyboard("매매 규칙 · 아래 버튼을 눌러 주세요", RULES_ROWS); return
-    if data == "stocks_menu": send_keyboard("종목 관리 · 아래 버튼을 눌러 주세요", STOCKS_ROWS); return
-    if data == "cfm_no":
-        _PENDING["apply"] = None; send_panel("취소했어요. 값은 그대로예요.", [[{"text": "메뉴", "callback_data": "menu"}]]); return
-    if data == "cfm_yes":
-        fn = _PENDING.get("apply"); _PENDING["apply"] = None
-        if fn and time.time() - _PENDING.get("ts", 0) <= CONFIRM_SEC: await fn()
-        else: send_panel("확인 시간이 지났거나 바꿀 값이 없어요. 처음부터 다시 눌러 주세요.", [[{"text": "메뉴", "callback_data": "menu"}]])
-        return
-    if data == "home": send_bottom_menu(); return
-    if data == "help": send_panel(HELP_TEXT, []); return
-    if data == "n7_view": send_panel(*(await build_n7_view(client))); return
-    if data == "setday_pick": send_panel(*(await build_setday_pick_view(client))); return
-    # v1.2.6 A1: SGOV 진입점은 4번에서 없앰 (예전 메시지 버튼도) — 비서봇 안내 + 메뉴
-    if data == "sgov" or data.startswith(("sgovx_", "sgovmode_", "sgov_")) or data == "funds_seed_sgov" \
-            or (data.startswith("funds_seed_") and data[len("funds_seed_"):] in SGOV_SEED_KEYS):
-        send_keyboard(SGOV_MOVED, MENU_ROWS); return
+    """판48 최소 UI: 적립봇 메뉴 전부 제거 — 모든 버튼·글자 명령은 안내만. 설정은 뮤즈랑 대화로.
+    (매매·환전·알림은 그대로 — 이 함수는 텔레그램 UI 진입점만 담당)"""
+    wait_state["mode"] = None   # 입력 대기(시드·일수 등)도 해제
+    send_panel(MENU_GONE_DCA, [], msg_id)
+    return
 
-    # 종목별 매매 버튼 v1
-    if data.startswith(("trade_on_", "trade_off_")):
-        turn_on = data.startswith("trade_on_")
-        sym = data.split("_", 2)[2].strip().upper()
-        latest = await DcaConfigManager.load()
-        stocks = latest.get("stocks", {})
-        if sym not in stocks:
-            send_panel("종목이 목록에 없습니다. 보유종목을 새로고침해 주세요.",
-                       [[{"text": "보유종목", "callback_data": "stock_list"}]], msg_id)
-            return
-        before = stocks[sym].get("enabled", True)
-        stocks[sym]["enabled"] = turn_on
-        await DcaConfigManager.save(latest)
-        RL.ev("state_change", "stock_enabled", "ok", None, actor="user", sym_ref=RL.ref(sym), before=before, after=turn_on, master_on=latest.get("is_master_active", False))
-        text, kb = await build_stock_detail_view(client, sym)
-        notice = ("해당 종목 자동매매를 시작했습니다."
-                  if turn_on else "해당 종목의 신규 자동주문을 중지했습니다.")
-        if turn_on and not latest.get("is_master_active", False):
-            notice += "\n전체 매매가 중지돼 있어 전체 시작 후 실행됩니다."
-        send_panel(notice + "\n\n" + text, kb, msg_id)
-        return
-    if data.startswith("browse|"):
-        parts = data.split("|")
-        if len(parts) != 5 or parts[1] not in ("all", "kr", "us") or parts[2] not in ("all", "on", "off") or not parts[3].isdigit() or parts[4] not in ("0", "1"):
-            return
-        send_panel(*(await build_stock_list_view(client, int(parts[3]), parts[1], parts[2],
-                    None if parts[4] == "1" else "")), msg_id)
-        return
-    if data == "stock_search":
-        wait_state["mode"] = "stock_search"
-        send_panel("보유종목 이름 또는 티커를 입력하세요. (예: NKE, QLD)\n검색은 전체 상태에서 진행합니다.",
-                   [[{"text": "목록으로", "callback_data": stock_list_callback()}]], msg_id)
-        return
-    if data == "add_symbol":
-        wait_state["mode"] = "add_sym"
-        send_panel("[새 종목 추가 — 미국주식만]\n• 모아갈 미국 티커(영문)를 입력해 주세요. 예: NKE, QLD, SPY\n• 추가하면 중지 상태로 등록됩니다 (기준금액 $40).",
-                   [[{"text": "취소", "callback_data": "panel"}]], msg_id)
-        return
-    if data in ("panel_view_now", "panel_view_done"):
-        PANEL_VIEW_CONTEXT["mode"] = "done" if data.endswith("done") else "now"
-        send_panel(*(await build_panel_view(client)), msg_id)
-    elif data == "funds": send_panel(*(await build_funds_view(client)), msg_id)
-    elif data in ("funds_seed", "funds_seed_stock"): send_panel(*build_seed_group_menu(await DcaConfigManager.load(), "stock"), msg_id)
-    elif data.startswith("funds_seed_"):
-        key = data[len("funds_seed_"):]
-        if key in SEED_FIELDS:
-            wait_state.update(mode="funds_seed", sym=key)
-            _cur = (cfg.get("stocks", {}).get(key) or {}).get("base_amount") if SEED_FIELDS[key][1] == "stock" else None
-            send_panel(explain(SEED_FIELDS[key][0], (f"${float(_cur):,.2f}" if _cur is not None else "미확인"), "0보다 큰 달러 숫자 (상한 없음, 기본 $40)",
-                               "그 종목을 한 번 살 때 쓰는 기준 금액(시드)이에요.", "다음 적립부터 이 금액이 기준이 돼요", "40"),
-                       [[{"text": "취소", "callback_data": f"funds_seed_{seed_group(key)}"}]], msg_id)
-    elif data == "funds_fx":
-        await show_fx_confirmation(client, msg_id)
-    elif data == "funds_fx_confirm":
-        result = await run_fx_from_confirm(client)
-        send_panel(*(await build_funds_view(client, f"자동환전 결과: {FX_RESULT_KO.get(result, result)}")), msg_id)
-    elif data in ("panel", "panel_refresh"): send_panel(*(await build_panel_view(client)), msg_id)
-    elif data == "stock_list": send_panel(*(await build_stock_list_view(client, STOCK_LIST_CONTEXT["page"])), msg_id)
-    elif data.startswith("slist_"): send_panel(*(await build_stock_list_view(client, int(data.split("_")[1]))), msg_id)
-    elif data.startswith("detail_"): send_panel(*(await build_stock_detail_view(client, data.split("_", 1)[1])), msg_id)
-    elif data.startswith("setday_"):
-        sym = data.split("_", 1)[1]; wait_state["mode"], wait_state["sym"] = "day_sym", sym
-        _s = cfg.get("stocks", {}).get(sym) or {}
-        send_panel(explain(f"{sym} 진행일수 보정", f"{int(_s.get('s_day', 0))}일차", "0~100 정수 (0은 새로 시작)",
-                           "실제로 매수를 진행한 날 수(진행일수)를 맞춰 적어요. 0을 넣으면 새 1차 매수를 처음부터 시작하고 익절 단계도 0으로 돌아가요.",
-                           "다음 판단부터 이 일차로 이어가요", "30"), [[{"text": "취소", "callback_data": f"detail_{sym}"}]], msg_id)
-    elif data.startswith("setamt_"):
-        sym = data.split("_", 1)[1]; wait_state["mode"], wait_state["sym"] = "amt_sym", sym
-        _s = cfg.get("stocks", {}).get(sym) or {}
-        send_panel(explain(f"{sym} 1회 기준 매수금액(시드)", f"${float(_s.get('base_amount', 40.0)):,.2f}", "0보다 큰 달러 숫자 (상한 없음, 기본 $40)",
-                           "그 종목을 한 번 살 때 쓰는 기준 금액이에요.", "다음 적립부터 이 금액이 기준이 돼요", "40"), [[{"text": "취소", "callback_data": f"detail_{sym}"}]], msg_id)
-    elif data.startswith("next_pause_"):
-        sym = data.split("_", 2)[-1]; wait_state["mode"], wait_state["sym"] = "next_pause", sym
-        send_panel(explain(f"{sym} 정지 기간", "새로 정함", "1일 이상 정수 (예: 30. 상한 없음)",
-                           "정지 대기 기간이에요. 이 기간 동안 사지도 팔지도 않고 기다려요.", "진행일수가 0일부터 새로 시작해요", "30"), [[{"text": "취소", "callback_data": f"detail_{sym}"}]], msg_id)
-    elif data.startswith("next_sell_"):
-        sym = data.split("_", 2)[-1]; wait_state["mode"], wait_state["sym"] = "next_sell", sym
-        send_panel(explain(f"{sym} 분할매도 기간", "새로 정함", "1일 이상 정수 (예: 100. 상한 없음)",
-                           "나눠서 파는 기간(분할매도)이에요. 이 기간 동안 매일 조금씩 팔아요.", "진행일수가 0일부터 새로 시작해요", "100"), [[{"text": "취소", "callback_data": f"detail_{sym}"}]], msg_id)
-    elif data.startswith("next_buy2_"):
-        sym = data.split("_", 2)[-1]; wait_state["mode"], wait_state["sym"] = "next_buy2", sym
-        send_panel(explain(f"{sym} 2차 매수 기간", "새로 정함", "1일 이상 정수 (예: 100. 상한 없음)",
-                           "2차로 나눠서 사는 기간이에요. 이 기간 동안 매일 조금씩 사요.", "진행일수가 0일부터 새로 시작해요", "100"), [[{"text": "취소", "callback_data": f"detail_{sym}"}]], msg_id)
-    elif data == "toggle_master":
-        cfg["is_master_active"] = not cfg.get("is_master_active", False); await DcaConfigManager.save(cfg)
-        RL.ev("state_change", "master_power", "ok", None, actor="user", before=not cfg["is_master_active"], after=cfg["is_master_active"])
-        send_panel(*(await build_panel_view(client)), msg_id)
-    elif data == "toggle_n7":
-        _now_on = bool((await DcaConfigManager.load()).get("n7_enabled", False))
-        async def _apply_n7(client=client):
-            latest = await DcaConfigManager.load(); before = bool(latest.get("n7_enabled", False))
-            latest["n7_enabled"] = not before; await DcaConfigManager.save(latest)
-            RL.ev("state_change", "n7_enabled", "ok", None, actor="user", before=before, after=latest["n7_enabled"])
-            send_panel(*(await build_n7_view(client, "지수 연동 배수(N7): " + ("켜짐" if latest["n7_enabled"] else "꺼짐"))))
-        ask_confirm("지수 연동 배수(N7)", "켜짐" if _now_on else "꺼짐", "꺼짐" if _now_on else "켜짐", _apply_n7,
-                    "N7은 200일선 기준으로 적립 배수를 자동으로 맞추는 기능이에요. 켜면 다음 적립부터 금액이 달라질 수 있어요.")
-    elif data.startswith("idx_"):
-        sym = data.split("_", 1)[1].strip().upper()
-        latest = await DcaConfigManager.load(); stocks = latest.get("stocks", {})
-        if sym in stocks:
-            cur = n7_index_of(stocks[sym]); a, b = N7_CHOICES["US"]
-            stocks[sym]["index_ref"] = b if cur == a else a; await DcaConfigManager.save(latest)
-            RL.ev("state_change", "n7_index_ref", "ok", None, actor="user", sym_ref=RL.ref(sym), before=cur, after=stocks[sym]["index_ref"])
-        send_panel(*(await build_stock_detail_view(client, sym)), msg_id)
-    elif data == "ask_tp":
-        wait_state["mode"] = "tp"
-        send_panel(explain("익절 % · 매도비율 % (모든 종목 공통)", f"익절 {float(cfg.get('tp1_pct', 10.0)):g}% / 매도 {float(cfg.get('sr_pct', 20.0)):g}%",
-                           "두 숫자 모두 0 초과 100 이하 (%). 숫자 1개만 보내면 익절 %만 바뀌어요 (기본 10 / 20)",
-                           "익절은 이익이 이 %에 닿으면 파는 기준이고, 매도비율은 그때 파는 분할매도 비율이에요.",
-                           "다음 익절 판단부터 새 기준을 써요", "10 20"), [[{"text": "메뉴", "callback_data": "menu"}]], msg_id)
 
 async def sgov_menu_action(data):
     """SGOV 메뉴 버튼 처리 (예전 handle_sgov_callback 의 설정 바꾸기 부분 그대로) → 안내 문구 ("" = 바꾼 것 없음).
@@ -1037,21 +911,18 @@ async def handle_message(msg: dict, client):
         RL.ev("user_event", "tg_button", "ok", None, actor="user", button=_cb_parts(_btn)[0], via="reply_keyboard")
         await dispatch_action(_btn, None, client); return
     cfg = await ensure_cycle_fields()
-    # 입력 대기 중에는 메뉴 텍스트도 입력으로 처리. 취소만 대기 해제.
+    # 판48 최소 UI: 메뉴 텍스트·취소는 안내만 (입력 대기는 해제). 설정은 뮤즈랑 대화로.
     if text == "취소":
         wait_state.update(mode=None, sym=None)
-        send_panel(*(await build_panel_view(client)))
+        send_panel("취소했어요. 값은 그대로예요.", [])
         return
     if wait_state.get("mode") is None and (text.startswith("/") or text in menu_words):
-        if text in ("주식", "보유종목", "종목"):
-            send_panel(*(await build_stock_list_view(client, 0)))
-        elif text == "SGOV": send_keyboard(SGOV_MOVED, MENU_ROWS)   # v1.2.6 A3: SGOV 화면은 4번에서 안 보여 줌
-        elif text in ("자금", "설정"): send_panel(*(await build_funds_view(client)))
-        elif text == "종목 추가":
-            wait_state["mode"] = "add_sym"
-            send_panel("미국 티커를 입력하세요 (예: NKE)", [[{"text":"취소", "callback_data":"panel"}]])
-        else:
-            send_panel(*(await build_panel_view(client)))
+        send_panel(MENU_GONE_DCA, [])
+        return
+    # 판48 최소 UI: 메뉴에서 들어간 입력 대기(시드·일수·금액 등)는 안내만 하고 해제.
+    if wait_state.get("mode") is not None:
+        wait_state.update(mode=None, sym=None)
+        send_panel(MENU_GONE_DCA, [])
         return
     stocks = cfg.get("stocks", {}); m, sym = wait_state.get("mode"), wait_state.get("sym")
     if m == "funds_seed":

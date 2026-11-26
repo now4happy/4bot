@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: /opt/bot-office/office_secretary.py   (OFFICE_SECRETARY_V3)
+# 사무실 v1.9.6 (2026-11-26, 판48 최소 UI): SGOV 메뉴 전부 제거 — 상황판 + [자동환전 실행]·[새로고침]만 남김.
+#   설정(시드·건너뜀·분배금·게이트·SGOV 켜기/끄기)은 텔레그램 버튼이 아니라 뮤즈랑 대화로 바꿈.
+#   매일 09:00 KST 상황판 자동 발송 (09:00~09:30 안에 1번, maybe_daily_chart).
 # 사무실 v1.9.5 (2026-11-20, audit-fix-v2 8-5): 업데이트 처리 중 오류가 나면 offset 유지(같은 입력 최대 3번 다시 처리 뒤 건너뜀, process_updates)
 # 사무실 v1.8.8 (2026-11-19): 8번 비서 도움말·"모르는 명령" 안내 글자를 새 메뉴 구조(자금 · 환율 규칙 · SGOV 현황 · 도움말)에 맞춤 — 글자만 변경, 버튼 글자·구조·매매 로직 그대로
 # 사무실 v1.8.7 (2026-11-14): 웹 사무실 완전 제거에 맞춰 8번 비서를 SGOV 메뉴 전용으로 정리 — 🏢 사무실·/주소·🖥 PC 상태·💰 잔액·Update 안내 삭제
@@ -17,7 +20,7 @@
 # V4 (2026-10-26): 비서봇에서 팬딩 모듈 import 및 팬딩 콜백 제거. 팬딩은 전용 봇에서만 처리.
 # V3 (2026-10-26): 하단 메인 메뉴·하위 메뉴 정리
 # 텔레그램 "사무실 비서" 대화 담당 (항상 실행: bot-office-secretary.service)
-#  - 하단 메뉴: [📈 상황판 | ☰ 메뉴] = SGOV 메뉴 (office_sgov.py) 뿐
+#  - 하단 메뉴: [📈 상황판] = SGOV 상황판 (office_sgov.py) 뿐
 #  안전: 등록된 대표님 채팅방(chat_id)에서 온 것만 처리.
 # ==========================================================
 import html, json, os, re, sys, tempfile, time, urllib.parse, urllib.request, uuid
@@ -48,7 +51,7 @@ def _hub_alert(bot, level, text):
             _hub_notify(bot, level, _hub_re.sub(r"<[^>]+>", "", str(text)))
     except Exception:
         pass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -59,9 +62,11 @@ TELEGRAM_API = os.environ.get("OFFICE_TELEGRAM_API", "https://api.telegram.org")
 SYSTEMCTL = os.environ.get("OFFICE_SYSTEMCTL", "systemctl")
 KST, EST = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
 
-HELP = ("<b>8번 비서 사용법</b> (SGOV 메뉴)\n"
-        "· <b>상황판</b> 버튼 : SGOV 상황판\n"
-        "· <b>메뉴</b> 버튼 : 자금 · 환율 규칙 · SGOV 현황 · 도움말")
+HELP = ("<b>8번 비서 사용법</b> (SGOV 상황판)\n"
+        "· <b>상황판</b> 버튼 : SGOV 상황판 (보유·진행률·다음 회차)\n"
+        "· 상황판 안 <b>자동환전 실행</b> : 환전할 금액 확인 뒤 실행\n"
+        "· 상황판 안 <b>새로고침</b> : 지금 상태 다시 확인\n"
+        "· 설정(시드·건너뜀·분배금·SGOV 켜기/끄기)은 뮤즈랑 대화로 바꿔 주세요.")
 
 
 def load(p, default):
@@ -152,11 +157,10 @@ class TG:
 # 버튼은 기존 글자 명령과 똑같이 처리된다. 글자를 꼭 입력해야 하는 기능(수정 내용·상품명·금액)은
 # 버튼을 누르면 "다음 메시지로 보내 주세요" 안내가 뜨고, 그 다음 메시지를 알맞은 명령으로 처리한다(10분 안 · 취소는 아래 다른 버튼).
 HOME = "🏠 메인 메뉴"   # 예전 하단 버튼이 남아 있을 때도 처음 화면으로
-MENU_OPEN = "☰ 메뉴"
-# v1.8.7: 처음 화면은 SGOV 진입 버튼 2개뿐 [📈 상황판, ☰ 메뉴] (office_sgov.py 가 받아서 SGOV 상황판·SGOV 메뉴로)
+# v1.9.6 (판48): 처음 화면은 SGOV 진입 버튼 1개뿐 [📈 상황판] (office_sgov.py 가 받아서 SGOV 상황판으로)
 SGOV_CHART = "📈 상황판"
 SGOV_HOME = "🏠 처음 화면"
-MAIN_LABELS = [[SGOV_CHART, MENU_OPEN]]
+MAIN_LABELS = [[SGOV_CHART]]
 MENU_KB = [[{"text": t} for t in row] for row in MAIN_LABELS]
 CANCEL_ROWS = [[{"text": "✖ 취소", "callback_data": "mn:x"}]]
 OFFICE_LABELS = {HOME, "❓ 도움말"}   # office_sgov.handle 에 넘기는 '비서봇 버튼 글자' (숫자 입력 대기 해제용)
@@ -173,14 +177,14 @@ def handle_message(tg, st, msg):
     if not text:
         return
     raw = text
-    if office_sgov and office_sgov.handle(tg, st, raw, OFFICE_LABELS):   # SGOV 메뉴 글자 (📈 상황판·☰ 메뉴 포함)
+    if office_sgov and office_sgov.handle(tg, st, raw, OFFICE_LABELS):   # SGOV 상황판·자동환전 글자 (📈 상황판 포함)
         return
     if raw in (HOME, SGOV_HOME):
         tg.send("🏠 <b>처음 화면</b> · 아래 버튼을 눌러 주세요", keyboard=MENU_KB); return
     low = text.lower()
     if low in ("/start", "/help", "도움말", "help", "?") or raw == "❓ 도움말":
         tg.send(HELP, keyboard=MENU_KB); return
-    tg.send("모르는 명령이에요. 아래 상황판·메뉴 버튼으로 써 주세요. (메뉴 안: 자금 · 환율 규칙 · SGOV 현황 · 도움말)", keyboard=MENU_KB)
+    tg.send("모르는 명령이에요. 아래 상황판 버튼으로 써 주세요. (설정은 뮤즈랑 대화로 바꿔요.)", keyboard=MENU_KB)
 
 
 def handle_callback(tg, st, cb):
@@ -223,6 +227,36 @@ def process_updates(tg, st, updates, offset, fails):
     return offset, False
 
 
+# 판48: 매일 09:00 KST 상황판 자동 발송 (09:00~09:30 안에 1번). 루프가 5~30초마다 돌므로 09:00 직후에 나감.
+DAILY_CHART_HOUR, DAILY_CHART_MIN = 9, 0
+DAILY_CHART_WINDOW_MIN = 30
+
+
+def maybe_daily_chart(tg, st, now_kst=None):
+    """09:00~09:30 KST 안에 오늘 아직 안 보냈으면 상황판 1번 보냄. → 보냈으면 True"""
+    if not office_sgov:
+        return False
+    now_kst = now_kst or datetime.now(KST)
+    today = now_kst.strftime("%Y-%m-%d")
+    if st.get("chart_sent_date") == today:
+        return False
+    start = now_kst.replace(hour=DAILY_CHART_HOUR, minute=DAILY_CHART_MIN, second=0, microsecond=0)
+    end = start + timedelta(minutes=DAILY_CHART_WINDOW_MIN)
+    if not (start <= now_kst < end):
+        return False
+    try:
+        office_sgov.show_chart(tg, st)
+    except Exception as e:
+        print("일일 상황판 발송 오류:", type(e).__name__, flush=True)
+        return False
+    st["chart_sent_date"] = today
+    try:
+        save_like(STATE, st)   # 바로 저장 (다음 루프에서 중복 발송 방지)
+    except Exception as e:
+        print("일일 상황판 상태 저장 오류:", type(e).__name__, flush=True)
+    return True
+
+
 def main():
     tg = TG()
     if not tg.token or not tg.chat:
@@ -238,6 +272,10 @@ def main():
             waiting = office_sgov.tick(tg, st) if office_sgov else 0   # v1.8.3: SGOV 요청 결과 확인 (meritz_dca_bot 이 쓴 결과 파일 읽기만)
         except Exception as e:
             print("SGOV 결과 확인 오류:", type(e).__name__, flush=True)
+        try:
+            maybe_daily_chart(tg, st)   # 판48: 매일 09:00 KST 상황판 자동 발송
+        except Exception as e:
+            print("일일 상황판 확인 오류:", type(e).__name__, flush=True)
         try:
             q = {"timeout": 5 if waiting else 30, "allowed_updates": json.dumps(["message", "callback_query"])}
             if offset:

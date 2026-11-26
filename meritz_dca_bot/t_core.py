@@ -35,7 +35,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.3.5"
+BOT_VERSION = "v1.3.6"
 BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -117,12 +117,12 @@ def reply_markup(rows):
 
 
 def send_panel(text, inline_kb, msg_id=None):
-    """v1.2.6: 화면 1개 = 새 메시지 1개 + 맨밑 키보드 (msg_id 는 예전 호출 모양 유지용, 쓰지 않음)"""
+    """판48 최소 UI: 화면 1개 = 새 메시지 1개, 키보드 없음 (메뉴 전부 제거 — 알림만 보냄).
+    inline_kb·msg_id 는 예전 호출 모양 유지용, 쓰지 않음. 맨밑 [상황판, 메뉴] 키보드는 remove_keyboard 로 지움."""
     head = ("[모의] " if RUN.get("dry", True) else "") + BOT_TITLE
-    rows, amap = reply_rows(inline_kb)
-    REPLY_MAP.clear(); REPLY_MAP.update(amap)
-    kb = [[{"text": t} for t in MAIN_ROW]] + rows
-    return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": head + "\n" + text, "reply_markup": reply_markup(kb)})
+    REPLY_MAP.clear()
+    return tg_api("sendMessage", {"chat_id": CHAT_ID, "text": head + "\n" + text,
+                                  "reply_markup": {"remove_keyboard": True}})
 
 
 def send_keyboard(text, rows_labels):
