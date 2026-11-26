@@ -55,7 +55,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-VERSION = "2.7.4"
+VERSION = "2.7.5"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 HOME = R / "var/lib/bot-office/fanding"
 INBOX = HOME / "inbox"
@@ -308,15 +308,15 @@ def _handle_done(tg, meta, now=None):
             st["alerted"] = ""
         st["force"] = False
         mult, sym, nd = st["multiplier"], st["symbol"], _d(st["next_due"])
-    tail = (f"다음 진행 예정: <b>{nd.isoformat()}({_wd(nd)})</b>" if advanced
+    tail = (f"다음 진행 예정: {nd.isoformat()}({_wd(nd)})" if advanced
             else f"(일정 밖 수동 전송이라 다음 진행일은 그대로: {nd.isoformat()}({_wd(nd)}))")
-    tg.send(f"<b>VR6 표 수신 완료</b> · {sym} · 배수 ×{mult}\n받은 이미지 {len(images)}장 · 글 번호 {pid or '?'}\n{tail}\n"
+    tg.send(f"✅ [VR6 표 수신 완료] · {sym} · 배수 ×{mult}\n받은 이미지 {len(images)}장 · 글 번호 {pid or '?'}\n{tail}\n"
             "주문표(매수계획·매도계획)를 찾아 판독할게요…")
     try:
         build_plan(tg, cycle, now=now)
     except Exception as e:      # 판독 오류로 '끝' 파일이 계속 남아 AI 를 반복 호출하지 않게, 알리고 끝낸다
         replay("vr6_plan_build", "failed", type(e).__name__, event_type="decision", cycle=cycle)
-        tg.send(f"<b>VR6 주문표 판독 오류</b>\n{html.escape(str(e))[:300]}\n주문하지 않았어요. /vr6재판독 으로 다시 해 보세요.")
+        tg.send(f"⚠️ [VR6 주문표 판독 오류]\n{html.escape(str(e))[:300]}\n주문하지 않았어요. /vr6재판독 으로 다시 해 보세요.")
 
 
 # ---------------------------------------------------------- 로그 (start.md 2절: 한 줄 JSON, 금액·식별자 없음)
@@ -841,7 +841,7 @@ def build_plan(tg, cycle, now=None):
     names = [n for n in st0["cycles"].get(cycle, {}).get("images", []) if (VDIR / n).exists()]
     old = st0["plans"].get(cycle)
     if old and old["status"] in ("submitting", "submitted", "partial", "retry", "retry_warn", "approved"):
-        tg.send("<b>VR6 이번 회차는 이미 주문을 진행했어요</b> · 새로 판독하지 않아요. 상태: /vr6주문")
+        tg.send("📋 [VR6 이번 회차는 이미 주문을 진행했어요] · 새로 판독하지 않아요. 상태: /vr6주문")
         return None
     found = None
     for n in reversed(names):                 # 주문표는 보통 글의 마지막 이미지 → 뒤에서부터
@@ -851,7 +851,7 @@ def build_plan(tg, cycle, now=None):
         if first["is_plan"] and (first["buys"] or first["sells"]):
             found = (n, data, first, ai1); break
     if not found:
-        tg.send(f"<b>VR6 주문표를 못 찾았어요</b> (이미지 {len(names)}장 확인)\n주문하지 않아요. 받은 표: /vr6표 · 다시: /vr6재판독")
+        tg.send(f"⚠️ [VR6 주문표를 못 찾았어요] (이미지 {len(names)}장 확인)\n주문하지 않아요. 받은 표: /vr6표 · 다시: /vr6재판독")
         replay("vr6_plan_found", "skipped", "no_plan_image", event_type="user_visible", cycle=cycle)
         return None
     n, data, first, ai1 = found
@@ -1004,7 +1004,7 @@ def submit(tg, cycle, confirm_warn=False):
         pl["orders"], pl["status"] = sorted(orders, key=lambda o: o["i"]), "submitted" if ok else "partial"
         pl["account_after"] = acc
         plan = pl
-    L = [f"<b>VR6 메리츠 예약주문 {'완료' if ok else '일부 실패'}</b> · {cycle} 회차 · "
+    L = [f"{'✅ [VR6 메리츠 예약주문 완료]' if ok else '⚠️ [VR6 메리츠 예약주문 일부 실패]'} · {cycle} 회차 · "
          f"{'자동' if plan.get('approved_by') == 'auto' else '승인'}",
          f"기간잔량 지정가 · 장개시 발주 · {plan['order_start']} ~ {plan['end']} (미국)"]
     for o in plan["orders"]:
@@ -1036,9 +1036,9 @@ def tick(tg, now=None):
         pc = st.get("pc") or {}
     if send_late:
         seen = datetime.fromtimestamp(pc["at"], KST).strftime("%m-%d %H:%M") if pc.get("at") else "기록 없음"
-        tg.send(f"<b>VR6 진행일({due.isoformat()}, {_wd(due)})이 지났는데 아직 표를 못 받았어요</b>\n"
+        tg.send(f"⚠️ [VR6 진행일({due.isoformat()}, {_wd(due)})이 지났는데 아직 표를 못 받았어요]\n"
                 f"PC가 마지막으로 서버에 물어본 때: {seen}\nWindows PC가 켜져 있는지, 팬딩 로그인이 풀리지 않았는지 확인하고 "
-                "PC에서 <code>py fanding_vr6.py run</code> 을 실행하세요. 상태는 /vr6진단")
+                "PC에서 py fanding_vr6.py run 을 실행하세요. 상태는 /vr6진단")
     todo, notices, fx_check = [], [], []
     with locked() as st:
         for cycle, pl in st["plans"].items():
@@ -1068,7 +1068,7 @@ def tick(tg, now=None):
                     continue
                 pl["order_start"], pl["alarm_sent"] = nxt.isoformat(), False
                 alarm, auto, cut = deadlines(pl, st)
-                r = tg.send(f"VR6 {cycle} 회차: 마감이 지나 첫 발주일을 <b>{nxt.isoformat()}</b>(미국)로 미뤘어요. "
+                r = tg.send(f"VR6 {cycle} 회차: 마감이 지나 첫 발주일을 {nxt.isoformat()}(미국)로 미뤘어요. "
                             f"새 마감 {cut:%m-%d %H:%M} KST", plan_rows(pl) if pl["status"] == "pending" else None)
                 if pl["status"] == "pending":
                     pl["msg_id"] = (r or {}).get("message_id")
@@ -1078,25 +1078,25 @@ def tick(tg, now=None):
                 due = auto_due(pl, st, now)
                 if due == "late" and not pl.get("auto_late"):      # 고른 시각이 이미 지남 → 소급 자동주문 안 함, 수동 결정
                     pl["auto_late"] = True
-                    tg.send(f"<b>VR6 {AUTO_MODES[mode]}({at:%H:%M})가 이미 지나</b> · {cycle} 회차는 자동주문 안 해요.\n"
+                    tg.send(f"⏰ [VR6 {AUTO_MODES[mode]}({at:%H:%M})가 이미 지나] · {cycle} 회차는 자동주문 안 해요.\n"
                             "주문하려면 아래 버튼으로 결정해 주세요.", plan_rows(pl))
                     continue
                 if due == "fire":
                     tg.clear_buttons(pl.get("msg_id"))
                     if pl["auto_ok"]:
                         pl["status"], pl["approved_by"] = "approved", "auto"
-                        tg.send(f"<b>버튼이 안 눌려 VR6 자동주문 진행</b> · {cycle} 회차 (점검 모두 통과)")
+                        tg.send(f"🤖 [버튼이 안 눌려 VR6 자동주문 진행] · {cycle} 회차 (점검 모두 통과)")
                     else:
                         pl["status"] = "skipped"
                         bad = "\n".join("  · " + html.escape(x["msg"]) for x in pl["checks"] if not x["ok"])
-                        tg.send(f"<b>VR6 자동주문 안 함</b> · {cycle} 회차\n안전점검을 통과 못 했어요:\n{bad}\n"
+                        tg.send(f"⏸️ [VR6 자동주문 안 함] · {cycle} 회차\n안전점검을 통과 못 했어요:\n{bad}\n"
                                 "필요하면 메리츠 앱에서 직접 주문해 주세요.")
                     replay("vr6_auto_decision", "ok" if pl["auto_ok"] else "skipped",
                            "" if pl["auto_ok"] else "checks_failed", cycle=cycle)
                     continue
                 if now >= alarm and not pl.get("alarm_sent"):
                     pl["alarm_sent"] = True
-                    tg.send(f"<b>VR6 주문 확인 마감 30분 전</b> · {cycle} 회차\n"
+                    tg.send(f"⏰ [VR6 주문 확인 마감 30분 전] · {cycle} 회차\n"
                             + (f"{at:%H:%M} 에 " if not mode else f"{AUTO_MODES[mode]}({at:%H:%M}) ")
                             + (("자동주문합니다." if pl["auto_ok"] else "점검 미통과라 자동주문 안 합니다.") if not pl.get("auto_late")
                                else "시각이 지나 자동주문 안 합니다.")
@@ -1104,7 +1104,7 @@ def tick(tg, now=None):
                     continue
             if pl["status"] == "pending" and not st["auto_order"] and now >= alarm and not pl.get("alarm_sent"):
                 pl["alarm_sent"] = True
-                tg.send(f"<b>VR6 결정 대기 · 마감 30분 전</b> · {cycle} 회차\n자동주문이 꺼져 있어요. 주문하려면 아래 [주문]을 "
+                tg.send(f"⏰ [VR6 결정 대기 · 마감 30분 전] · {cycle} 회차\n자동주문이 꺼져 있어요. 주문하려면 아래 [주문]을 "
                         f"눌러 주세요 (마감 {cut:%H:%M} KST, 지나면 다음 거래일로 미뤄요).", plan_rows(pl))
                 continue
             if pl["status"] in ("approved", "retry", "retry_warn") and (now.hour, now.minute) >= _hm(st["submit_kst"]):
@@ -1122,8 +1122,8 @@ def tick(tg, now=None):
             acc = account(st)
             gap = usd_gap(pl, acc)
             if gap is not None and gap > 0:
-                tg.send(f"<b>VR6 달러 부족</b> · {cycle} 회차\n매수 줄이 모두 체결되려면 ${need_usd(pl):,.2f} 필요 · "
-                        f"보유 달러 ${acc['usd_cash']:,.2f} → <b>${gap:,.2f} 부족</b>\n"
+                tg.send(f"⚠️ [VR6 달러 부족] · {cycle} 회차\n매수 줄이 모두 체결되려면 ${need_usd(pl):,.2f} 필요 · "
+                        f"보유 달러 ${acc['usd_cash']:,.2f} → ${gap:,.2f} 부족\n"
                         "예약은 걸려 있지만 달러가 없으면 매수가 거절될 수 있어요.", fx_row(pl, acc))
             replay("vr6_night_fx_check", "ok" if gap is not None else "failed",
                    "short" if (gap or 0) > 0 else ("enough" if gap is not None else "account_error"),
@@ -1137,7 +1137,7 @@ def tick(tg, now=None):
             with locked() as st:
                 pl = st["plans"][cycle]; pl["status"] = "partial"; ver = pl["ver"]
             replay("vr6_submit", "failed", type(e).__name__, event_type="external_call", cycle=cycle)
-            tg.send(f"<b>VR6 주문 접수 오류</b> · {cycle}\n{html.escape(str(e))[:400]}",
+            tg.send(f"⚠️ [VR6 주문 접수 오류] · {cycle}\n{html.escape(str(e))[:400]}",
                     [[{"text": "다시 시도", "callback_data": f"vm:re:{cycle}:{ver}"}]])
     try:
         auto_fx_tick(tg, now)            # 부족금 자동환전 (켜졌을 때만, VR6 키로만)
@@ -1354,7 +1354,7 @@ def set_auto_fx(tg, on=None):
         new = (not cur) if on is None else bool(on)
         st["auto_fx"] = {"on": new, "at": datetime.now(KST).isoformat()}
     replay("vr6_auto_fx_toggle", "ok", "on" if new else "off", event_type="user_event")
-    tg.send(f"VR6 자동환전 <b>{'켜짐' if new else '꺼짐'}</b>\n"
+    tg.send(f"💱 [VR6 자동환전 {'켜짐' if new else '꺼짐'}]\n"
             + ("지금부터 새로 오는 주문표에서 추정 예수금 기준 부족이 있으면 주문표 알림 전에 1번 자동환전해요 "
                "(부족 $10 이상 → $10 단위 반올림 · $10 미만 → $100 · 평일 09:00~15:30 만). VR6 계좌만, P 에는 영향 없어요."
                if new else "자동환전하지 않아요. 환전(수동)은 그대로 쓸 수 있어요."), keyboard=keyboard())
@@ -1367,7 +1367,7 @@ def set_auto_rfx(tg, on=None):
         new = (not cur) if on is None else bool(on)
         st["auto_rfx"] = {"on": new, "at": datetime.now(KST).isoformat()}
     replay("vr6_auto_rfx_toggle", "ok", "on" if new else "off", event_type="user_event")
-    tg.send(f"VR6 역자동환전 <b>{'켜짐' if new else '꺼짐'}</b>\n"
+    tg.send(f"💱 [VR6 역자동환전 {'켜짐' if new else '꺼짐'}]\n"
             + (f"이번 회차 주문이 접수됐거나 남은 주문이 없으면, 평일 09:00~15:30 에 남는 달러를 원화로 1번 바꿔요 "
                f"(보유 달러(추정) − max(${ft.RFX_KEEP_USD:,}, 앞으로 쓸 달러), $10 내림, ${ft.RFX_MIN_USD} 미만이면 안 함). VR6 계좌만."
                if new else "역자동환전하지 않아요."), keyboard=keyboard())
@@ -1485,7 +1485,7 @@ def auto_fx_tick(tg, now=None):
                     and str(rec.get("dup_ver")) != str(pl.get("ver"))):
                 with locked() as s2:
                     s2.setdefault("auto_fx_done", {}).setdefault(cycle, {})["dup_ver"] = pl.get("ver")
-                tg.send(f"<b>VR6 자동환전 안 함</b> · {cycle} 회차 (새 판독)\n"
+                tg.send(f"⏸️ [VR6 자동환전 안 함] · {cycle} 회차 (새 판독)\n"
                         "이 회차는 이미 자동환전했어요. 같은 회차는 1번만 해요. 더 필요하면 환전으로 직접 해 주세요.")
             continue
         _auto_fx_one(tg, cycle, pl, now)
@@ -1509,7 +1509,7 @@ def _auto_fx_one(tg, cycle, pl, now):
     if r.get("full"):                      # 알림이 이미 나간 뒤라 따로 완료 알림 (전체 항목)
         tg.send(f"VR6 · {cycle} 회차\n" + "\n".join(r["full"]))
     elif r["lines"]:
-        tg.send(f"<b>VR6 자동환전</b> · {cycle} 회차\n" + "\n".join(r["lines"]))
+        tg.send(f"💱 [VR6 자동환전] · {cycle} 회차\n" + "\n".join(r["lines"]))
     replay("vr6_auto_fx", "ok" if r["result"] == "ok" else ("skipped" if r["result"] in ("no_gap", "unknown", "outside_hours") else "failed"),
            r["result"], event_type="external_call" if r["result"] in ("ok", "uncertain") else "decision", cycle=cycle, when="after_notice")
 
@@ -1658,7 +1658,7 @@ def vr6_auto_picker(tg):
         times = {"A": datetime(due.year, due.month, due.day, h, m, tzinfo=KST) + timedelta(hours=1),
                  "B": cutoff_kst(due, st) - timedelta(hours=1)}
         basis = f"다음 진행일 {due.isoformat()} 기준"
-    tg.send(f"<b>VR6 자동주문 켜기 — 시간을 골라줘</b>\n(한국시간, {basis})", _ft().auto_pick_rows("vm", times))
+    tg.send(f"🤖 [VR6 자동주문 켜기 — 시간을 골라줘]\n(한국시간, {basis})", _ft().auto_pick_rows("vm", times))
 
 
 def set_vr6_auto(tg, mode):
@@ -1680,9 +1680,9 @@ def set_vr6_auto(tg, mode):
             at = (datetime(due.year, due.month, due.day, *_hm(st["notice_kst"]), tzinfo=KST) + timedelta(hours=1)
                   if mode == "A" else cutoff_kst(due, st) - timedelta(hours=1))
         when = f"{AUTO_MODES[mode]} ({at:%H:%M}" + (", 첫 발주일 마감 기준)" if mode == "B" else ")")
-        tg.send(f"VR6 자동주문 <b>켜짐</b> — {when}에 자동주문해요 (점검 통과 시).", keyboard=keyboard())
+        tg.send(f"🤖 [VR6 자동주문 켜짐] — {when}에 자동주문해요 (점검 통과 시).", keyboard=keyboard())
     else:
-        tg.send("VR6 자동주문 <b>꺼짐</b> — 버튼을 안 누르면 주문하지 않아요.", keyboard=keyboard())
+        tg.send("🤖 [VR6 자동주문 꺼짐] — 버튼을 안 누르면 주문하지 않아요.", keyboard=keyboard())
 
 
 # ---------------------------------------------------------- 4번 봇 메뉴·명령
@@ -1742,7 +1742,7 @@ def diagnosis(now=None):
         conn = (f"연결됨 · TQQQ 보유 {acc.get('holding', '?')}주(매도가능 {acc.get('sellable', '?')}) · "
                 f"현재가 {acc.get('price', '?')}" + (f" · 보유 달러 ${acc['usd_cash']:,.2f}" if acc.get("usd_cash") is not None else ""))
     pl = _latest_plan(st)
-    return ("<b>VR6 진단</b>\n"
+    return ("🔍 [VR6 진단]\n"
             f"• PC가 마지막으로 서버에 물어본 때: {seen}" + (f" (프로그램 v{html.escape(str(pc.get('version')))})" if pc.get("version") else "") + "\n"
             f"• 다음 진행일: {nd.isoformat()}({_wd(nd)}) · 지금 진행 요청: {'켜짐' if st['force'] else '꺼짐'}\n"
             f"• 마지막 완료: {st['last_done']} · 마지막으로 처리한 글 번호: {st['last_post_id']}\n"
@@ -1769,9 +1769,9 @@ def mult_confirm(tg, n):
         tg.send("배수는 1~50 사이 정수로 보내 주세요. (예: 10)"); return
     cur = _fill(load(STATE, {}))["multiplier"]
     if n == cur:
-        tg.send(f"VR6 지금 배수가 이미 <b>×{cur}</b> 예요. 바뀐 것이 없어요."); return
+        tg.send(f"VR6 지금 배수가 이미 ×{cur} 예요. 바뀐 것이 없어요."); return
     ft._CFM["vr6mult"] = (n, time.time())
-    tg.send(f"<b>VR6 배수 바꾸기 확인</b>\n지금 값 ×{cur} → 새 값 <b>×{n}</b>\n다음에 받는 주문표부터 적용돼요. 주문은 바로 나가지 않아요.",
+    tg.send(f"📐 [VR6 배수 바꾸기 확인]\n지금 값 ×{cur} → 새 값 ×{n}\n다음에 받는 주문표부터 적용돼요. 주문은 바로 나가지 않아요.",
             [[{"text": f"×{n}로 바꾸기", "callback_data": f"vm:mc:{n}"}, {"text": "취소", "callback_data": "vm:mx"}]])
 
 
@@ -1784,14 +1784,14 @@ def _set_mult(tg, n):
         pl = _latest_plan(st)
         pending = pl and pl["status"] == "pending"
     note = "\n이미 받은 주문표(결정 대기)는 그때 배수 그대로예요. 새 배수로 하려면 /vr6재판독" if pending else ""
-    tg.send(f"VR6 배수 ×{old} → <b>×{n}</b>\n다음에 받는 주문표부터 적용돼요.{note}")
+    tg.send(f"VR6 배수 ×{old} → ×{n}\n다음에 받는 주문표부터 적용돼요.{note}")
 
 
 def _shift(tg, days):
     with locked() as st:
         nd = _d(st["next_due"]) + timedelta(days=days)
         st["next_due"] = nd.isoformat(); st["alerted"] = ""
-    tg.send(f"다음 진행일을 <b>{nd.isoformat()}({_wd(nd)})</b> 로 바꿨어요.")
+    tg.send(f"다음 진행일을 {nd.isoformat()}({_wd(nd)}) 로 바꿨어요.")
 
 
 def handle_text(tg, text):
@@ -1801,7 +1801,7 @@ def handle_text(tg, text):
     if t in (MENU_LABEL,) + OLD_MENU_LABELS or low in ("/vr6", "vr6"):
         tg.send(status_line() + "\n아래 버튼에서 골라 주세요. 가끔 쓰는 기능은 도구에 있어요.", keyboard=keyboard()); return True
     if low in ("/vr6도구", "vr6도구"):
-        tg.send("<b>VR6 도구</b> — 가끔 쓰는 기능", keyboard=tools_keyboard()); return True
+        tg.send("🛠️ [VR6 도구] — 가끔 쓰는 기능", keyboard=tools_keyboard()); return True
     if low in ("/vr6자동전환", "vr6자동전환"):             # 옛 자동 버튼 별칭: 켜져 있으면 끄고, 꺼져 있으면 시간 선택
         if _fill(load(STATE, {}))["auto_order"]:
             set_vr6_auto(tg, None)
@@ -1823,21 +1823,21 @@ def handle_text(tg, text):
             try:
                 nd = date.fromisoformat(m.group(1))
             except ValueError:
-                tg.send("날짜를 <code>2026-11-09</code> 모양으로 적어 주세요."); return True
+                tg.send("날짜를 2026-11-09 모양으로 적어 주세요."); return True
             with locked() as st:
                 st["next_due"] = nd.isoformat(); st["alerted"] = ""
             note = "" if nd.weekday() == 0 else f"\n(참고: {_wd(nd)}요일이에요. 보통은 월요일이에요.)"
-            tg.send(f"다음 진행일을 <b>{nd.isoformat()}({_wd(nd)})</b> 로 바꿨어요.{note}")
+            tg.send(f"다음 진행일을 {nd.isoformat()}({_wd(nd)}) 로 바꿨어요.{note}")
         else:
             st = _fill(load(STATE, {})); nd = _d(st["next_due"])
-            tg.send(f"다음 진행일: <b>{nd.isoformat()}({_wd(nd)})</b> · 주기 {st['interval_days']}일\n"
-                    f"마지막 완료: {st['last_done']}\n날짜 바꾸기: <code>/vr6일정 2026-11-09</code>",
+            tg.send(f"다음 진행일: {nd.isoformat()}({_wd(nd)}) · 주기 {st['interval_days']}일\n"
+                    f"마지막 완료: {st['last_done']}\n날짜 바꾸기: /vr6일정 2026-11-09",
                     [[{"text": "2주 뒤로 미루기", "callback_data": "vm:sh:14"}]])
         return True
     if low in ("/vr6지금", "vr6지금"):
         with locked() as st:
             st["force"] = True
-        tg.send("<b>VR6 지금 진행</b> 요청을 켰어요.\nWindows PC에서 <code>py fanding_vr6.py run</code> (또는 run.bat)을 실행하면 "
+        tg.send("▶️ [VR6 지금 진행] 요청을 켰어요.\nWindows PC에서 py fanding_vr6.py run (또는 run.bat)을 실행하면 "
                 "오늘이 진행일이 아니어도 최신 글의 표를 가져와요. 끝나면 요청은 꺼져요."); return True
     if low in ("/vr6표", "vr6표"):
         st = _fill(load(STATE, {}))
@@ -1846,7 +1846,7 @@ def handle_text(tg, text):
         if not names:
             tg.send("아직 받은 VR6 표가 없어요."); return True
         for i, n in enumerate(names, 1):
-            tg.photo(VDIR / n, f"<b>VR6 표</b> {i}/{len(names)} · {st['symbol']} · 현재 배수 ×{st['multiplier']}")
+            tg.photo(VDIR / n, f"📋 [VR6 표] {i}/{len(names)} · {st['symbol']} · 현재 배수 ×{st['multiplier']}")
         return True
     if low in ("/vr6주문", "vr6주문"):
         st = _fill(load(STATE, {}))
@@ -1890,19 +1890,19 @@ def handle_text(tg, text):
         set_auto_rfx(tg, "켜기" in low); return True
     if low in ("/vr6역환전자동", "vr6역환전자동"):
         on, at = auto_rfx_state()
-        tg.send(f"VR6 역자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                + "\n바꾸기: <code>/vr6역환전자동켜기</code> · <code>/vr6역환전자동끄기</code> 또는 VR6 메뉴의 역자동환전 켜기 · 역자동환전 끄기 버튼"); return True
+        tg.send(f"VR6 역자동환전은 지금 {'켜짐' if on else '꺼짐'}" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
+                + "\n바꾸기: /vr6역환전자동켜기 · /vr6역환전자동끄기 또는 VR6 메뉴의 역자동환전 켜기 · 역자동환전 끄기 버튼"); return True
     if low in ("/vr6자동환전", "vr6자동환전"):
         on, at = auto_fx_state()
-        tg.send(f"VR6 자동환전은 지금 <b>{'켜짐' if on else '꺼짐'}</b>" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
-                + "\n바꾸기: <code>/vr6자동환전켜기</code> · <code>/vr6자동환전끄기</code> 또는 VR6 메뉴의 자동환전 켜기 · 자동환전 끄기 버튼"); return True
+        tg.send(f"VR6 자동환전은 지금 {'켜짐' if on else '꺼짐'}" + (f" ({html.escape(at[:16])} 부터)" if on and at else "")
+                + "\n바꾸기: /vr6자동환전켜기 · /vr6자동환전끄기 또는 VR6 메뉴의 자동환전 켜기 · 자동환전 끄기 버튼"); return True
     m = re.fullmatch(r"(?:/vr6환전|vr6환전)\s*([\d,.$]+)?", t, re.I)
     if m:
         amt = None
         if m.group(1):
             amt = _fx_amount(m.group(1))
             if amt is None:
-                tg.send("금액을 <code>/vr6환전 300</code> 처럼 적어 주세요."); return True
+                tg.send("금액을 /vr6환전 300 처럼 적어 주세요."); return True
         fx_show(tg, amount=amt)
         return True
     if low in ("/vr6진단", "vr6진단"):
