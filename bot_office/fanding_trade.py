@@ -168,7 +168,7 @@ def _hub_alert(bot, level, text):
     except Exception:
         pass
 
-VERSION = "v1.6.6"
+VERSION = "v1.6.7"
 R = Path(os.environ.get("OFFICE_ROOT", "/"))
 CFG = R / "etc/bot-office/fanding.json"
 GEMINI_CFG = R / "etc/bot-office/gemini.json"
@@ -2559,21 +2559,22 @@ def handle_image(tg, data, sha, meta):
 
 # ---------------------------------------------------------- 주문 접수
 def pc_status_lines():
-    """조기 알림용: 한국 PC 감시(pc-monitor.json) + 팬딩 수집기(bridge) 상태 2줄"""
+    """조기 알림용: 실제 표 수집 경로(Muse 05:00 작업 → 서버 수신) 상태 2줄.
+    한국 PC·서버 수집기는 2026-11-13에 중단돼서 그쪽 보고 시간은 더 이상 보지 않는다."""
     out = []
     try:
-        pc = (load(HOME / "pc-monitor.json", {}) or {}).get("pc") or {}
-        age = int(time.time() - pc["at"]) if pc.get("at") else None
-        out.append("한국 PC: " + ("보고 기록 없음 (감시 프로그램 미연결)" if age is None else
-                                    (f"켜져 있음 ({age // 60}분 전 보고)" if age <= 300 else f"{age // 60}분째 보고 없음 → 꺼짐·인터넷 끊김 의심")))
+        b = load(BRIDGE, {}) or {}
+        last = b.get("last_received") or {}
+        at = last.get("at")
+        if at:
+            s = str(at)
+            shown = s[:16].replace("T", " ") if len(s) >= 16 else s
+            out.append("표 수집(Muse 05:00): 최근 서버 수신 " + shown + " (" + str(last.get("mode") or "미확인") + ")")
+        else:
+            out.append("표 수집(Muse 05:00): 최근 서버 수신 기록 없음")
     except Exception:
-        out.append("한국 PC: 확인 실패")
-    try:
-        b = (load(BRIDGE, {}) or {}).get("pc") or {}
-        age = int(time.time() - b["at"]) if b.get("at") else None
-        out.append("팬딩 수집기: " + ("연결 기록 없음" if age is None else f"{age // 60}분 전 · 단계 {html.escape(str(b.get('stage') or '미확인'))}"))
-    except Exception:
-        out.append("팬딩 수집기: 확인 실패")
+        out.append("표 수집(Muse 05:00): 확인 실패")
+    out.append("한국 PC 수집기는 2026-11-13에 중단됨 — PC 전원·로그인은 원인이 아님")
     return "\n".join(out)
 
 
@@ -2757,7 +2758,7 @@ def tick(tg):
                 and (now.hour, now.minute) >= hm(c["missing_alert_kst"]) and not st.get(key)):
             st[key] = True
             tg.send(f"📋 [{exp.isoformat()} 가격표가 아직 안 왔어요] ({c['missing_alert_kst']} 기준)\n"
-                    "윈도우 PC가 켜져 있는지, 팬딩 로그인이 풀리지 않았는지 확인해 주세요. (휴장일이면 무시)")
+                    "Muse 05:00 표 수집이 아직 안 됐어요. (휴장일이면 무시)")
         for k in sorted(k for k in st if k.startswith("missing:"))[:-10]:
             st.pop(k, None)
         cleanup_images(st)
