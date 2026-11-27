@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # =====================================================================
 # FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.1.1)
+# v1.3.7 (2026-11-28): 판 60 — 알림 이모티콘 구분 추가 (표시만. 매매 판단·수량·가격·주문·장부·환전 그대로)
 # 메리츠 적립 봇 (서비스 meritz_dca) — 3번 toss_dca_bot/main.py(v4.3.8) 엔진을 옮기고 토스 API 만 메리츠로 바꿈
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로: 100일 사이클(buy_1/pause/buy_2/sell/decision) · +1%↑ ½ 매수 · 익절 10%/20% 구간 20% 매도(단계는 위로만)
@@ -72,7 +73,7 @@ def pct_ok(x):
 def ask_confirm(title, before, after, apply_coro, extra=""):
     """apply_coro: 확인 때 실행할 async 함수 (인자 없음)"""
     _PENDING["apply"], _PENDING["ts"] = apply_coro, time.time()
-    send_panel(f"[{title}] 바꿀까요?\n지금 값 → 새 값\n{before} → {after}\n" + (extra + "\n" if extra else "") +
+    send_panel(f"❓ [{title}] 바꿀까요?\n지금 값 → 새 값\n{before} → {after}\n" + (extra + "\n" if extra else "") +
                f"{CONFIRM_SEC}초 안에 [변경 확인]을 눌러 주세요. 주문·환전은 나가지 않고 설정 값만 바뀌어요.",
                [[{"text": "변경 확인", "callback_data": "cfm_yes"}, {"text": "취소", "callback_data": "cfm_no"}]])
 
@@ -322,7 +323,7 @@ async def _hold_watch(client, cfg, sym, s, tp1, today_str):
     s["tp_alert_date"] = today_str; await save_merged(cfg, sym)
     _decide(sym, "hold_watch", "ok", "tp_zone_alert_only", s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, stage=stg))
     mode_txt = "정지 대기" if s.get("s_mode") == "pause" else "기간 완료·결정 대기"
-    send_panel(f"[{sym} {stg}차 익절 구간 도달 알림]\n• 현재 {mode_txt} 중입니다. 수익률 {prof_pct:+.2f}%\n"
+    send_panel(f"🔔 [{sym} {stg}차 익절 구간 도달 알림]\n• 현재 {mode_txt} 중입니다. 수익률 {prof_pct:+.2f}%\n"
                f"• 정지 중 알림이며 자동 매도가 아닙니다. 아무 주문도 내지 않았습니다.\n• 팔지 여부는 직접 결정해 주세요. (같은 종목은 하루 1번만 알림)",
                [[{"text": f"{sym} 상세", "callback_data": f"detail_{sym}"}, {"text": "관제탑", "callback_data": "panel"}]])
 
@@ -369,7 +370,7 @@ async def sync_fills(client):
             changed = True
             if done and isinstance(p.get("step"), dict): steps_done.append(p)      # audit-fix 6-9: 전량 체결 확인 → 일차·이월 올림
             if not done:
-                lines.append(f"{p['sym']} {'매수' if p['side'] == 'BUY' else '매도'} 주문 {p['qty']:g}주 중 {float(p.get('applied_q', 0)):g}주만 체결 확인 — 앱에서 확인해 주세요")
+                lines.append(f"⚠️ {p['sym']} {'매수' if p['side'] == 'BUY' else '매도'} 주문 {p['qty']:g}주 중 {float(p.get('applied_q', 0)):g}주만 체결 확인 — 앱에서 확인해 주세요")
                 if isinstance(p.get("step"), dict): lines.append(f"  ↳ {p['sym']} 일차·이월은 올리지 않았습니다 (체결 미완료). 체결분은 장부에 반영됨 — 관제탑에서 일차 확인·보정해 주세요")
             continue
         keep.append(p)
@@ -402,10 +403,10 @@ async def sync_fills(client):
         for c_sym, c_title in completed:
             try:
                 t, kb = await build_stock_detail_view(client, c_sym)
-                send_panel(f"[{c_sym} {c_title} 및 자동 정지!]\n아래에서 다음 단계를 선택해 주세요!\n\n" + t, kb)
+                send_panel(f"🎉 [{c_sym} {c_title} 및 자동 정지!]\n아래에서 다음 단계를 선택해 주세요!\n\n" + t, kb)
             except Exception as e: RL.err("step_complete_panel", e)
     if lines:
-        send_panel("[체결 반영 · 봇 장부]\n" + "\n".join(lines), [[{"text": "보유종목 확인", "callback_data": "stock_list"}, {"text": "관제탑", "callback_data": "panel"}]])
+        send_panel("🧾 [체결 반영 · 봇 장부]\n" + "\n".join(lines), [[{"text": "보유종목 확인", "callback_data": "stock_list"}, {"text": "관제탑", "callback_data": "panel"}]])
     return len(lines)
 
 
@@ -428,7 +429,7 @@ async def execute_us_step(client):
         # 실주문 모드인데 안전장치가 막힘 → 판단·주문·일차 진행 모두 안 함 (하루 1번 알림)
         if RL.once("live_gate_blocked"):
             RL.ev("decision", "market_pass", "skipped", "live_gate_blocked", actor="scheduler", count=len(RUN["gate"]))
-            send_panel("[실주문 안전장치에 걸려 오늘 주문 안 함]\n" + "\n".join("• " + g for g in RUN["gate"]),
+            send_panel("⛔ [실주문 안전장치에 걸려 오늘 주문 안 함]\n" + "\n".join("• " + g for g in RUN["gate"]),
                        [[{"text": "관제탑", "callback_data": "panel"}]])
         return
     cfg = await sync_holdings_from_meritz(client)
@@ -490,7 +491,7 @@ async def execute_us_step(client):
                     s["sold_stage"] = max(int(s.get("sold_stage", 0)), chk_stage); s["tp_check"] = {}
                     await save_merged(cfg, sym)
                     RL.ev("state_change", "tp_check_resolved", "ok", "sold_detected", actor="scheduler", sym_ref=RL.ref(sym), stage=chk_stage, broker_before=pre_q, broker_now=broker_q)
-                    send_panel(f"[{sym} {chk_stage}차 익절 확인 필요 → 매도됨으로 확인]\n• 메리츠 잔고가 {pre_q:g}주 → {broker_q:g}주로 줄었습니다. 같은 단계를 다시 팔지 않도록 익절 단계만 올렸습니다.\n• 봇 장부 수량이 잔고와 달라져 이 종목은 주문을 쉽니다. 장부 보정은 Muse 확인이 필요합니다.", [[{"text": "관제탑", "callback_data": "panel"}]])
+                    send_panel(f"🔍 [{sym} {chk_stage}차 익절 확인 필요 → 매도됨으로 확인]\n• 메리츠 잔고가 {pre_q:g}주 → {broker_q:g}주로 줄었습니다. 같은 단계를 다시 팔지 않도록 익절 단계만 올렸습니다.\n• 봇 장부 수량이 잔고와 달라져 이 종목은 주문을 쉽니다. 장부 보정은 Muse 확인이 필요합니다.", [[{"text": "관제탑", "callback_data": "panel"}]])
                 else:
                     s["tp_check"] = {}; await save_merged(cfg, sym)
                     RL.ev("state_change", "tp_check_resolved", "ok", "not_sold", actor="scheduler", sym_ref=RL.ref(sym), stage=chk_stage, broker_before=pre_q, broker_now=broker_q)
@@ -502,7 +503,7 @@ async def execute_us_step(client):
                     fail_reasons[sym] = why
                     if RL.once(f"{sym}|ledger_mismatch"):
                         _decide(sym, "stock_step", "skipped", "ledger_mismatch", s, _snap(sym, s, ledger_qty=qty, broker_qty=broker_q))
-                        send_panel(f"[{sym} 오늘 주문 안 함]\n• {why}\n• 입고·수동 매매·체결 누락을 확인해 주세요. 진행 일차는 그대로입니다.",
+                        send_panel(f"⛔ [{sym} 오늘 주문 안 함]\n• {why}\n• 입고·수동 매매·체결 누락을 확인해 주세요. 진행 일차는 그대로입니다.",
                                    [[{"text": f"{sym} 상세", "callback_data": f"detail_{sym}"}, {"text": "관제탑", "callback_data": "panel"}]])
                     continue
                 if RL.once(f"{sym}|ledger_mismatch_dry"):
@@ -528,7 +529,7 @@ async def execute_us_step(client):
                 s["last_exec_date"] = today_str; await save_merged(cfg, sym)
                 _decide(sym, "stock_step", "skipped", why, s)
                 if RL.once(f"{sym}|guard|{why}"):
-                    send_panel(f"[{sym} 오늘 주문 안 함]\n• 사유: {why_txt}{(' (' + price_err + ')') if price_err else ''}\n"
+                    send_panel(f"⚠️ [{sym} 오늘 주문 안 함]\n• 사유: {why_txt}{(' (' + price_err + ')') if price_err else ''}\n"
                                f"• 오늘은 매수·익절·분할매도를 하지 않습니다. 진행 일차는 그대로 두었습니다.\n• 다음 거래일에 다시 확인합니다.",
                                [[{"text": f"{sym} 상세", "callback_data": f"detail_{sym}"}, {"text": "관제탑", "callback_data": "panel"}]])
                 continue
@@ -556,11 +557,11 @@ async def execute_us_step(client):
                         s["tp_check"] = {"stage": target_stg, "qty": sell_q, "broker_qty": broker_q, "date": today_str, "why": tp_unknown[:120]}
                         s["last_exec_date"] = today_str; fail_reasons.pop(sym, None); await save_merged(cfg, sym)
                         RL.ev("state_change", "tp_check_pending", "ok", "order_no_response", actor="scheduler", sym_ref=RL.ref(sym), stage=target_stg, sold_stage_unchanged=sold_stg)
-                        send_panel(f"[{sym} {target_stg}차 익절 매도 응답 없음 — 확인 필요]\n• 매도가 나갔는지 알 수 없어 익절 단계를 올리지 않았습니다. 오늘은 다시 주문하지 않습니다.\n• 다음 사이클에 메리츠 잔고로 다시 확인합니다. 메리츠 앱에서 체결 여부도 확인해 주세요.\n• 사유: {tp_unknown}", [[{"text": "관제탑", "callback_data": "panel"}]])
+                        send_panel(f"⚠️ [{sym} {target_stg}차 익절 매도 응답 없음 — 확인 필요]\n• 매도가 나갔는지 알 수 없어 익절 단계를 올리지 않았습니다. 오늘은 다시 주문하지 않습니다.\n• 다음 사이클에 메리츠 잔고로 다시 확인합니다. 메리츠 앱에서 체결 여부도 확인해 주세요.\n• 사유: {tp_unknown}", [[{"text": "관제탑", "callback_data": "panel"}]])
                         _hub_alert(HUB_NAME, "critical", f"{sym} {target_stg}차 익절 매도 응답 없음 — 확인 필요")
                         continue
                     s["sold_stage"] = target_stg; s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
-                    logs.append(f"{sym}: {target_stg}차 익절 ({prof_pct:+.2f}% / {sell_q}주 시장가)"); await save_merged(cfg, sym); continue
+                    logs.append(f"🎯 {sym}: {target_stg}차 익절 ({prof_pct:+.2f}% / {sell_q}주 시장가)"); await save_merged(cfg, sym); continue
                 _decide(sym, "take_profit", "skipped", "no_sellable_qty", s, daily=True)
             n7m = float(n7_mults.get(n7_index_of(s), 1.0)) if s_mode in ["buy_1", "buy_2"] else 1.0
             half_buy = bool(avg_p > 0 and qty > 0 and prof_pct >= 1.0)
@@ -584,7 +585,7 @@ async def execute_us_step(client):
                         if not await stock_trade_allowed(sym): _decide(sym, "buy", "skipped", "trade_not_allowed", s); continue
                         _decide(sym, "buy", "ok", None, s, _snap(sym, s, cur_price=cur_p, avg_price=avg_p, qty=qty, profit_pct=prof_pct, buy_amount=buy_amt_today, buy_qty=buy_q, carry_before=s.get("buy_carry"), carry_after=new_carry), half=half_buy, n7_mult=n7m)
                         await _order("buy", sym, "buy", buy_q, ord_id, client, cur_p, step={"day_after": s_day + 1, "carry_after": new_carry, "target": s_target})
-                        logs.append(f"{sym}: {buy_q}주 시장가 매수 (오늘 ${buy_amt_today:.2f}{'' if not s.get('buy_carry') else ' + 이월'} · {s_day+1}/{s_target}일차)" + (f" · 지수 {n7m:.1f}배" if n7m != 1.0 else ""))
+                        logs.append(f"🛒 {sym}: {buy_q}주 시장가 매수 (오늘 ${buy_amt_today:.2f}{'' if not s.get('buy_carry') else ' + 이월'} · {s_day+1}/{s_target}일차)" + (f" · 지수 {n7m:.1f}배" if n7m != 1.0 else ""))
                     else:
                         _decide(sym, "buy", "ok", "carry_no_order", s, _snap(sym, s, cur_price=cur_p, buy_amount=buy_amt_today, carry_after=new_carry))
                         logs.append(f"↪{sym}: 1주 가격(${cur_p:.2f})보다 적어 주문 없이 이월 ${new_carry:.2f} ({s_day+1}/{s_target}일차)")
@@ -592,13 +593,13 @@ async def execute_us_step(client):
                     if _rejected(oe):
                         if isinstance(oe, (WarnNeeded, GateBlocked)):   # 사람이 봐야 하는 거절 → 오늘은 다시 시도하지 않음 (일차 그대로)
                             s["last_exec_date"] = today_str; await save_merged(cfg, sym)
-                            send_panel(f"[{sym} 매수 안 함]\n• {'증권사 경고(자동 확인 안 함)' if isinstance(oe, WarnNeeded) else '실주문 안전장치'}: {str(oe)[:160]}\n• 진행 일차는 그대로입니다.", [[{"text": "관제탑", "callback_data": "panel"}]])
+                            send_panel(f"⛔ [{sym} 매수 안 함]\n• {'증권사 경고(자동 확인 안 함)' if isinstance(oe, WarnNeeded) else '실주문 안전장치'}: {str(oe)[:160]}\n• 진행 일차는 그대로입니다.", [[{"text": "관제탑", "callback_data": "panel"}]])
                             continue
                         raise   # 증권사가 거절한 주문(체결 안 됨) → 3번처럼 실패 알림 후 재시도
                     # 응답이 끊긴 주문은 체결됐을 수 있으므로 오늘은 다시 주문하지 않음 (일차는 올리지 않음)
                     s["last_exec_date"] = today_str; fail_reasons.pop(sym, None); await save_merged(cfg, sym)
                     RL.ev("state_change", "no_reorder_today", "ok", None, actor="scheduler", sym_ref=RL.ref(sym), why="order_no_response", day_unchanged=s_day)
-                    send_panel(f"[{sym} 매수 주문 응답 없음]\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 메리츠 앱에서 체결 여부를 확인해 주세요. (일차·장부는 그대로 — 체결됐다면 관제탑에서 일차 보정, 장부는 Muse 확인)\n• 사유: {str(oe)[:120]}", [[{"text": "관제탑", "callback_data": "panel"}]])
+                    send_panel(f"⚠️ [{sym} 매수 주문 응답 없음]\n• 체결됐을 수 있어 오늘은 다시 주문하지 않습니다.\n• 메리츠 앱에서 체결 여부를 확인해 주세요. (일차·장부는 그대로 — 체결됐다면 관제탑에서 일차 보정, 장부는 Muse 확인)\n• 사유: {str(oe)[:120]}", [[{"text": "관제탑", "callback_data": "panel"}]])
                     continue
                 if buy_q > 0:     # audit-fix 6-9: 주문 접수만으론 일차·이월을 올리지 않음 → 전량 체결 확인 때 sync_fills 가 올림 (오늘 재주문은 막음)
                     s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)
@@ -618,18 +619,18 @@ async def execute_us_step(client):
                 oid = f"s_{today_str}_{sym}"
                 await _order("split_sell", sym, "sell", sq, oid, client, cur_p, step={"day_after": s_day + 1, "target": s_target})
                 s["last_exec_date"] = today_str; fail_reasons.pop(sym, None)   # audit-fix 6-9: 일차는 체결 확인 때 올림
-                logs.append(f"{sym}: 분할매도 주문 접수 ({sq}주 / 체결 확인 뒤 {s_day+1}/{s_target}일차)"); await save_merged(cfg, sym); continue
+                logs.append(f"📤 {sym}: 분할매도 주문 접수 ({sq}주 / 체결 확인 뒤 {s_day+1}/{s_target}일차)"); await save_merged(cfg, sym); continue
             elif s_mode == "sell": _decide(sym, "split_sell", "skipped", "no_holding", s, daily=True)
         except Exception as e:
             fail_reasons[sym] = str(e)[:200]
             RL.err("stock_step", e, event_type="decision", sym_ref=RL.ref(sym), mode=s.get("s_mode"))
     if logs:
-        send_panel("[금일 정기 매매 " + ("계획(모의)" if RUN.get("dry", True) else "주문 접수") + " 보고]\n" + "\n".join(logs),
+        send_panel("✅ [금일 정기 매매 " + ("계획(모의)" if RUN.get("dry", True) else "주문 접수") + " 보고]\n" + "\n".join(logs),
                    [[{"text": "보유종목 확인", "callback_data": "stock_list"}, {"text": "관제탑", "callback_data": "panel"}]])
         _hub_alert(HUB_NAME, "info", "\n".join(logs))
     for c_sym, c_title in completed_syms:
         t, kb = await build_stock_detail_view(client, c_sym)
-        send_panel(f"[{c_sym} {c_title} 및 자동 정지!]\n아래에서 다음 단계를 선택해 주세요!\n\n" + t, kb)
+        send_panel(f"🎉 [{c_sym} {c_title} 및 자동 정지!]\n아래에서 다음 단계를 선택해 주세요!\n\n" + t, kb)
     await sync_fills(client)   # 모의 체결·즉시 체결은 바로 장부에
 
 
@@ -644,7 +645,7 @@ async def check_missed_trades_alert(client):
     if missed:
         RL.ev("decision", "missed_trade_alert", "ok", None, actor="scheduler", market="US", count=len(missed))
         cfg[alert_key] = today_str; await DcaConfigManager.save(cfg)
-        txt = "[매매 미진행/실패 알람 - 미국장]\n\n" + "\n".join(missed)
+        txt = "🚨 [매매 미진행/실패 알람 - 🇺🇸 미국장]\n\n" + "\n".join(missed)
         send_panel(txt, [[{"text": "관제탑", "callback_data": "panel"}]])
         _hub_alert(HUB_NAME, "critical", txt)
 
@@ -653,7 +654,7 @@ async def check_missed_trades_alert(client):
 async def add_symbol_from_text(client, text):
     sym = text.strip().upper()
     if not is_us_symbol(sym):
-        return None, "미국 티커(영문)만 넣어 주세요. 예: NKE, QLD (한국주식은 이 봇에서 안 함)"
+        return None, "⚠️ 미국 티커(영문)만 넣어 주세요. 예: NKE, QLD (한국주식은 이 봇에서 안 함)"
     cfg = await DcaConfigManager.load()
     if sym == SG.sgov_symbol(cfg):
         return None, f"{sym} 는 일반 종목이 아니라 SGOV 회차 적립입니다. SGOV는 비서봇으로 옮겼어요. 비서봇 메뉴에서 봐 주세요."
@@ -735,7 +736,7 @@ def seed_group(key):
 #   SGOV 그룹(총 목표·회차 금액·1회차 금액·총 회차 수·회차 간격)은 비서봇 ⚙️ 시드·SGOV → 요청 파일 → bridge_handle 이 같은 검증으로 저장.
 SGOV_SEED_KEYS = ("target_usd_total", "tranche_usd", "first_tranche_usd", "tranches_total", "interval_days")
 SGOV_MOVED = "SGOV는 비서봇으로 옮겼어요. 비서봇 메뉴에서 봐 주세요."
-MENU_GONE_DCA = "메뉴는 없어졌어요. 이 봇은 알림만 보내요. SGOV 상황판·자동환전은 비서봇에서, 설정(시드·매매 규칙·전원)은 뮤즈랑 대화로 바꿔 주세요."
+MENU_GONE_DCA = "🔔 메뉴는 없어졌어요. 이 봇은 알림만 보내요. SGOV 상황판·자동환전은 비서봇에서, 설정(시드·매매 규칙·전원)은 뮤즈랑 대화로 바꿔 주세요."
 
 
 def build_seed_group_menu(cfg, group):
@@ -823,12 +824,12 @@ async def show_fx_confirmation(client, msg_id):
     try:
         need, usd, amount = await fx_confirm_info(client)
     except Exception as e:
-        send_panel(f"환전 계획 확인 실패: {type(e).__name__}", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
+        send_panel(f"⚠️ 환전 계획 확인 실패: {type(e).__name__}", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
         return
     if amount is None:
         send_panel("환전할 금액 없음", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
         return
-    send_panel(f"이 금액만큼 자동환전할까요? ~${amount:,.2f} · 적립 + SGOV 합산분\n기존 낮 자동환전 안전장치 및 시간 제한 적용",
+    send_panel(f"💱 이 금액만큼 자동환전할까요? ~${amount:,.2f} · 적립 + SGOV 합산분\n기존 낮 자동환전 안전장치 및 시간 제한 적용",
                [[{"text":"실행", "callback_data":"funds_fx_confirm"}, {"text":"취소", "callback_data":"funds"}]], msg_id)
 
 async def handle_callback(cb: dict, client):
@@ -931,7 +932,7 @@ async def handle_message(msg: dict, client):
         try:
             value = parse_seed_value(key, text)
         except (ValueError, TypeError) as e:
-            send_panel(f"저장 거부: {e}. 0보다 큰 달러 숫자를 넣어 주세요.", [[{"text": "시드 설정", "callback_data": f"funds_seed_{seed_group(key)}"}]])
+            send_panel(f"⚠️ 저장 거부: {e}. 0보다 큰 달러 숫자를 넣어 주세요.", [[{"text": "시드 설정", "callback_data": f"funds_seed_{seed_group(key)}"}]])
             return
         wait_state.update(mode=None, sym=None)
         _old = (cfg.get("stocks", {}).get(key) or {}).get("base_amount")
@@ -939,10 +940,10 @@ async def handle_message(msg: dict, client):
             try:
                 await save_seed_value(cfg, key, value)
             except (ValueError, TypeError) as e:
-                send_panel(f"저장 거부: {e}", [[{"text": "시드 설정", "callback_data": f"funds_seed_{seed_group(key)}"}]]); return
+                send_panel(f"⚠️ 저장 거부: {e}", [[{"text": "시드 설정", "callback_data": f"funds_seed_{seed_group(key)}"}]]); return
             cfg2 = await DcaConfigManager.load()
             menu_text, kb = build_seed_group_menu(cfg2, seed_group(key))
-            send_panel("시드 변경 저장 (주문·환전 없음)\n\n" + menu_text, kb)
+            send_panel("✅ 시드 변경 저장 (주문·환전 없음)\n\n" + menu_text, kb)
         ask_confirm(SEED_FIELDS[key][0], (f"${float(_old):,.2f}" if _old is not None else "미확인"), f"${float(value):,.2f}", _apply_seed)
         return
     if m == "stock_search":
@@ -961,7 +962,7 @@ async def handle_message(msg: dict, client):
         try:
             d = max(0, min(100, int("".join(ch for ch in text if ch.isdigit()))))
         except ValueError:
-            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="day_sym"); send_panel("0~100 사이 정수만 입력해 주세요. (0은 새로 시작)", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
+            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="day_sym"); send_panel("⚠️ 0~100 사이 정수만 입력해 주세요. (0은 새로 시작)", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
         wait_state["mode"] = None
         async def _apply_day(sym=sym, d=d):
             cfg = await DcaConfigManager.load(); stocks = cfg.get("stocks", {})
@@ -975,7 +976,7 @@ async def handle_message(msg: dict, client):
                 stocks[sym]["sold_stage"] = 0
             if d == 0: stocks[sym]["buy_carry"] = 0.0
             await DcaConfigManager.save(cfg)
-            t, kb = await build_stock_detail_view(client, sym); send_panel(f"[{sym}] 진행 일수가 {d}일차로 반영되었습니다!\n\n" + t, kb)
+            t, kb = await build_stock_detail_view(client, sym); send_panel(f"✅ [{sym}] 진행 일수가 {d}일차로 반영되었습니다!\n\n" + t, kb)
         ask_confirm(f"{sym} 진행일수 보정", f"{int(stocks[sym].get('s_day', 0))}일차", f"{d}일차", _apply_day,
                     "0 입력: 새 1차 매수를 처음부터 시작하고 익절 단계도 0으로 초기화돼요." if d == 0 else "")
         return
@@ -984,7 +985,7 @@ async def handle_message(msg: dict, client):
             val = float("".join(ch for ch in text if ch.isdigit() or ch == "."))
             if val <= 0 or val != val or val == float("inf"): raise ValueError
         except ValueError:
-            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="amt_sym"); send_panel("0보다 큰 달러 숫자를 입력해 주세요. 예: 40", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
+            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="amt_sym"); send_panel("⚠️ 0보다 큰 달러 숫자를 입력해 주세요. 예: 40", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
         wait_state["mode"] = None
         async def _apply_amt(sym=sym, val=val):
             cfg = await DcaConfigManager.load(); stocks = cfg.get("stocks", {})
@@ -992,14 +993,14 @@ async def handle_message(msg: dict, client):
             aref = RL.audit("base_amount_change", sym=sym, before=stocks[sym].get("base_amount"), after=val)
             stocks[sym]["base_amount"] = val; await DcaConfigManager.save(cfg)
             RL.ev("state_change", "base_amount", "ok", None, actor="user", sym_ref=RL.ref(sym), audit_ref=aref)
-            t, kb = await build_stock_detail_view(client, sym); send_panel(f"[{sym}] 1회 기준 매수금액 변경 완료!\n\n" + t, kb)
+            t, kb = await build_stock_detail_view(client, sym); send_panel(f"✅ [{sym}] 1회 기준 매수금액 변경 완료!\n\n" + t, kb)
         ask_confirm(f"{sym} 1회 기준 매수금액(시드)", f"${float(stocks[sym].get('base_amount', 40.0)):,.2f}", f"${val:,.2f}", _apply_amt)
         return
     elif m in ["next_pause", "next_sell", "next_buy2"] and sym in stocks:
         try:
             days = max(1, int("".join(ch for ch in text if ch.isdigit())))   # Q2: 하한 1일, 상한 없음
         except ValueError:
-            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode=m); send_panel("1일 이상 정수로 입력해 주세요. (예: 30. 상한 없음)", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
+            RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode=m); send_panel("⚠️ 1일 이상 정수로 입력해 주세요. (예: 30. 상한 없음)", [[{"text": "돌아가기", "callback_data": f"detail_{sym}"}]]); return
         wait_state["mode"] = None
         _kind = {"next_pause": "정지", "next_sell": "분할매도", "next_buy2": "2차 매수"}[m]
         async def _apply_next(sym=sym, m=m, days=days):
@@ -1011,7 +1012,7 @@ async def handle_message(msg: dict, client):
             stocks[sym]["buy_carry"] = 0.0
             RL.ev("state_change", "next_stage", "ok", None, actor="user", sym_ref=RL.ref(sym), mode_before=mode_before, mode_after=stocks[sym]["s_mode"], target=days)
             await DcaConfigManager.save(cfg)
-            t, kb = await build_stock_detail_view(client, sym); send_panel(f"[{sym}] 다음 단계({days}일) 가동 시작!\n\n" + t, kb)
+            t, kb = await build_stock_detail_view(client, sym); send_panel(f"✅ [{sym}] 다음 단계({days}일) 가동 시작!\n\n" + t, kb)
         ask_confirm(f"{sym} {_kind} 기간", "결정 대기", f"{_kind} {days}일 (진행 0일부터 시작)", _apply_next)
         return
     elif m == "tp":
@@ -1021,7 +1022,7 @@ async def handle_message(msg: dict, client):
             new_tp = float(pts[0]); new_sr = float(pts[1]) if len(pts) == 2 else float(cfg.get("sr_pct", 20.0))
             if not (pct_ok(new_tp) and pct_ok(new_sr)): raise ValueError("range")   # Q1: 0 초과 100 이하 (예전엔 검사 없음)
         except ValueError:
-            RL.ev("user_event", "bad_input", "failed", "pct_range", actor="user", wait_mode="tp"); send_panel("두 숫자 모두 0 초과 100 이하(%)로 띄어 써 주세요. 예: 10 20", [[{"text": "메뉴", "callback_data": "menu"}]]); return
+            RL.ev("user_event", "bad_input", "failed", "pct_range", actor="user", wait_mode="tp"); send_panel("⚠️ 두 숫자 모두 0 초과 100 이하(%)로 띄어 써 주세요. 예: 10 20", [[{"text": "메뉴", "callback_data": "menu"}]]); return
         wait_state["mode"] = None
         tp_before = (cfg.get("tp1_pct"), cfg.get("sr_pct"))
         async def _apply_tp(new_tp=new_tp, new_sr=new_sr, tp_before=tp_before):
@@ -1233,7 +1234,7 @@ async def maybe_table_range_notice(now=None):
             path = _table_notice_path(key, gap)
             if path.exists():
                 _NOTICED_RANGE.add(tag); continue
-            txt = (f"[표 범위 끝 임박 — 풀이님께 질문]\n"
+            txt = (f"❓ [표 범위 끝 임박 — 풀이님께 질문]\n"
                    f"• {name}가 {gap} 부터 없습니다 (알림 시작일 {start}, 그 1주일 전).\n"
                    f"• 그 날짜부터는 휴장일·공휴일 여부를 알 수 없습니다. 지금은 아무것도 막지 않았고 환전·주문 동작도 그대로입니다.\n"
                    f"• 표를 새 연도로 늘릴지, {gap} 부터 환전을 막을지 정해 주세요. (정할 때까지 막지 않습니다)")
@@ -1440,12 +1441,12 @@ async def run_service():
           poll_sec=50, enabled=bool(s.get("enabled")), dry_run=bool(s.get("dry_run", True)), key_ok=not bad, tg_ok=bool(t_core.TG_TOKEN))
     signal.signal(signal.SIGTERM, _on_stop)
     if bad:
-        txt = "[메리츠 적립 키 확인 실패 — 메리츠 호출·주문 안 함]\n" + "\n".join("• " + b for b in bad)
+        txt = "⚠️ [메리츠 적립 키 확인 실패 — 메리츠 호출·주문 안 함]\n" + "\n".join("• " + b for b in bad)
         _hub_alert(HUB_NAME, "critical", txt)
         if not poll_blocked(): send_panel(txt, [[{"text": "관제탑", "callback_data": "panel"}]])
     elif not poll_blocked():
         t, kb = await build_panel_view(client)
-        send_panel(f"[메리츠 적립봇 {BOT_VERSION} 시작]\n\n" + t, kb)
+        send_panel(f"✨ [메리츠 적립봇 {BOT_VERSION} 시작]\n\n" + t, kb)
     RL.set_cid("")
     await asyncio.gather(polling_loop(client), scheduler_loop(client), bridge_loop(client))
 

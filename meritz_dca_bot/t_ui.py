@@ -1,5 +1,6 @@
 # =====================================================================
 # FILE: meritz_dca_bot/t_ui.py   (MERITZ_DCA v1.1.0)
+# v1.3.7 (2026-11-28): 판 60 — 알림 이모티콘 구분 추가 (표시만. 매매 판단·수량·가격·주문·장부·환전 그대로)
 # v1.3.2 (2026-11-19, audit-fix 6-4): build_panel_view 는 읽기 전용 — cycle_mode 를 buy_1 로 덮지 않고 낡은 설정을 저장하지 않음
 # 텔레그램 조작판 화면. 3번 toss_dca_bot/t_ui.py(v4.3.8)에서 옮김.
 # v1.0.0 (2026-11-08): 첫 버전.
@@ -27,11 +28,11 @@ def ensure_stock_cycle(s: dict, is_kr: bool = False):
 def mode_lines():
     """주문 모드 + 실주문을 막는 이유 (화면용)"""
     if not SETTINGS.get("enabled", False):
-        head = "· 주문 모드: 꺼짐 (enabled=false · 판단·주문 없음)"
+        head = "· 주문 모드: ⚪ 꺼짐 (enabled=false · 판단·주문 없음)"
     elif RUN.get("dry", True):
-        head = "· 주문 모드: 모의 실행 (주문 안 냄 · 모의 장부에만 기록)"
+        head = "· 주문 모드: 🧪 모의 실행 (주문 안 냄 · 모의 장부에만 기록)"
     else:
-        head = "· 주문 모드: 실주문"
+        head = "· 주문 모드: 🔴 실주문"
     lines = [head]
     gate = [g for g in RUN.get("gate", []) if g]
     if gate and SETTINGS.get("enabled", False) and not RUN.get("dry", True):
@@ -45,17 +46,17 @@ def get_toss_schedule_status(stocks: dict) -> str:
     now_est = datetime.now(EST_TZ)
     t0, t1 = SETTINGS.get("order_time_et", "10:05"), SETTINGS.get("order_deadline_et", "15:40")
     if now_est.weekday() >= 5:
-        return f"주말 휴장 (월요일 {t0} 미국 동부 시작)"
+        return f"💤 주말 휴장 (월요일 {t0} 미국 동부 시작)"
     t_est, hm_est = now_est.strftime("%Y-%m-%d"), now_est.strftime("%H:%M")
     us_stocks = [s for s in stocks.values() if s.get("enabled", True) and s.get("s_mode") not in ["decision", "pause"]]
     us_done = all(s.get("last_exec_date") == t_est for s in us_stocks) if us_stocks else True
     if us_done:
-        return f"금일 매매 종료 (다음 시작: {t0} 미국 동부)"
+        return f"💤 금일 매매 종료 (다음 시작: {t0} 미국 동부)"
     if hm_est < t0:
-        return f"대기 중 (오늘 {t0} 미국 동부 시작)"
+        return f"⏳ 대기 중 (오늘 {t0} 미국 동부 시작)"
     if t0 <= hm_est <= t1:
-        return "정기 매매 시간대 가동 중 (하루 1번, 끝나면 자동 휴면)"
-    return f"금일 매매시간 종료 (다음 시작: {t0} 미국 동부)"
+        return "🟢 정기 매매 시간대 가동 중 (하루 1번, 끝나면 자동 휴면)"
+    return f"💤 금일 매매시간 종료 (다음 시작: {t0} 미국 동부)"
 
 
 # 설정파일에 기록하지 않는 패널 보기 상태
@@ -63,11 +64,11 @@ PANEL_VIEW_CONTEXT = {"mode": "now"}
 
 def progress_bar(pct, icon):
     count = max(0, min(10, int(float(pct) / 10 + 0.5)))
-    return icon * count + "" * (10-count)
+    return icon * count + "⬜" * (10-count)
 
 def progress_lines(cfg, usd, need, mode="now"):
     assets = []
-    for sym, icon in (("NKE", ""), ("QLD", "")):
+    for sym, icon in (("NKE", "🟦"), ("QLD", "🟪")):
         st = cfg.get("stocks", {}).get(sym)
         if st is None: continue
         day, target = int(st.get("s_day") or 0), int(st.get("s_target_days") or 100)
@@ -77,9 +78,9 @@ def progress_lines(cfg, usd, need, mode="now"):
         assets.append((value, sym, f"{progress_bar(pct, icon)} {sym} {pct:.0f}% ({day}/{target}일 · ${value:,.0f})"))
     # v1.2.6: SGOV 줄은 뺌 (SGOV 진행률은 비서봇 SGOV 상황판에서). NKE·QLD·현금만.
     pct = min(100, 100*usd/need) if need > 0 else (100 if usd > 0 else 0)
-    assets.append((usd, "현금", f"{progress_bar(pct, '')} 현금 {pct:.0f}% (오늘 필요 ${need:,.0f} · ${usd:,.0f})"))
+    assets.append((usd, "현금", f"{progress_bar(pct, '🟩')} 현금 {pct:.0f}% (오늘 필요 ${need:,.0f} · ${usd:,.0f})"))
     assets.sort(key=lambda item: item[0], reverse=True)
-    lines = ["[시드 대비 진행률 — " + ("완성 시 예상" if mode == "done" else "지금") + "]"]
+    lines = ["📊 [시드 대비 진행률 — " + ("완성 시 예상" if mode == "done" else "지금") + "]"]
     if mode == "done": lines.append("완성 시 예상 — 적립 금액은 가격 따라 달라져요")
     lines.extend(item[2] for item in assets)
     lines.append("금액 기준: " + " · ".join(f"{name} ${value:,.0f}" for value,name,_ in assets))
@@ -114,7 +115,7 @@ async def build_funds_view(client, notice=""):
     except Exception as e: error = f"환전 계획 조회 실패: {type(e).__name__}"
     amount = fx_auto_amount(Decimal(str(need)) - Decimal(str(usd))) if need is not None else None
     stocks = cfg.get("stocks", {})
-    lines = ["[자금 · 주식]", f"보유 달러: ${usd:,.2f}",
+    lines = ["💰 [자금 · 주식]", f"보유 달러: ${usd:,.2f}",
              "매매: " + ("자동" if SETTINGS.get("enabled") else "중지") + " / " + ("모의" if RUN.get("dry", True) else "실전"),
              "자동환전: " + ("켜짐" if SETTINGS.get("auto_fx", {}).get("on") else "꺼짐"),
              "적립 시드 (100일): " + " · ".join(f"{sym} ${float(stocks[sym].get('base_amount') or 0):,.2f}/회" for sym in ("NKE","QLD") if sym in stocks),
@@ -142,29 +143,29 @@ async def build_panel_view(client):
     decision_syms = [sym for sym, s in stocks.items() if s.get("s_mode") == "decision"]
     t0, t1 = SETTINGS.get("order_time_et", "10:05"), SETTINGS.get("order_deadline_et", "15:40")
     lines = [
-        f"[메리츠 적립 관제탑 ({BOT_VERSION})]",
-        f"· 시스템 전원: {'켜짐' if is_master else '꺼짐'}",
+        f"🎛 [메리츠 적립 관제탑 ({BOT_VERSION})]",
+        f"· 시스템 전원: {'🟢 켜짐' if is_master else '🔴 꺼짐'}",
         *mode_lines(),
-        f"· 시장 상태: {'' if is_hol else ''}{hol_reason}",
-        f"· 운용 종목수: 총 {total_cnt}종목 (미국주식만)",
+        f"· 시장 상태: {'🛑' if is_hol else '🟢'} {hol_reason}",
+        f"· 운용 종목수: 📦 총 {total_cnt}종목 (미국주식만)",
         "· 시작 상태: " + (f"주입됨 ({cfg.get('start_injected')})" if cfg.get("start_injected") else "주입 전 (--inject-start)"),
         "─────────────────",
-        "[운용 규칙 요약]",
+        "⏳ [운용 규칙 요약]",
         " • 기본 사이클: 종목별 100일 분할매수 (고정)",
-        f" • 매매 시각: {t0}~{t1} 미국 동부 시장가 즉시주문 · 하루 1번",
+        f" • 매매 시각: 🇺🇸 {t0}~{t1} 미국 동부 시장가 즉시주문 · 하루 1번",
         " • 매수 배율: 수익률 +1.0%↑ 시 1/2배 (그 외 1배)",
         " • 정수 주문: " + ("남은 금액은 다음 날로 이월 (평균 = 기준금액)" if SETTINGS.get("us_int_buy_mode", "carry") != "min1" else "금액이 1주보다 작아도 최소 1주"),
         *n7_status_lines(cfg),
         " • 100일 종료 시: [N일 정지 / N일 분할매도 / N일 2차매수] 선택", "─────────────────",
-        "[수익률 구간별 매도 계획]",
+        "📊 [수익률 구간별 매도 계획]",
         f" • {tp1:.0f}% 수익 도달 시 잔고의 {sr:.0f}% 매도",
         f" • {tp1*2:.0f}% 수익 도달 시 잔고의 {sr:.0f}% 매도",
         f" • {tp1*3:.0f}% 이상 수익 도달 시 미정 (매도 없음)",
         " • 단계는 위로만: 이미 판 단계는 다시 팔지 않음 (보유 0주·진행일수 0 입력 때만 초기화)",
         " • 정지·결정 대기 중: 익절 구간 도달 시 알림만 (자동 매도 아님)",
         " • 평단: 봇 장부 기준 (입고 평단 안 씀)",
-        f"조회: {datetime.now(KST_TZ).strftime('%H:%M:%S')} KST",
-        f"스케줄 상태: {get_toss_schedule_status(stocks)}"
+        f"⏱ 조회: {datetime.now(KST_TZ).strftime('%H:%M:%S')} KST",
+        f"⚡ 스케줄 상태: {get_toss_schedule_status(stocks)}"
     ]
     try:
         usd = float(await asyncio.to_thread(client.api.usd_estimated))
@@ -172,8 +173,8 @@ async def build_panel_view(client):
         # v1.2.4: 지금/완성 시 예상 토글 제거 — 진행률은 항상 지금 기준으로만 보여준다.
         lines.extend(["─────────────────", *progress_lines(cfg, usd, need, "now")])
     except Exception as e:
-        lines.append(f"시드 대비 진행률: 조회 실패 ({type(e).__name__})")
-    if decision_syms: lines.append(f"\n[기간 완료 종목: {', '.join(decision_syms)}] 아래 보유종목 리스트에서 다음 단계를 선택하세요!")
+        lines.append(f"📊 시드 대비 진행률: 조회 실패 ({type(e).__name__})")
+    if decision_syms: lines.append(f"\n🚨 [기간 완료 종목: {', '.join(decision_syms)}] 아래 보유종목 리스트에서 다음 단계를 선택하세요!")
     # v1.2.6: 상황판 맨밑 키보드 = [📈 상황판, ☰ 메뉴] + [🔄 새로고침, 전원 켜기/끄기]. 💰 자금은 ☰ 메뉴 안으로.
     kb = [[{"text": "새로고침", "callback_data": "panel_refresh"},
            {"text": "전체 전원 끄기" if is_master else "전체 전원 켜기", "callback_data": "toggle_master"}]]
@@ -230,26 +231,27 @@ async def build_stock_list_view(client, page: int = 0, market=None, status=None,
     title = {"all": "전체 주식", "kr": "한국주식", "us": "미국주식"}[market]
     status_title = {"all": "전체", "on": "매매 켜짐", "off": "대기·중지"}[status]
     on_count = sum(bool(info.get("enabled", True)) for _, info in market_items)
-    lines = [f"[{title} · 총 {len(market_items)}종목]",
-             f"매매 켜짐 {on_count} · 대기·중지 {len(market_items)-on_count}",
+    lines = [f"📋 [{title} · 총 {len(market_items)}종목]",
+             f"🟢 매매 켜짐 {on_count} · ⏸ 대기·중지 {len(market_items)-on_count}",
              f"필터: {status_title} · {page+1}/{max_page+1}페이지"]
     if not cfg.get("is_master_active", False):
-        lines.append("전체 전원 꺼짐 · 모든 종목 자동주문 정지")
+        lines.append("🔴 전체 전원 꺼짐 · 모든 종목 자동주문 정지")
     try:
-        lines.append(f"오늘 적립 예상: ${await stock_today_estimate(client, cfg):,.2f} (장 열릴 때 확정)")
-    except Exception: lines.append("오늘 적립 예상: 조회 불가 (장 열릴 때 확정)")
+        lines.append(f"💵 오늘 적립 예상: ${await stock_today_estimate(client, cfg):,.2f} (장 열릴 때 확정)")
+    except Exception: lines.append("💵 오늘 적립 예상: 조회 불가 (장 열릴 때 확정)")
     if query:
-        lines.append(f"검색: {query} · {len(items)}종목")
+        lines.append(f"🔎 검색: {query} · {len(items)}종목")
     lines += ["• 종목명·티커를 입력하거나 아래 종목을 선택하세요.", "─────────────────"]
     def btn(text, m=market, st=status, pg=0, keep=True):
         return {"text": text, "callback_data": stock_list_callback(m, st, pg, keep)}
     kb = [[btn("전체", st="all"), btn("매매 켜짐", st="on"), btn("대기·중지", st="off")]]
     for idx, (sym, info) in enumerate(items[page*5:(page+1)*5], page*5+1):
         icon = "" if info.get("enabled", True) else ""
+        row_icon = "🟢" if info.get("enabled", True) else "⏸"   # v1.3.7: 본문 줄에만 (버튼 글자는 그대로)
         label = f"{icon} {info.get('name', sym)} ({sym})"
         if info.get("s_mode") == "decision":
             label += " · 결정 대기"
-        lines.append(f"{idx}. {label}")
+        lines.append(f"{idx}. {row_icon}{label}")
         kb.append([{"text": label[:100], "callback_data": f"detail_{sym}"}])
     if not items:
         lines.append("조건에 맞는 종목이 없습니다.")
@@ -288,26 +290,26 @@ async def build_stock_detail_view(client, sym: str):
     prof_pct = ((cur_p - avg_p) / avg_p) * 100 if avg_p > 0 and cur_p > 0 else 0.0
     amt = float(s.get("base_amount", 40.0))
     amt_str = f"${amt:.2f} (+1%↑ 시 1/2: ${amt/2:.2f})"
-    p_str = f"현재가: ${cur_p:.2f} | 평단가(장부): ${avg_p:.4f} ({prof_pct:+.2f}% / {qty:g}주)"
-    bq = "조회 실패" if broker_q is None else f"{broker_q:g}주" + ("" if abs(broker_q - qty) < 1e-6 else " 장부와 다름")
+    p_str = f"📈 현재가: ${cur_p:.2f} | 평단가(장부): ${avg_p:.4f} ({prof_pct:+.2f}% / {qty:g}주)"
+    bq = "조회 실패" if broker_q is None else f"{broker_q:g}주" + ("" if abs(broker_q - qty) < 1e-6 else " ⚠️ 장부와 다름")
     s_mode, s_day, s_target = s["s_mode"], int(s["s_day"]), int(s["s_target_days"])
-    m_desc = {"buy_1": f"1차 분할매수 ({s_day}/100일 고정)", "pause": f"정지 대기 중 ({s_day}/{s_target}일)", "buy_2": f"2차 분할매수 ({s_day}/{s_target}일)", "sell": f"분할매도 ({s_day}/{s_target}일)", "decision": f"기간({s_target}일) 완료! 결정 대기(정지)"}
+    m_desc = {"buy_1": f"🛒 1차 분할매수 ({s_day}/100일 고정)", "pause": f"⏸ 정지 대기 중 ({s_day}/{s_target}일)", "buy_2": f"🛒 2차 분할매수 ({s_day}/{s_target}일)", "sell": f"📤 분할매도 ({s_day}/{s_target}일)", "decision": f"🚨 기간({s_target}일) 완료! 결정 대기(정지)"}
     src = (s.get("ledger") or {}).get("source", "")
-    lines = [f"미국주식 · [{s.get('name', sym)} ({sym}) 상세 설정]", "─────────────────", f"{p_str}",
-             f"메리츠 잔고: {bq}" + (" · 평단=증권사 값(자동 등록)" if src == "broker_avg" else ""),
-             f"1회 기준 매수금: {amt_str}", f"↪이월 금액(정수 주문 남은 돈): ${float(s.get('buy_carry') or 0):.2f}",
-             f"진행 거래일수: {m_desc.get(s_mode, s_mode)}", f"최근 실행일: {s.get('last_exec_date') or '대기 중'}"]
+    lines = [f"🇺🇸 미국주식 · [{s.get('name', sym)} ({sym}) 상세 설정]", "─────────────────", f"{p_str}",
+             f"🏦 메리츠 잔고: {bq}" + (" · 평단=증권사 값(자동 등록)" if src == "broker_avg" else ""),
+             f"💰 1회 기준 매수금: {amt_str}", f"↪️ 이월 금액(정수 주문 남은 돈): ${float(s.get('buy_carry') or 0):.2f}",
+             f"⏳ 진행 거래일수: {m_desc.get(s_mode, s_mode)}", f"🕒 최근 실행일: {s.get('last_exec_date') or '대기 중'}"]
     try:
-        lines.append(f"오늘 적립 예상: ${await stock_today_estimate(client, cfg):,.2f} (장 열릴 때 확정)")
-    except Exception: lines.append("오늘 적립 예상: 조회 불가 (장 열릴 때 확정)")
+        lines.append(f"💵 오늘 적립 예상: ${await stock_today_estimate(client, cfg):,.2f} (장 열릴 때 확정)")
+    except Exception: lines.append("💵 오늘 적립 예상: 조회 불가 (장 열릴 때 확정)")
     idx = n7_index_of(s); etf, _, idx_name = N7_INDEX[idx]
     n7_on = bool(cfg.get("n7_enabled", False)); n7_m = float(((cfg.get("n7_state") or {}).get(idx) or {}).get("mult", 1.0))
-    lines.append(f"기준 지수: {idx_name} ({etf}) · " + (f"지수 배수 {n7_m:.1f}배 (켜짐)" if n7_on else "지수 연동 배수 꺼짐"))
-    lines.append(f"익절 진행 단계: {int(s.get('sold_stage', 0))}차까지 완료 (위로만, 다시 팔지 않음)")
+    lines.append(f"📐 기준 지수: {idx_name} ({etf}) · " + (f"지수 배수 {n7_m:.1f}배 (켜짐)" if n7_on else "지수 연동 배수 꺼짐"))
+    lines.append(f"🎯 익절 진행 단계: {int(s.get('sold_stage', 0))}차까지 완료 (위로만, 다시 팔지 않음)")
     kb = [[{"text": f"[{sym}] 기준금액 변경", "callback_data": f"setamt_{sym}"}, {"text": f"[{sym}] 진행일수 보정", "callback_data": f"setday_{sym}"}]]
     kb.append([{"text": f"기준 지수 바꾸기 ({idx_name} → {N7_INDEX[[k for k in N7_CHOICES['US'] if k != idx][0]][2]})", "callback_data": f"idx_{sym}"}])
     if s_mode == "decision":
-        lines.append("\n[기간이 완료되었습니다! 다음 진행 방향을 선택하세요]")
+        lines.append("\n🚨 [기간이 완료되었습니다! 다음 진행 방향을 선택하세요]")
         kb.append([{"text": "몇 일 정지하며 기다릴지 설정", "callback_data": f"next_pause_{sym}"}])
         kb.append([{"text": "몇 일 동안 나눠서 매도할지 설정", "callback_data": f"next_sell_{sym}"}])
         kb.append([{"text": "몇 일 동안 2차 매수할지 설정", "callback_data": f"next_buy2_{sym}"}])
@@ -315,7 +317,7 @@ async def build_stock_detail_view(client, sym: str):
 
     # 종목별 매매 버튼 v1
     trade_enabled = bool(s.get("enabled", True))
-    lines.append("• 자동매매: " + ("실행 중" if trade_enabled else "대기 / 중지"))
+    lines.append("• 자동매매: " + ("🟢 실행 중" if trade_enabled else "⏸ 대기 / 중지"))
     kb.insert(0, [
         {"text": "매매 시작", "callback_data": f"trade_on_{sym}"},
         {"text": "매매 중지", "callback_data": f"trade_off_{sym}"}
@@ -327,7 +329,7 @@ async def build_stock_detail_view(client, sym: str):
 async def build_n7_view(client=None, notice=""):
     """지수 연동 배수: 지금 상태(n7_status_lines) + 켜기/끄기 버튼 (누르면 기존 toggle_n7)"""
     cfg = await DcaConfigManager.load()
-    lines = ["[지수 연동 배수 (N7)]", *n7_status_lines(cfg)]
+    lines = ["📐 [지수 연동 배수 (N7)]", *n7_status_lines(cfg)]
     if notice: lines.insert(0, notice)
     kb = [[{"text": "지수 연동 배수 끄기" if cfg.get("n7_enabled", False) else "지수 연동 배수 켜기", "callback_data": "toggle_n7"}],
           [{"text": "메뉴", "callback_data": "menu"}]]
@@ -338,7 +340,7 @@ async def build_setday_pick_view(client=None):
     """진행일수 보정: 종목을 고르면 기존 setday_{종목} 입력으로 감"""
     cfg = await DcaConfigManager.load()
     items = select_stock_items(cfg.get("stocks", {}))
-    lines = ["[진행일수 보정] 종목을 골라 주세요."]
+    lines = ["🔢 [진행일수 보정] 종목을 골라 주세요."]
     kb = [[{"text": f"[{sym}] 진행일수 보정", "callback_data": f"setday_{sym}"}] for sym, _ in items[:20]]
     if not items: lines.append("목록에 종목이 없습니다.")
     kb.append([{"text": "메뉴", "callback_data": "menu"}])
@@ -346,7 +348,7 @@ async def build_setday_pick_view(client=None):
 
 
 HELP_TEXT = "\n".join([
-    "[도움말 · 메리츠 적립 6번]",
+    "📖 [도움말 · 메리츠 적립 6번]",
     "· 맨밑 첫 줄: 상황판 (예전 관제탑) · 메뉴",
     "· 메뉴 4칸: 자금 · 매매 규칙 · 현재 상태 · 종목 관리",
     "· 자금: 보유 달러와 자동환전, 시드(종목별 1회 매수금액). 자동환전은 주식분 + SGOV분 합산 부족분으로 한 번만 해요.",

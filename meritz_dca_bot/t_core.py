@@ -1,5 +1,6 @@
 # =====================================================================
 # FILE: meritz_dca_bot/t_core.py   (MERITZ_DCA v1.1.1)
+# v1.3.7 (2026-11-28): 판 60 — 알림 이모티콘 구분 추가 (표시만. 매매 판단·수량·가격·주문·장부·환전 그대로)
 # 메리츠 적립 봇 공통 부품. 3번 toss_dca_bot/t_core.py(v4.3.8)에서 옮김.
 # v1.0.0 (2026-11-08): 첫 버전.
 #   - 그대로 옮김(바이트 동일): runtime_info, 익절 단계(tp_stage_reached·tp_sell_stage), calc_buy_amount,
@@ -35,7 +36,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.3.6"
+BOT_VERSION = "v1.3.7"
 BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")
@@ -451,7 +452,7 @@ async def n7_market_multipliers(client, cfg: dict, is_kr_market: bool) -> dict:
             RL.ev("decision", "n7_multiplier", "ok", None, actor="scheduler", index=idx, d=round(d, 4), mult=eff,
                   cand=st.get("cand"), cand_days=st.get("cand_days"), changed=changed)
             if changed:
-                msg = (f"[지수 연동 배수 변경 · {name} ({etf})]\n• 200일선 대비 {d*100:+.1f}% (전일 {cdate} 종가 기준)\n"
+                msg = (f"📐 [지수 연동 배수 변경 · {name} ({etf})]\n• 200일선 대비 {d*100:+.1f}% (전일 {cdate} 종가 기준)\n"
                        f"• 매수 배수: {before:.1f}배 → {eff:.1f}배 (연속 {N7_CONFIRM_DAYS}거래일 확인)")
                 if eff > 1.0: msg += "\n" + n7_forecast_text(cfg, idx, eff)
                 send_panel(msg, [[{"text": "관제탑", "callback_data": "panel"}]])
