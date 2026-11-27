@@ -39,8 +39,11 @@ def http_post(path, body, headers):
         raise Stop(f"허용하지 않는 주소: {path}")
     if path == CHART_PATH and headers.get("api-id") != API_ID:
         raise Stop("허용하지 않는 api-id")
+    # 키움 앞단 방화벽이 파이썬 기본 User-Agent를 막아 400 "Request Blocked"를 돌려준다 (2026-11-27 서버에서 직접 확인). 브라우저 UA를 보낸다.
     req = urllib.request.Request(BASE + path, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json;charset=UTF-8", **headers})
+                                 headers={"Content-Type": "application/json;charset=UTF-8",
+                                          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+                                          **headers})
     with urllib.request.build_opener(_NoRedirect).open(req, timeout=20) as r:
         return json.loads(r.read().decode("utf-8")), {k.lower(): v for k, v in r.headers.items()}
 
