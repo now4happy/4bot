@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 59 v2.20.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 62 v2.21.0)
+# v2.21.0 (2026-11-28, 판 62 — 암살자 알림 HTML 태그 제거, 표시만. 매매 로직·게이트 판정 그대로)
 # v2.20.0 (2026-11-27, 판 59 — BOT_VERSION 은 v2.7.0 그대로): 체결 알림·스나이퍼 매수 접수·미체결 취소 메시지에 이모티콘 구분 추가 (표시만 바꿈). ① 체결 알림 머리말 ✅ + 다음 매도 🎯·다음 매수 🛒 (fill_alert_text에서만 붙이고 trigger_lines()는 안 건드려 상황판은 그대로) ② 매수 접수 🛒·실패/응답 못 받음 ⚠️ ③ 미체결 취소 ⏰. 매매 로직·수량·가격·60초 규칙 변경 없음
 # v2.19.0 (2026-11-26, 판 46 — BOT_VERSION 은 v2.7.0 그대로): ① 마감 일일결산에 당일 실현수익(봇 장부 기준·수수료·세금 미반영)·당일 매수/익절 횟수·누적실현 추가 — 체결을 장부에 반영할 때마다 data/realized_daily.json 에 주문별로 쌓음(장중 반영분 포함, exec_id 로 중복 방지) ② 결산 줄마다 이모티콘. 발송 시점·횟수·매매 로직 변경 없음
 # v2.12.0 수정 1차 (2026-11-24, 판 39 수정 1차): ① 모의 매도 컷오프 16:10 → 20:00 (run_sniper_dry) ② ANCHOR_KO 의 죽은 라벨 "first" 삭제 (1분봉 필드명 수정은 meritz_api.py·어댑터 파일)
@@ -115,6 +116,7 @@ import contextlib
 import copy
 import re
 import datetime
+import html
 import json
 import logging
 import math
@@ -705,6 +707,14 @@ def assassin_poll(s, api, note):
 ASSASSIN_TICK_SEC = 5.0               # 판 41 할 일 1: 암살자 틱 간격 (모의·예약 때). 실전(LIVE)이면 매 틱 (정정·스윕이 빨라야 해서)
 
 
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^<>]*>")   # 판 62: 태그 모양만 (< 뒤 영문자). '<=30'·'<-5%'·'->' 같은 부등호 글자는 안 지움
+
+
+def plain_alert_text(text):
+    """판 62 v2.21.0: 원작 암살자 알림(HTML) → 평문 (표시 전용). 태그를 먼저 지우고 그다음 &lt; &gt; &amp; &quot; 를 되돌림 (순서를 바꾸면 되돌린 부등호가 태그로 지워질 수 있음)"""
+    return html.unescape(_HTML_TAG_RE.sub("", str(text)))
+
+
 def assassin_live_step(s, api, note):
     """판 41 할 일 1: 원작 암살자 틱(모의⇄0주예약⇄실전 통합 상태 머신)을 메리츠 API 로 한 번 부름 → 원작 결과 글자 (실패·건너뜀이면 None).
     알림(원작이 만든 title·body)은 텔레그램으로 보냄. 주문·정정·취소는 assassin_live.py 를 거침 (dry_run 이면 주문 없이 가짜 번호)"""
@@ -722,7 +732,7 @@ def assassin_live_step(s, api, note):
         ctx.alerts.clear()
         r = AL.tick(ctx, n)
         for title, body in list(ctx.alerts):
-            note.send(f"{title}\n{body}" if body else title)
+            note.send(f"{plain_alert_text(title)}\n{plain_alert_text(body)}" if body else plain_alert_text(title))
         return r
     except Exception as e:
         logging.warning(f"암살자 틱 실패 {type(e).__name__}: {str(e)[:120]}")
