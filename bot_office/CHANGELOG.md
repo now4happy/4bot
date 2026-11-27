@@ -1,5 +1,10 @@
 # 5번 사무실 비서 변경 기록
 
+## v2.1.3 · 2026-11-27 11:27 (KST)
+- 파일: kiwoom_minute_probe.py
+- 내용: 키움 분봉 프로브: 브라우저 User-Agent 추가
+- 브랜치: staging
+
 ## v2.1.2 · 2026-11-27 11:21 (KST)
 - 파일: kiwoom_minute_probe.py
 - 내용: 키움 분봉 프로브 추가 (ka10080, 시세 조회 전용)
