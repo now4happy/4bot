@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # =====================================================================
 # FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.1.1)
+# v1.3.8 (2026-11-28): 판 61 — bridge 답장 이모티콘 구분 추가 (표시만. 요청 처리·검증·저장·주문·장부·환전 그대로)
 # v1.3.7 (2026-11-28): 판 60 — 알림 이모티콘 구분 추가 (표시만. 매매 판단·수량·가격·주문·장부·환전 그대로)
 # 메리츠 적립 봇 (서비스 meritz_dca) — 3번 toss_dca_bot/main.py(v4.3.8) 엔진을 옮기고 토스 API 만 메리츠로 바꿈
 # v1.0.0 (2026-11-08): 첫 버전.
@@ -860,19 +861,19 @@ async def sgov_menu_action(data):
         except ValueError: v = None
         if v in SG.SKIP_X_CHOICES:
             await SG.sgov_menu_set("skip_jump_pct", v)
-            notice = f"7일 상승 건너뜀 기준을 {v:g}% 로 바꿨습니다. 다음 회차 판단부터 적용 (지금 매수 없음)."
+            notice = f"✅ 7일 상승 건너뜀 기준을 {v:g}% 로 바꿨습니다. 다음 회차 판단부터 적용 (지금 매수 없음)."
     elif data.startswith("sgovmode_"):
         m = data.split("_", 1)[1]
         if m in SG.CAP_MODES:
             await SG.sgov_menu_set("skip_cap_mode", m)
-            notice = f"연속 건너뜀 규칙: {SG.CAP_MODES[m]} — 다음 회차 판단부터 적용 (지금 매수 없음)."
+            notice = f"✅ 연속 건너뜀 규칙: {SG.CAP_MODES[m]} — 다음 회차 판단부터 적용 (지금 매수 없음)."
     elif data == "sgov_review_ok":
         await SG.sgov_menu_set("review_hold", False)
-        notice = "재점검 완료 — 다음 예정일에 다시 판단합니다 (지금 매수 없음)."
+        notice = "✅ 재점검 완료 — 다음 예정일에 다시 판단합니다 (지금 매수 없음)."
     elif data == "sgov_toggle":
         latest = await DcaConfigManager.load(); on = not bool(SG.sgov_block(latest).get("enabled"))
         await SG.sgov_menu_set("enabled", on)
-        notice = "SGOV 회차 적립을 켰습니다. 예정일이 되면 판단합니다 (지금 매수 없음)." if on else "SGOV 회차 적립을 껐습니다."
+        notice = "✅ SGOV 회차 적립을 켰습니다. 예정일이 되면 판단합니다 (지금 매수 없음)." if on else "✅ SGOV 회차 적립을 껐습니다."
     return notice
 
 
@@ -1292,45 +1293,45 @@ async def bridge_handle(req: dict, client):
     """요청 1개 실행 → (상태, 문구, data). 기존 함수만 부르고, 기존 검증을 그대로 다시 함. 부분 적용 없음 (기존 함수가 한 번에 저장)"""
     t, a = req.get("type"), req.get("args") or {}
     if t == "snapshot":
-        return "ok", "상태를 새로 만들었습니다.", {}
+        return "ok", "✅ 상태를 새로 만들었습니다.", {}
     if t == "fx_preview":
         need, usd, amount = await fx_confirm_info(client)
-        if amount is None: return "ok", "환전할 금액 없음", {"need": need, "usd": float(usd), "amount": None}
-        return "ok", (f"이 금액만큼 자동환전할까요? ~${amount:,.2f} · 적립 + SGOV 합산분\n"
+        if amount is None: return "ok", "🔔 환전할 금액 없음", {"need": need, "usd": float(usd), "amount": None}
+        return "ok", (f"💱 이 금액만큼 자동환전할까요? ~${amount:,.2f} · 적립 + SGOV 합산분\n"
                       "기존 낮 자동환전 안전장치 및 시간 제한 적용"), {"need": need, "usd": float(usd), "amount": float(amount)}
     if t == "fx_run":
         code = await run_fx_from_confirm(client)
-        return ("ok" if code in ("ok", "dry_run") else "rejected"), f"자동환전 결과: {FX_RESULT_KO.get(code, code)}", {"code": code}
+        return ("ok" if code in ("ok", "dry_run") else "rejected"), f"{'💱' if code in ('ok', 'dry_run') else '⚠️'} 자동환전 결과: {FX_RESULT_KO.get(code, code)}", {"code": code}
     if t == "sgov_seed":
         key, raw = str(a.get("key") or ""), str(a.get("value") or "")
-        if key not in SGOV_SEED_KEYS: return "rejected", "저장 거부: SGOV 시드 항목이 아님", {}
+        if key not in SGOV_SEED_KEYS: return "rejected", "⚠️ 저장 거부: SGOV 시드 항목이 아님", {}
         try:
             value = parse_seed_value(key, raw)
             await save_seed_value(await DcaConfigManager.load(), key, value)
         except (ValueError, TypeError) as e:
-            return "rejected", f"저장 거부: {e}", {"key": key}
-        return "ok", f"시드 변경 저장 (주문·환전 없음): {SEED_FIELDS[key][0]} = {value}", {"key": key, "value": value}
+            return "rejected", f"⚠️ 저장 거부: {e}", {"key": key}
+        return "ok", f"✅ 시드 변경 저장 (주문·환전 없음): {SEED_FIELDS[key][0]} = {value}", {"key": key, "value": value}
     if t == "sgov_dist":
         try: val = parse_dist_amount(a.get("amount"))
         except ValueError:
             RL.ev("user_event", "bad_input", "failed", "not_a_number", actor="user", wait_mode="sgov_dist", via="bridge")
-            return "rejected", "숫자(달러)를 입력해 주세요. 예: 12.34", {}
+            return "rejected", "⚠️ 숫자(달러)를 입력해 주세요. 예: 12.34", {}
         await SG.sgov_add_distribution(val)
-        return "ok", f"분배금 ${val:.2f} 기록 — SGOV 대기 달러로 다음 회차에 재투자합니다.", {"amount": val}
+        return "ok", f"✅ 분배금 ${val:.2f} 기록 — SGOV 대기 달러로 다음 회차에 재투자합니다.", {"amount": val}
     if t in ("sgov_x", "sgov_mode", "sgov_review_ok"):
         data = {"sgov_x": f"sgovx_{a.get('x')}", "sgov_mode": f"sgovmode_{a.get('mode')}", "sgov_review_ok": "sgov_review_ok"}[t]
         notice = await sgov_menu_action(data)
-        return ("ok" if notice else "rejected"), (notice or "허용되지 않은 값이라 바꾸지 않았습니다."), {}
+        return ("ok" if notice else "rejected"), (notice or "⚠️ 허용되지 않은 값이라 바꾸지 않았습니다."), {}
     if t == "sgov_enable":
         want = a.get("on")
-        if not isinstance(want, bool): return "rejected", "on 값 오류 (true/false)", {}
+        if not isinstance(want, bool): return "rejected", "⚠️ on 값 오류 (true/false)", {}
         cur = bool(SG.sgov_block(await DcaConfigManager.load()).get("enabled"))
-        if cur == want: return "ok", "이미 " + ("켜져" if cur else "꺼져") + " 있어 바꾸지 않았습니다.", {"enabled": cur}
+        if cur == want: return "ok", "🔔 이미 " + ("켜져" if cur else "꺼져") + " 있어 바꾸지 않았습니다.", {"enabled": cur}
         return "ok", await sgov_menu_action("sgov_toggle"), {"enabled": want}
     if t == "sgov_gate":
         lines = await SG.sgov_preview_lines(client, await DcaConfigManager.load(), datetime.now(EST_TZ).strftime("%Y-%m-%d"))
-        return "ok", "[SGOV 게이트 확인 — 조회만, 주문·저장 없음]\n" + "\n".join(lines), {}
-    return "invalid", "모르는 요청", {}
+        return "ok", "🔍 [SGOV 게이트 확인 — 조회만, 주문·저장 없음]\n" + "\n".join(lines), {}
+    return "invalid", "⚠️ 모르는 요청", {}
 
 
 async def bridge_pass(client, now=None):
