@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
-# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 46 v2.19.0)
+# FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 59 v2.20.0)
+# v2.20.0 (2026-11-27, 판 59 — BOT_VERSION 은 v2.7.0 그대로): 체결 알림·스나이퍼 매수 접수·미체결 취소 메시지에 이모티콘 구분 추가 (표시만 바꿈). ① 체결 알림 머리말 ✅ + 다음 매도 🎯·다음 매수 🛒 (fill_alert_text에서만 붙이고 trigger_lines()는 안 건드려 상황판은 그대로) ② 매수 접수 🛒·실패/응답 못 받음 ⚠️ ③ 미체결 취소 ⏰. 매매 로직·수량·가격·60초 규칙 변경 없음
 # v2.19.0 (2026-11-26, 판 46 — BOT_VERSION 은 v2.7.0 그대로): ① 마감 일일결산에 당일 실현수익(봇 장부 기준·수수료·세금 미반영)·당일 매수/익절 횟수·누적실현 추가 — 체결을 장부에 반영할 때마다 data/realized_daily.json 에 주문별로 쌓음(장중 반영분 포함, exec_id 로 중복 방지) ② 결산 줄마다 이모티콘. 발송 시점·횟수·매매 로직 변경 없음
 # v2.12.0 수정 1차 (2026-11-24, 판 39 수정 1차): ① 모의 매도 컷오프 16:10 → 20:00 (run_sniper_dry) ② ANCHOR_KO 의 죽은 라벨 "first" 삭제 (1분봉 필드명 수정은 meritz_api.py·어댑터 파일)
 # v2.12.0 (2026-11-24, 판 39 — BOT_VERSION 은 v2.7.0 그대로): ① first_buy_ha 추가 — 보유 층 0개일 때만 메리츠 1분봉(api.minute_candles)을 읽어 plan_buy(ha=) 로 전달 (실거래·모의 둘 다) ② 동기화 시각 기본 16:10 → 20:00 ET (_hm 대체값 3곳) ③ run_late_fills 안내 글자 '동기화 시각 이후'
@@ -816,7 +817,7 @@ def next_trade_lines(s, st):
 def fill_alert_text(s, d, new, open_rows, sim):
     """체결 알림 글자. new = [(item, 이전 알림 수량)]. 한 줄 = 이번에 늘어난 수량·평균가, 주문 대비 누적·미체결, 조건(주문 설명·지정가)"""
     own_open = {str(r.get("oder_no") or "").strip(): int(float(str(r.get("ncnt_qty") or 0).replace(",", "") or 0)) for r in open_rows if isinstance(r, dict)}
-    lines = [f"{d} 체결 알림"]
+    lines = [f"✅ {d} 체결 알림"]
     for it, nq in new:
         o = it["o"]
         dq, da = it["q"] - nq, it["amt"] - float(o.get("notified_amt") or 0)
@@ -826,7 +827,13 @@ def fill_alert_text(s, d, new, open_rows, sim):
         lines.append(f"  주문 {o.get('qty')}주 중 누적 {it['q']}주 체결 · " + ("전량 체결" if left <= 0 else f"미체결 {left}주"))
         lines.append(f"  조건: {o.get('desc', '')}" + (f" · {TYPE_KO.get(o.get('type'), o.get('type'))} ${float(o['price']):.2f}" if o.get("type") != "MOC" and o.get("price") else ""))
     if sim is not None:
-        lines += next_trade_lines(s, sim)
+        for _tl in next_trade_lines(s, sim):                    # 판 59: 다음 매도 🎯·다음 매수 🛒 — trigger_lines()는 상황판과 공유하니 여기서만 붙임
+            if _tl.startswith("다음 매도:"):
+                lines.append("🎯 " + _tl)
+            elif _tl.startswith("다음 매수:"):
+                lines.append("🛒 " + _tl)
+            else:
+                lines.append(_tl)
     else:
         lines.append("다음 매매는 내일 아침 계획에서 정해져요")
     return "\n".join(lines)
@@ -1936,7 +1943,7 @@ def _cancel_stale_buys(s, api, cfg, note, mark, m, rows, open_buys, d, now_t):
             logging.warning(f"스나이퍼 미체결 매수 60초 취소 실패 (주문 {o.get('no')}): {type(e).__name__} {e}")
             continue
         cancelled_any = True
-        note.send(f"미체결 매수 60초 지나 취소했어요: {remain}주 @ ${float(o.get('price') or 0):.2f} (주문 {o.get('no')}) — 체결된 {filled}주는 장부에 반영돼요")
+        note.send(f"⏰ 미체결 매수 60초 지나 취소했어요: {remain}주 @ ${float(o.get('price') or 0):.2f} (주문 {o.get('no')}) — 체결된 {filled}주는 장부에 반영돼요")
     return cancelled_any
 
 
@@ -2156,7 +2163,7 @@ def run_sniper_tick(s, api, note):
     if res == "rejected":
         ss["buy_block_until"] = now_t + 300                    # 거절되면 5분 쉼 (같은 거절을 매분 반복하지 않게)
     SN.save_state(cfg, ss)
-    note.send(f"스나이퍼 매수 {'접수' if res == 'ok' else ('실패' if res == 'rejected' else '응답 못 받음')}\n현재가 ${px:.2f}" + (f" · RSI {rsi:.1f}" if rsi is not None else "") + "\n" + fmt_orders([o])
+    note.send(f"{'🛒' if res == 'ok' else '⚠️'} 스나이퍼 매수 {'접수' if res == 'ok' else ('실패' if res == 'rejected' else '응답 못 받음')}\n현재가 ${px:.2f}" + (f" · RSI {rsi:.1f}" if rsi is not None else "") + "\n" + fmt_orders([o])
               + ("\n" + "\n".join(pb["notes"]) if pb["notes"] else "") + ("\n" + "\n".join(errs) if errs else ""))
     return "매수 접수" if res == "ok" else "매수 실패"
 
