@@ -1,5 +1,6 @@
 # =====================================================================
 # FILE: meritz_dca_bot/t_core.py   (MERITZ_DCA v1.1.1)
+# v1.3.10 (2026-11-28): 판 65 — bridge 요청 목록 ts 정렬 오류 수정 (정렬 키만. 검증·거부 사유·요청 처리 그대로)
 # v1.3.9 (2026-11-28): 판 64 — 6번 남은 이모티콘 3곳 추가 (표시만. 요청 처리·검증·저장·주문·장부·환전 그대로)
 # v1.3.8 (2026-11-28): 판 61 — bridge 답장 이모티콘 구분 추가 (표시만. 요청 처리·검증·저장·주문·장부·환전 그대로)
 # v1.3.7 (2026-11-28): 판 60 — 알림 이모티콘 구분 추가 (표시만. 매매 판단·수량·가격·주문·장부·환전 그대로)
@@ -38,7 +39,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dca_engine import DcaConfigManager
 
-BOT_VERSION = "v1.3.9"
+BOT_VERSION = "v1.3.10"
 BOT_TITLE = "6번 메리츠 적립"
 HUB_NAME = "6번 메리츠 적립"
 KST_TZ, EST_TZ = ZoneInfo("Asia/Seoul"), ZoneInfo("America/New_York")

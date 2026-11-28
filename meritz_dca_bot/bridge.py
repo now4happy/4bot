@@ -14,6 +14,7 @@
 # v1.2.7 (2026-11-14): SGOV 알림 파일 추가 — <bridge>/alerts/alert_<id>.json (meritz_dca_bot 만 씀, 비서봇은 읽기만).
 #   비서봇이 보낸 뒤 남기는 표시 <bridge>/alerts_sent/sent_<id>.json 은 비서봇만 씀 (여기서는 읽지도 쓰지도 않음).
 #   기존 snapshot.json·requests/·results/ 의 형식·동작은 그대로.
+# v1.3.10 (2026-11-28): 판 65 — bridge 요청 목록 ts 정렬 오류 수정 (정렬 키만. 검증·거부 사유·요청 처리 그대로)
 # =====================================================================
 import hashlib
 import json
@@ -67,6 +68,14 @@ def validate_request(rid: str, req, now: float):
     return None, ""
 
 
+def _sort_ts(req) -> float:
+    """정렬용 ts. 숫자로 못 바꾸면 0 (거부 판단은 validate_request 가 함)"""
+    if not isinstance(req, dict): return 0.0
+    try: ts = float(req.get("ts") or 0)
+    except (TypeError, ValueError, OverflowError): return 0.0
+    return ts if ts == ts else 0.0          # NaN 은 비교가 안 돼 다른 요청 순서를 흐트러뜨림 → 0
+
+
 def pending_requests(base: str, now: float = None):
     """아직 결과가 없는 요청 → [(id, 요청 dict 또는 None, 거부 상태, 사유)] (오래된 순). 읽기만 함"""
     now = time.time() if now is None else now
@@ -88,7 +97,7 @@ def pending_requests(base: str, now: float = None):
             out.append((rid, None, "invalid", "요청 파일을 읽지 못함")); continue
         st, why = validate_request(rid, req, now)
         out.append((rid, req, st, why))
-    out.sort(key=lambda x: float((x[1] or {}).get("ts") or 0) if isinstance(x[1], dict) else 0)
+    out.sort(key=lambda x: _sort_ts(x[1]))
     return out
 
 
