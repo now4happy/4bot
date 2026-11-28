@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # =====================================================================
 # FILE: meritz_dca_bot/main.py   (MERITZ_DCA v1.1.1)
+# v1.3.9 (2026-11-28): 판 64 — 6번 남은 이모티콘 3곳 추가 (표시만. 요청 처리·검증·저장·주문·장부·환전 그대로)
 # v1.3.8 (2026-11-28): 판 61 — bridge 답장 이모티콘 구분 추가 (표시만. 요청 처리·검증·저장·주문·장부·환전 그대로)
 # v1.3.7 (2026-11-28): 판 60 — 알림 이모티콘 구분 추가 (표시만. 매매 판단·수량·가격·주문·장부·환전 그대로)
 # 메리츠 적립 봇 (서비스 meritz_dca) — 3번 toss_dca_bot/main.py(v4.3.8) 엔진을 옮기고 토스 API 만 메리츠로 바꿈
@@ -828,7 +829,7 @@ async def show_fx_confirmation(client, msg_id):
         send_panel(f"⚠️ 환전 계획 확인 실패: {type(e).__name__}", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
         return
     if amount is None:
-        send_panel("환전할 금액 없음", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
+        send_panel("🔔 환전할 금액 없음", [[{"text":"자금", "callback_data":"funds"}]], msg_id)
         return
     send_panel(f"💱 이 금액만큼 자동환전할까요? ~${amount:,.2f} · 적립 + SGOV 합산분\n기존 낮 자동환전 안전장치 및 시간 제한 적용",
                [[{"text":"실행", "callback_data":"funds_fx_confirm"}, {"text":"취소", "callback_data":"funds"}]], msg_id)
@@ -1341,13 +1342,13 @@ async def bridge_pass(client, now=None):
     for rid, req, bad, why in BR.pending_requests(base, now):
         rtype = (req or {}).get("type") if isinstance(req, dict) else None
         if bad:
-            BR.write_result(base, rid, rtype, bad, why)
+            BR.write_result(base, rid, rtype, bad, f"⚠️ {why}")
             RL.ev("user_event", "bridge_request", "skipped", bad, actor="user", kind=str(rtype)[:20]); n += 1; continue
         BR.write_result(base, rid, rtype, "processing", "처리 중")          # 먼저 표시 → 재시작해도 다시 실행 안 함
         try: st, text, data = await bridge_handle(req, client)
         except Exception as e:
             RL.err("bridge_handle", e, event_type="user_event", kind=rtype)
-            st, text, data = "error", f"처리 오류: {type(e).__name__}", {}
+            st, text, data = "error", f"⚠️ 처리 오류: {type(e).__name__}", {}
         BR.write_result(base, rid, rtype, st, text, data)
         RL.ev("user_event", "bridge_request", "ok" if st == "ok" else "failed", None if st == "ok" else st, actor="user", kind=rtype)
         n += 1
