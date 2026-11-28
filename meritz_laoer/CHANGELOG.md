@@ -1,5 +1,10 @@
 # 메리츠 SOXL 하이브리드모드 변경 기록
 
+## v1.5.6 · 2026-11-28 10:32 (KST)
+- 파일: config.py, main.py, meritz_api.py, notifier.py, tg_menu.py
+- 내용: 판 63 (v2.22.0): 7번 역환전(달러→원화 자동환전) 추가
+- 브랜치: staging
+
 ## v1.5.5 · 2026-11-28 06:55 (KST)
 - 파일: main.py
 - 내용: 판 61 (v1.3.8): 6번 메리츠 적립 bridge 답장 이모티콘 구분 추가
