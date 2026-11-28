@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ==========================================================
 # FILE: meritz_laoer/main.py   (MERITZ_LAOER v2.7.0 · 판 62 v2.21.0)
+# v2.22.0 (2026-11-28): 판 63 — 7번 역환전(달러→원화 자동환전) 추가 (아침 환전 전, 내일 필요액 남기고 초과분만, 하루 상한 공유)
 # v2.21.0 (2026-11-28, 판 62 — 암살자 알림 HTML 태그 제거, 표시만. 매매 로직·게이트 판정 그대로)
 # v2.20.0 (2026-11-27, 판 59 — BOT_VERSION 은 v2.7.0 그대로): 체결 알림·스나이퍼 매수 접수·미체결 취소 메시지에 이모티콘 구분 추가 (표시만 바꿈). ① 체결 알림 머리말 ✅ + 다음 매도 🎯·다음 매수 🛒 (fill_alert_text에서만 붙이고 trigger_lines()는 안 건드려 상황판은 그대로) ② 매수 접수 🛒·실패/응답 못 받음 ⚠️ ③ 미체결 취소 ⏰. 매매 로직·수량·가격·60초 규칙 변경 없음
 # v2.19.0 (2026-11-26, 판 46 — BOT_VERSION 은 v2.7.0 그대로): ① 마감 일일결산에 당일 실현수익(봇 장부 기준·수수료·세금 미반영)·당일 매수/익절 횟수·누적실현 추가 — 체결을 장부에 반영할 때마다 data/realized_daily.json 에 주문별로 쌓음(장중 반영분 포함, exec_id 로 중복 방지) ② 결산 줄마다 이모티콘. 발송 시점·횟수·매매 로직 변경 없음
@@ -426,6 +427,20 @@ def run_open_capture(s, api, live, now):
     return ensure_open_price(s, ConfigManager(s), d, live, now, px, status)
 
 
+def fx_used_usd(s, kind, d, live):
+    """판 63 하루 상한 공유: 환전 기록 {kind}_<d>.json (kind = "fx" 정방향 | "rfx" 역환전, 모의는 dry_ 접두) 의 usd → 금액.
+    파일 없음 = 0.0. 파일이 있는데 못 읽거나 usd 가 이상하면 None (호출부는 환전하지 않음). '신청 전 기록'·'실패 또는 불확실' 기록도 합계에 넣음 (실제로 나갔을 수 있어서)"""
+    path = os.path.join(s["state_dir"], "data", f"{'' if live else 'dry_'}{kind}_{d}.json")
+    if not os.path.exists(path):
+        return 0.0
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            v = float(json.load(f)["usd"])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    return v if math.isfinite(v) and v >= 0 else None
+
+
 def auto_fx(s, api, cfg, plan, live, d, fx_now=None):
     """부족 달러만큼 원→달러 환전. 부족 없거나 꺼져 있으면 None. live=False 면 신청 없이 계산만.
     v2.0.8: fx_now(한국시간으로 바꿀 수 있는 시각)를 주면 실거래 신청 전에 '실시간 환전 시간(평일·국내 휴일 아님·09:00~23:50/00:20~02:00)'인지 확인 — 시간외·환전 불가 시간엔 신청 안 함(기록 안 씀)
@@ -435,9 +450,17 @@ def auto_fx(s, api, cfg, plan, live, d, fx_now=None):
     if not s.get("auto_fx_enabled") or short <= 0:
         return None
     raw = math.ceil(short * (1 + float(s["auto_fx_buffer_pct"]) / 100.0))
-    want = min(raw, int(float(s["auto_fx_max_usd_per_day"])))
+    reversed_usd = fx_used_usd(s, "rfx", d, live)          # 판 63: 오늘 역환전한 금액만큼 하루 상한에서 뺌
+    left = 0 if reversed_usd is None else max(0, int(float(s["auto_fx_max_usd_per_day"])) - math.ceil(reversed_usd))
+    want = min(raw, left)
     r = {"short": round(short, 2), "want": want, "capped": want < raw, "rate": None, "krw_est": None,
          "status": "", "done": False, "error": None}
+    if reversed_usd is None:
+        r.update(status="환전 안 함", error="역환전 기록 파일을 못 읽어 하루 상한을 확인할 수 없어요")
+        return r
+    if reversed_usd > 0 and want <= 0:
+        r.update(status="환전 안 함 — 오늘 하루 상한을 역환전이 다 썼어요")
+        return r
     try:
         rate, tm = api.fx_applied()
     except MeritzError as e:
@@ -2317,6 +2340,119 @@ def _next_rounds_inputs(s, api, cfg, rounds):
     return hybrid_fx_plan(s, cash, rounds), 0.0, rate, cash
 
 
+_RFXM = {"day": "", "done": False, "next": 0.0, "warned": []}    # 판 63 역환전: 오늘 판단이 끝났는지·다시 시도할 시각·알린 이유 (메모리). 신청 중복은 rfx_<날짜>.json 이 막음
+
+
+def _rfx_skip(note, key, why, retry=True):
+    """역환전 안 함 알림(같은 이유는 하루 한 번). retry=True 면 5분 뒤 다시, False 면 오늘 판단 끝"""
+    if key not in _RFXM["warned"]:
+        _RFXM["warned"].append(key)
+        note.send("⚠️ 역환전 안 함: " + why + (" (5분 뒤 다시 확인해요)" if retry else ""))
+    if retry:
+        _RFXM["next"] = time.time() + 300
+    else:
+        _RFXM["done"] = True
+
+
+def run_fx_reverse_morning(s, api, note, live):
+    """판 63 v2.22.0 역환전(달러→원화) → 상태 글자. loop 가 환전 창 안에서 run_fx_morning 보다 먼저 부름. 주문은 안 냄.
+    남길 금액 = 아침 환전과 같은 필요 달러(hybrid_fx_plan, 휴장 전날이면 1+extra 회차). 초과분(예수금 − 남길 금액)이 reverse_fx_min_usd 이상이면
+    하루 상한(정방향+역환전 합계) 안에서 달러 정수(버림)로 신청. 하루 한 번 (rfx_<날짜>.json 을 신청 전에 먼저 씀). live=False 면 계산만.
+    오늘 정방향 환전 기록(fx_<날짜>.json)이 있으면 안 함 — 아침 환전이 여유%를 더해 산 달러를 다음 loop 에서 되팔지 않게."""
+    if not s.get("reverse_fx_enabled"):
+        return "꺼짐"
+    n = now_kst()
+    w = fx_window_info(n, s)
+    if not w["open"]:
+        return "시간 아님"
+    d = w["day"].strftime("%Y-%m-%d")
+    if _RFXM["day"] != d:
+        _RFXM.update(day=d, done=False, next=0.0, warned=[])
+    pre = "" if live else "dry_"
+    marker = os.path.join(s["state_dir"], "data", f"{pre}rfx_{d}.json")
+    if os.path.exists(marker):
+        return "이미 함"
+    if os.path.exists(os.path.join(s["state_dir"], "data", f"{pre}fx_{d}.json")):
+        return "아침 환전 뒤"
+    if _RFXM["done"]:
+        return "확인 끝"
+    if time.time() < _RFXM["next"]:
+        return "대기"
+    cfg = ConfigManager(s)
+    if live:
+        bad = gate_problems(s, cfg, live=True)
+        if bad:
+            _rfx_skip(note, "gate", "; ".join(bad))
+            return "차단"
+    cap = int(float(s.get("auto_fx_max_usd_per_day") or 0))
+    if cap <= 0:
+        _rfx_skip(note, "cap_unset", "하루 환전 상한이 입력돼 있지 않아요", retry=False)
+        return "상한 없음"
+    ca = closure_ahead(w["day"], s)
+    rounds = 1 + (ca["extra"] if ca else 0)
+    try:
+        plan, _prev, _buy_rate, cash = _next_rounds_inputs(s, api, cfg, rounds)
+    except (MeritzError, ValueError) as e:
+        _rfx_skip(note, "read", f"계획·적용환율·달러 예수금 조회 실패: {str(e)[:100]}")
+        return "조회 실패"
+    buys = [o for o in plan["orders"] if o.get("side") == "BUY"]
+    need = float(plan["info"]["need_usd"]) if buys else 0.0       # 매수 계획이 없으면 남길 금액 0
+    excess = round(float(cash) - need, 2)
+    minimum = int(float(s.get("reverse_fx_min_usd", 100)))
+    if excess < minimum:                                          # 기록 파일 안 씀 (Q24)
+        _rfx_skip(note, "small", f"초과분 ${max(0.0, excess):,.2f} 이 최소 ${minimum:,} 미만 (예수금 ${cash:,.2f} · 내일 필요 ${need:,.0f})", retry=False)
+        return "필요 없음"
+    forward = fx_used_usd(s, "fx", d, live)
+    if forward is None:
+        _rfx_skip(note, "fx_record", "원화→달러 환전 기록을 못 읽어 하루 상한을 확인할 수 없어요")
+        return "기록 확인 필요"
+    whole = int(math.floor(excess))
+    amount = min(whole, max(0, cap - math.ceil(forward)))
+    if amount <= 0:
+        _rfx_skip(note, "cap_used", f"오늘 하루 상한 ${cap:,} 을 이미 다 썼어요", retry=False)
+        return "상한 소진"
+    capped = " · 상한만큼만" if amount < whole else ""
+    try:
+        rate, tm = api.fx_applied_sell()
+    except MeritzError as e:
+        _rfx_skip(note, "rate", f"매도 적용환율 조회 실패: {str(e)[:100]}")
+        return "환율 실패"
+    krw_est = int(amount * rate)
+    remain = float(cash) - amount
+    rec = {"date": d, "usd": amount, "rate": rate, "krw_est": krw_est, "need_usd": need, "usd_cash_before": round(float(cash), 2)}
+    if not live:
+        cfg._save_json(marker, dict(rec, result="모의 — 신청 안 함 (계산만)"))
+        _RFXM["done"] = True
+        note.send(f"⚠️ 역환전 안 함: 모의 — 신청 안 함 (계산: ${amount:,} → 약 ₩{krw_est:,}{capped} · 남는 달러 ${remain:,.2f} · 내일 필요 ${need:,.0f})")
+        return "모의"
+    again = fx_window_info(now_kst(), s)                          # 조회하는 사이 환전 시간이 지났으면 신청 안 함
+    if not again["open"] or again["day"] != w["day"]:
+        return "시간 아님"
+    cfg._save_json(marker, dict(rec, result="신청 전 기록 (이 파일이 있으면 오늘 다시 신청하지 않음)"))
+    _RFXM["done"] = True
+    try:
+        res = api.fx_exchange(amount, rate, tm, crcd="USD", mnec_clcd="2")
+    except Exception as e:                                        # 네트워크 오류·시간 초과 포함 — 나갔는지 불확실하면 다시 신청 안 함
+        cfg._save_json(marker, dict(rec, result=f"실패 또는 불확실: {type(e).__name__} {str(e)[:120]}"))
+        note.send(f"⚠️ 역환전 안 함: 신청 실패 또는 불확실 — 오늘 다시 신청 안 해요. 메리츠에서 환전 내역을 확인해 주세요 "
+                  f"(신청 ${amount:,}{capped} · {type(e).__name__}: {str(e)[:100]})")
+        return "신청 실패"
+    cfg._save_json(marker, dict(rec, result="신청 완료"))
+    got = _rfx_response_krw(res)
+    krw_text = f"₩{got:,}" if got else f"약 ₩{krw_est:,}"
+    note.send(f"✅ 역환전 완료: ${amount:,} → {krw_text} (남긴 달러 ${remain:,.2f} · 내일 필요 ${need:,.0f}){capped}")
+    return "완료"
+
+
+def _rfx_response_krw(res):
+    """환전 응답의 원화 거래금액 tr_amt → 정수, 없거나 이상하면 0 (그때는 조회 환율로 계산한 예상액을 '약'으로 표시)"""
+    try:
+        v = float(res.get("tr_amt"))
+        return int(v) if math.isfinite(v) and v > 0 else 0
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
 def run_fx_morning(s, api, note, live):
     """자동환전 → 상태 글자. loop 가 창 안에서만 부름. 주문은 안 냄. (함수 이름은 판 9 그대로)
     '다음 한 회차분'(탑쌓기 계획, max_rounds_per_day 를 1로 둔 계획) 필요 달러 − 달러 예수금 = 부족분만 환전 (여유%·하루 상한은 auto_fx 그대로).
@@ -2575,6 +2711,15 @@ def run_fx_tasks(s, note, live):
         api = MeritzApi(s["key_file"], os.path.join(s["state_dir"], "data", "meritz_token.json"))
         if fxw:
             run_closure_alert(s, note, live)
+            if s.get("reverse_fx_enabled"):             # 판 63: 아침 환전보다 먼저. 실패해도 아침 환전은 그대로
+                try:
+                    run_fx_reverse_morning(s, api, note, live)
+                except Exception as e:
+                    logging.exception(f"역환전 중 오류: {type(e).__name__}")
+                    ek = "rerr_" + kst.strftime("%Y-%m-%d")
+                    if ek not in _FXM["warned"]:
+                        _FXM["warned"].append(ek)
+                        note.send(f"⚠️ 역환전 안 함: 처리 중 오류 ({type(e).__name__}) — 환전 기록과 메리츠 환전 내역을 확인해 주세요")
             if s.get("auto_fx_enabled"):
                 run_fx_morning(s, api, note, live)
         if short_due:

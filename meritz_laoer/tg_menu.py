@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/tg_menu.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.22.0 (2026-11-28): 판 63 — 7번 역환전(달러→원화 자동환전) 추가 (아침 환전 전, 내일 필요액 남기고 초과분만, 하루 상한 공유)
 # v2.12.0 수정 1차 (2026-11-24, 판 39 수정 1차): 설정값 줄의 '첫 기준가: 안 정함' 표시 삭제 (첫 매수는 가격 조건 없음)
 # v2.15.0 (2026-11-25, 판 41 할 일 5): 바벨 삭제 — [바벨 관제보드] 버튼·화면(barbell_text)·B_BBBOARD·BOOL_NAME 바벨 항목 제거, 매수 비율 모드는 복리↔단리 2순환(PM_NEXT·PM_CHANGES 에서 바벨 제거)
 # v2.10.0 (2026-11-23, 판 36 Case 113): '돌파 매수% 변경' 버튼·설정 표시·도움말 삭제, 눌림 매수% 기본 10(바벨 15), 1층 익절 기본 1.0, 다음 매수 타점 표시를 원작 판정과 같은 값(기준가=min(직전 매도가, 가장 낮은 F 평단), 15:00 신규 진입 차단·개장 7분 쉴드)으로 맞춤. 레이더 설정 버튼 5개(눌림·버킷 시드 / 1층 익절·상단 익절 / 첫 기준가)
@@ -85,6 +86,7 @@ CHG_OK = "변경 확인"
 ADD_OK = "주식 넣기 확인"                            # 장부가 바뀌므로 수량·평단을 보여 준 뒤 확인
 BOT_ON, BOT_OFF = "봇 켜기", "봇 끄기"
 FX_ON, FX_OFF = "자동환전 켜기", "자동환전 끄기"
+FX_R_ON, FX_R_OFF = "역환전 켜기", "역환전 끄기"      # 판 63 v2.22.0
 T_MODE_TOWER, T_MODE_SNIPER, MODE_OK = "탑쌓기 매매 시작", "스나이퍼 매매로 돌아가기", "네, 바꿀게요"      # v2.9.0 6차 판 33: 매매 모드 바꾸기 (누르면 확인 메시지 → [네, 바꿀게요] 를 눌러야만 바뀜)
 
 # 설정 변경 버튼 → 설정 키·이름·단위·종류. kind: krw(원, 억·만 가능) | int | num(소수 가능). lo/hi: 허용 범위 (lo_incl/hi_incl 로 경계 포함 여부)
@@ -113,7 +115,7 @@ MEANS = {
     "auto_fx_max_usd_per_day": ("자동환전을 하루에 최대 얼마까지 할지 정한 상한이에요.", "하루 환전 한도가 달라져요"),
 }
 _EMOJI_RE = re.compile("(?:[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u25A0-\u25FF\u2300-\u23FF\u2900-\u297F\u2139\uFE0F\u200D])+ ?")   # 예전 이모티콘 키보드 글자를 새 버튼으로 읽는 데 씀
-BOOL_NAME = {"compound_enabled": "복리 모드", "enabled": "봇", "auto_fx_enabled": "자동환전"}
+BOOL_NAME = {"compound_enabled": "복리 모드", "enabled": "봇", "auto_fx_enabled": "자동환전", "reverse_fx_enabled": "역환전"}
 T_ASSN, ASSN_OK = "암살자 승격", "네, 암살자 바꿀게요"      # v2.13.0 판 40 할 일 2: 암살자 승격·복귀 (눌러도 바로 안 바뀌고 확인부터 — 원작은 한 번 누름. 실돈이라 확인 단계 추가)
 T_PMODE, PM_OK = "매수 비율 모드 바꾸기", "네, 모드 바꿀게요"      # v2.15.0 판 41 할 일 5: 복리↔단리 2순환 (바벨 삭제)
 PM_KO = {"compound": "복리 8%", "simple": "단리 10%"}
@@ -121,6 +123,7 @@ PM_NEXT = {"compound": "simple", "simple": "compound"}
 PM_CHANGES = {"compound": {"compound_enabled": True}, "simple": {"compound_enabled": False}}
 MODE_KO = {"sniper": "하이브리드 스나이퍼 매매", "tower": "탑쌓기 매매"}
 FX_NEED = "여유%와 하루 상한을 먼저 입력해 주세요"          # 값 없이 켜기를 눌렀을 때 이 글자만
+FX_R_NEED = "하루 상한을 먼저 입력해 주세요"                 # 판 63: 역환전은 하루 상한만 필요
 SET_POWER = "봇 켜기/끄기"
 TOWER_SET = ["매수 간격 변경", "탑쌓기 매도% 변경", "매도 비중 변경", "하루 매수 F 수 변경", "하루 매도 F 수 변경"]      # 판 35: 탑쌓기 매매 화면 (판 39: F 완성 기준 금액은 잔고 동기화로 이동, 남은 시드 삭제)
 SYNC_SET = ["F 완성 기준 금액 변경", "버킷 시드 변경"]      # 판 39 할 일 3: 시드 설정 = 잔고 동기화 화면
@@ -149,7 +152,8 @@ MSG_MAX_AGE = 120           # 이보다 오래된 메시지는 처리하지 않�
 HEAD = "7번 메리츠 SOXL 하이브리드"
 ALL_LABELS = ({B_RADAR, B_SYNC, B_TOWER, B_FX, BACK, R_REFRESH, T_TOOLS, I_FUNDS, I_PLAN, I_LEDGER, I_POWER, T_CHECK, T_ADD, T_HALT, T_INJECT,
                T_FP, T_STOP, HALT_OK, INJECT_OK, INJECT_OVER, CHG_OK, ADD_OK, BOT_ON, BOT_OFF, FX_ON, FX_OFF, T_MODE_TOWER, T_MODE_SNIPER, MODE_OK, T_PMODE, PM_OK, T_ASSN, ASSN_OK} | set(SET_ITEMS))
-LABEL_LIST = sorted(ALL_LABELS)
+LABEL_LIST = sorted(ALL_LABELS) + [FX_R_ON, FX_R_OFF]      # 판 63: 새 라벨은 맨 뒤 — 이미 보낸 버튼의 번호가 밀리지 않게
+ALL_LABELS |= {FX_R_ON, FX_R_OFF}
 LABEL_IDX = {x: i for i, x in enumerate(LABEL_LIST)}      # 인라인 버튼 callback_data = "c:<번호>" (64바이트 제한 때문에 글자 대신 번호 — 같은 버전 안에서는 항상 같은 번호)
 
 
@@ -737,6 +741,7 @@ class MenuBot:
         return [[("🔴 자동환전 끄기 (지금 켜짐)", FX_OFF) if s.get("auto_fx_enabled") else ("🟢 자동환전 켜기 (지금 꺼짐)", FX_ON)],
                 [(f"환전 하루 상한  {fmt_val(KEY_ITEM['auto_fx_max_usd_per_day'], s.get('auto_fx_max_usd_per_day'), '입력 전')}  ▶ 변경", "환전 하루 상한 변경")],
                 [(f"환전 여유%  {fmt_val(KEY_ITEM['auto_fx_buffer_pct'], s.get('auto_fx_buffer_pct'), '입력 전')}  ▶ 변경", "환전 여유% 변경")],
+                [("🔴 역환전 끄기 (지금 켜짐)", FX_R_OFF) if s.get("reverse_fx_enabled") else ("🟢 역환전 켜기 (지금 꺼짐)", FX_R_ON)],
                 [R_REFRESH]]
 
     def inline_for(self, s):
@@ -771,6 +776,8 @@ class MenuBot:
         on = bool(s.get("auto_fx_enabled"))
         day = o.now_kst().strftime("%Y-%m-%d") if hasattr(o, "now_kst") else o.now_et().strftime("%Y-%m-%d")
         done, rec = 0.0, None
+        live = not s.get("dry_run", True)
+        used, rdone = {}, 0.0      # 판 63: 날짜별 상한 사용액(정방향+역환전)과 오늘 역환전 완료액
         try:
             with o.in_dir(s["state_dir"]):
                 cfg = o.ConfigManager(s)
@@ -778,14 +785,26 @@ class MenuBot:
                     r = cfg._load_json(f"data/{'' if not s.get('dry_run', True) else 'dry_'}fx_{dd}.json", None)
                     if isinstance(r, dict) and r.get("usd") and "신청 완료" in str(r.get("result") or ""):
                         done, rec = max(done, float(r["usd"])), r
+                    rr = cfg._load_json(f"data/{'' if live else 'dry_'}rfx_{dd}.json", None)
+                    if isinstance(rr, dict) and rr.get("usd") and "신청 완료" in str(rr.get("result") or ""):
+                        rdone = max(rdone, float(rr["usd"]))
+                    pair = (o.fx_used_usd(s, "fx", dd, live), o.fx_used_usd(s, "rfx", dd, live))
+                    used[dd] = None if None in pair else sum(pair)
         except Exception:
-            pass
+            used["error"] = None
         cap = _num(s.get("auto_fx_max_usd_per_day"))
-        left = (f"${max(0.0, cap - done):,.0f}" if cap else "미확인 (하루 상한 입력 전)")
+        if not cap:
+            left = "미확인 (하루 상한 입력 전)"
+        elif None in used.values():
+            left = "미확인 (환전 기록을 못 읽음)"
+        else:                      # 정방향 + 역환전 합계 (신청 전·실패 또는 불확실 기록도 포함)
+            left = f"${max(0.0, cap - max(used.values(), default=0.0)):,.0f}"
+        rmin = int(_num(s.get("reverse_fx_min_usd", 100)) or 100)
         lines = ["💱 <b>[환전]</b>", "──────────────",
                  f"▫️ 오늘 환전한 금액: <b>${done:,.0f}</b>" + ("" if rec else " (기록 없음)"),
                  f"▫️ 오늘 남은 한도: <b>{left}</b> (하루 상한 {k('auto_fx_max_usd_per_day')})",
                  f"▫️ 자동환전: <b>{'🟢 켜짐' if on else '🔴 꺼짐'}</b> · 여유 {k('auto_fx_buffer_pct')}",
+                 f"▫️ 역환전: <b>{'🟢 켜짐' if s.get('reverse_fx_enabled') else '🔴 꺼짐'}</b> · 최소 ${rmin:,} · 오늘 역환전 ${rdone:,.0f}",
                  "──────────────"]
         try:
             api_bad = self._api_ok(s)
@@ -942,8 +961,15 @@ class MenuBot:
             self.nav = "radar"
             return say({I_FUNDS: self.funds_text, I_LEDGER: self.ledger_text, I_POWER: self.power_text}.get(text, lambda x: "\n".join(self.plan_lines(x, self.board(x))))(s), self.radar_inline(s))
         # ---- 환전 (설정 값만 바꿈)
-        if text in (FX_ON, FX_OFF):
+        if text in (FX_ON, FX_OFF, FX_R_ON, FX_R_OFF):
             self.nav = "fx"
+        if text == FX_R_ON:
+            if not ((_num(s.get("auto_fx_max_usd_per_day")) or 0) > 0):
+                return say(FX_R_NEED)
+            return self.propose(s, say, {"reverse_fx_enabled": True},
+                                "켜면 실거래 모드에서만, 아침 실시간 환전 시간에 아침 환전보다 먼저 하루 한 번, 내일 필요 달러를 남기고 초과분이 최소 금액 이상이면 달러→원화로 바꿔요 (하루 상한은 원화→달러와 합계). 실제 역환전은 아직 시험 전이라 처음엔 적은 상한으로 켜 보세요.")
+        if text == FX_R_OFF:
+            return self.apply(s, say, {"reverse_fx_enabled": False})
         if text == FX_ON:
             if not fx_values_ready(s):
                 return say(FX_NEED)

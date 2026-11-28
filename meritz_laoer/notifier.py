@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/notifier.py   (MERITZ_LAOER v2.7.0)
+# v2.22.0 (2026-11-28): 판 63 — 7번 역환전(달러→원화 자동환전) 추가 (아침 환전 전, 내일 필요액 남기고 초과분만, 하루 상한 공유)
 # v2.9.0 6차 (2026-11-22, 판 33): 화면 이름 표에 trade_mode(매매 모드)·tower_buy_gap_usd(탑쌓기 매수 간격) 추가
 # v2.7.0 (2026-11-21, 판 27): 설정 이름 표에서 tower_gap_usd('탑쌓기 간격') 제거 — 간격 설정이 없어졌음.
 # v2.6.0 (2026-11-21, 판 26): 설정 이름 표에 sniper_portion_pct → '눌림 매수%' 추가
@@ -66,6 +67,7 @@ _NAME_KO = {
     "tower_floor1_start_usd": "맨 위 F 시작가", "strategy": "전략", "sell_profit_pct": "목표 이익률", "sell_fraction_pct": "매도 비중",
     "order_type": "주문 방식", "allow_consecutive_sell": "연속 매도", "auto_fx_enabled": "자동환전",
     "auto_fx_buffer_pct": "환전 여유%", "auto_fx_max_usd_per_day": "환전 하루 상한",
+    "reverse_fx_enabled": "역환전", "reverse_fx_min_usd": "역환전 최소 금액",
     "intraday_sell_check_sec": "장중 매도 확인 간격", "order_time_et": "주문 시작 시각", "order_deadline_et": "주문 마감 시각",
     "sync_time_et": "체결 반영 시각", "seed_usd": "시드(달러)", "fee_pct": "수수료",
     "start.qty": "시작 수량", "start.principal_usd": "시작 원금", "start.avg_usd": "시작 평단",
@@ -76,6 +78,7 @@ _BOOL_KO = {
     "enabled": ("봇 켜짐", "봇 꺼짐"), "dry_run": ("모의", "실거래"),
     "transfer_confirmed": ("입고 확인됨", "입고 확인 전"),
     "toss_sniper_stopped_confirmed": ("토스 스나이퍼 정지 확인됨", "토스 스나이퍼 정지 확인 전"),
+    "reverse_fx_enabled": ("역환전 켜짐", "역환전 꺼짐"),
     "auto_fx_enabled": ("자동환전 켜짐", "자동환전 꺼짐"), "allow_consecutive_sell": ("연속 매도 허용", "연속 매도 금지"),
 }
 _FLAG_KO = {"--inject-start": "장부 시작", "--clear-halt": "정지 해제", "--overwrite": "덮어쓰기", "--add-shares": "주식 넣기",

@@ -1,5 +1,6 @@
 # ==========================================================
 # FILE: meritz_laoer/config.py   (MERITZ_LAOER v2.7.0 · 판 39 v2.12.0)
+# v2.22.0 (2026-11-28): 판 63 — 7번 역환전(달러→원화 자동환전) 추가 (아침 환전 전, 내일 필요액 남기고 초과분만, 하루 상한 공유)
 # v2.13.0 (2026-11-24, 판 40): sniper_tick_sec(기본 1.5)·sniper_book_sec(기본 10) 추가 + validate_settings 검사. sync_time_et 는 '하루 기록 마감 시각'이고 스나이퍼 틱 끝 시각이 아님 (틱은 매도·매수 창이 정함)
 # v2.12.0 (2026-11-24, 판 39): sniper_portion_pct·tower_remaining_seed_usd·sniper_first_anchor_usd 검사 삭제(옛 키는 남아 있어도 무시) · compound_enabled(복리 모드) 검사 추가 · 기본 sync_time_et 16:10 → 20:00
 # v2.10.0 (2026-11-23, 판 36 Case 113): 기본 sniper_tp_l1_pct 1.5 → 1.0 · sniper_breakout_portion_pct 검사 삭제(옛 키는 남아 있어도 무시)
@@ -68,7 +69,9 @@ SAFE_DEFAULTS = {
     # ---- 자동환전 (사용자 요청 2026-11-18). 기본 꺼짐. 켜려면 아래 두 값도 설정 필수 (노션 Q11)
     "auto_fx_enabled": False,              # true 면 오늘 매수에 달러가 모자랄 때 원화→달러 환전 신청 (실주문 모드에서만)
     "auto_fx_buffer_pct": None,            # 부족 달러에 더할 여유 % (환율·체결가 변동 대비)
-    "auto_fx_max_usd_per_day": None,       # 하루 환전 상한 (달러, 정수)
+    "auto_fx_max_usd_per_day": None,       # 하루 환전 상한 (달러, 정수) — v2.22.0: 정방향 + 역환전 합계 상한
+    "reverse_fx_enabled": False,           # 판 63 역환전(달러→원화) 켜기/끄기. 켜려면 auto_fx_max_usd_per_day 입력 필수
+    "reverse_fx_min_usd": 100,             # 남길 금액을 뺀 초과분이 이 금액(달러 정수) 이상일 때만 역환전
     # 익절 %: hantu_laoer/config.py DEFAULT_TARGET["SOXL"] (main c53f8d4 기준). 서버 data/profit_config.json 값은 확인 필요
     "target_profit_pct": 12.0,
     # 복리 %: hantu_laoer/config.py DEFAULT_COMPOUND["SOXL"] (익절 이익 중 다음 시드에 더하는 비율)
@@ -256,6 +259,14 @@ def validate_settings(s):
             bad.append("auto_fx_enabled=true 인데 auto_fx_buffer_pct 없음 (0 이상, 노션 질문 Q11)")
         if s.get("auto_fx_max_usd_per_day") is None or _f(s.get("auto_fx_max_usd_per_day")) <= 0:
             bad.append("auto_fx_enabled=true 인데 auto_fx_max_usd_per_day 없음 (0 초과, 노션 질문 Q11)")
+    if not isinstance(s.get("reverse_fx_enabled", False), bool):
+        bad.append("reverse_fx_enabled 는 true | false")
+    elif s.get("reverse_fx_enabled"):
+        if s.get("auto_fx_max_usd_per_day") is None or _f(s.get("auto_fx_max_usd_per_day")) <= 0:
+            bad.append("reverse_fx_enabled=true 인데 auto_fx_max_usd_per_day 없음 (0 초과)")
+    rmin = s.get("reverse_fx_min_usd", 100)
+    if isinstance(rmin, bool) or not isinstance(rmin, (int, float)) or _f(rmin) < 1 or _f(rmin) != int(_f(rmin)):
+        bad.append("reverse_fx_min_usd 는 1 이상 정수 (달러)")
     st = s.get("start") or {}
     q, pr, av = st.get("qty"), st.get("principal_usd"), st.get("avg_usd")
     if q is None or int(_f(q)) < 0 or _f(q) != int(_f(q)):
